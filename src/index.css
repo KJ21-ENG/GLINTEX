@@ -40,3 +40,7 @@
 
 html, body, #root { height: 100%; }
 body { margin: 0; }
+
+/* Disabled piece helper: dim and strike-through for non-available pieces */
+.piece-disabled { opacity: 0.55; text-decoration: line-through; }
+.piece-disabled input[type="checkbox"] { cursor: not-allowed; }

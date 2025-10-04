@@ -561,19 +561,30 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const [issueMetaByLot, setIssueMetaByLot] = useState({});
   const [issuingLot, setIssuingLot] = useState(null);
 
-  // Prepare lots with available pieces
-  const availablePieces = db.inbound_items.filter(x => x.status === 'available');
+  // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
     const m = {};
     for (const lot of db.lots) {
-      m[lot.lotNo] = { ...lot, itemName: db.items.find(i=>i.id===lot.itemId)?.name || '—', firmName: db.firms.find(f=>f.id===lot.firmId)?.name || '—', supplierName: db.suppliers.find(s=>s.id===lot.supplierId)?.name || '—', pieces: [] };
+      m[lot.lotNo] = {
+        ...lot,
+        itemName: db.items.find(i => i.id === lot.itemId)?.name || '—',
+        firmName: db.firms.find(f => f.id === lot.firmId)?.name || '—',
+        supplierName: db.suppliers.find(s => s.id === lot.supplierId)?.name || '—',
+        pieces: [],
+        availableCount: 0,
+        pendingWeight: 0,
+      };
     }
-    for (const p of availablePieces) {
+    for (const p of db.inbound_items) {
       if (!m[p.lotNo]) continue;
       m[p.lotNo].pieces.push(p);
+      if (p.status === 'available') {
+        m[p.lotNo].availableCount = (m[p.lotNo].availableCount || 0) + 1;
+        m[p.lotNo].pendingWeight = (m[p.lotNo].pendingWeight || 0) + Number(p.weight || 0);
+      }
     }
     return m;
-  }, [db.lots, db.items, db.firms, db.suppliers, availablePieces]);
+  }, [db.lots, db.items, db.firms, db.suppliers, db.inbound_items]);
 
   // Include all lots (even those with zero available pieces) so filters like "inactive" work
   const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
@@ -588,9 +599,9 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       // client-side type filter: active / inactive
-      const availableWeight = (l.pieces||[]).reduce((s,p)=>s+p.weight,0);
+      // pending = weight available to be issued (computed earlier on lotsMap)
+      const pending = Number(l.pendingWeight || 0);
       const initialWeight = Number(l.totalWeight || 0);
-      const pending = availableWeight; // pending = weight available to be issued
       if (filters.type === 'active') {
         // show lots where pending > 0 and pending <= initial
         if (!(pending > 0 && pending <= initialWeight)) return false;
@@ -672,9 +683,9 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                     <td className="py-2 pr-2">{l.itemName}</td>
                     <td className="py-2 pr-2">{l.firmName}</td>
                     <td className="py-2 pr-2">{l.supplierName}</td>
-                    <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).length} / ${l.totalPieces ?? 0}`}</td>
+                    <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).filter(p=>p.status==='available').length} / ${l.totalPieces ?? 0}`}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
-                    <td className="py-2 pr-2 text-right">{formatKg((l.pieces||[]).reduce((s,p)=>s+p.weight,0))}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(Number(l.pendingWeight || 0))}</td>
                   </tr>
                   {expandedLot === l.lotNo && (
                     <tr className={`border-t ${cls.rowBorder}`}>
@@ -696,12 +707,12 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                           <div className="overflow-auto">
                             {(() => {
                               const initialWeight = Number(l.totalWeight || 0);
-                              const pendingWeightVal = (l.pieces||[]).reduce((s,p)=>s+p.weight,0);
+                              const pendingWeightVal = Number(l.pendingWeight || 0);
                               return (
-                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
+                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
                                   <tbody>
                                     {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={pendingWeightVal} />
+                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.status === 'available' ? p.weight : 0} />
                                     ))}
                                   </tbody>
                                 </table>
@@ -1168,9 +1179,11 @@ function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pe
     }
   }
 
+  const isAvailable = p.status === 'available';
+
   return (
-    <tr className={`border-t ${cls.rowBorder}`}>
-      <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} /></td>
+    <tr className={`border-t ${cls.rowBorder} ${!isAvailable ? 'piece-disabled' : ''}`}>
+      <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} disabled={!isAvailable} /></td>
       <td className="py-2 pr-2 font-mono">{p.id}</td>
       <td className="py-2 pr-2">{p.seq}</td>
       <td className="py-2 pr-2 text-right">
@@ -1188,14 +1201,13 @@ function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pe
           ) : (
             <>
               <span className="mr-2">{formatKg(p.weight)}</span>
-              <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted}`} title="Edit weight">
+              <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted}`} title="Edit weight" disabled={!isAvailable}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z"/></svg>
               </button>
             </>
           )}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right">{formatKg(initialWeight)}</td>
       <td className="py-2 pr-2 text-right">{formatKg(pendingWeight)}</td>
     </tr>
   );

@@ -555,7 +555,7 @@ function RecentLots({ db }) {
 \*********************/
 function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const { cls, brand } = useBrand();
-  const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '' });
+  const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '', type: 'active' });
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
   const [issueMetaByLot, setIssueMetaByLot] = useState({});
@@ -575,7 +575,8 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
     return m;
   }, [db.lots, db.items, db.firms, db.suppliers, availablePieces]);
 
-  const allLots = useMemo(() => Object.values(lotsMap).filter(l => (l.pieces || []).length > 0), [lotsMap]);
+  // Include all lots (even those with zero available pieces) so filters like "inactive" work
+  const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
 
   // Apply filters
   const filteredLots = useMemo(() => {
@@ -586,6 +587,19 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
       if (filters.lotSearch && !l.lotNo.toLowerCase().includes(filters.lotSearch.toLowerCase())) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
+      // client-side type filter: active / inactive
+      const availableWeight = (l.pieces||[]).reduce((s,p)=>s+p.weight,0);
+      const initialWeight = Number(l.totalWeight || 0);
+      const pending = availableWeight; // pending = weight available to be issued
+      if (filters.type === 'active') {
+        // show lots where pending > 0 and pending <= initial
+        if (!(pending > 0 && pending <= initialWeight)) return false;
+      } else if (filters.type === 'inactive') {
+        // show lots where pending === 0
+        if (!(Math.abs(pending) < 1e-9)) return false;
+      } else if (filters.type === 'all') {
+        // no filtering
+      }
       return true;
     }).sort((a,b) => (b.date || '').localeCompare(a.date));
   }, [allLots, filters]);
@@ -637,13 +651,14 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   return (
     <div className="space-y-6">
       <Section title="Stock (Lot-wise)" actions={<div className="flex gap-2"><Button onClick={()=>exporters?.exportXlsx(filteredLots, piecesByLot())} >Export XLSX</Button><SecondaryButton onClick={()=>exporters?.exportCsv(filteredLots, piecesByLot())}>Export CSV</SecondaryButton><SecondaryButton onClick={()=>exporters?.exportPdf(filteredLots, piecesByLot(), brand)}>Export PDF</SecondaryButton></div>}>
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4 mb-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-3 md:gap-4 mb-3">
           <div><label className={`text-xs ${cls.muted}`}>Lot search</label><Input value={filters.lotSearch} onChange={e=>setFilters(f=>({ ...f, lotSearch: e.target.value }))} placeholder="Search lot no" /></div>
           <div><label className={`text-xs ${cls.muted}`}>Date From</label><Input type="date" value={filters.from} onChange={e=>setFilters(f=>({ ...f, from: e.target.value }))} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Date To</label><Input type="date" value={filters.to} onChange={e=>setFilters(f=>({ ...f, to: e.target.value }))} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={filters.itemId} onChange={e=>setFilters(f=>({ ...f, itemId: e.target.value }))}><option value="">Any</option>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={filters.firmId} onChange={e=>setFilters(f=>({ ...f, firmId: e.target.value }))}><option value="">Any</option>{db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Type</label><Select value={filters.type} onChange={e=>setFilters(f=>({ ...f, type: e.target.value }))}><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></Select></div>
         </div>
 
           <div className="overflow-auto">
@@ -659,7 +674,7 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                     <td className="py-2 pr-2">{l.supplierName}</td>
                     <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).length} / ${l.totalPieces ?? 0}`}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
-                    <td className="py-2 pr-2 text-right">{formatKg((l.totalWeight || 0) - ((l.pieces||[]).reduce((s,p)=>s+p.weight,0)))}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg((l.pieces||[]).reduce((s,p)=>s+p.weight,0))}</td>
                   </tr>
                   {expandedLot === l.lotNo && (
                     <tr className={`border-t ${cls.rowBorder}`}>

@@ -22,8 +22,8 @@ export function RecentLots({ db }) {
     <div className="overflow-auto">
       <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
         <tbody>
-          {rows.length===0? <tr><td colSpan={7} className="py-4">No lots yet.</td></tr> : rows.map(r=> (
-            <tr key={r.lotNo} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2 font-medium">{r.lotNo}</td><td className="py-2 pr-2">{r.date}</td><td className="py-2 pr-2">{r.itemName}</td><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2">{r.supplierName}</td><td className="py-2 pr-2 text-right">{r.totalPieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td></tr>
+  {rows.length===0? <tr><td colSpan={7} className="py-4">No lots yet.</td></tr> : rows.map(r=> (
+            <tr key={r.lotNo} className={`border-t ${cls.rowBorder} row-hover`}><td className="py-2 pr-2 font-medium">{r.lotNo}</td><td className="py-2 pr-2">{r.date}</td><td className="py-2 pr-2">{r.itemName}</td><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2">{r.supplierName}</td><td className="py-2 pr-2 text-right">{r.totalPieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td></tr>
           ))}
         </tbody>
       </table>

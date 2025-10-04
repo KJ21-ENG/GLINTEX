@@ -15,7 +15,7 @@ export function IssueHistory({ db }) {
         <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th></tr></thead>
         <tbody>
           {rows.length===0? <tr><td colSpan={7} className="py-4">No issues yet.</td></tr> : rows.map((r, idx) => (
-            <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top`}>
+            <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top row-hover`}>
               <td className="py-2 pr-2">{r.date}</td>
               <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
               <td className="py-2 pr-2">{r.lotNo}</td>

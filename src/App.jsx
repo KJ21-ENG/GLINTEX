@@ -179,7 +179,7 @@ export default function App() {
             </div>
             <nav className="hidden md:flex gap-2">
               {TABS.map(t => (
-                <button key={t.key} onClick={() => setTab(t.key)} className={`px-3 py-1.5 rounded-lg text-sm border ${tab===t.key?cls.navActive:"border-transparent"} ${tab!==t.key?cls.navHover:""}`}>
+                <button key={t.key} onClick={() => setTab(t.key)} className={`px-3 py-1.5 rounded-lg text-sm border ${tab===t.key?cls.navActive:"border-transparent"} ${tab!==t.key?cls.navHover:""} underline-on-hover` }>
                   {t.label}
                 </button>
               ))}

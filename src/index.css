@@ -44,3 +44,23 @@ body { margin: 0; }
 /* Disabled piece helper: dim and strike-through for non-available pieces */
 .piece-disabled { opacity: 0.55; text-decoration: line-through; }
 .piece-disabled input[type="checkbox"] { cursor: not-allowed; }
+
+/* Hover and transition helpers */
+@layer components {
+  .hover-elevate { @apply transition-transform duration-150 ease-out; }
+  .hover-elevate:hover { @apply -translate-y-0.5 shadow-md; }
+
+  .soft-shadow { @apply transition-shadow duration-150; }
+  .soft-shadow:hover { @apply shadow-sm; }
+
+  .row-hover { @apply transition-colors duration-150; }
+  /* Use theme variable so hover works both in light and dark (data-theme based) */
+  .row-hover:hover { background-color: #e0e7ef; } /* Light mode increased contrast */
+  [data-theme="dark"] .row-hover:hover { background-color: #23263a; } /* Dark mode increased contrast */
+
+  .btn-hover { @apply transform transition-transform duration-150; }
+  .btn-hover:hover { @apply -translate-y-0.5 shadow-sm; }
+
+  .underline-on-hover { @apply transition-all duration-150; }
+  .underline-on-hover:hover { text-decoration: underline; }
+}

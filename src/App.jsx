@@ -694,14 +694,20 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                           </div>
 
                           <div className="overflow-auto">
-                            <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
-                            <tbody>
-                              {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} />
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                            {(() => {
+                              const initialWeight = Number(l.totalWeight || 0);
+                              const pendingWeightVal = (l.pieces||[]).reduce((s,p)=>s+p.weight,0);
+                              return (
+                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
+                                  <tbody>
+                                    {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
+                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={pendingWeightVal} />
+                                    ))}
+                                  </tbody>
+                                </table>
+                              );
+                            })()}
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -1140,7 +1146,7 @@ function groupBy(arr, keyFn) { const m = {}; for (const x of arr) { const k = ke
 
 export { useBrand };
 
-function PieceRow({ p, lotNo, selected, onToggle, onSaved }) {
+function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0 }) {
   const { cls } = useBrand();
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -1189,6 +1195,8 @@ function PieceRow({ p, lotNo, selected, onToggle, onSaved }) {
           )}
         </div>
       </td>
+      <td className="py-2 pr-2 text-right">{formatKg(initialWeight)}</td>
+      <td className="py-2 pr-2 text-right">{formatKg(pendingWeight)}</td>
     </tr>
   );
 }

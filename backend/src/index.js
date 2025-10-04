@@ -293,6 +293,37 @@ app.put('/api/settings', async (req, res) => {
   }
 });
 
+// Update a single inbound piece (seq, weight)
+app.put('/api/inbound_items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { seq, weight } = req.body;
+    if (seq !== undefined && (!Number.isInteger(seq) || seq < 1)) return res.status(400).json({ error: 'seq must be a positive integer' });
+    if (weight !== undefined && (!Number.isFinite(Number(weight)) || Number(weight) <= 0)) return res.status(400).json({ error: 'weight must be a positive number' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.inboundItem.findUnique({ where: { id } });
+      if (!existing) throw new Error('Inbound piece not found');
+
+      const updated = await tx.inboundItem.update({ where: { id }, data: { ...(seq !== undefined ? { seq } : {}), ...(weight !== undefined ? { weight: Number(weight) } : {}) } });
+
+      // Recalculate lot totals (totalPieces and totalWeight) based on current inbound items for the lot
+      const lotNo = updated.lotNo;
+      const agg = await tx.inboundItem.aggregate({ where: { lotNo }, _sum: { weight: true }, _count: { id: true } });
+      const totalWeight = Number(agg._sum.weight || 0);
+      const totalPieces = Number(agg._count.id || 0);
+      await tx.lot.update({ where: { lotNo }, data: { totalWeight, totalPieces } });
+
+      return updated;
+    });
+
+    res.json({ ok: true, inboundItem: result });
+  } catch (err) {
+    console.error('Failed to update inbound item', err);
+    res.status(400).json({ error: err.message || 'Failed to update inbound item' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
 });

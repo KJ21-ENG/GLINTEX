@@ -1,5 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState, createContext, useRef } from "react";
-import api from './api.js';
+import * as api from './api.js';
 import * as exporters from './exporters.js';
 
 /**
@@ -348,7 +348,7 @@ export default function App() {
 
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
-          {tab === "stock" && <Stock db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
+          {tab === "stock" && <Stock db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} refreshDb={refreshDb} />}
           {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
           {tab === "masters" && <Masters
             db={db}
@@ -553,7 +553,7 @@ function RecentLots({ db }) {
 /*********************
 |* Stock On Hand Tab  *
 \*********************/
-function Stock({ db, onIssuePieces, refreshing }) {
+function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const { cls, brand } = useBrand();
   const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '' });
   const [expandedLot, setExpandedLot] = useState(null);
@@ -681,12 +681,7 @@ function Stock({ db, onIssuePieces, refreshing }) {
                             <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
                             <tbody>
                               {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                <tr key={p.id} className={`border-t ${cls.rowBorder}`}>
-                                  <td className="py-2 pr-2"><input type="checkbox" checked={(selectedByLot[l.lotNo]||[]).includes(p.id)} onChange={(e)=>{ e.stopPropagation(); togglePiece(l.lotNo, p.id); }} /></td>
-                                  <td className="py-2 pr-2 font-mono">{p.id}</td>
-                                  <td className="py-2 pr-2">{p.seq}</td>
-                                  <td className="py-2 pr-2 text-right">{formatKg(p.weight)}</td>
-                                </tr>
+                                <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} />
                               ))}
                             </tbody>
                           </table>
@@ -1128,3 +1123,56 @@ function RawTable({ title, rows }) {
 function groupBy(arr, keyFn) { const m = {}; for (const x of arr) { const k = keyFn(x); (m[k] ||= []).push(x);} return m; }
 
 export { useBrand };
+
+function PieceRow({ p, lotNo, selected, onToggle, onSaved }) {
+  const { cls } = useBrand();
+  const [editing, setEditing] = useState(false);
+  const [weight, setWeight] = useState(p.weight);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setWeight(p.weight); }, [p.weight]);
+
+  async function save() {
+    if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) { alert('Weight must be positive'); return; }
+    setSaving(true);
+    try {
+      await api.updateInboundItem(p.id, { weight: Number(weight) });
+      setEditing(false);
+      onSaved && onSaved();
+    } catch (err) {
+      alert(err.message || 'Failed to save piece');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <tr className={`border-t ${cls.rowBorder}`}>
+      <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} /></td>
+      <td className="py-2 pr-2 font-mono">{p.id}</td>
+      <td className="py-2 pr-2">{p.seq}</td>
+      <td className="py-2 pr-2 text-right">
+        <div className="flex items-center justify-end gap-2">
+              {editing ? (
+            <>
+              <Input type="number" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} style={{ width: 120 }} />
+              <button onClick={(e)=>{ e.stopPropagation(); setEditing(false); setWeight(p.weight); }} disabled={saving} title="Cancel" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} hover:opacity-90`}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+              <button onClick={(e)=>{ e.stopPropagation(); save(); }} disabled={saving} title="Save" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} hover:opacity-90`}>
+                {saving ? <svg xmlns="http://www.w3.org/2000/svg" className="animate-spin w-4 h-4 text-emerald-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"/></svg> : <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-emerald-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/></svg>}
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="mr-2">{formatKg(p.weight)}</span>
+              <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted}`} title="Edit weight">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z"/></svg>
+              </button>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}

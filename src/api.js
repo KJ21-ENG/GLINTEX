@@ -26,6 +26,7 @@ export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function issuePieces(payload) { return await request('/api/consumptions', { method: 'POST', body: payload }); }
+export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
 export async function deleteItem(id) { return await request(`/api/items/${id}`, { method: 'DELETE' }); }
@@ -42,6 +43,7 @@ export default {
   getDB,
   createLot,
   issuePieces,
+  updateInboundItem,
   listItems,
   createItem,
   deleteItem,

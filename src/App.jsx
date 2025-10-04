@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState, createContext, useRef } from "react";
 import api from './api.js';
+import * as exporters from './exporters.js';
 
 /**
  * GLINTEX Inventory — DB-backed React app
@@ -347,7 +348,7 @@ export default function App() {
 
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
-          {tab === "stock" && <Stock db={db} />}
+          {tab === "stock" && <Stock db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
           {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
           {tab === "masters" && <Masters
             db={db}
@@ -552,31 +553,149 @@ function RecentLots({ db }) {
 /*********************
 |* Stock On Hand Tab  *
 \*********************/
-function Stock({ db }) {
-  const { cls } = useBrand();
-  const available = db.inbound_items.filter(x => x.status === "available");
-  const byItem = groupBy(available, i => i.itemId);
-  const rows = Object.entries(byItem).map(([itemId, arr]) => ({ itemId, itemName: db.items.find(i=>i.id===itemId)?.name || "—", pieces: arr.length, weight: arr.reduce((s,x)=>s+x.weight,0), byLot: groupBy(arr, x=>x.lotNo) }));
+function Stock({ db, onIssuePieces, refreshing }) {
+  const { cls, brand } = useBrand();
+  const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '' });
+  const [expandedLot, setExpandedLot] = useState(null);
+  const [selectedByLot, setSelectedByLot] = useState({});
+  const [issueMetaByLot, setIssueMetaByLot] = useState({});
+  const [issuingLot, setIssuingLot] = useState(null);
+
+  // Prepare lots with available pieces
+  const availablePieces = db.inbound_items.filter(x => x.status === 'available');
+  const lotsMap = useMemo(() => {
+    const m = {};
+    for (const lot of db.lots) {
+      m[lot.lotNo] = { ...lot, itemName: db.items.find(i=>i.id===lot.itemId)?.name || '—', firmName: db.firms.find(f=>f.id===lot.firmId)?.name || '—', supplierName: db.suppliers.find(s=>s.id===lot.supplierId)?.name || '—', pieces: [] };
+    }
+    for (const p of availablePieces) {
+      if (!m[p.lotNo]) continue;
+      m[p.lotNo].pieces.push(p);
+    }
+    return m;
+  }, [db.lots, db.items, db.firms, db.suppliers, availablePieces]);
+
+  const allLots = useMemo(() => Object.values(lotsMap).filter(l => (l.pieces || []).length > 0), [lotsMap]);
+
+  // Apply filters
+  const filteredLots = useMemo(() => {
+    return allLots.filter(l => {
+      if (filters.itemId && l.itemId !== filters.itemId) return false;
+      if (filters.firmId && l.firmId !== filters.firmId) return false;
+      if (filters.supplierId && l.supplierId !== filters.supplierId) return false;
+      if (filters.lotSearch && !l.lotNo.toLowerCase().includes(filters.lotSearch.toLowerCase())) return false;
+      if (filters.from && l.date < filters.from) return false;
+      if (filters.to && l.date > filters.to) return false;
+      return true;
+    }).sort((a,b) => (b.date || '').localeCompare(a.date));
+  }, [allLots, filters]);
+
+  function toggleExpand(lotNo) { setExpandedLot(prev => (prev === lotNo ? null : lotNo)); }
+
+  function togglePiece(lotNo, pieceId) {
+    setSelectedByLot(prev => {
+      const next = { ...prev };
+      const arr = new Set(next[lotNo] || []);
+      if (arr.has(pieceId)) arr.delete(pieceId); else arr.add(pieceId);
+      next[lotNo] = Array.from(arr);
+      return next;
+    });
+  }
+
+  function selectAll(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: (lotsMap[lotNo].pieces || []).map(p=>p.id) })); }
+  function clearSel(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: [] })); }
+
+  function setIssueMeta(lotNo, meta) { setIssueMetaByLot(prev => ({ ...prev, [lotNo]: { ...(prev[lotNo]||{}), ...meta } })); }
+
+  async function doIssue(lotNo) {
+    const pieceIds = (selectedByLot[lotNo] || []).slice();
+    if (!pieceIds.length) { alert('Select pieces to issue'); return; }
+    const meta = issueMetaByLot[lotNo] || {};
+    const payload = { date: meta.date || todayISO(), itemId: lotsMap[lotNo].itemId, lotNo, pieceIds, note: meta.note || '' };
+    setIssuingLot(lotNo);
+    try {
+      await onIssuePieces(payload);
+      alert(`Issued ${pieceIds.length} pcs from Lot ${lotNo}`);
+      // clear selection for this lot
+      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+      setIssueMetaByLot(prev => ({ ...prev, [lotNo]: {} }));
+      setExpandedLot(null);
+    } catch (err) {
+      alert(err.message || 'Failed to issue pieces');
+    } finally {
+      setIssuingLot(null);
+    }
+  }
+
+  // Export helpers
+  function piecesByLot() {
+    const map = {};
+    for (const l of filteredLots) map[l.lotNo] = (l.pieces || []).map(p => ({ id: p.id, seq: p.seq, weight: p.weight }));
+    return map;
+  }
+
   return (
     <div className="space-y-6">
-      <Section title="Stock on Hand (by Item)">
-        <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Item</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
-            <tbody>
-              {rows.length===0? <tr><td colSpan={3} className="py-4">No stock.</td></tr> : rows.map(r=> (
-                <tr key={r.itemId} className={`border-t ${cls.rowBorder} align-top`}><td className="py-2 pr-2"><div className="font-medium">{r.itemName}</div><div className={`${cls.muted} mt-1`}>{Object.entries(r.byLot).map(([lotNo, arr])=> (<div key={lotNo} className="text-xs">• Lot <b>{lotNo}</b>: {arr.length} pcs / {formatKg(arr.reduce((s,x)=>s+x.weight,0))} kg</div>))}</div></td><td className="py-2 pr-2 text-right">{r.pieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.weight)}</td></tr>
-              ))}
-            </tbody>
-          </table>
+      <Section title="Stock (Lot-wise)" actions={<div className="flex gap-2"><Button onClick={()=>exporters?.exportXlsx(filteredLots, piecesByLot())} >Export XLSX</Button><SecondaryButton onClick={()=>exporters?.exportCsv(filteredLots, piecesByLot())}>Export CSV</SecondaryButton><SecondaryButton onClick={()=>exporters?.exportPdf(filteredLots, piecesByLot(), brand)}>Export PDF</SecondaryButton></div>}>
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4 mb-3">
+          <div><label className={`text-xs ${cls.muted}`}>Lot search</label><Input value={filters.lotSearch} onChange={e=>setFilters(f=>({ ...f, lotSearch: e.target.value }))} placeholder="Search lot no" /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Date From</label><Input type="date" value={filters.from} onChange={e=>setFilters(f=>({ ...f, from: e.target.value }))} /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Date To</label><Input type="date" value={filters.to} onChange={e=>setFilters(f=>({ ...f, to: e.target.value }))} /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={filters.itemId} onChange={e=>setFilters(f=>({ ...f, itemId: e.target.value }))}><option value="">Any</option>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={filters.firmId} onChange={e=>setFilters(f=>({ ...f, firmId: e.target.value }))}><option value="">Any</option>{db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
         </div>
-      </Section>
 
-      <Section title="Pieces (Detailed)">
         <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Avail Pcs</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
             <tbody>
-              {available.length===0? <tr><td colSpan={4} className="py-4">No available pieces.</td></tr> : available.sort((a,b)=>a.id.localeCompare(b.id)).map(p=> (
-                <tr key={p.id} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2 font-mono">{p.id}</td><td className="py-2 pr-2">{db.items.find(i=>i.id===p.itemId)?.name || "—"}</td><td className="py-2 pr-2">{p.lotNo}</td><td className="py-2 pr-2 text-right">{formatKg(p.weight)}</td></tr>
+              {filteredLots.length===0? <tr><td colSpan={7} className="py-4">No lots match filters.</td></tr> : filteredLots.map(l=> (
+                <React.Fragment key={l.lotNo}>
+                  <tr className={`border-t ${cls.rowBorder} align-top`} onClick={()=>toggleExpand(l.lotNo)} style={{ cursor: 'pointer' }}>
+                    <td className="py-2 pr-2 font-medium">{l.lotNo}</td>
+                    <td className="py-2 pr-2">{l.date}</td>
+                    <td className="py-2 pr-2">{l.itemName}</td>
+                    <td className="py-2 pr-2">{l.firmName}</td>
+                    <td className="py-2 pr-2">{l.supplierName}</td>
+                    <td className="py-2 pr-2 text-right">{(l.pieces||[]).length}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg((l.pieces||[]).reduce((s,p)=>s+p.weight,0))}</td>
+                  </tr>
+                  {expandedLot === l.lotNo && (
+                    <tr className={`border-t ${cls.rowBorder}`}>
+                      <td colSpan={7} className="p-3">
+                        <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
+                          <div className="mb-2 flex items-center gap-2">
+                          <Pill>Available: {(l.pieces||[]).length} pcs</Pill>
+                          <Pill>Selected: {(selectedByLot[l.lotNo]||[]).length} pcs</Pill>
+                          <SecondaryButton onClick={(e)=>{ e.stopPropagation(); selectAll(l.lotNo); }} disabled={(l.pieces||[]).length===0}>Select all</SecondaryButton>
+                          <SecondaryButton onClick={(e)=>{ e.stopPropagation(); clearSel(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length}>Clear</SecondaryButton>
+                          <div className="ml-auto flex items-center gap-2">
+                            <label className={`text-xs ${cls.muted}`}>Date</label>
+                            <Input type="date" value={(issueMetaByLot[l.lotNo]||{}).date || todayISO()} onChange={e=>{ setIssueMeta(l.lotNo, { date: e.target.value }); }} style={{ width: 140 }} />
+                            <Input value={(issueMetaByLot[l.lotNo]||{}).note || ''} onChange={e=>setIssueMeta(l.lotNo, { note: e.target.value })} placeholder="Note (optional)" style={{ width: 220 }} />
+                            <Button onClick={(e)=>{ e.stopPropagation(); doIssue(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length || issuingLot===l.lotNo || refreshing}>{issuingLot===l.lotNo ? 'Issuing…' : 'Issue'}</Button>
+                          </div>
+                          </div>
+
+                          <div className="overflow-auto">
+                            <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+                            <tbody>
+                              {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
+                                <tr key={p.id} className={`border-t ${cls.rowBorder}`}>
+                                  <td className="py-2 pr-2"><input type="checkbox" checked={(selectedByLot[l.lotNo]||[]).includes(p.id)} onChange={(e)=>{ e.stopPropagation(); togglePiece(l.lotNo, p.id); }} /></td>
+                                  <td className="py-2 pr-2 font-mono">{p.id}</td>
+                                  <td className="py-2 pr-2">{p.seq}</td>
+                                  <td className="py-2 pr-2 text-right">{formatKg(p.weight)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

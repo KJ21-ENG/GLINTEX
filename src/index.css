@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Small defaults */
+:root {
+  /* Brand (from logo) */
+  --brand-primary: #2E4CA6;
+  --brand-gold: #D4AF37;
+
+  /* Neutral palette (light theme) */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-contrast: #f1f5f9;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e6e9ee;
+
+  /* Header / subtle backgrounds */
+  --header-overlay: rgba(255,255,255,0.8);
+}
+
+/* Dark theme overrides */
+[data-theme="dark"] {
+  --bg: #060814;
+  --surface: rgba(255,255,255,0.04);
+  --surface-contrast: rgba(255,255,255,0.02);
+  --text: #ffffff;
+  --muted: rgba(255,255,255,0.72);
+  --border: rgba(255,255,255,0.08);
+  --header-overlay: rgba(2,6,23,0.6);
+}
+
+/* Small helper utility classes that use the variables */
+.theme-bg { background-color: var(--bg); }
+.theme-surface { background-color: var(--surface); }
+.theme-text { color: var(--text); }
+.theme-muted { color: var(--muted); }
+.theme-border { border-color: var(--border); }
+
+html, body, #root { height: 100%; }
+body { margin: 0; }

@@ -1,0 +1,70 @@
+# Node
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+.public
+
+# Parcel, Vite, and other caches
+.cache/
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# dotenv environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Yarn integrity file
+.yarn-integrity
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+._*
+Icon
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Misc
+*.tgz
+*.lock-wscript
+
+# Ignore project brand images (optional)
+/public/brand-logo.jpg

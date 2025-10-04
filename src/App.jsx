@@ -373,17 +373,18 @@ export default function App() {
 function Inbound({ db, onCreateLot, refreshing }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
-  const [itemId, setItemId] = useState(db.items[0]?.id || "");
-  const [firmId, setFirmId] = useState(db.firms[0]?.id || "");
-  const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
+  const [itemId, setItemId] = useState("");
+  const [firmId, setFirmId] = useState("");
+  const [supplierId, setSupplierId] = useState("");
   const [weight, setWeight] = useState("");
   const [previewLotNo, setPreviewLotNo] = useState("");
   const [cart, setCart] = useState([]);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { if (db.items.length && !db.items.some(i => i.id === itemId)) setItemId(db.items[0]?.id || ""); }, [db.items, itemId]);
-  useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(db.firms[0]?.id || ""); }, [db.firms, firmId]);
-  useEffect(() => { if (db.suppliers.length && !db.suppliers.some(s => s.id === supplierId)) setSupplierId(db.suppliers[0]?.id || ""); }, [db.suppliers, supplierId]);
+  // Keep selects empty by default; if current value disappears from DB, clear it
+  useEffect(() => { if (db.items.length && !db.items.some(i => i.id === itemId)) setItemId(""); }, [db.items, itemId]);
+  useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(""); }, [db.firms, firmId]);
+  useEffect(() => { if (db.suppliers.length && !db.suppliers.some(s => s.id === supplierId)) setSupplierId(""); }, [db.suppliers, supplierId]);
 
   // Fetch next sequence preview
   useEffect(() => {
@@ -445,8 +446,17 @@ function Inbound({ db, onCreateLot, refreshing }) {
       const totalPieces = cart.length;
       const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
       alert(`Saved Lot with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
+
+      // reset inbound form fields
       setCart([]);
       setWeight("");
+      setDate(todayISO());
+      setItemId("");
+      setFirmId("");
+      setSupplierId("");
+      // focus back to weight input for quick entry
+      try { weightRef.current?.focus(); } catch (e) {}
+
       // refresh preview
       try {
         const res2 = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
@@ -468,11 +478,11 @@ function Inbound({ db, onCreateLot, refreshing }) {
       >
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setCart([]);}} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>{db.suppliers.length===0? <option>No suppliers</option> : db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}><option value="">Select</option>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}><option value="">Select</option>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={supplierId} onChange={e=>setSupplierId(e.target.value)}><option value="">Select</option>{db.suppliers.length===0? <option>No suppliers</option> : db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Lot No (preview)</label><Input value={previewLotNo} readOnly /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input inputRef={weightRef} type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ addPiece(); } }} placeholder="e.g. 1.250" /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input inputRef={weightRef} type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); if(e.shiftKey){ saveLot(); } else { addPiece(); } } }} placeholder="e.g. 1.250" /></div>
         </div>
         <div className="mt-3 flex gap-2">
           <Button onClick={addPiece} disabled={!canAdd}>Add</Button>
@@ -582,23 +592,23 @@ function Stock({ db }) {
 function IssueToMachine({ db, onIssuePieces, refreshing }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
-  const [itemId, setItemId] = useState(db.items[0]?.id || "");
+  const [itemId, setItemId] = useState("");
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState([]);
   const [issuing, setIssuing] = useState(false);
 
   useEffect(() => {
     if (db.items.length && !db.items.some(i => i.id === itemId)) {
-      setItemId(db.items[0]?.id || "");
+      setItemId("");
     }
   }, [db.items, itemId]);
 
   const candidateLots = useMemo(() => db.lots.filter(l => l.itemId === itemId), [db.lots, itemId]);
-  const [lotNo, setLotNo] = useState(candidateLots[0]?.lotNo || "");
+  const [lotNo, setLotNo] = useState("");
 
   useEffect(() => {
-    const first = candidateLots[0]?.lotNo || "";
-    setLotNo(first);
+    // Do not auto-select first lot; leave user to choose from Select
+    if (!candidateLots.some(l => l.lotNo === lotNo)) setLotNo("");
   }, [candidateLots]);
 
   useEffect(() => { setSelected([]); }, [lotNo]);
@@ -643,8 +653,8 @@ function IssueToMachine({ db, onIssuePieces, refreshing }) {
       <Section title="Issue to machine">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>setDate(e.target.value)} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
+  <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}><option value="">Select</option>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+  <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}><option value="">Select</option>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
           <div className="md:col-span-2"><label className={`text-xs ${cls.muted}`}>Note (optional)</label><Input value={note} onChange={e=>setNote(e.target.value)} placeholder="Reference / reason" /></div>
         </div>
 

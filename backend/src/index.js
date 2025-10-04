@@ -18,17 +18,18 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/db', async (req, res) => {
   const items = await prisma.item.findMany();
   const firms = await prisma.firm.findMany();
+  const suppliers = await prisma.supplier.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const consumptions = await prisma.consumption.findMany();
   const settings = await prisma.settings.findMany();
-  res.json({ items, firms, lots, inbound_items, consumptions, settings });
+  res.json({ items, firms, suppliers, lots, inbound_items, consumptions, settings });
 });
 
 app.post('/api/lots', async (req, res) => {
   try {
-    const { lotNo, date, itemId, firmId, pieces } = req.body;
-    if (!lotNo || !date || !itemId || !firmId) {
+    const { lotNo, date, itemId, firmId, supplierId, pieces } = req.body;
+    if (!lotNo || !date || !itemId || !firmId || !supplierId) {
       return res.status(400).json({ error: 'Missing required lot fields' });
     }
     if (!Array.isArray(pieces) || pieces.length === 0) {
@@ -61,6 +62,7 @@ app.post('/api/lots', async (req, res) => {
           date,
           itemId,
           firmId,
+          supplierId,
           totalPieces,
           totalWeight,
         },
@@ -156,6 +158,7 @@ app.post('/api/import', async (req, res) => {
     await prisma.lot.deleteMany();
     await prisma.item.deleteMany();
     await prisma.firm.deleteMany();
+    await prisma.supplier.deleteMany();
 
     // Bulk create
     if (Array.isArray(data.items)) {
@@ -168,9 +171,14 @@ app.post('/api/import', async (req, res) => {
         await prisma.firm.create({ data: { id: f.id || undefined, name: f.name } });
       }
     }
+    if (Array.isArray(data.suppliers)) {
+      for (const s of data.suppliers) {
+        await prisma.supplier.create({ data: { id: s.id || undefined, name: s.name } });
+      }
+    }
     if (Array.isArray(data.lots)) {
       for (const l of data.lots) {
-        await prisma.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0) } });
+        await prisma.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, supplierId: l.supplierId || null, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0) } });
       }
     }
     if (Array.isArray(data.inbound_items)) {
@@ -219,6 +227,18 @@ app.delete('/api/firms/:id', async (req, res) => {
     return res.status(400).json({ error: 'Firm is referenced and cannot be deleted' });
   }
   await prisma.firm.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
+app.get('/api/suppliers', async (req, res) => { res.json(await prisma.supplier.findMany()); });
+app.post('/api/suppliers', async (req, res) => { const { name } = req.body; const seller = await prisma.supplier.create({ data: { name } }); res.json(seller); });
+app.delete('/api/suppliers/:id', async (req, res) => {
+  const { id } = req.params;
+  const usage = await prisma.lot.count({ where: { supplierId: id } });
+  if (usage > 0) {
+    return res.status(400).json({ error: 'Supplier is referenced and cannot be deleted' });
+  }
+  await prisma.supplier.delete({ where: { id } });
   res.json({ ok: true });
 });
 

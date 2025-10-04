@@ -19,17 +19,25 @@ model Firm {
   lots Lot[]
 }
 
+model Supplier {
+  id   String @id @default(cuid())
+  name String
+  lots Lot[]
+}
+
 model Lot {
-  id          String       @id @default(cuid())
-  lotNo       String       @unique
+  id          String     @id @default(cuid())
+  lotNo       String     @unique
   date        String
   itemId      String
   firmId      String
+  supplierId  String?
   totalPieces Int
   totalWeight Float
-  createdAt   DateTime     @default(now())
-  item        Item         @relation(fields: [itemId], references: [id])
-  firm        Firm         @relation(fields: [firmId], references: [id])
+  createdAt   DateTime   @default(now())
+  item        Item       @relation(fields: [itemId], references: [id])
+  firm        Firm       @relation(fields: [firmId], references: [id])
+  supplier    Supplier?  @relation(fields: [supplierId], references: [id])
 }
 
 model InboundItem {

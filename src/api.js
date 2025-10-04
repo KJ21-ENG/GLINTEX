@@ -32,6 +32,9 @@ export async function deleteItem(id) { return await request(`/api/items/${id}`, 
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
+export async function listSuppliers() { return await request('/api/suppliers'); }
+export async function createSupplier(name) { return await request('/api/suppliers', { method: 'POST', body: { name } }); }
+export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 
 export default {
@@ -45,5 +48,8 @@ export default {
   listFirms,
   createFirm,
   deleteFirm,
+  listSuppliers,
+  createSupplier,
+  deleteSupplier,
   updateSettings,
 };

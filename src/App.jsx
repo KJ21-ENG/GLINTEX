@@ -40,6 +40,7 @@ function normalizeDb(raw) {
   const ensureArr = (val) => (Array.isArray(val) ? val : []);
   const items = ensureArr(raw?.items);
   const firms = ensureArr(raw?.firms);
+  const suppliers = ensureArr(raw?.suppliers);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const consumptions = ensureArr(raw?.consumptions).map((c) => ({
@@ -47,7 +48,7 @@ function normalizeDb(raw) {
     pieceIds: typeof c.pieceIds === 'string' ? c.pieceIds.split(',').filter(Boolean) : ensureArr(c.pieceIds),
   }));
   const settings = ensureArr(raw?.settings);
-  return { items, firms, lots, inbound_items, consumptions, settings };
+  return { items, firms, suppliers, lots, inbound_items, consumptions, settings };
 }
 
 function extractBrandFromDb(db) {
@@ -237,6 +238,16 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateSupplier = useCallback(async (name) => {
+    await api.createSupplier(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteSupplier = useCallback(async (id) => {
+    await api.deleteSupplier(id);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleSaveBrand = useCallback(async (values) => {
     setSavingBrand(true);
     try {
@@ -327,6 +338,8 @@ export default function App() {
             onDeleteItem={handleDeleteItem}
             onAddFirm={handleCreateFirm}
             onDeleteFirm={handleDeleteFirm}
+            onAddSupplier={handleCreateSupplier}
+            onDeleteSupplier={handleDeleteSupplier}
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}
@@ -345,6 +358,7 @@ function Inbound({ db, onCreateLot, refreshing }) {
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState(db.items[0]?.id || "");
   const [firmId, setFirmId] = useState(db.firms[0]?.id || "");
+  const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
   const [lotNo, setLotNo] = useState("");
   const [weight, setWeight] = useState("");
   const [cart, setCart] = useState([]);
@@ -352,12 +366,13 @@ function Inbound({ db, onCreateLot, refreshing }) {
 
   useEffect(() => { if (db.items.length && !db.items.some(i => i.id === itemId)) setItemId(db.items[0]?.id || ""); }, [db.items, itemId]);
   useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(db.firms[0]?.id || ""); }, [db.firms, firmId]);
+  useEffect(() => { if (db.suppliers.length && !db.suppliers.some(s => s.id === supplierId)) setSupplierId(db.suppliers[0]?.id || ""); }, [db.suppliers, supplierId]);
 
-  const canAdd = date && itemId && firmId && lotNo && Number(weight) > 0;
-  const canSave = cart.length > 0 && date && itemId && firmId && lotNo && !saving;
+  const canAdd = date && itemId && firmId && supplierId && lotNo && Number(weight) > 0;
+  const canSave = cart.length > 0 && date && itemId && firmId && supplierId && lotNo && !saving;
 
   function startNewLot() {
-    if (!date || !itemId || !firmId) { alert('Select date, item and firm first.'); return; }
+    if (!date || !itemId || !firmId || !supplierId) { alert('Select date, item, firm and supplier first.'); return; }
     const seq = nextLotSequence(db, date);
     const newLotNo = `${yyyymmdd(date)}-${String(seq).padStart(3, "0")}`;
     setLotNo(newLotNo);
@@ -382,7 +397,7 @@ function Inbound({ db, onCreateLot, refreshing }) {
     setSaving(true);
     try {
       const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
-      await onCreateLot({ lotNo, date, itemId, firmId, pieces });
+      await onCreateLot({ lotNo, date, itemId, firmId, supplierId, pieces });
       const totalPieces = cart.length;
       const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
       alert(`Saved Lot ${lotNo} with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
@@ -402,10 +417,11 @@ function Inbound({ db, onCreateLot, refreshing }) {
         title="Inbound Receiving"
         actions={<><SecondaryButton onClick={startNewLot}>Start New Lot</SecondaryButton><Pill>Lot No is auto-generated & stored in database</Pill></>}
       >
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setLotNo(""); setCart([]);}} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Firm (Supplier)</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>{db.suppliers.length===0? <option>No suppliers</option> : db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Lot No (auto)</label><Input value={lotNo} readOnly placeholder="Click Start New Lot" /></div>
           <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="e.g. 1.250" /></div>
         </div>
@@ -460,13 +476,14 @@ function RecentLots({ db }) {
     ...l,
     itemName: db.items.find(i=>i.id===l.itemId)?.name || "—",
     firmName: db.firms.find(f=>f.id===l.firmId)?.name || "—",
+    supplierName: db.suppliers.find(s=>s.id===l.supplierId)?.name || "—",
   }));
   return (
     <div className="overflow-auto">
-      <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+      <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
         <tbody>
-          {rows.length===0? <tr><td colSpan={6} className="py-4">No lots yet.</td></tr> : rows.map(r=> (
-            <tr key={r.lotNo} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2 font-medium">{r.lotNo}</td><td className="py-2 pr-2">{r.date}</td><td className="py-2 pr-2">{r.itemName}</td><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2 text-right">{r.totalPieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td></tr>
+          {rows.length===0? <tr><td colSpan={7} className="py-4">No lots yet.</td></tr> : rows.map(r=> (
+            <tr key={r.lotNo} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2 font-medium">{r.lotNo}</td><td className="py-2 pr-2">{r.date}</td><td className="py-2 pr-2">{r.itemName}</td><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2">{r.supplierName}</td><td className="py-2 pr-2 text-right">{r.totalPieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td></tr>
           ))}
         </tbody>
       </table>
@@ -659,10 +676,11 @@ function IssueHistory({ db }) {
 /*********************
 |* Masters (Items/Firms)
 \*********************/
-function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, refreshing }) {
+function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, onAddSupplier, onDeleteSupplier, refreshing }) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
+  const [supplierName, setSupplierName] = useState("");
   const [working, setWorking] = useState(false);
 
   async function addItem() {
@@ -719,10 +737,37 @@ function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, refresh
     }
   }
 
+  async function addSupplier() {
+    const name = supplierName.trim();
+    if (!name) return;
+    if (db.suppliers.some(s => s.name.toLowerCase() === name.toLowerCase())) { alert("Supplier already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddSupplier(name);
+      setSupplierName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add supplier');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteSupplier(id) {
+    if (!confirm("Delete supplier? You cannot remove it if referenced by lots.")) return;
+    setWorking(true);
+    try {
+      await onDeleteSupplier(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete supplier');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const disable = working || refreshing;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <Section title="Items">
         <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
         <ul className="space-y-2">{db.items.map(i => (
@@ -733,12 +778,22 @@ function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, refresh
         ))}</ul>
       </Section>
 
-      <Section title="Firms (Suppliers)">
+      <Section title="Firms">
         <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
         <ul className="space-y-2">{db.firms.map(f => (
           <li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
             <span>{f.name}</span>
             <SecondaryButton onClick={()=>deleteFirm(f.id)} disabled={disable}>Delete</SecondaryButton>
+          </li>
+        ))}</ul>
+      </Section>
+
+      <Section title="Suppliers">
+        <div className="flex gap-2 mb-3"><Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="New supplier name" /><Button onClick={addSupplier} disabled={disable}>Add</Button></div>
+        <ul className="space-y-2">{db.suppliers.map(s => (
+          <li key={s.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+            <span>{s.name}</span>
+            <SecondaryButton onClick={()=>deleteSupplier(s.id)} disabled={disable}>Delete</SecondaryButton>
           </li>
         ))}</ul>
       </Section>
@@ -751,13 +806,29 @@ function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, refresh
 \*********************/
 function Reports({ db }) {
   const { cls } = useBrand();
+  const bySupplier = groupBy(db.lots.filter(l => l.supplierId), l => l.supplierId);
+  const supplierRows = Object.entries(bySupplier).map(([supplierId, lots]) => ({ supplierName: db.suppliers.find(s=>s.id===supplierId)?.name || "—", lotsCount: lots.length, pieces: lots.reduce((s,l)=>s+l.totalPieces,0), weight: lots.reduce((s,l)=>s+l.totalWeight,0) }));
+  
   const byFirm = groupBy(db.lots, l => l.firmId);
   const firmRows = Object.entries(byFirm).map(([firmId, lots]) => ({ firmName: db.firms.find(f=>f.id===firmId)?.name || "—", lotsCount: lots.length, pieces: lots.reduce((s,l)=>s+l.totalPieces,0), weight: lots.reduce((s,l)=>s+l.totalWeight,0) }));
+  
   return (
     <div className="space-y-6">
       <Section title="Supplier-wise Purchases">
         <div className="overflow-auto">
           <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Lots</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+            <tbody>
+              {supplierRows.length===0? <tr><td colSpan={4} className="py-4">No data.</td></tr> : supplierRows.map((r, idx)=> (
+                <tr key={idx} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2">{r.supplierName}</td><td className="py-2 pr-2 text-right">{r.lotsCount}</td><td className="py-2 pr-2 text-right">{r.pieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.weight)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      
+      <Section title="Firm-wise Summary">
+        <div className="overflow-auto">
+          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2 text-right">Lots</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
             <tbody>
               {firmRows.length===0? <tr><td colSpan={4} className="py-4">No data.</td></tr> : firmRows.map((r, idx)=> (
                 <tr key={idx} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2 text-right">{r.lotsCount}</td><td className="py-2 pr-2 text-right">{r.pieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.weight)}</td></tr>
@@ -841,6 +912,7 @@ function AdminData({ db, onSaveBrand, savingBrand }) {
       <Section title="Raw Tables (Read-only preview)">
         <RawTable title="Items" rows={db.items} />
         <RawTable title="Firms" rows={db.firms} />
+        <RawTable title="Suppliers" rows={db.suppliers} />
         <RawTable title="Lots" rows={db.lots} />
         <RawTable title="Inbound Items" rows={db.inbound_items} />
         <RawTable title="Issues to Machine" rows={db.consumptions} />

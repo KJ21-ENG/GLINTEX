@@ -646,10 +646,10 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
         </div>
 
-        <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Avail Pcs</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+          <div className="overflow-auto">
+          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Pieces (available/out)</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
             <tbody>
-              {filteredLots.length===0? <tr><td colSpan={7} className="py-4">No lots match filters.</td></tr> : filteredLots.map(l=> (
+              {filteredLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : filteredLots.map(l=> (
                 <React.Fragment key={l.lotNo}>
                   <tr className={`border-t ${cls.rowBorder} align-top`} onClick={()=>toggleExpand(l.lotNo)} style={{ cursor: 'pointer' }}>
                     <td className="py-2 pr-2 font-medium">{l.lotNo}</td>
@@ -657,8 +657,9 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                     <td className="py-2 pr-2">{l.itemName}</td>
                     <td className="py-2 pr-2">{l.firmName}</td>
                     <td className="py-2 pr-2">{l.supplierName}</td>
-                    <td className="py-2 pr-2 text-right">{(l.pieces||[]).length}</td>
-                    <td className="py-2 pr-2 text-right">{formatKg((l.pieces||[]).reduce((s,p)=>s+p.weight,0))}</td>
+                    <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).length} / ${l.totalPieces ?? 0}`}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg((l.totalWeight || 0) - ((l.pieces||[]).reduce((s,p)=>s+p.weight,0)))}</td>
                   </tr>
                   {expandedLot === l.lotNo && (
                     <tr className={`border-t ${cls.rowBorder}`}>

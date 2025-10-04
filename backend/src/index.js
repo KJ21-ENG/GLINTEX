@@ -328,11 +328,17 @@ app.put('/api/inbound_items/:id', async (req, res) => {
 app.delete('/api/lots/:lotNo', async (req, res) => {
   try {
     const { lotNo } = req.params;
+    // Do not allow delete if any consumption exists for this lot
+    const consCount = await prisma.consumption.count({ where: { lotNo } });
+    if (consCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
+    }
+
     await prisma.$transaction(async (tx) => {
-      await tx.consumption.deleteMany({ where: { lotNo } });
       await tx.inboundItem.deleteMany({ where: { lotNo } });
       await tx.lot.deleteMany({ where: { lotNo } });
     });
+
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete lot', err);

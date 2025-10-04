@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Item {
+  id    String @id @default(cuid())
+  name  String
+  lots  Lot[]
+}
+
+model Firm {
+  id   String @id @default(cuid())
+  name String
+  lots Lot[]
+}
+
+model Lot {
+  id          String       @id @default(cuid())
+  lotNo       String       @unique
+  date        String
+  itemId      String
+  firmId      String
+  totalPieces Int
+  totalWeight Float
+  createdAt   DateTime     @default(now())
+  item        Item         @relation(fields: [itemId], references: [id])
+  firm        Firm         @relation(fields: [firmId], references: [id])
+}
+
+model InboundItem {
+  id        String  @id
+  lotNo     String
+  itemId    String
+  weight    Float
+  status    String
+  seq       Int
+  createdAt DateTime @default(now())
+}
+
+model Consumption {
+  id          String  @id
+  date        String
+  itemId      String
+  lotNo       String
+  count       Int
+  totalWeight Float
+  pieceIds    String
+  reason      String
+  note        String?
+}
+
+model Settings {
+  id           Int    @id @default(1)
+  brandPrimary String
+  brandGold    String
+  logoDataUrl  String?
+}
+
+

@@ -1,42 +1,25 @@
-import React, { useEffect, useMemo, useState, useContext, createContext } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState, createContext } from "react";
+import api from './api.js';
 
 /**
- * GLINTEX Inventory — Vite app
- * Matches Canvas v4 features with branding + theme toggle.
+ * GLINTEX Inventory — DB-backed React app
  */
 
-const DB_KEY = "glintex_db_v1";
 const THEME_KEY = "glintex_theme";
 
 const BrandCtx = createContext(null);
 function useBrand() { return useContext(BrandCtx); }
 
-function formatKg(n) { if (n==null || Number.isNaN(n)) return "0.000"; return Number(n).toFixed(3); }
+const defaultBrand = {
+  primary: "#2E4CA6",
+  gold: "#D4AF37",
+  logoDataUrl: "",
+};
+
+function formatKg(n) { if (n == null || Number.isNaN(n)) return "0.000"; return Number(n).toFixed(3); }
 function uid(prefix = "id") { return `${prefix}_${Math.random().toString(36).slice(2,8)}${Date.now().toString(36).slice(-4)}`; }
 function todayISO() { return new Date().toISOString().slice(0,10); }
 function yyyymmdd(dateISO) { return dateISO.replaceAll("-", ""); }
-
-function loadDB() { try { const raw = localStorage.getItem(DB_KEY); if (!raw) return null; return JSON.parse(raw); } catch { return null; } }
-function saveDB(db) { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-
-const defaultBrand = {
-  primary: "#2E4CA6", // GLINTEX blue (tweak if you prefer exact sample)
-  gold: "#D4AF37",    // gold
-  logoDataUrl: "",    // uploaded logo preview (optional)
-};
-
-const makeEmptyDB = () => ({
-  items: [],
-  firms: [],
-  lots: [],
-  inbound_items: [], // {id, lotNo, itemId, weight, status, seq, createdAt}
-  consumptions: [],  // issues to machine entries
-  counters: { lot: {} },
-  ui: {
-    issueSelections: {}, // { [lotNo]: string[] }
-    brand: defaultBrand,
-  },
-});
 
 function themeClasses(theme) {
   const dark = theme === "dark";
@@ -53,9 +36,30 @@ function themeClasses(theme) {
   return { baseText, headerBg, cardBg, cardBorder, input, muted, rowBorder, pill, navActive, navHover };
 }
 
-/****************************\
-|* Small UI helpers (no libs)*
-\****************************/
+function normalizeDb(raw) {
+  const ensureArr = (val) => (Array.isArray(val) ? val : []);
+  const items = ensureArr(raw?.items);
+  const firms = ensureArr(raw?.firms);
+  const lots = ensureArr(raw?.lots);
+  const inbound_items = ensureArr(raw?.inbound_items);
+  const consumptions = ensureArr(raw?.consumptions).map((c) => ({
+    ...c,
+    pieceIds: typeof c.pieceIds === 'string' ? c.pieceIds.split(',').filter(Boolean) : ensureArr(c.pieceIds),
+  }));
+  const settings = ensureArr(raw?.settings);
+  return { items, firms, lots, inbound_items, consumptions, settings };
+}
+
+function extractBrandFromDb(db) {
+  const settingsRow = db?.settings?.[0];
+  if (!settingsRow) return { ...defaultBrand };
+  return {
+    primary: settingsRow.brandPrimary || defaultBrand.primary,
+    gold: settingsRow.brandGold || defaultBrand.gold,
+    logoDataUrl: settingsRow.logoDataUrl || "",
+  };
+}
+
 const Section = ({ title, actions, children }) => {
   const { cls } = useBrand();
   return (
@@ -131,9 +135,6 @@ const Pill = ({ children, className = "" }) => {
   );
 };
 
-/*************************\
-|* App root & navigation *|
-\*************************/
 const TABS = [
   { key: "inbound", label: "Inbound" },
   { key: "stock", label: "Stock" },
@@ -144,63 +145,147 @@ const TABS = [
 ];
 
 export default function App() {
-  // Theme
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || "dark");
-
-  // Data
-  const [db, setDb] = useState(() => loadDB() || seedInitial());
+  const [db, setDb] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
   const [tab, setTab] = useState("inbound");
+  const [brandPreview, setBrandPreview] = useState(defaultBrand);
+  const [savingBrand, setSavingBrand] = useState(false);
 
-  // Derived UI helpers
-  const brand = db.ui?.brand || defaultBrand;
-  const cls = themeClasses(theme);
+  const cls = useMemo(() => themeClasses(theme), [theme]);
 
-  useEffect(() => { saveDB(db); }, [db]);
+  const loadDb = useCallback(async () => {
+    const raw = await api.getDB();
+    const normalized = normalizeDb(raw);
+    setDb(normalized);
+    return normalized;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const normalized = await loadDb();
+        if (cancelled) return;
+        setBrandPreview(extractBrandFromDb(normalized));
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to load DB", err);
+        setError(err.message || "Failed to load data from server");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loadDb]);
+
+  const refreshDb = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const normalized = await loadDb();
+      setBrandPreview(extractBrandFromDb(normalized));
+      setError(null);
+      return normalized;
+    } catch (err) {
+      console.error("Refresh failed", err);
+      setError(err.message || "Failed to refresh data");
+      throw err;
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadDb]);
+
   useEffect(() => { localStorage.setItem(THEME_KEY, theme); }, [theme]);
-
-  // Keep the document <html> data-theme in sync so CSS variables switch
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    document.documentElement.style.setProperty('--brand-primary', brandPreview.primary);
+    document.documentElement.style.setProperty('--brand-gold', brandPreview.gold);
+  }, [brandPreview.primary, brandPreview.gold]);
 
-  const setBrand = (fnOrObj) => {
-    setDb(prev => {
-      const next = typeof fnOrObj === 'function' ? fnOrObj(prev.ui?.brand || defaultBrand) : fnOrObj;
-      return { ...prev, ui: { ...(prev.ui||{}), brand: next } };
-    });
-  };
+  const brandCtxValue = useMemo(() => ({ theme, setTheme, brand: brandPreview, setBrand: setBrandPreview, cls }), [theme, setTheme, brandPreview, cls]);
 
-  useEffect(() => {
-    // Sync brand colors to CSS custom properties so pure-CSS parts pick them up
-    document.documentElement.style.setProperty('--brand-primary', brand.primary);
-    document.documentElement.style.setProperty('--brand-gold', brand.gold);
-  }, [brand.primary, brand.gold]);
+  const handleCreateLot = useCallback(async (payload) => {
+    await api.createLot(payload);
+    await refreshDb();
+  }, [refreshDb]);
 
-  // Helper: convert #RRGGBB to rgba() with alpha
-  function hexToRgba(hex, alpha = 1) {
-    if (!hex) return `rgba(0,0,0,${alpha})`;
-    const h = hex.replace('#', '').trim();
-    if (h.length !== 6) return `rgba(0,0,0,${alpha})`;
-    const r = parseInt(h.slice(0,2), 16);
-    const g = parseInt(h.slice(2,4), 16);
-    const b = parseInt(h.slice(4,6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
+  const handleIssuePieces = useCallback(async (payload) => {
+    await api.issuePieces(payload);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateItem = useCallback(async (name) => {
+    await api.createItem(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteItem = useCallback(async (id) => {
+    await api.deleteItem(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateFirm = useCallback(async (name) => {
+    await api.createFirm(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteFirm = useCallback(async (id) => {
+    await api.deleteFirm(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleSaveBrand = useCallback(async (values) => {
+    setSavingBrand(true);
+    try {
+      await api.updateSettings(values);
+      setBrandPreview(values);
+      await refreshDb();
+    } finally {
+      setSavingBrand(false);
+    }
+  }, [refreshDb]);
+
+  const headerLogo = brandPreview.logoDataUrl || "/brand-logo.jpg";
+
+  if (loading) {
+    return (
+      <BrandCtx.Provider value={brandCtxValue}>
+        <div className={`min-h-screen w-full grid place-items-center ${cls.baseText}`}>
+          <div className="text-center space-y-2">
+            <div className="text-lg font-semibold">Loading inventory…</div>
+            {error && <div className="text-sm opacity-70">{error}</div>}
+          </div>
+        </div>
+      </BrandCtx.Provider>
+    );
   }
 
-  const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
-
-  // Static logo fallback from /public/brand-logo.jpg if user hasn't uploaded
-  const headerLogo = brand.logoDataUrl || "/brand-logo.jpg";
+  if (!db) {
+    return (
+      <BrandCtx.Provider value={brandCtxValue}>
+        <div className={`min-h-screen w-full grid place-items-center ${cls.baseText}`}>
+          <div className="text-center space-y-3">
+            <div className="text-lg font-semibold">Unable to load data</div>
+            {error && <div className="text-sm opacity-70">{error}</div>}
+            <div>
+              <Button onClick={() => { setLoading(true); refreshDb().finally(() => setLoading(false)); }}>Retry</Button>
+            </div>
+          </div>
+        </div>
+      </BrandCtx.Provider>
+    );
+  }
 
   return (
-    <BrandCtx.Provider value={{ theme, setTheme, brand, setBrand, cls }}>
-      <div className={`min-h-screen w-full ${cls.baseText}`}
-        style={{ backgroundColor: 'var(--bg)' }}
-      >
+    <BrandCtx.Provider value={brandCtxValue}>
+      <div className={`min-h-screen w-full ${cls.baseText}`} style={{ backgroundColor: 'var(--bg)' }}>
         <header className={`sticky top-0 z-20 backdrop-blur border-b ${cls.headerBg}`}>
           <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl grid place-items-center font-bold border overflow-hidden" style={{ background: "#fff", borderColor: brand.gold }}>
+              <div className="w-9 h-9 rounded-xl grid place-items-center font-bold border overflow-hidden" style={{ background: "#fff", borderColor: brandPreview.gold }}>
                 <img src={headerLogo} alt="GLINTEX" className="w-9 h-9 object-contain" />
               </div>
               <div>
@@ -221,42 +306,41 @@ export default function App() {
                   {TABS.map(t=> <option key={t.key} value={t.key}>{t.label}</option>)}
                 </Select>
               </div>
-              <SecondaryButton onClick={toggleTheme}>{theme === "dark" ? "☀️ Light" : "🌙 Dark"}</SecondaryButton>
+              <SecondaryButton onClick={() => setTheme(t => (t === "dark" ? "light" : "dark"))}>{theme === "dark" ? "☀️ Light" : "🌙 Dark"}</SecondaryButton>
             </div>
           </div>
         </header>
 
+        {error && (
+          <div className="bg-orange-500/10 border border-orange-400/30 text-orange-200 px-4 py-2 text-sm text-center">
+            {error} <button className="underline ml-2" onClick={() => refreshDb().catch(() => {})}>Retry</button>
+          </div>
+        )}
+
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-          {tab === "inbound" && <Inbound db={db} setDb={setDb} />}
+          {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
           {tab === "stock" && <Stock db={db} />}
-          {tab === "issue" && <IssueToMachine db={db} setDb={setDb} />}
-          {tab === "masters" && <Masters db={db} setDb={setDb} />}
+          {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
+          {tab === "masters" && <Masters
+            db={db}
+            onAddItem={handleCreateItem}
+            onDeleteItem={handleDeleteItem}
+            onAddFirm={handleCreateFirm}
+            onDeleteFirm={handleDeleteFirm}
+            refreshing={refreshing}
+          />}
           {tab === "reports" && <Reports db={db} />}
-          {tab === "data" && <AdminData db={db} setDb={setDb} />}
+          {tab === "data" && <AdminData db={db} onSaveBrand={handleSaveBrand} savingBrand={savingBrand || refreshing} />}
         </main>
       </div>
     </BrandCtx.Provider>
   );
 }
 
-/****************
- * Seed helpers *
- ****************/
-function seedInitial() {
-  const db = makeEmptyDB();
-  const i1 = { id: uid("item"), name: "Metallic Yarn" };
-  const i2 = { id: uid("item"), name: "Polyester Yarn" };
-  const f1 = { id: uid("firm"), name: "ABC Suppliers" };
-  const f2 = { id: uid("firm"), name: "Shree Traders" };
-  db.items.push(i1, i2); db.firms.push(f1, f2);
-  saveDB(db);
-  return db;
-}
-
 /*********************
 |* Inbound Receiving  *
 \*********************/
-function Inbound({ db, setDb }) {
+function Inbound({ db, onCreateLot, refreshing }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState(db.items[0]?.id || "");
@@ -264,14 +348,21 @@ function Inbound({ db, setDb }) {
   const [lotNo, setLotNo] = useState("");
   const [weight, setWeight] = useState("");
   const [cart, setCart] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { if (db.items.length && !db.items.some(i => i.id === itemId)) setItemId(db.items[0]?.id || ""); }, [db.items, itemId]);
+  useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(db.firms[0]?.id || ""); }, [db.firms, firmId]);
 
   const canAdd = date && itemId && firmId && lotNo && Number(weight) > 0;
-  const canSave = cart.length > 0 && date && itemId && firmId && lotNo;
+  const canSave = cart.length > 0 && date && itemId && firmId && lotNo && !saving;
 
   function startNewLot() {
+    if (!date || !itemId || !firmId) { alert('Select date, item and firm first.'); return; }
     const seq = nextLotSequence(db, date);
     const newLotNo = `${yyyymmdd(date)}-${String(seq).padStart(3, "0")}`;
-    setLotNo(newLotNo); setCart([]); setWeight("");
+    setLotNo(newLotNo);
+    setCart([]);
+    setWeight("");
   }
 
   function addPiece() {
@@ -285,39 +376,44 @@ function Inbound({ db, setDb }) {
     setCart(cart.filter(c => c.tempId !== tempId).map((c, idx) => ({...c, seq: idx+1})));
   }
 
-  function saveLot() {
+  async function saveLot() {
     if (!canSave) return;
     if (db.lots.some(l => l.lotNo === lotNo)) { alert(`Lot ${lotNo} already exists.`); return; }
-
-    const totalPieces = cart.length;
-    const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
-
-    const lot = { lotNo, date, itemId, firmId, totalPieces, totalWeight, createdAt: new Date().toISOString() };
-    const items = cart.map((row, idx) => ({ id: `${lotNo}-${idx+1}`, lotNo, itemId, weight: Number(row.weight), status: "available", seq: idx+1, createdAt: new Date().toISOString() }));
-
-    const nextCounters = { ...db.counters };
-    const dkey = yyyymmdd(date);
-    nextCounters.lot = { ...nextCounters.lot, [dkey]: (nextCounters.lot?.[dkey] || 0) + 1 };
-
-    setDb({ ...db, counters: nextCounters, lots: [...db.lots, lot], inbound_items: [...db.inbound_items, ...items] });
-    setCart([]); setWeight("");
-    alert(`Saved Lot ${lotNo} with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
+    setSaving(true);
+    try {
+      const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
+      await onCreateLot({ lotNo, date, itemId, firmId, pieces });
+      const totalPieces = cart.length;
+      const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
+      alert(`Saved Lot ${lotNo} with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
+      setCart([]);
+      setWeight("");
+      setLotNo("");
+    } catch (err) {
+      alert(err.message || 'Failed to save lot');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="space-y-6">
       <Section
         title="Inbound Receiving"
-        actions={<><SecondaryButton onClick={startNewLot}>Start New Lot</SecondaryButton><Pill>Lot No is auto‑generated & non‑editable</Pill></>}
+        actions={<><SecondaryButton onClick={startNewLot}>Start New Lot</SecondaryButton><Pill>Lot No is auto-generated & stored in database</Pill></>}
       >
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setLotNo(""); setCart([]);}} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Firm (Supplier)</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Firm (Supplier)</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Lot No (auto)</label><Input value={lotNo} readOnly placeholder="Click Start New Lot" /></div>
           <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="e.g. 1.250" /></div>
         </div>
-        <div className="mt-3 flex gap-2"><Button onClick={addPiece} disabled={!canAdd}>Add</Button><SecondaryButton onClick={()=>setCart([])} disabled={cart.length===0}>Clear Cart</SecondaryButton><Button onClick={saveLot} disabled={!canSave} className="ml-auto">Save Lot</Button></div>
+        <div className="mt-3 flex gap-2">
+          <Button onClick={addPiece} disabled={!canAdd}>Add</Button>
+          <SecondaryButton onClick={()=>setCart([])} disabled={cart.length===0}>Clear Cart</SecondaryButton>
+          <Button onClick={saveLot} disabled={!canSave || refreshing} className="ml-auto">{saving ? 'Saving…' : 'Save Lot'}</Button>
+        </div>
         <CartPreview lotNo={lotNo} cart={cart} removeFromCart={removeFromCart} />
       </Section>
       <Section title="Recent Lots"><RecentLots db={db} /></Section>
@@ -353,11 +449,18 @@ function CartPreview({ lotNo, cart, removeFromCart }) {
   );
 }
 
-function nextLotSequence(db, dateISO) { const key = yyyymmdd(dateISO); const current = db.counters?.lot?.[key] || 0; return current + 1; }
+function nextLotSequence(db, dateISO) {
+  const countForDate = db.lots.filter(l => l.date === dateISO).length;
+  return countForDate + 1;
+}
 
 function RecentLots({ db }) {
   const { cls } = useBrand();
-  const rows = [...db.lots].sort((a,b)=> b.createdAt.localeCompare(a.createdAt)).slice(0,8).map(l=>({ ...l, itemName: db.items.find(i=>i.id===l.itemId)?.name || "—", firmName: db.firms.find(f=>f.id===l.firmId)?.name || "—" }));
+  const rows = [...db.lots].sort((a,b)=> b.createdAt?.localeCompare?.(a.createdAt) || 0).slice(0,8).map(l=>({
+    ...l,
+    itemName: db.items.find(i=>i.id===l.itemId)?.name || "—",
+    firmName: db.firms.find(f=>f.id===l.firmId)?.name || "—",
+  }));
   return (
     <div className="overflow-auto">
       <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
@@ -411,28 +514,29 @@ function Stock({ db }) {
 /***************************
 |* Issue to Machine        *
 \***************************/
-function IssueToMachine({ db, setDb }) {
+function IssueToMachine({ db, onIssuePieces, refreshing }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState(db.items[0]?.id || "");
-  const candidateLots = useMemo(() => db.lots.filter(l => l.itemId === itemId), [db.lots, itemId]);
-  const [lotNo, setLotNo] = useState(candidateLots[0]?.lotNo || "");
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState([]);
+  const [issuing, setIssuing] = useState(false);
 
   useEffect(() => {
-    const lots = db.lots.filter(l => l.itemId === itemId);
-    const first = lots[0]?.lotNo || "";
+    if (db.items.length && !db.items.some(i => i.id === itemId)) {
+      setItemId(db.items[0]?.id || "");
+    }
+  }, [db.items, itemId]);
+
+  const candidateLots = useMemo(() => db.lots.filter(l => l.itemId === itemId), [db.lots, itemId]);
+  const [lotNo, setLotNo] = useState(candidateLots[0]?.lotNo || "");
+
+  useEffect(() => {
+    const first = candidateLots[0]?.lotNo || "";
     setLotNo(first);
-  }, [itemId, db.lots]);
+  }, [candidateLots]);
 
-  useEffect(() => {
-    if (!lotNo) { setSelected([]); return; }
-    const saved = db.ui?.issueSelections?.[lotNo] || [];
-    const availSet = new Set(db.inbound_items.filter(ii => ii.lotNo===lotNo && ii.status==='available').map(ii=>ii.id));
-    const filtered = saved.filter(id => availSet.has(id));
-    setSelected(filtered);
-  }, [lotNo, db.inbound_items]);
+  useEffect(() => { setSelected([]); }, [lotNo]);
 
   const availablePieces = useMemo(() => db.inbound_items
     .filter(ii => ii.lotNo===lotNo && ii.itemId===itemId && ii.status==='available')
@@ -443,29 +547,30 @@ function IssueToMachine({ db, setDb }) {
     return rows[0] || null;
   }, [db.consumptions, lotNo]);
 
-  function persistSelection(l, ids) {
-    setDb(prev => ({ ...prev, ui: { ...prev.ui, issueSelections: { ...(prev.ui?.issueSelections||{}), [l]: ids } } }));
+  function toggle(id) {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
-  function toggle(id) { const next = selected.includes(id) ? selected.filter(x=>x!==id) : [...selected, id]; setSelected(next); persistSelection(lotNo, next); }
-  function selectAll() { const all = availablePieces.map(p=>p.id); setSelected(all); persistSelection(lotNo, all); }
-  function clearSel() { setSelected([]); persistSelection(lotNo, []); }
+  function selectAll() { setSelected(availablePieces.map(p=>p.id)); }
+  function clearSel() { setSelected([]); }
 
-  function issue() {
+  async function issue() {
     if (!date || !itemId || !lotNo || selected.length===0) return;
     const availSet = new Set(availablePieces.map(p=>p.id));
     const chosen = selected.filter(id => availSet.has(id));
     if (chosen.length===0) { alert("Nothing to issue. Selected pieces are not available."); return; }
-
-    const picked = availablePieces.filter(p=> chosen.includes(p.id));
-    const totalWeight = picked.reduce((s,p)=>s+p.weight,0);
-
-    const updatedItems = db.inbound_items.map(ii => chosen.includes(ii.id) ? { ...ii, status: 'consumed' } : ii);
-    const entry = { id: uid("use"), date, itemId, lotNo, count: chosen.length, totalWeight, pieceIds: chosen, reason: 'internal', note };
-
-    const remainingSel = (db.ui?.issueSelections?.[lotNo] || []).filter(id => !chosen.includes(id));
-    setDb({ ...db, inbound_items: updatedItems, consumptions: [...db.consumptions, entry], ui: { ...db.ui, issueSelections: { ...(db.ui?.issueSelections||{}), [lotNo]: remainingSel } } });
-    setSelected([]); setNote("");
-    alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)`);
+    setIssuing(true);
+    try {
+      await onIssuePieces({ date, itemId, lotNo, pieceIds: chosen, note });
+      const picked = availablePieces.filter(p=> chosen.includes(p.id));
+      const totalWeight = picked.reduce((s,p)=>s+p.weight,0);
+      alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)`);
+      setSelected([]);
+      setNote("");
+    } catch (err) {
+      alert(err.message || 'Failed to issue pieces');
+    } finally {
+      setIssuing(false);
+    }
   }
 
   return (
@@ -473,7 +578,7 @@ function IssueToMachine({ db, setDb }) {
       <Section title="Issue to machine">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>setDate(e.target.value)} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
           <div className="md:col-span-2"><label className={`text-xs ${cls.muted}`}>Note (optional)</label><Input value={note} onChange={e=>setNote(e.target.value)} placeholder="Reference / reason" /></div>
         </div>
@@ -483,7 +588,7 @@ function IssueToMachine({ db, setDb }) {
           <Pill>Selected: {selected.length} pcs</Pill>
           <SecondaryButton onClick={selectAll} disabled={availablePieces.length===0}>Select all</SecondaryButton>
           <SecondaryButton onClick={clearSel} disabled={selected.length===0}>Clear</SecondaryButton>
-          <Button onClick={issue} disabled={selected.length===0} className="ml-auto">Issue</Button>
+          <Button onClick={issue} disabled={selected.length===0 || refreshing || issuing} className="ml-auto">{issuing ? 'Issuing…' : 'Issue'}</Button>
         </div>
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -534,8 +639,8 @@ function IssueHistory({ db }) {
       <table className="w-full text-sm">
         <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th></tr></thead>
         <tbody>
-          {rows.length===0? <tr><td colSpan={7} className="py-4">No issues yet.</td></tr> : rows.map(r => (
-            <tr key={r.id} className={`border-t ${cls.rowBorder} align-top`}>
+          {rows.length===0? <tr><td colSpan={7} className="py-4">No issues yet.</td></tr> : rows.map((r, idx) => (
+            <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top`}>
               <td className="py-2 pr-2">{r.date}</td>
               <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
               <td className="py-2 pr-2">{r.lotNo}</td>
@@ -554,26 +659,88 @@ function IssueHistory({ db }) {
 /*********************
 |* Masters (Items/Firms)
 \*********************/
-function Masters({ db, setDb }) {
+function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, refreshing }) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
+  const [working, setWorking] = useState(false);
 
-  function addItem() { const name = itemName.trim(); if (!name) return; if (db.items.some(i => i.name.toLowerCase() === name.toLowerCase())) { alert("Item already exists"); return; } setDb({ ...db, items: [...db.items, { id: uid("item"), name }] }); setItemName(""); }
-  function deleteItem(id) { if (!confirm("Delete item? You cannot remove it if referenced by lots.")) return; const used = db.lots.some(l => l.itemId === id) || db.inbound_items.some(ii => ii.itemId === id); if (used) { alert("Item in use. Cannot delete."); return; } setDb({ ...db, items: db.items.filter(i=>i.id!==id) }); }
-  function addFirm() { const name = firmName.trim(); if (!name) return; if (db.firms.some(f => f.name.toLowerCase() === name.toLowerCase())) { alert("Firm already exists"); return; } setDb({ ...db, firms: [...db.firms, { id: uid("firm"), name }] }); setFirmName(""); }
-  function deleteFirm(id) { if (!confirm("Delete firm? You cannot remove it if referenced by lots.")) return; const used = db.lots.some(l => l.firmId === id); if (used) { alert("Firm in use. Cannot delete."); return; } setDb({ ...db, firms: db.firms.filter(f=>f.id!==id) }); }
+  async function addItem() {
+    const name = itemName.trim();
+    if (!name) return;
+    if (db.items.some(i => i.name.toLowerCase() === name.toLowerCase())) { alert("Item already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddItem(name);
+      setItemName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add item');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteItem(id) {
+    if (!confirm("Delete item? You cannot remove it if referenced by lots.")) return;
+    setWorking(true);
+    try {
+      await onDeleteItem(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete item');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function addFirm() {
+    const name = firmName.trim();
+    if (!name) return;
+    if (db.firms.some(f => f.name.toLowerCase() === name.toLowerCase())) { alert("Firm already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddFirm(name);
+      setFirmName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add firm');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteFirm(id) {
+    if (!confirm("Delete firm? You cannot remove it if referenced by lots.")) return;
+    setWorking(true);
+    try {
+      await onDeleteFirm(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete firm');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const disable = working || refreshing;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <Section title="Items">
-        <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem}>Add</Button></div>
-        <ul className="space-y-2">{db.items.map(i => (<li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}><span>{i.name}</span><SecondaryButton onClick={()=>deleteItem(i.id)}>Delete</SecondaryButton></li>))}</ul>
+        <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
+        <ul className="space-y-2">{db.items.map(i => (
+          <li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+            <span>{i.name}</span>
+            <SecondaryButton onClick={()=>deleteItem(i.id)} disabled={disable}>Delete</SecondaryButton>
+          </li>
+        ))}</ul>
       </Section>
 
       <Section title="Firms (Suppliers)">
-        <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm}>Add</Button></div>
-        <ul className="space-y-2">{db.firms.map(f => (<li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}><span>{f.name}</span><SecondaryButton onClick={()=>deleteFirm(f.id)}>Delete</SecondaryButton></li>))}</ul>
+        <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
+        <ul className="space-y-2">{db.firms.map(f => (
+          <li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+            <span>{f.name}</span>
+            <SecondaryButton onClick={()=>deleteFirm(f.id)} disabled={disable}>Delete</SecondaryButton>
+          </li>
+        ))}</ul>
       </Section>
     </div>
   );
@@ -608,19 +775,40 @@ function Reports({ db }) {
 /*********************
 |* Admin / Data       *
 \*********************/
-function AdminData({ db, setDb }) {
+function AdminData({ db, onSaveBrand, savingBrand }) {
   const { brand, setBrand, cls } = useBrand();
+  const [localBrand, setLocalBrand] = useState(brand);
+  const [saving, setSaving] = useState(false);
 
-  function exportJSON() { const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `glintex_inventory_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); }
-  function importJSON(e) { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const parsed = JSON.parse(String(reader.result)); if (!parsed || !parsed.items || !parsed.firms || !parsed.lots || !parsed.inbound_items) throw new Error("Invalid backup file"); setDb(parsed); alert("Import successful."); } catch (err) { alert("Failed to import: " + err.message); } }; reader.readAsText(file); }
+  useEffect(() => {
+    setLocalBrand(brand);
+  }, [brand.primary, brand.gold, brand.logoDataUrl]);
 
-  function resetDB() { if (!confirm("This will erase all data (keeps initial seeds). Continue?")) return; const fresh = seedInitial(); setDb(fresh); }
+  function updateBrandField(field, value) {
+    const next = { ...localBrand, [field]: value };
+    setLocalBrand(next);
+    setBrand(next);
+  }
 
   function onLogo(e) {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => { setBrand(prev => ({ ...prev, logoDataUrl: String(reader.result) })); };
+    reader.onload = () => {
+      updateBrandField('logoDataUrl', String(reader.result));
+    };
     reader.readAsDataURL(file);
+  }
+
+  async function saveBrand() {
+    setSaving(true);
+    try {
+      await onSaveBrand(localBrand);
+      alert('Branding updated');
+    } catch (err) {
+      alert(err.message || 'Failed to save branding');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -629,29 +817,25 @@ function AdminData({ db, setDb }) {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={`text-xs ${cls.muted}`}>Primary (Blue) — HEX</label>
-            <Input value={brand.primary} onChange={e=>setBrand(prev=>({ ...prev, primary: e.target.value }))} />
+            <Input value={localBrand.primary} onChange={e=>updateBrandField('primary', e.target.value)} />
           </div>
           <div>
             <label className={`text-xs ${cls.muted}`}>Accent (Gold) — HEX</label>
-            <Input value={brand.gold} onChange={e=>setBrand(prev=>({ ...prev, gold: e.target.value }))} />
+            <Input value={localBrand.gold} onChange={e=>updateBrandField('gold', e.target.value)} />
           </div>
           <div className="flex items-end gap-2">
             <label className="inline-flex items-center gap-2">
               <SecondaryButton as="span">Upload Logo</SecondaryButton>
               <input type="file" accept="image/*" onChange={onLogo} className="hidden" />
             </label>
-            <img src={brand.logoDataUrl || "/brand-logo.jpg"} alt="logo" className="h-9 object-contain border rounded-lg" />
+            <img src={localBrand.logoDataUrl || "/brand-logo.jpg"} alt="logo" className="h-9 object-contain border rounded-lg" />
           </div>
         </div>
         <div className="mt-3 flex gap-2 items-center">
           <Pill>Preview</Pill>
-          <Button>Primary Button</Button>
-          <SecondaryButton>Secondary</SecondaryButton>
+          <Button disabled={saving || savingBrand} onClick={saveBrand}>{saving || savingBrand ? 'Saving…' : 'Save Branding'}</Button>
+          <SecondaryButton onClick={() => setLocalBrand(brand)}>Reset</SecondaryButton>
         </div>
-      </Section>
-
-      <Section title="Backup & Restore">
-        <div className="flex flex-col md:flex-row gap-3"><Button onClick={exportJSON}>Export JSON</Button><label className="inline-flex items-center gap-2"><SecondaryButton>Import JSON</SecondaryButton><input type="file" accept="application/json" onChange={importJSON} className="hidden" /></label><SecondaryButton onClick={resetDB}>Reset DB</SecondaryButton></div>
       </Section>
 
       <Section title="Raw Tables (Read-only preview)">
@@ -665,7 +849,9 @@ function AdminData({ db, setDb }) {
   );
 }
 
-function RawTable({ title, rows }) { const { cls } = useBrand(); const keys = Object.keys(rows[0] || {}); 
+function RawTable({ title, rows }) {
+  const { cls } = useBrand();
+  const keys = Object.keys(rows[0] || {});
   return (
     <div className="mb-6">
       <h3 className={`text-sm uppercase tracking-wide mb-2 ${cls.muted}`}>{title}</h3>
@@ -686,3 +872,5 @@ function RawTable({ title, rows }) { const { cls } = useBrand(); const keys = Ob
 |* Utilities          *
 \*********************/
 function groupBy(arr, keyFn) { const m = {}; for (const x of arr) { const k = keyFn(x); (m[k] ||= []).push(x);} return m; }
+
+export { useBrand };

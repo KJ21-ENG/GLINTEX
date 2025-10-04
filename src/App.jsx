@@ -666,9 +666,9 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                         <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
                           <div className="mb-2 flex items-center gap-2">
                           <Pill>Available: {(l.pieces||[]).length} pcs</Pill>
-                          <Pill>Selected: {(selectedByLot[l.lotNo]||[]).length} pcs</Pill>
-                          <SecondaryButton onClick={(e)=>{ e.stopPropagation(); selectAll(l.lotNo); }} disabled={(l.pieces||[]).length===0}>Select all</SecondaryButton>
-                          <SecondaryButton onClick={(e)=>{ e.stopPropagation(); clearSel(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length}>Clear</SecondaryButton>
+                          <button onClick={(e)=>{ e.stopPropagation(); if(!confirm('Delete lot '+l.lotNo+'? This will remove all pieces and history for this lot.')) return; api.deleteLot(l.lotNo).then(()=>{ refreshDb().catch(()=>{}); alert('Deleted'); }).catch(err=>alert(err.message || err)); }} title="Delete lot" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ml-2 hover:opacity-90`}>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6h18M8 6v12a2 2 0 002 2h4a2 2 0 002-2V6M10 6V4a2 2 0 012-2h0a2 2 0 012 2v2"/></svg>
+                          </button>
                           <div className="ml-auto flex items-center gap-2">
                             <label className={`text-xs ${cls.muted}`}>Date</label>
                             <Input type="date" value={(issueMetaByLot[l.lotNo]||{}).date || todayISO()} onChange={e=>{ setIssueMeta(l.lotNo, { date: e.target.value }); }} style={{ width: 140 }} />

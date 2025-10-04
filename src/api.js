@@ -37,6 +37,7 @@ export async function listSuppliers() { return await request('/api/suppliers'); 
 export async function createSupplier(name) { return await request('/api/suppliers', { method: 'POST', body: { name } }); }
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
+export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 
 export default {
   health,
@@ -44,6 +45,7 @@ export default {
   createLot,
   issuePieces,
   updateInboundItem,
+  deleteLot,
   listItems,
   createItem,
   deleteItem,

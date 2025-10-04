@@ -324,6 +324,22 @@ app.put('/api/inbound_items/:id', async (req, res) => {
   }
 });
 
+// Delete a lot and its inbound items and consumptions
+app.delete('/api/lots/:lotNo', async (req, res) => {
+  try {
+    const { lotNo } = req.params;
+    await prisma.$transaction(async (tx) => {
+      await tx.consumption.deleteMany({ where: { lotNo } });
+      await tx.inboundItem.deleteMany({ where: { lotNo } });
+      await tx.lot.deleteMany({ where: { lotNo } });
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete lot', err);
+    res.status(500).json({ error: err.message || 'Failed to delete lot' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
 });

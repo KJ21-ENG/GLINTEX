@@ -28,8 +28,8 @@ app.get('/api/db', async (req, res) => {
 
 app.post('/api/lots', async (req, res) => {
   try {
-    const { lotNo, date, itemId, firmId, supplierId, pieces } = req.body;
-    if (!lotNo || !date || !itemId || !firmId || !supplierId) {
+    const { date, itemId, firmId, supplierId, pieces } = req.body;
+    if (!date || !itemId || !firmId || !supplierId) {
       return res.status(400).json({ error: 'Missing required lot fields' });
     }
     if (!Array.isArray(pieces) || pieces.length === 0) {
@@ -43,12 +43,8 @@ app.post('/api/lots', async (req, res) => {
         throw new Error(`Invalid weight for piece ${idx + 1}`);
       }
       return {
-        id: `${lotNo}-${seq}`,
-        lotNo,
-        itemId,
-        weight,
-        status: 'available',
         seq,
+        weight,
       };
     });
 
@@ -56,6 +52,25 @@ app.post('/api/lots', async (req, res) => {
     const totalWeight = preparedPieces.reduce((sum, piece) => sum + piece.weight, 0);
 
     const result = await prisma.$transaction(async (tx) => {
+      // Get next lot number from sequence
+      const sequence = await tx.sequence.upsert({
+        where: { id: 'lot_sequence' },
+        update: { nextValue: { increment: 1 } },
+        create: { id: 'lot_sequence', nextValue: 1 }
+      });
+
+      // Use the sequence value directly as the lot number (e.g. "001", "002")
+      const lotNo = String(sequence.nextValue).padStart(3, "0");
+      
+      // Update piece IDs with the actual lot number
+      const updatedPieces = preparedPieces.map((piece, idx) => ({
+        ...piece,
+        id: `${lotNo}-${idx + 1}`,
+        lotNo,
+        itemId,
+        status: 'available',
+      }));
+
       const lot = await tx.lot.create({
         data: {
           lotNo,
@@ -68,7 +83,7 @@ app.post('/api/lots', async (req, res) => {
         },
       });
 
-      await tx.inboundItem.createMany({ data: preparedPieces });
+      await tx.inboundItem.createMany({ data: updatedPieces });
 
       return lot;
     });

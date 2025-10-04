@@ -69,4 +69,9 @@ model Settings {
   logoDataUrl  String?
 }
 
+model Sequence {
+  id        String @id @default("lot_sequence")
+  nextValue Int    @default(1)
+}
+
 

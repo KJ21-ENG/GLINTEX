@@ -359,7 +359,6 @@ function Inbound({ db, onCreateLot, refreshing }) {
   const [itemId, setItemId] = useState(db.items[0]?.id || "");
   const [firmId, setFirmId] = useState(db.firms[0]?.id || "");
   const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
-  const [lotNo, setLotNo] = useState("");
   const [weight, setWeight] = useState("");
   const [cart, setCart] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -368,17 +367,8 @@ function Inbound({ db, onCreateLot, refreshing }) {
   useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(db.firms[0]?.id || ""); }, [db.firms, firmId]);
   useEffect(() => { if (db.suppliers.length && !db.suppliers.some(s => s.id === supplierId)) setSupplierId(db.suppliers[0]?.id || ""); }, [db.suppliers, supplierId]);
 
-  const canAdd = date && itemId && firmId && supplierId && lotNo && Number(weight) > 0;
-  const canSave = cart.length > 0 && date && itemId && firmId && supplierId && lotNo && !saving;
-
-  function startNewLot() {
-    if (!date || !itemId || !firmId || !supplierId) { alert('Select date, item, firm and supplier first.'); return; }
-    const seq = nextLotSequence(db, date);
-    const newLotNo = `${yyyymmdd(date)}-${String(seq).padStart(3, "0")}`;
-    setLotNo(newLotNo);
-    setCart([]);
-    setWeight("");
-  }
+  const canAdd = date && itemId && firmId && supplierId && Number(weight) > 0;
+  const canSave = cart.length > 0 && date && itemId && firmId && supplierId && !saving;
 
   function addPiece() {
     if (!canAdd) return;
@@ -393,17 +383,15 @@ function Inbound({ db, onCreateLot, refreshing }) {
 
   async function saveLot() {
     if (!canSave) return;
-    if (db.lots.some(l => l.lotNo === lotNo)) { alert(`Lot ${lotNo} already exists.`); return; }
     setSaving(true);
     try {
       const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
-      await onCreateLot({ lotNo, date, itemId, firmId, supplierId, pieces });
+      await onCreateLot({ date, itemId, firmId, supplierId, pieces });
       const totalPieces = cart.length;
       const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
-      alert(`Saved Lot ${lotNo} with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
+      alert(`Saved Lot with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
       setCart([]);
       setWeight("");
-      setLotNo("");
     } catch (err) {
       alert(err.message || 'Failed to save lot');
     } finally {
@@ -415,14 +403,13 @@ function Inbound({ db, onCreateLot, refreshing }) {
     <div className="space-y-6">
       <Section
         title="Inbound Receiving"
-        actions={<><SecondaryButton onClick={startNewLot}>Start New Lot</SecondaryButton><Pill>Lot No is auto-generated & stored in database</Pill></>}
+        actions={<Pill>Lot No is auto-generated from database sequence</Pill>}
       >
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4">
-          <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setLotNo(""); setCart([]);}} /></div>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
+          <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setCart([]);}} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>{db.suppliers.length===0? <option>No suppliers</option> : db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Lot No (auto)</label><Input value={lotNo} readOnly placeholder="Click Start New Lot" /></div>
           <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="e.g. 1.250" /></div>
         </div>
         <div className="mt-3 flex gap-2">
@@ -430,14 +417,14 @@ function Inbound({ db, onCreateLot, refreshing }) {
           <SecondaryButton onClick={()=>setCart([])} disabled={cart.length===0}>Clear Cart</SecondaryButton>
           <Button onClick={saveLot} disabled={!canSave || refreshing} className="ml-auto">{saving ? 'Saving…' : 'Save Lot'}</Button>
         </div>
-        <CartPreview lotNo={lotNo} cart={cart} removeFromCart={removeFromCart} />
+        <CartPreview cart={cart} removeFromCart={removeFromCart} />
       </Section>
       <Section title="Recent Lots"><RecentLots db={db} /></Section>
     </div>
   );
 }
 
-function CartPreview({ lotNo, cart, removeFromCart }) {
+function CartPreview({ cart, removeFromCart }) {
   const { cls } = useBrand();
   return (
     <div className="mt-6">
@@ -452,7 +439,7 @@ function CartPreview({ lotNo, cart, removeFromCart }) {
               {cart.map((r) => (
                 <tr key={r.tempId} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2">{r.seq}</td>
-                  <td className="py-2 pr-2">{lotNo ? `${lotNo}-${r.seq}` : "—"}</td>
+                  <td className="py-2 pr-2">Auto-generated</td>
                   <td className="py-2 pr-2">{formatKg(r.weight)}</td>
                   <td className="py-2 pl-2 text-right"><SecondaryButton onClick={()=>removeFromCart(r.tempId)}>Remove</SecondaryButton></td>
                 </tr>
@@ -463,11 +450,6 @@ function CartPreview({ lotNo, cart, removeFromCart }) {
       )}
     </div>
   );
-}
-
-function nextLotSequence(db, dateISO) {
-  const countForDate = db.lots.filter(l => l.date === dateISO).length;
-  return countForDate + 1;
 }
 
 function RecentLots({ db }) {

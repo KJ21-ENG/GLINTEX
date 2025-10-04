@@ -554,7 +554,9 @@ function RecentLots({ db }) {
 |* Stock On Hand Tab  *
 \*********************/
 function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
-  const { cls, brand } = useBrand();
+  const { cls, brand, theme } = useBrand();
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef(null);
   const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '', type: 'active' });
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
@@ -661,7 +663,7 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
 
   return (
     <div className="space-y-6">
-      <Section title="Stock (Lot-wise)" actions={<div className="flex gap-2"><Button onClick={()=>exporters?.exportXlsx(filteredLots, piecesByLot())} >Export XLSX</Button><SecondaryButton onClick={()=>exporters?.exportCsv(filteredLots, piecesByLot())}>Export CSV</SecondaryButton><SecondaryButton onClick={()=>exporters?.exportPdf(filteredLots, piecesByLot(), brand)}>Export PDF</SecondaryButton></div>}>
+      <Section title={null}>
         <div className="grid grid-cols-1 md:grid-cols-7 gap-3 md:gap-4 mb-3">
           <div><label className={`text-xs ${cls.muted}`}>Lot search</label><Input value={filters.lotSearch} onChange={e=>setFilters(f=>({ ...f, lotSearch: e.target.value }))} placeholder="Search lot no" /></div>
           <div><label className={`text-xs ${cls.muted}`}>Date From</label><Input type="date" value={filters.from} onChange={e=>setFilters(f=>({ ...f, from: e.target.value }))} /></div>
@@ -669,7 +671,26 @@ function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={filters.itemId} onChange={e=>setFilters(f=>({ ...f, itemId: e.target.value }))}><option value="">Any</option>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={filters.firmId} onChange={e=>setFilters(f=>({ ...f, firmId: e.target.value }))}><option value="">Any</option>{db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Type</label><Select value={filters.type} onChange={e=>setFilters(f=>({ ...f, type: e.target.value }))}><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></Select></div>
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Type</label>
+            <div className="relative flex items-center gap-2">
+              <Select value={filters.type} onChange={e=>setFilters(f=>({ ...f, type: e.target.value }))} style={{ minWidth: 120 }}><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></Select>
+              <div className="relative" ref={exportRef}>
+                <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover}`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+                {exportOpen && (
+                  <div className={`absolute right-0 mt-2 w-40 rounded-md shadow-lg border ${cls.cardBorder} ${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} z-50`} onClick={e=>e.stopPropagation()}>
+                    <div className="p-2">
+                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'}`} onClick={()=>{ exporters?.exportXlsx(filteredLots, piecesByLot()); setExportOpen(false); }}>Export XLSX</button>
+                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'}`} onClick={()=>{ exporters?.exportCsv(filteredLots, piecesByLot()); setExportOpen(false); }}>Export CSV</button>
+                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'}`} onClick={()=>{ exporters?.exportPdf(filteredLots, piecesByLot(), brand); setExportOpen(false); }}>Export PDF</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
           <div className="overflow-auto">

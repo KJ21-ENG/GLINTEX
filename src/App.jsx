@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState, createContext } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState, createContext, useRef } from "react";
 import api from './api.js';
 
 /**
@@ -102,10 +102,11 @@ const SecondaryButton = ({ children, className = "", ...props }) => {
   );
 };
 
-const Input = ({ className = "", ...props }) => {
+const Input = ({ className = "", inputRef, ...props }) => {
   const { cls } = useBrand();
   return (
     <input
+      ref={inputRef}
       className={`w-full px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-[var(--brand-primary)] ${cls.input} ` + className}
       {...props}
     />
@@ -135,6 +136,22 @@ const Pill = ({ children, className = "" }) => {
     </span>
   );
 };
+
+function Pagination({ total, page, setPage, pageSize = 8 }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  const pages = [];
+  for (let i = 1; i <= totalPages; i++) pages.push(i);
+  return (
+    <div className="mt-3 flex items-center gap-2">
+      <SecondaryButton onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1}>Prev</SecondaryButton>
+      {pages.map(p => (
+        <button key={p} onClick={() => setPage(p)} className={`px-2 py-1 rounded ${p===page?"bg-slate-700 text-white":""}`}>{p}</button>
+      ))}
+      <SecondaryButton onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}>Next</SecondaryButton>
+    </div>
+  );
+}
 
 const TABS = [
   { key: "inbound", label: "Inbound" },
@@ -360,6 +377,7 @@ function Inbound({ db, onCreateLot, refreshing }) {
   const [firmId, setFirmId] = useState(db.firms[0]?.id || "");
   const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
   const [weight, setWeight] = useState("");
+  const [previewLotNo, setPreviewLotNo] = useState("");
   const [cart, setCart] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -367,14 +385,33 @@ function Inbound({ db, onCreateLot, refreshing }) {
   useEffect(() => { if (db.firms.length && !db.firms.some(f => f.id === firmId)) setFirmId(db.firms[0]?.id || ""); }, [db.firms, firmId]);
   useEffect(() => { if (db.suppliers.length && !db.suppliers.some(s => s.id === supplierId)) setSupplierId(db.suppliers[0]?.id || ""); }, [db.suppliers, supplierId]);
 
+  // Fetch next sequence preview
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
+        const j = await res.json();
+        if (!cancelled) setPreviewLotNo(j.next);
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const canAdd = date && itemId && firmId && supplierId && Number(weight) > 0;
   const canSave = cart.length > 0 && date && itemId && firmId && supplierId && !saving;
+
+  const weightRef = useRef(null);
 
   function addPiece() {
     if (!canAdd) return;
     const nextSeq = cart.length + 1;
     setCart([...cart, { seq: nextSeq, tempId: uid("piece"), weight: Number(weight) }]);
     setWeight("");
+    // focus back to weight input
+    setTimeout(() => { try { weightRef.current?.focus(); } catch (e) {} }, 0);
   }
 
   function removeFromCart(tempId) {
@@ -386,12 +423,36 @@ function Inbound({ db, onCreateLot, refreshing }) {
     setSaving(true);
     try {
       const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
-      await onCreateLot({ date, itemId, firmId, supplierId, pieces });
+      try {
+        await onCreateLot({ date, itemId, firmId, supplierId, pieces });
+      } catch (err) {
+        // If lot already exists (race), refresh preview and retry once
+        if ((err && String(err.message || '').toLowerCase().includes('lot already exists')) || (err && String(err.message || '').toLowerCase().includes('already exists'))) {
+          try {
+            const res = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
+            const j = await res.json();
+            setPreviewLotNo(j.next);
+          } catch (e) {
+            // ignore
+          }
+          // retry once
+          await onCreateLot({ date, itemId, firmId, supplierId, pieces });
+        } else {
+          throw err;
+        }
+      }
+
       const totalPieces = cart.length;
       const totalWeight = cart.reduce((s, r) => s + (Number(r.weight)||0), 0);
       alert(`Saved Lot with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
       setCart([]);
       setWeight("");
+      // refresh preview
+      try {
+        const res2 = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
+        const j2 = await res2.json();
+        setPreviewLotNo(j2.next);
+      } catch (e) {}
     } catch (err) {
       alert(err.message || 'Failed to save lot');
     } finally {
@@ -405,26 +466,27 @@ function Inbound({ db, onCreateLot, refreshing }) {
         title="Inbound Receiving"
         actions={<Pill>Lot No is auto-generated from database sequence</Pill>}
       >
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>{setDate(e.target.value); setCart([]);}} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={firmId} onChange={e=>setFirmId(e.target.value)}>{db.firms.length===0? <option>No firms</option> : db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={supplierId} onChange={e=>setSupplierId(e.target.value)}>{db.suppliers.length===0? <option>No suppliers</option> : db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="e.g. 1.250" /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Lot No (preview)</label><Input value={previewLotNo} readOnly /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Weight (kg)</label><Input inputRef={weightRef} type="number" min="0" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ addPiece(); } }} placeholder="e.g. 1.250" /></div>
         </div>
         <div className="mt-3 flex gap-2">
           <Button onClick={addPiece} disabled={!canAdd}>Add</Button>
           <SecondaryButton onClick={()=>setCart([])} disabled={cart.length===0}>Clear Cart</SecondaryButton>
           <Button onClick={saveLot} disabled={!canSave || refreshing} className="ml-auto">{saving ? 'Saving…' : 'Save Lot'}</Button>
         </div>
-        <CartPreview cart={cart} removeFromCart={removeFromCart} />
+        <CartPreview previewLotNo={previewLotNo} cart={cart} removeFromCart={removeFromCart} />
       </Section>
       <Section title="Recent Lots"><RecentLots db={db} /></Section>
     </div>
   );
 }
 
-function CartPreview({ cart, removeFromCart }) {
+function CartPreview({ previewLotNo, cart, removeFromCart }) {
   const { cls } = useBrand();
   return (
     <div className="mt-6">
@@ -439,7 +501,7 @@ function CartPreview({ cart, removeFromCart }) {
               {cart.map((r) => (
                 <tr key={r.tempId} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2">{r.seq}</td>
-                  <td className="py-2 pr-2">Auto-generated</td>
+                  <td className="py-2 pr-2">{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Auto-generated'}</td>
                   <td className="py-2 pr-2">{formatKg(r.weight)}</td>
                   <td className="py-2 pl-2 text-right"><SecondaryButton onClick={()=>removeFromCart(r.tempId)}>Remove</SecondaryButton></td>
                 </tr>
@@ -454,7 +516,10 @@ function CartPreview({ cart, removeFromCart }) {
 
 function RecentLots({ db }) {
   const { cls } = useBrand();
-  const rows = [...db.lots].sort((a,b)=> b.createdAt?.localeCompare?.(a.createdAt) || 0).slice(0,8).map(l=>({
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
+  const sorted = [...db.lots].sort((a,b)=> b.createdAt?.localeCompare?.(a.createdAt) || 0);
+  const rows = sorted.slice((page-1)*pageSize, page*pageSize).map(l=>({
     ...l,
     itemName: db.items.find(i=>i.id===l.itemId)?.name || "—",
     firmName: db.firms.find(f=>f.id===l.firmId)?.name || "—",
@@ -469,6 +534,7 @@ function RecentLots({ db }) {
           ))}
         </tbody>
       </table>
+      <Pagination total={sorted.length} page={page} setPage={setPage} pageSize={pageSize} />
     </div>
   );
 }
@@ -906,6 +972,10 @@ function AdminData({ db, onSaveBrand, savingBrand }) {
 function RawTable({ title, rows }) {
   const { cls } = useBrand();
   const keys = Object.keys(rows[0] || {});
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
+  const start = (page-1)*pageSize;
+  const pageRows = rows.slice(start, start+pageSize);
   return (
     <div className="mb-6">
       <h3 className={`text-sm uppercase tracking-wide mb-2 ${cls.muted}`}>{title}</h3>
@@ -913,9 +983,10 @@ function RawTable({ title, rows }) {
         <div className="overflow-auto">
           <table className="w-full text-xs md:text-sm"><thead className={`text-left ${cls.muted}`}><tr>{keys.map(k => <th key={k} className="py-1 pr-2">{k}</th>)}</tr></thead>
             <tbody>
-              {rows.map((r, i) => (<tr key={i} className={`border-t ${cls.rowBorder}`}>{keys.map(k => <td key={k} className="py-1 pr-2 font-mono whitespace-pre">{String(r[k])}</td>)}</tr>))}
+              {pageRows.map((r, i) => (<tr key={start+i} className={`border-t ${cls.rowBorder}`}>{keys.map(k => <td key={k} className="py-1 pr-2 font-mono whitespace-pre">{String(r[k])}</td>)}</tr>))}
             </tbody>
           </table>
+          <Pagination total={rows.length} page={page} setPage={setPage} pageSize={pageSize} />
         </div>
       )}
     </div>

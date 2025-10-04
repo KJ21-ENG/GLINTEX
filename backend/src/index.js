@@ -26,6 +26,18 @@ app.get('/api/db', async (req, res) => {
   res.json({ items, firms, suppliers, lots, inbound_items, consumptions, settings });
 });
 
+// Return the next lot number preview (value that will be used on save)
+app.get('/api/sequence/next', async (req, res) => {
+  try {
+    const seq = await prisma.sequence.findUnique({ where: { id: 'lot_sequence' } });
+    const nextVal = (seq ? seq.nextValue : 0) + 1;
+    res.json({ next: String(nextVal).padStart(3, '0'), raw: nextVal });
+  } catch (err) {
+    console.error('Failed to read sequence', err);
+    res.status(500).json({ error: 'Failed to read sequence' });
+  }
+});
+
 app.post('/api/lots', async (req, res) => {
   try {
     const { date, itemId, firmId, supplierId, pieces } = req.body;

@@ -169,7 +169,15 @@ export default function App() {
         <header className={`sticky top-0 z-20 backdrop-blur border-b ${cls.headerBg}`}>
           <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl grid place-items-center font-bold border overflow-hidden" style={{ background: "#fff", borderColor: brandPreview.gold }}>
+              <div
+                role="button"
+                tabIndex={0}
+                title="Toggle theme"
+                onClick={() => setTheme(t => (t === "dark" ? "light" : "dark"))}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTheme(t => (t === "dark" ? "light" : "dark")); } }}
+                className="w-9 h-9 rounded-xl grid place-items-center font-bold border overflow-hidden cursor-pointer"
+                style={{ background: "#fff", borderColor: brandPreview.gold }}
+              >
                 <img src={headerLogo} alt="GLINTEX" className="w-9 h-9 object-contain" />
               </div>
               <div>
@@ -190,7 +198,6 @@ export default function App() {
                   {TABS.map(t=> <option key={t.key} value={t.key}>{t.label}</option>)}
                 </Select>
               </div>
-              <SecondaryButton onClick={() => setTheme(t => (t === "dark" ? "light" : "dark"))}>{theme === "dark" ? "☀️ Light" : "🌙 Dark"}</SecondaryButton>
             </div>
           </div>
         </header>

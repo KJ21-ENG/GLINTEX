@@ -38,6 +38,9 @@
 .theme-muted { color: var(--muted); }
 .theme-border { border-color: var(--border); }
 
+/* Center table cell contents app-wide (horizontal + vertical) */
+table th, table td { text-align: center !important; vertical-align: middle; }
+
 html, body, #root { height: 100%; }
 body { margin: 0; }
 

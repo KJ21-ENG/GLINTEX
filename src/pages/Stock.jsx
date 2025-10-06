@@ -6,7 +6,7 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, Select, Pill } from '../components';
 import { PieceRow } from '../components/stock';
-import { formatKg, todayISO } from '../utils';
+import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 
@@ -21,6 +21,7 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const [issuingLot, setIssuingLot] = useState(null);
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
+  const [isSummaryView, setIsSummaryView] = useState(false);
 
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
@@ -185,6 +186,19 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
     return map;
   }
 
+  const [hoveredSummaryKey, setHoveredSummaryKey] = useState(null);
+
+  const displayedLots = useMemo(() => {
+    if (!isSummaryView) return filteredLots;
+    // aggregated lots grouped by name/cullah/supplier
+    try {
+      return aggregateLots(filteredLots);
+    } catch (err) {
+      console.error('aggregateLots failed', err);
+      return filteredLots;
+    }
+  }, [filteredLots, isSummaryView]);
+
   return (
     <div className="space-y-6">
       <Section title={null}>
@@ -197,7 +211,7 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
           <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
           <div>
             <label className={`text-xs ${cls.muted}`}>Type</label>
-            <div className="relative flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
               <Select value={filters.type} onChange={e=>setFilters(f=>({ ...f, type: e.target.value }))} style={{ minWidth: 120 }}><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></Select>
               <div className="relative" ref={exportRef}>
                 <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover} btn-hover`}>
@@ -213,26 +227,88 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                   </div>
                 )}
               </div>
+              {/* Summary view toggle */}
+              <label className="flex items-center gap-2 ml-2 text-sm">
+                <input type="checkbox" checked={isSummaryView} onChange={e=>setIsSummaryView(e.target.checked)} />
+                <span className={`${cls.muted}`}>Summary view</span>
+              </label>
             </div>
           </div>
         </div>
 
           <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Lot No</th><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Pieces (available/out)</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
+          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}>
+            <tr>
+              {isSummaryView ? (
+                <>
+                  <th className="py-2 pr-2">Item</th>
+                  <th className="py-2 pr-2">Firm</th>
+                  <th className="py-2 pr-2">Supplier</th>
+                  <th className="py-2 pr-2 text-right">Pieces (available/out)</th>
+                  <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                  <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                </>
+              ) : (
+                <>
+                  <th className="py-2 pr-2">Lot No</th>
+                  <th className="py-2 pr-2">Date</th>
+                  <th className="py-2 pr-2">Item</th>
+                  <th className="py-2 pr-2">Firm</th>
+                  <th className="py-2 pr-2">Supplier</th>
+                  <th className="py-2 pr-2 text-right">Pieces (available/out)</th>
+                  <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                  <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                </>
+              )}
+            </tr>
+          </thead>
             <tbody>
-              {filteredLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : filteredLots.map(l=> (
-                <React.Fragment key={l.lotNo}>
-                  <tr className={`border-t ${cls.rowBorder} align-top row-hover`} onClick={()=>toggleExpand(l.lotNo)} style={{ cursor: 'pointer' }}>
-                    <td className="py-2 pr-2 font-medium">{l.lotNo}</td>
-                    <td className="py-2 pr-2">{l.date}</td>
-                    <td className="py-2 pr-2">{l.itemName}</td>
-                    <td className="py-2 pr-2">{l.firmName}</td>
-                    <td className="py-2 pr-2">{l.supplierName}</td>
-                    <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).filter(p=>p.status==='available').length} / ${l.totalPieces ?? 0}`}</td>
-                    <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
-                    <td className="py-2 pr-2 text-right">{formatKg(Number(l.pendingWeight || 0))}</td>
+              {displayedLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : displayedLots.map((l, idx)=> {
+                const isSummary = isSummaryView;
+                const rowKey = l.lotNo || `${l.itemName || l.name || ''}-${l.firmName || l.firm || ''}-${l.supplierName || l.supplier || ''}-${idx}`;
+                return (
+                <React.Fragment key={rowKey}>
+                  <tr className={`border-t ${cls.rowBorder} align-top row-hover`} onClick={isSummary ? undefined : ()=>toggleExpand(l.lotNo)} style={{ cursor: isSummary ? 'default' : 'pointer' }}>
+                    {isSummary ? (
+                      <>
+                        <td className="py-2 pr-2 relative">
+                          <div className="flex items-center gap-2">
+                            <span>{l.itemName || l.name}</span>
+                            <div className="relative">
+                              <button type="button" title="Show lots" onMouseEnter={() => setHoveredSummaryKey(rowKey)} onMouseLeave={() => setHoveredSummaryKey(null)} className={`w-6 h-6 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover`}>
+                                <span className="text-xs font-semibold">i</span>
+                              </button>
+                            {hoveredSummaryKey === rowKey && (l._sourceLots || []).length > 0 && (
+                                <div className={`absolute right-0 top-full mt-1 z-50`} onMouseEnter={() => setHoveredSummaryKey(rowKey)} onMouseLeave={() => setHoveredSummaryKey(null)}>
+                                  <div className={`popover-panel ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                                    <div className="text-xs font-medium mb-1">Lots</div>
+                                    <div className="text-xs">{(l._sourceLots || []).join(', ')}</div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-2 pr-2">{(l._firms || []).join(', ')}</td>
+                        <td className="py-2 pr-2">{l.supplierName || l.supplier}</td>
+                        <td className="py-2 pr-2 text-right">{`${l.availableCount ?? (l.available || 0)} / ${l.totalPieces ?? l.total ?? 0}`}</td>
+                        <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
+                        <td className="py-2 pr-2 text-right">{formatKg(Number(l.pendingWeight || 0))}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="py-2 pr-2 font-medium">{l.lotNo}</td>
+                        <td className="py-2 pr-2">{l.date}</td>
+                        <td className="py-2 pr-2">{l.itemName || l.name}</td>
+                        <td className="py-2 pr-2">{l.firmName || l.firm}</td>
+                        <td className="py-2 pr-2">{l.supplierName || l.supplier}</td>
+                        <td className="py-2 pr-2 text-right">{`${(l.pieces||[]).filter(p=>p.status==='available').length} / ${l.totalPieces ?? 0}`}</td>
+                        <td className="py-2 pr-2 text-right">{formatKg(l.totalWeight || 0)}</td>
+                        <td className="py-2 pr-2 text-right">{formatKg(Number(l.pendingWeight || 0))}</td>
+                      </>
+                    )}
                   </tr>
-                  {expandedLot === l.lotNo && (
+                  {!isSummary && expandedLot === l.lotNo && (
                     <tr className={`border-t ${cls.rowBorder}`}>
                       <td colSpan={7} className="p-3">
                         <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
@@ -275,7 +351,8 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                     </tr>
                   )}
                 </React.Fragment>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

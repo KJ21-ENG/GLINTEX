@@ -39,3 +39,51 @@ export function groupBy(arr, keyFn) {
   } 
   return m; 
 }
+
+/**
+ * Aggregate lots by name, cullah and supplier and sum numeric fields.
+ * Keeps first-seen values for non-numeric fields.
+ */
+export function aggregateLots(lots = []) {
+  const keyFor = (lot) => `${lot.name || lot.itemName || ''}||${lot.cullah || ''}||${lot.supplier || lot.supplierName || ''}`;
+  const grouped = new Map();
+
+  for (const lot of lots) {
+    const key = keyFor(lot);
+    if (!grouped.has(key)) {
+      // shallow clone to avoid mutating original and track source metadata
+      const clone = { ...lot };
+      clone._sourceLots = [lot.lotNo].filter(Boolean);
+      clone._firms = [lot.firmName || lot.firm].filter(Boolean);
+      grouped.set(key, clone);
+      continue;
+    }
+
+    const acc = grouped.get(key);
+    for (const field of Object.keys(lot)) {
+      const val = lot[field];
+      // sum numeric fields
+      if (typeof val === 'number') {
+        acc[field] = (acc[field] || 0) + val;
+      } else if (typeof val === 'string') {
+        // If the destination is numeric-like string, try coercion
+        const maybeNum = Number(val);
+        if (!Number.isNaN(maybeNum)) {
+          acc[field] = (acc[field] || 0) + maybeNum;
+        }
+        // otherwise keep first-seen string value (do nothing)
+      }
+      // non-numeric fields: keep first-seen (already present in acc)
+    }
+    // merge source lots and firms metadata
+    if (lot.lotNo) {
+      acc._sourceLots = Array.from(new Set([...(acc._sourceLots || []), lot.lotNo]));
+    }
+    const maybeFirm = lot.firmName || lot.firm;
+    if (maybeFirm) {
+      acc._firms = Array.from(new Set([...(acc._firms || []), maybeFirm]));
+    }
+  }
+
+  return Array.from(grouped.values());
+}

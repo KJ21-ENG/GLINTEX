@@ -9,3 +9,4 @@ export { Input } from './Input.jsx';
 export { Select } from './Select.jsx';
 export { Pill } from './Pill.jsx';
 export { Pagination } from './Pagination.jsx';
+export { Popover } from './Popover.jsx';

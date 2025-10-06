@@ -72,6 +72,19 @@ body { margin: 0; }
   .underline-on-hover:hover { text-decoration: underline; }
 }
 
+/* Popover panel used by small hover panels/tooltips. Uses opaque card bg to avoid transparency */
+.popover-panel {
+  background: var(--card-bg-solid);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(2,6,23,0.6);
+  padding: 8px;
+  display: inline-block; /* allow width to fit content */
+  width: auto;
+  max-width: 360px;
+}
+
 /* Whatsapp connected glowing status */
 .whatsapp-status-connected {
   color: #10b981; /* Tailwind green-500 */

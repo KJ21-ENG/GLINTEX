@@ -1,4 +1,20 @@
-const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+// Auto-detect API base URL based on current host
+const getApiBase = () => {
+  // If explicitly set in env, use that
+  if (import.meta.env.VITE_API_BASE) {
+    return import.meta.env.VITE_API_BASE;
+  }
+  
+  // Auto-detect from current window location
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  
+  // Fallback for SSR or when window is not available
+  return 'http://localhost:4000';
+};
+
+const BASE = getApiBase();
 
 async function request(path, { method = 'GET', body } = {}) {
   const res = await fetch(BASE + path, {

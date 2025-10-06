@@ -73,6 +73,22 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
   }
 });
 
+// SSE endpoint for real-time whatsapp events (qr/status)
+app.get('/api/whatsapp/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const emitter = whatsapp.getEmitter();
+  const onStatus = (data) => res.write(`event: status\ndata: ${JSON.stringify(data)}\n\n`);
+  const onQr = (data) => res.write(`event: qr\ndata: ${JSON.stringify(data)}\n\n`);
+  emitter.on('status', onStatus);
+  emitter.on('qr', onQr);
+  req.on('close', () => {
+    emitter.off('status', onStatus);
+    emitter.off('qr', onQr);
+  });
+});
+
 app.post('/api/whatsapp/logout', async (req, res) => {
   try {
     await whatsapp.logout();
@@ -352,22 +368,55 @@ app.delete('/api/operators/:id', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
-    const { brandPrimary, brandGold, logoDataUrl } = req.body;
-    const settings = await prisma.settings.upsert({
-      where: { id: 1 },
-      update: {
-        brandPrimary: brandPrimary || '#2E4CA6',
-        brandGold: brandGold || '#D4AF37',
-        logoDataUrl: logoDataUrl || null,
-      },
-      create: {
-        id: 1,
-        brandPrimary: brandPrimary || '#2E4CA6',
-        brandGold: brandGold || '#D4AF37',
-        logoDataUrl: logoDataUrl || null,
-      },
-    });
-    res.json(settings);
+    const { brandPrimary, brandGold, logoDataUrl, whatsappNumber } = req.body;
+    // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
+    function normalizeForStore(num) {
+      if (!num) return null;
+      const digits = String(num).replace(/[^0-9]/g, '');
+      if (!digits) return null;
+      let d = digits.replace(/^0+/, '');
+      if (d.length === 10) d = `91${d}`;
+      return d;
+    }
+    const normalizedWhatsAppNumber = normalizeForStore(whatsappNumber);
+    // Try to upsert including whatsappNumber if DB supports it, otherwise fallback without it
+    try {
+      const settings = await prisma.settings.upsert({
+        where: { id: 1 },
+        update: {
+          brandPrimary: brandPrimary || '#2E4CA6',
+          brandGold: brandGold || '#D4AF37',
+          logoDataUrl: logoDataUrl || null,
+          whatsappNumber: normalizedWhatsAppNumber || null,
+        },
+        create: {
+          id: 1,
+          brandPrimary: brandPrimary || '#2E4CA6',
+          brandGold: brandGold || '#D4AF37',
+          logoDataUrl: logoDataUrl || null,
+          whatsappNumber: normalizedWhatsAppNumber || null,
+        },
+      });
+      return res.json(settings);
+    } catch (innerErr) {
+      // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
+      console.warn('Failed to upsert with whatsappNumber, retrying without it:', innerErr.message || innerErr);
+      const settings = await prisma.settings.upsert({
+        where: { id: 1 },
+        update: {
+          brandPrimary: brandPrimary || '#2E4CA6',
+          brandGold: brandGold || '#D4AF37',
+          logoDataUrl: logoDataUrl || null,
+        },
+        create: {
+          id: 1,
+          brandPrimary: brandPrimary || '#2E4CA6',
+          brandGold: brandGold || '#D4AF37',
+          logoDataUrl: logoDataUrl || null,
+        },
+      });
+      return res.json(settings);
+    }
   } catch (err) {
     console.error('Failed to update settings', err);
     res.status(500).json({ error: 'Failed to update settings' });

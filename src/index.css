@@ -72,6 +72,30 @@ body { margin: 0; }
   .underline-on-hover:hover { text-decoration: underline; }
 }
 
+/* Whatsapp connected glowing status */
+.whatsapp-status-connected {
+  color: #10b981; /* Tailwind green-500 */
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(16,185,129,0.9), 0 0 18px rgba(16,185,129,0.6);
+  animation: whatsapp-glow 2s ease-in-out infinite alternate;
+}
+@keyframes whatsapp-glow {
+  from { text-shadow: 0 0 6px rgba(16,185,129,0.6), 0 0 12px rgba(16,185,129,0.4); }
+  to   { text-shadow: 0 0 12px rgba(16,185,129,0.95), 0 0 24px rgba(16,185,129,0.6); }
+}
+
+/* Whatsapp disconnected glowing red status */
+.whatsapp-status-disconnected {
+  color: #ef4444; /* Tailwind red-500 */
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(239,68,68,0.9), 0 0 18px rgba(239,68,68,0.6);
+  animation: whatsapp-glow-red 2s ease-in-out infinite alternate;
+}
+@keyframes whatsapp-glow-red {
+  from { text-shadow: 0 0 6px rgba(239,68,68,0.6), 0 0 12px rgba(239,68,68,0.4); }
+  to   { text-shadow: 0 0 12px rgba(239,68,68,0.95), 0 0 24px rgba(239,68,68,0.6); }
+}
+
 /* Modal / sheet helper to ensure the panel background is opaque so the overlay hides underlying UI */
 .modal-sheet {
   background-color: var(--card-bg-solid);

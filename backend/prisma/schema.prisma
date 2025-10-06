@@ -83,6 +83,7 @@ model Settings {
   brandPrimary String
   brandGold    String
   logoDataUrl  String?
+  whatsappNumber String?
 }
 
 model Sequence {

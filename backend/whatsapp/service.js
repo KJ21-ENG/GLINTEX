@@ -31,6 +31,10 @@ class WhatsappService {
     this.initialized = false;
     this.emitter = new EventEmitter();
     this._waiting = [];
+    this._sendQueue = [];
+    this._processingQueue = false;
+    this._maxSendAttempts = 3;
+    this._shuttingDown = false;
   }
 
   async init() {
@@ -54,6 +58,8 @@ class WhatsappService {
       this.emitter.emit('qr', { qr: null });
       // flush waiting promises
       this._flushWaiting();
+      // start processing any queued sends
+      this._processQueue().catch(err => console.error('Queue processor failed', err));
     });
 
     this.client.on('authenticated', (session) => {
@@ -75,7 +81,10 @@ class WhatsappService {
       this.emitter.emit('status', { status: this.status });
       // Do not permanently destroy client here - attempt to re-initialize so LocalAuth session is reused
       this.initialized = false;
+      // keep client reference removed so sends know it's not available
       this.client = null;
+      // let queue processor know we are disconnected; it will pause
+      this._processingQueue = false;
       // Try to re-init after short delay
       setTimeout(async () => {
         try {
@@ -110,6 +119,11 @@ class WhatsappService {
     this.status = 'disconnected';
     this.qrDataUrl = null;
     this.emitter.emit('status', { status: this.status });
+    // reject any queued sends because logout is explicit
+    for (const item of this._sendQueue) {
+      try { item.reject(new Error('Whatsapp logged out')); } catch (_) {}
+    }
+    this._sendQueue = [];
     // remove LocalAuth session directory used by whatsapp-web.js for this client
     try {
       const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
@@ -119,32 +133,100 @@ class WhatsappService {
     } catch (e) { console.error('Failed to clear auth dir', e); }
     this.initialized = false;
     this.client = null;
+    this._shuttingDown = false;
   }
 
   async sendText(number, text) {
-    // wait until connected
-    await this._waitUntilConnected(10000);
-    if (!this.client) throw new Error('Client not initialized');
-    // normalize number (ensure country code present)
-    const normalized = normalizeNumber(number);
-    // whatsapp-web.js expects id like '919999999999@c.us'
-    const id = `${normalized}@c.us`;
-    return await this.client.sendMessage(id, text);
+    // Enqueue the send so it will be processed when client is ready.
+    return this.enqueueSend(number, text);
   }
 
   // Safe send that doesn't throw if client not ready immediately; returns a promise
   async sendTextSafe(number, text) {
+    // try a gentle wait first
     try {
       await this._waitUntilConnected(15000);
     } catch (err) {
-      // We'll attempt to initialize client and then send; if still failing, bubble error
+      // Try to initialize and fall back to queueing
       try {
         await this.init();
       } catch (e) {
-        throw new Error('Whatsapp client not available');
+        // still not available, enqueue and let it run when ready; reject after timeout
+        return this.enqueueSend(number, text, { timeout: 30000 });
       }
     }
-    return this.sendText(number, text);
+    return this.enqueueSend(number, text);
+  }
+
+  enqueueSend(number, text, opts = {}) {
+    if (this._shuttingDown) return Promise.reject(new Error('Whatsapp service shutting down'));
+    return new Promise((resolve, reject) => {
+      const entry = { number, text, resolve, reject, attempts: 0, timeout: opts.timeout || 0 };
+      this._sendQueue.push(entry);
+      // kick the processor
+      this._processQueue().catch(err => console.error('Queue processor error', err));
+    });
+  }
+
+  async _processQueue() {
+    if (this._processingQueue) return;
+    this._processingQueue = true;
+    try {
+      while (this._sendQueue.length > 0) {
+        // ensure client is ready
+        if (this.status !== 'connected' || !this.client) {
+          // wait for ready or timeout before retrying
+          try {
+            await this._waitUntilConnected(30000);
+          } catch (e) {
+            // If still not connected, reject oldest entries after their timeout
+            const nowQueue = this._sendQueue.slice();
+            for (const item of nowQueue) {
+              item.attempts += 1;
+              if (item.attempts >= this._maxSendAttempts || (item.timeout && item.timeout <= 0)) {
+                // final rejection
+                try { item.reject(new Error('Whatsapp client not available')); } catch (_) {}
+                const idx = this._sendQueue.indexOf(item);
+                if (idx >= 0) this._sendQueue.splice(idx, 1);
+              }
+            }
+            // Pause processing until next status change
+            break;
+          }
+        }
+
+        const entry = this._sendQueue.shift();
+        if (!entry) break;
+        entry.attempts += 1;
+        const normalized = (() => { try { return normalizeNumber(entry.number); } catch (_) { return null; } })();
+        if (!normalized) {
+          entry.reject(new Error('Invalid phone number'));
+          continue;
+        }
+        const id = `${normalized}@c.us`;
+        try {
+          // perform send and await
+          await this.client.sendMessage(id, entry.text);
+          entry.resolve(true);
+        } catch (err) {
+          console.error('Failed to send whatsapp message', err && err.message);
+          // if attempts remain, push back to queue's end to retry after reconnect
+          if (entry.attempts < this._maxSendAttempts) {
+            this._sendQueue.push(entry);
+            // if error looks like session/page closed, attempt re-init
+            if (err && /Session closed|Session not created|Target closed|Protocol error/.test(String(err))) {
+              try { this.initialized = false; this.client = null; await this.init(); } catch (e) { console.error('Re-init during send failure failed', e); }
+            }
+            // small delay to avoid tight loop
+            await new Promise(r => setTimeout(r, 500));
+          } else {
+            entry.reject(err);
+          }
+        }
+      }
+    } finally {
+      this._processingQueue = false;
+    }
   }
 
   _waitUntilConnected(timeout = 10000) {

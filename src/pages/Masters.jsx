@@ -14,6 +14,7 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
   const [machineName, setMachineName] = useState("");
   const [operatorName, setOperatorName] = useState("");
   const [working, setWorking] = useState(false);
+  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | operators
 
   async function addItem() {
     const name = itemName.trim();
@@ -154,7 +155,25 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="flex items-center gap-2">
+        <button onClick={() => setTab('items')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='items' ? cls.navActive : 'border-transparent'} ${tab!=='items' ? cls.navHover : ''}`}>
+          Items
+        </button>
+        <button onClick={() => setTab('firms')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='firms' ? cls.navActive : 'border-transparent'} ${tab!=='firms' ? cls.navHover : ''}`}>
+          Firms
+        </button>
+        <button onClick={() => setTab('suppliers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='suppliers' ? cls.navActive : 'border-transparent'} ${tab!=='suppliers' ? cls.navHover : ''}`}>
+          Suppliers
+        </button>
+        <button onClick={() => setTab('machines')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='machines' ? cls.navActive : 'border-transparent'} ${tab!=='machines' ? cls.navHover : ''}`}>
+          Machines
+        </button>
+        <button onClick={() => setTab('operators')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='operators' ? cls.navActive : 'border-transparent'} ${tab!=='operators' ? cls.navHover : ''}`}>
+          Operators
+        </button>
+      </div>
+
+      {tab === 'items' && (
         <Section title="Items">
           <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
           <ul className="space-y-2">{db.items.map(i => (
@@ -164,7 +183,9 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
             </li>
           ))}</ul>
         </Section>
+      )}
 
+      {tab === 'firms' && (
         <Section title="Firms">
           <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
           <ul className="space-y-2">{db.firms.map(f => (
@@ -174,7 +195,9 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
             </li>
           ))}</ul>
         </Section>
+      )}
 
+      {tab === 'suppliers' && (
         <Section title="Suppliers">
           <div className="flex gap-2 mb-3"><Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="New supplier name" /><Button onClick={addSupplier} disabled={disable}>Add</Button></div>
           <ul className="space-y-2">{db.suppliers.map(s => (
@@ -184,9 +207,9 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
             </li>
           ))}</ul>
         </Section>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {tab === 'machines' && (
         <Section title="Machines">
           <div className="flex gap-2 mb-3"><Input value={machineName} onChange={e=>setMachineName(e.target.value)} placeholder="New machine name" /><Button onClick={addMachine} disabled={disable}>Add</Button></div>
           <ul className="space-y-2">{db.machines.map(m => (
@@ -196,7 +219,9 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
             </li>
           ))}</ul>
         </Section>
+      )}
 
+      {tab === 'operators' && (
         <Section title="Operators">
           <div className="flex gap-2 mb-3"><Input value={operatorName} onChange={e=>setOperatorName(e.target.value)} placeholder="New operator name" /><Button onClick={addOperator} disabled={disable}>Add</Button></div>
           <ul className="space-y-2">{db.operators.map(o => (
@@ -206,7 +231,7 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
             </li>
           ))}</ul>
         </Section>
-      </div>
+      )}
     </div>
   );
 }

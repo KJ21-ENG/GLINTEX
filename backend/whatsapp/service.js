@@ -132,6 +132,21 @@ class WhatsappService {
     return await this.client.sendMessage(id, text);
   }
 
+  // Safe send that doesn't throw if client not ready immediately; returns a promise
+  async sendTextSafe(number, text) {
+    try {
+      await this._waitUntilConnected(15000);
+    } catch (err) {
+      // We'll attempt to initialize client and then send; if still failing, bubble error
+      try {
+        await this.init();
+      } catch (e) {
+        throw new Error('Whatsapp client not available');
+      }
+    }
+    return this.sendText(number, text);
+  }
+
   _waitUntilConnected(timeout = 10000) {
     if (this.status === 'connected') return Promise.resolve();
     return new Promise((resolve, reject) => {

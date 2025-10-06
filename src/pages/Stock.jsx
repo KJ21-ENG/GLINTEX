@@ -17,6 +17,7 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '', type: 'active' });
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
+  const [deletingLot, setDeletingLot] = useState(null);
   const [issuingLot, setIssuingLot] = useState(null);
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
@@ -89,6 +90,44 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
 
   function selectAll(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: (lotsMap[lotNo].pieces || []).map(p=>p.id) })); }
   function clearSel(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: [] })); }
+
+  async function handleDelete(lotNo, e) {
+    e.stopPropagation();
+    const selected = (selectedByLot[lotNo] || []).slice();
+    // If there are selected pieces, but all pieces are selected -> treat as deleting whole lot
+    const totalPiecesForLot = (lotsMap[lotNo] && (lotsMap[lotNo].pieces || []).length) || 0;
+    if (selected.length && selected.length === totalPiecesForLot) {
+      // fall through to whole-lot delete
+    } else if (selected.length) {
+      if (!confirm(`Delete ${selected.length} selected piece(s) from lot ${lotNo}? This cannot be undone.`)) return;
+      setDeletingLot(lotNo);
+      try {
+        await Promise.all(selected.map(id => api.deleteInboundItem(id)));
+        // clear selection for this lot
+        setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+        await refreshDb();
+        alert('Selected pieces deleted');
+      } catch (err) {
+        alert(err.message || 'Failed to delete selected pieces');
+      } finally {
+        setDeletingLot(null);
+      }
+      return;
+    }
+
+    // otherwise delete whole lot
+    if (!confirm('Delete lot '+lotNo+'? This will remove all pieces and history for this lot.')) return;
+    setDeletingLot(lotNo);
+    try {
+      await api.deleteLot(lotNo);
+      await refreshDb();
+      alert('Deleted lot');
+    } catch (err) {
+      alert(err.message || err || 'Failed to delete lot');
+    } finally {
+      setDeletingLot(null);
+    }
+  }
 
   function openIssueModal(lotNo) {
     const pieceIds = (selectedByLot[lotNo] || []).slice();
@@ -202,8 +241,12 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                           <Pill>Selected: {(selectedByLot[l.lotNo]||[]).length} pcs</Pill>
                           <SecondaryButton onClick={selectAll.bind(null, l.lotNo)} disabled={(l.pieces||[]).length===0}>Select all</SecondaryButton>
                           <SecondaryButton onClick={clearSel.bind(null, l.lotNo)} disabled={(selectedByLot[l.lotNo]||[]).length===0}>Clear</SecondaryButton>
-                          <button onClick={(e)=>{ e.stopPropagation(); if(!confirm('Delete lot '+l.lotNo+'? This will remove all pieces and history for this lot.')) return; api.deleteLot(l.lotNo).then(()=>{ refreshDb().catch(()=>{}); alert('Deleted'); }).catch(err=>alert(err.message || err)); }} title="Delete lot" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ml-2 hover:opacity-90`}>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6h18M8 6v12a2 2 0 002 2h4a2 2 0 002-2V6M10 6V4a2 2 0 012-2h0a2 2 0 012 2v2"/></svg>
+                          <button onClick={(e)=>handleDelete(l.lotNo, e)} title="Delete" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ml-2 hover:opacity-90` }>
+                            {deletingLot === l.lotNo ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="animate-spin w-4 h-4 text-red-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6h18M8 6v12a2 2 0 002 2h4a2 2 0 002-2V6M10 6V4a2 2 0 012-2h0a2 2 0 012 2v2"/></svg>
+                            )}
                           </button>
                           <div className="ml-auto">
                             <Button onClick={(e)=>{ e.stopPropagation(); openIssueModal(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length || refreshing}>

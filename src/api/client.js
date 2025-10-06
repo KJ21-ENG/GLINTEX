@@ -61,11 +61,15 @@ export async function deleteOperator(id) { return await request(`/api/operators/
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteConsumption(id) { return await request(`/api/consumptions/${id}`, { method: 'DELETE' }); }
+export async function deleteInboundItem(id) { return await request(`/api/inbound_items/${id}`, { method: 'DELETE' }); }
 export async function whatsappStatus() { return await request('/api/whatsapp/status'); }
 export async function whatsappStart() { return await request('/api/whatsapp/start', { method: 'POST' }); }
 export async function whatsappQr() { return await request('/api/whatsapp/qrcode'); }
 export async function whatsappLogout() { return await request('/api/whatsapp/logout', { method: 'POST' }); }
 export async function whatsappSendTest(number) { return await request('/api/whatsapp/send-test', { method: 'POST', body: { number } }); }
+export async function listWhatsappTemplates() { return await request('/api/whatsapp/templates'); }
+export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
+export async function sendWhatsappEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
 
 export default {
   health,

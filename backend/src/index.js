@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
 import prisma from './prismaClient.js';
 import whatsapp from '../whatsapp/service.js';
+import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from './utils/whatsappTemplates.js';
 
 dotenv.config();
 const app = express();
@@ -11,6 +12,21 @@ app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
 const PORT = process.env.PORT || 4000;
+
+// Helper: send notification for an event using stored templates
+async function sendNotification(event, payload) {
+  try {
+    const tpl = await getTemplateByEvent(event);
+    if (!tpl || !tpl.enabled) return;
+    const msg = interpolateTemplate(tpl.template, payload || {});
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings || !settings.whatsappNumber) return console.warn('No whatsappNumber configured, skipping notification');
+    // Fire-and-forget
+    whatsapp.sendTextSafe(settings.whatsappNumber, msg).catch(err => console.error('Failed to send whatsapp notification', err));
+  } catch (err) {
+    console.error('sendNotification error', err);
+  }
+}
 
 app.get('/api/health', async (req, res) => {
   res.json({ ok: true });
@@ -62,6 +78,37 @@ app.post('/api/whatsapp/start', async (req, res) => {
     console.error('Failed to start whatsapp', err);
     res.status(500).json({ error: String(err) });
   }
+});
+
+// Templates endpoints
+app.get('/api/whatsapp/templates', async (req, res) => {
+  try {
+    const t = await listTemplates();
+    res.json(t);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+app.put('/api/whatsapp/templates/:event', async (req, res) => {
+  try {
+    const { event } = req.params;
+    const { enabled, template } = req.body;
+    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '' });
+    res.json(t);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+app.post('/api/whatsapp/send-event', async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+    const tpl = await getTemplateByEvent(event);
+    if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
+    const msg = interpolateTemplate(tpl.template, payload || {});
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings || !settings.whatsappNumber) return res.status(400).json({ error: 'No whatsappNumber configured' });
+    // Fire and forget
+    whatsapp.sendTextSafe(settings.whatsappNumber, msg).catch(err => console.error('Failed to send whatsapp event', err));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 app.get('/api/whatsapp/qrcode', async (req, res) => {
@@ -172,6 +219,11 @@ app.post('/api/lots', async (req, res) => {
     });
 
     res.json({ ok: true, lot: result });
+    // Notify inbound created (non-blocking)
+    try {
+      const itemName = (await prisma.item.findUnique({ where: { id: itemId } })).name || '';
+      sendNotification('inbound_created', { itemName, lotNo: result.lotNo, date, totalPieces, totalWeight });
+    } catch (e) { console.error('notify inbound error', e); }
   } catch (err) {
     console.error('Failed to create lot', err);
     if (err.code === 'P2002') {
@@ -240,6 +292,15 @@ app.post('/api/consumptions', async (req, res) => {
     });
 
     res.json({ ok: true, consumption });
+    // Notify consumption created
+    try {
+      const itemName = (await prisma.item.findUnique({ where: { id: consumption.itemId } })).name || '';
+      const machineName = consumption.machineId ? (await prisma.machine.findUnique({ where: { id: consumption.machineId } })).name : '';
+      const operatorName = consumption.operatorId ? (await prisma.operator.findUnique({ where: { id: consumption.operatorId } })).name : '';
+      // Include machineNumber for templates (alias of machineName)
+      const machineNumber = machineName || '';
+      sendNotification('consumption_created', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, machineName, machineNumber, operatorName, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [] });
+    } catch (e) { console.error('notify consumption error', e); }
   } catch (err) {
     console.error('Failed to record consumption', err);
     res.status(400).json({ error: err.message || 'Failed to record consumption' });
@@ -394,9 +455,46 @@ app.delete('/api/consumptions/:id', async (req, res) => {
     });
 
     res.json({ ok: true });
+    // Notify consumption deleted
+    try {
+      const itemName = consumption.itemId ? (await prisma.item.findUnique({ where: { id: consumption.itemId } })).name : '';
+      // include machine/operator info if available
+      const machineRec = consumption.machineId ? await prisma.machine.findUnique({ where: { id: consumption.machineId } }) : null;
+      const operatorRec = consumption.operatorId ? await prisma.operator.findUnique({ where: { id: consumption.operatorId } }) : null;
+      const machineNameDel = machineRec ? machineRec.name : '';
+      const operatorNameDel = operatorRec ? operatorRec.name : '';
+      const machineNumberDel = machineNameDel || '';
+      sendNotification('consumption_deleted', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [], machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
+    } catch (e) { console.error('notify consumption deleted error', e); }
   } catch (err) {
     console.error('Failed to delete consumption', err);
     res.status(500).json({ error: err.message || 'Failed to delete consumption' });
+  }
+});
+
+// Delete a single inbound item (piece)
+app.delete('/api/inbound_items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.inboundItem.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Inbound piece not found' });
+    // Do not allow delete if consumed
+    if (existing.status === 'consumed') return res.status(400).json({ error: 'Cannot delete consumed piece' });
+    await prisma.inboundItem.delete({ where: { id } });
+    // Recalculate lot totals
+    const agg = await prisma.inboundItem.aggregate({ where: { lotNo: existing.lotNo }, _sum: { weight: true }, _count: { id: true } });
+    const totalWeight = Number(agg._sum.weight || 0);
+    const totalPieces = Number(agg._count.id || 0);
+    await prisma.lot.update({ where: { lotNo: existing.lotNo }, data: { totalWeight, totalPieces } });
+    res.json({ ok: true });
+    // Notify inbound piece deleted
+    try {
+      const itemName = existing.itemId ? (await prisma.item.findUnique({ where: { id: existing.itemId } })).name : '';
+      sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id });
+    } catch (e) { console.error('notify inbound piece deleted error', e); }
+  } catch (err) {
+    console.error('Failed to delete inbound piece', err);
+    res.status(500).json({ error: err.message || 'Failed to delete inbound piece' });
   }
 });
 
@@ -497,6 +595,10 @@ app.delete('/api/lots/:lotNo', async (req, res) => {
     if (consCount > 0) {
       return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
     }
+    // Gather info for notification before deletion
+    const lotRec = await prisma.lot.findUnique({ where: { lotNo } });
+    const itemRec = lotRec ? await prisma.item.findUnique({ where: { id: lotRec.itemId } }) : null;
+    const totalPieces = lotRec ? Number(lotRec.totalPieces || 0) : 0;
 
     await prisma.$transaction(async (tx) => {
       await tx.inboundItem.deleteMany({ where: { lotNo } });
@@ -504,6 +606,11 @@ app.delete('/api/lots/:lotNo', async (req, res) => {
     });
 
     res.json({ ok: true });
+
+    // Notify lot deletion
+    try {
+      sendNotification('lot_deleted', { itemName: itemRec ? itemRec.name : '', lotNo, totalPieces, date: lotRec ? lotRec.date : '' });
+    } catch (e) { console.error('notify lot deleted error', e); }
   } catch (err) {
     console.error('Failed to delete lot', err);
     res.status(500).json({ error: err.message || 'Failed to delete lot' });

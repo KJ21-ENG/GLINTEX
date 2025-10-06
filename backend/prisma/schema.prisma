@@ -91,4 +91,12 @@ model Sequence {
   nextValue Int    @default(1)
 }
 
+model WhatsappTemplate {
+  id       Int    @id @default(autoincrement())
+  event    String @unique
+  enabled  Boolean @default(true)
+  template String
+}
+
+
 

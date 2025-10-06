@@ -96,6 +96,32 @@ body { margin: 0; }
   to   { text-shadow: 0 0 12px rgba(239,68,68,0.95), 0 0 24px rgba(239,68,68,0.6); }
 }
 
+/* Whatsapp templates editor tweaks for dark mode */
+.whatsapp-templates textarea {
+  background: transparent; /* let cardBg variable handle background */
+  color: var(--text);
+  border-color: var(--border);
+}
+.whatsapp-templates .font-mono { color: var(--muted); }
+
+/* small hover helpers for template toolbar buttons */
+.whatsapp-templates button[title] { position: relative; }
+.whatsapp-templates button[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card-bg-solid);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.6);
+  white-space: nowrap;
+  z-index: 60;
+}
+
 /* Modal / sheet helper to ensure the panel background is opaque so the overlay hides underlying UI */
 .modal-sheet {
   background-color: var(--card-bg-solid);

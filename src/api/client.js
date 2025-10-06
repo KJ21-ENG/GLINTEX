@@ -60,6 +60,7 @@ export async function createOperator(name) { return await request('/api/operator
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
+export async function deleteConsumption(id) { return await request(`/api/consumptions/${id}`, { method: 'DELETE' }); }
 export async function whatsappStatus() { return await request('/api/whatsapp/status'); }
 export async function whatsappStart() { return await request('/api/whatsapp/start', { method: 'POST' }); }
 export async function whatsappQr() { return await request('/api/whatsapp/qrcode'); }
@@ -73,6 +74,7 @@ export default {
   issuePieces,
   updateInboundItem,
   deleteLot,
+  deleteConsumption,
   listItems,
   createItem,
   deleteItem,

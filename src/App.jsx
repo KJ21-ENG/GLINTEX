@@ -231,7 +231,7 @@ export default function App() {
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
           {tab === "stock" && <Stock db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} />}
+          {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} refreshDb={refreshDb} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}

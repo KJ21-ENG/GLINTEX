@@ -8,7 +8,7 @@ import { Section, Button, SecondaryButton, Input, Select, Pill } from '../compon
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
 
-export function IssueToMachine({ db, onIssuePieces, refreshing }) {
+export function IssueToMachine({ db, onIssuePieces, refreshing, refreshDb }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
@@ -136,7 +136,7 @@ export function IssueToMachine({ db, onIssuePieces, refreshing }) {
         </div>
       </Section>
 
-      <Section title="Issue History"><IssueHistory db={db} /></Section>
+      <Section title="Issue History"><IssueHistory db={db} refreshDb={refreshDb} /></Section>
     </div>
   );
 }

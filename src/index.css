@@ -102,3 +102,11 @@ body { margin: 0; }
   /* subtle elevation so it reads above overlay */
   box-shadow: 0 8px 24px rgba(2,6,23,0.6);
 }
+
+/* Center action buttons/icons placed inside table cells */
+table td > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+}

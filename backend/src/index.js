@@ -366,6 +366,40 @@ app.delete('/api/operators/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete('/api/consumptions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Find the consumption record
+    const consumption = await prisma.consumption.findUnique({ where: { id } });
+    if (!consumption) {
+      return res.status(404).json({ error: 'Consumption record not found' });
+    }
+
+    // Get the piece IDs from the consumption record
+    const pieceIds = consumption.pieceIds ? consumption.pieceIds.split(',') : [];
+    
+    // Use transaction to ensure atomicity
+    await prisma.$transaction(async (tx) => {
+      // Delete the consumption record
+      await tx.consumption.delete({ where: { id } });
+      
+      // Mark pieces as available again
+      if (pieceIds.length > 0) {
+        await tx.inboundItem.updateMany({
+          where: { id: { in: pieceIds } },
+          data: { status: 'available' },
+        });
+      }
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete consumption', err);
+    res.status(500).json({ error: err.message || 'Failed to delete consumption' });
+  }
+});
+
 app.put('/api/settings', async (req, res) => {
   try {
     const { brandPrimary, brandGold, logoDataUrl, whatsappNumber } = req.body;

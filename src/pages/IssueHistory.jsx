@@ -5,14 +5,33 @@
 import React, { useMemo, useState, useRef } from 'react';
 import { useBrand } from '../context';
 import { formatKg } from '../utils';
-import { Input, Select } from '../components';
+import { Input, Select, Button } from '../components';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
+import * as api from '../api';
 
-export function IssueHistory({ db, rows: rowsProp }) {
+export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   const { cls, theme, brand } = useBrand();
   const exportRef = useRef(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [filters, setFilters] = useState({ itemId: '', lotSearch: '', from: '', to: '', machineId: '', operatorId: '' });
+  const [deletingId, setDeletingId] = useState(null);
+
+  const handleDelete = async (consumptionId) => {
+    if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
+      return;
+    }
+    
+    setDeletingId(consumptionId);
+    try {
+      await api.deleteConsumption(consumptionId);
+      await refreshDb();
+      alert('Issue record deleted successfully. Pieces are now available again.');
+    } catch (err) {
+      alert(err.message || 'Failed to delete issue record');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const rows = useMemo(() => {
     return Array.isArray(rowsProp) ? rowsProp.slice() : (db.consumptions || []).slice();
@@ -96,9 +115,9 @@ export function IssueHistory({ db, rows: rowsProp }) {
 
       <div className="overflow-auto">
         <table className="w-full text-sm">
-          <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2">Machine</th><th className="py-2 pr-2">Operator</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th></tr></thead>
+          <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2">Machine</th><th className="py-2 pr-2">Operator</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th><th className="py-2 pr-2">Actions</th></tr></thead>
           <tbody>
-            {filtered.length===0? <tr><td colSpan={9} className="py-4">No issues match filters.</td></tr> : filtered.map((r, idx) => (
+            {filtered.length===0? <tr><td colSpan={10} className="py-4">No issues match filters.</td></tr> : filtered.map((r, idx) => (
               <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top row-hover`}>
                 <td className="py-2 pr-2">{r.date}</td>
                 <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
@@ -109,6 +128,23 @@ export function IssueHistory({ db, rows: rowsProp }) {
                 <td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td>
                 <td className="py-2 pr-2 font-mono whitespace-pre-wrap">{r.pieceIds.join(", ")}</td>
                 <td className="py-2 pr-2">{r.note || "—"}</td>
+                <td className="py-2 pr-2 flex items-center justify-center">
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    disabled={deletingId === r.id}
+                    title="Delete"
+                    className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${deletingId === r.id ? 'opacity-60 cursor-not-allowed' : 'hover:opacity-90'}`}
+                  >
+                    {deletingId === r.id ? (
+                      <svg className="w-4 h-4 animate-spin text-red-500" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6h18M8 6v12a2 2 0 002 2h4a2 2 0 002-2V6M10 6V4a2 2 0 012-2h0a2 2 0 012 2v2"/></svg>
+                    )}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

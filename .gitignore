@@ -27,6 +27,10 @@ out/
 # Parcel, Vite, and other caches
 .cache/
 
+# WhatsApp WebJS
+backend/.wwebjs_cache/
+backend/.wwebjs_auth/
+
 # Dependency directories
 jspm_packages/
 

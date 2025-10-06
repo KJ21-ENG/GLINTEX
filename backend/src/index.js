@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
 import prisma from './prismaClient.js';
+import whatsapp from '../whatsapp/service.js';
 
 dotenv.config();
 const app = express();
@@ -37,6 +38,58 @@ app.get('/api/sequence/next', async (req, res) => {
   } catch (err) {
     console.error('Failed to read sequence', err);
     res.status(500).json({ error: 'Failed to read sequence' });
+  }
+});
+
+// Whatsapp control endpoints
+app.get('/api/whatsapp/status', async (req, res) => {
+  try {
+    const status = whatsapp.getStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/whatsapp/start', async (req, res) => {
+  try {
+    // initialize client
+    if (!whatsapp.client) {
+      await whatsapp.init();
+    }
+    res.status(202).json({ ok: true });
+  } catch (err) {
+    console.error('Failed to start whatsapp', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/whatsapp/qrcode', async (req, res) => {
+  try {
+    const qr = whatsapp.getQrDataUrl();
+    res.json({ qr });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/whatsapp/logout', async (req, res) => {
+  try {
+    await whatsapp.logout();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/whatsapp/send-test', async (req, res) => {
+  try {
+    const number = req.body.number || '916353131826';
+    await whatsapp.sendText(number, 'Hii');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to send test message', err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
@@ -376,5 +429,14 @@ app.delete('/api/lots/:lotNo', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
+  // Initialize Whatsapp service on startup so it restores LocalAuth session if present
+  (async () => {
+    try {
+      await whatsapp.init();
+      console.log('Whatsapp service initialized');
+    } catch (err) {
+      console.error('Failed to initialize Whatsapp service', err);
+    }
+  })();
 });
 

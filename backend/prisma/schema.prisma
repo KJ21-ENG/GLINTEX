@@ -50,6 +50,18 @@ model InboundItem {
   createdAt DateTime @default(now())
 }
 
+model Machine {
+  id          String        @id @default(cuid())
+  name        String
+  consumptions Consumption[]
+}
+
+model Operator {
+  id          String        @id @default(cuid())
+  name        String
+  consumptions Consumption[]
+}
+
 model Consumption {
   id          String  @id
   date        String
@@ -60,6 +72,10 @@ model Consumption {
   pieceIds    String
   reason      String
   note        String?
+  machineId   String?
+  operatorId  String?
+  machine     Machine? @relation(fields: [machineId], references: [id])
+  operator    Operator? @relation(fields: [operatorId], references: [id])
 }
 
 model Settings {

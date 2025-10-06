@@ -9,6 +9,8 @@ export function normalizeDb(raw) {
   const items = ensureArr(raw?.items);
   const firms = ensureArr(raw?.firms);
   const suppliers = ensureArr(raw?.suppliers);
+  const machines = ensureArr(raw?.machines);
+  const operators = ensureArr(raw?.operators);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const consumptions = ensureArr(raw?.consumptions).map((c) => ({
@@ -16,7 +18,7 @@ export function normalizeDb(raw) {
     pieceIds: typeof c.pieceIds === 'string' ? c.pieceIds.split(',').filter(Boolean) : ensureArr(c.pieceIds),
   }));
   const settings = ensureArr(raw?.settings);
-  return { items, firms, suppliers, lots, inbound_items, consumptions, settings };
+  return { items, firms, suppliers, machines, operators, lots, inbound_items, consumptions, settings };
 }
 
 export function extractBrandFromDb(db) {

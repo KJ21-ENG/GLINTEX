@@ -6,11 +6,13 @@ import React, { useState } from 'react';
 import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input } from '../components';
 
-export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, onAddSupplier, onDeleteSupplier, refreshing }) {
+export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, onAddSupplier, onDeleteSupplier, onAddMachine, onDeleteMachine, onAddOperator, onDeleteOperator, refreshing }) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
   const [supplierName, setSupplierName] = useState("");
+  const [machineName, setMachineName] = useState("");
+  const [operatorName, setOperatorName] = useState("");
   const [working, setWorking] = useState(false);
 
   async function addItem() {
@@ -94,39 +96,117 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
     }
   }
 
+  async function addMachine() {
+    const name = machineName.trim();
+    if (!name) return;
+    if (db.machines.some(m => m.name.toLowerCase() === name.toLowerCase())) { alert("Machine already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddMachine(name);
+      setMachineName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add machine');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteMachine(id) {
+    if (!confirm("Delete machine? You cannot remove it if referenced by consumptions.")) return;
+    setWorking(true);
+    try {
+      await onDeleteMachine(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete machine');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function addOperator() {
+    const name = operatorName.trim();
+    if (!name) return;
+    if (db.operators.some(o => o.name.toLowerCase() === name.toLowerCase())) { alert("Operator already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddOperator(name);
+      setOperatorName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add operator');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteOperator(id) {
+    if (!confirm("Delete operator? You cannot remove it if referenced by consumptions.")) return;
+    setWorking(true);
+    try {
+      await onDeleteOperator(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete operator');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const disable = working || refreshing;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <Section title="Items">
-        <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
-        <ul className="space-y-2">{db.items.map(i => (
-          <li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-            <span>{i.name}</span>
-            <SecondaryButton onClick={()=>deleteItem(i.id)} disabled={disable}>Delete</SecondaryButton>
-          </li>
-        ))}</ul>
-      </Section>
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Section title="Items">
+          <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
+          <ul className="space-y-2">{db.items.map(i => (
+            <li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+              <span>{i.name}</span>
+              <SecondaryButton onClick={()=>deleteItem(i.id)} disabled={disable}>Delete</SecondaryButton>
+            </li>
+          ))}</ul>
+        </Section>
 
-      <Section title="Firms">
-        <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
-        <ul className="space-y-2">{db.firms.map(f => (
-          <li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-            <span>{f.name}</span>
-            <SecondaryButton onClick={()=>deleteFirm(f.id)} disabled={disable}>Delete</SecondaryButton>
-          </li>
-        ))}</ul>
-      </Section>
+        <Section title="Firms">
+          <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
+          <ul className="space-y-2">{db.firms.map(f => (
+            <li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+              <span>{f.name}</span>
+              <SecondaryButton onClick={()=>deleteFirm(f.id)} disabled={disable}>Delete</SecondaryButton>
+            </li>
+          ))}</ul>
+        </Section>
 
-      <Section title="Suppliers">
-        <div className="flex gap-2 mb-3"><Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="New supplier name" /><Button onClick={addSupplier} disabled={disable}>Add</Button></div>
-        <ul className="space-y-2">{db.suppliers.map(s => (
-          <li key={s.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-            <span>{s.name}</span>
-            <SecondaryButton onClick={()=>deleteSupplier(s.id)} disabled={disable}>Delete</SecondaryButton>
-          </li>
-        ))}</ul>
-      </Section>
+        <Section title="Suppliers">
+          <div className="flex gap-2 mb-3"><Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="New supplier name" /><Button onClick={addSupplier} disabled={disable}>Add</Button></div>
+          <ul className="space-y-2">{db.suppliers.map(s => (
+            <li key={s.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+              <span>{s.name}</span>
+              <SecondaryButton onClick={()=>deleteSupplier(s.id)} disabled={disable}>Delete</SecondaryButton>
+            </li>
+          ))}</ul>
+        </Section>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Section title="Machines">
+          <div className="flex gap-2 mb-3"><Input value={machineName} onChange={e=>setMachineName(e.target.value)} placeholder="New machine name" /><Button onClick={addMachine} disabled={disable}>Add</Button></div>
+          <ul className="space-y-2">{db.machines.map(m => (
+            <li key={m.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+              <span>{m.name}</span>
+              <SecondaryButton onClick={()=>deleteMachine(m.id)} disabled={disable}>Delete</SecondaryButton>
+            </li>
+          ))}</ul>
+        </Section>
+
+        <Section title="Operators">
+          <div className="flex gap-2 mb-3"><Input value={operatorName} onChange={e=>setOperatorName(e.target.value)} placeholder="New operator name" /><Button onClick={addOperator} disabled={disable}>Add</Button></div>
+          <ul className="space-y-2">{db.operators.map(o => (
+            <li key={o.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
+              <span>{o.name}</span>
+              <SecondaryButton onClick={()=>deleteOperator(o.id)} disabled={disable}>Delete</SecondaryButton>
+            </li>
+          ))}</ul>
+        </Section>
+      </div>
     </div>
   );
 }

@@ -17,8 +17,9 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '', type: 'active' });
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
-  const [issueMetaByLot, setIssueMetaByLot] = useState({});
   const [issuingLot, setIssuingLot] = useState(null);
+  const [issueModalOpen, setIssueModalOpen] = useState(false);
+  const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
 
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
@@ -89,21 +90,48 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   function selectAll(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: (lotsMap[lotNo].pieces || []).map(p=>p.id) })); }
   function clearSel(lotNo) { setSelectedByLot(prev => ({ ...prev, [lotNo]: [] })); }
 
-  function setIssueMeta(lotNo, meta) { setIssueMetaByLot(prev => ({ ...prev, [lotNo]: { ...(prev[lotNo]||{}), ...meta } })); }
-
-  async function doIssue(lotNo) {
+  function openIssueModal(lotNo) {
     const pieceIds = (selectedByLot[lotNo] || []).slice();
     if (!pieceIds.length) { alert('Select pieces to issue'); return; }
-    const meta = issueMetaByLot[lotNo] || {};
-    const payload = { date: meta.date || todayISO(), itemId: lotsMap[lotNo].itemId, lotNo, pieceIds, note: meta.note || '' };
+    setIssueModalData({ 
+      lotNo, 
+      pieceIds, 
+      date: todayISO(), 
+      machineId: '', 
+      operatorId: '', 
+      note: '' 
+    });
+    setIssueModalOpen(true);
+  }
+
+  function closeIssueModal() {
+    setIssueModalOpen(false);
+    setIssueModalData({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
+  }
+
+  async function doIssue() {
+    const { lotNo, pieceIds, date, machineId, operatorId, note } = issueModalData;
+    if (!machineId) { alert('Please select a machine'); return; }
+    if (!operatorId) { alert('Please select an operator'); return; }
+    
+    const payload = { 
+      date, 
+      itemId: lotsMap[lotNo].itemId, 
+      lotNo, 
+      pieceIds, 
+      note, 
+      machineId, 
+      operatorId 
+    };
+    
     setIssuingLot(lotNo);
     try {
       await onIssuePieces(payload);
       alert(`Issued ${pieceIds.length} pcs from Lot ${lotNo}`);
       // clear selection for this lot
       setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
-      setIssueMetaByLot(prev => ({ ...prev, [lotNo]: {} }));
       setExpandedLot(null);
+      closeIssueModal();
     } catch (err) {
       alert(err.message || 'Failed to issue pieces');
     } finally {
@@ -171,14 +199,16 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                         <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
                           <div className="mb-2 flex items-center gap-2">
                           <Pill>Available: {(l.pieces||[]).length} pcs</Pill>
+                          <Pill>Selected: {(selectedByLot[l.lotNo]||[]).length} pcs</Pill>
+                          <SecondaryButton onClick={selectAll.bind(null, l.lotNo)} disabled={(l.pieces||[]).length===0}>Select all</SecondaryButton>
+                          <SecondaryButton onClick={clearSel.bind(null, l.lotNo)} disabled={(selectedByLot[l.lotNo]||[]).length===0}>Clear</SecondaryButton>
                           <button onClick={(e)=>{ e.stopPropagation(); if(!confirm('Delete lot '+l.lotNo+'? This will remove all pieces and history for this lot.')) return; api.deleteLot(l.lotNo).then(()=>{ refreshDb().catch(()=>{}); alert('Deleted'); }).catch(err=>alert(err.message || err)); }} title="Delete lot" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ml-2 hover:opacity-90`}>
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6h18M8 6v12a2 2 0 002 2h4a2 2 0 002-2V6M10 6V4a2 2 0 012-2h0a2 2 0 012 2v2"/></svg>
                           </button>
-                          <div className="ml-auto flex items-center gap-2">
-                            <label className={`text-xs ${cls.muted}`}>Date</label>
-                            <Input type="date" value={(issueMetaByLot[l.lotNo]||{}).date || todayISO()} onChange={e=>{ setIssueMeta(l.lotNo, { date: e.target.value }); }} style={{ width: 140 }} />
-                            <Input value={(issueMetaByLot[l.lotNo]||{}).note || ''} onChange={e=>setIssueMeta(l.lotNo, { note: e.target.value })} placeholder="Note (optional)" style={{ width: 220 }} />
-                            <Button onClick={(e)=>{ e.stopPropagation(); doIssue(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length || issuingLot===l.lotNo || refreshing}>{issuingLot===l.lotNo ? 'Issuing…' : 'Issue'}</Button>
+                          <div className="ml-auto">
+                            <Button onClick={(e)=>{ e.stopPropagation(); openIssueModal(l.lotNo); }} disabled={!(selectedByLot[l.lotNo]||[]).length || refreshing}>
+                              Issue Selected
+                            </Button>
                           </div>
                           </div>
 
@@ -207,6 +237,84 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
           </table>
         </div>
       </Section>
+
+      {/* Issue Modal */}
+      {issueModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeIssueModal}>
+          <div className={`max-w-md w-full mx-4 rounded-xl border ${cls.cardBorder} modal-sheet`} onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Issue Pieces</h3>
+                <button onClick={closeIssueModal} className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} hover:opacity-90`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Lot: {issueModalData.lotNo}</label>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Selected Pieces: {issueModalData.pieceIds.length}</label>
+                </div>
+
+                <div>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Date</label>
+                  <Input 
+                    type="date" 
+                    value={issueModalData.date} 
+                    onChange={e => setIssueModalData(prev => ({ ...prev, date: e.target.value }))} 
+                  />
+                </div>
+
+                <div>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Machine *</label>
+                  <Select 
+                    value={issueModalData.machineId} 
+                    onChange={e => setIssueModalData(prev => ({ ...prev, machineId: e.target.value }))}
+                  >
+                    <option value="">Select Machine</option>
+                    {db.machines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </Select>
+                </div>
+
+                <div>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Operator *</label>
+                  <Select 
+                    value={issueModalData.operatorId} 
+                    onChange={e => setIssueModalData(prev => ({ ...prev, operatorId: e.target.value }))}
+                  >
+                    <option value="">Select Operator</option>
+                    {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </Select>
+                </div>
+
+                <div>
+                  <label className={`text-sm font-medium ${cls.muted} block mb-1`}>Note (optional)</label>
+                  <Input 
+                    value={issueModalData.note} 
+                    onChange={e => setIssueModalData(prev => ({ ...prev, note: e.target.value }))} 
+                    placeholder="Reference / reason"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <SecondaryButton onClick={closeIssueModal} className="flex-1">
+                    Cancel
+                  </SecondaryButton>
+                  <Button 
+                    onClick={doIssue} 
+                    disabled={issuingLot === issueModalData.lotNo || refreshing}
+                    className="flex-1"
+                  >
+                    {issuingLot === issueModalData.lotNo ? 'Issuing…' : 'Issue Pieces'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

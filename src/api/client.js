@@ -52,6 +52,12 @@ export async function deleteFirm(id) { return await request(`/api/firms/${id}`, 
 export async function listSuppliers() { return await request('/api/suppliers'); }
 export async function createSupplier(name) { return await request('/api/suppliers', { method: 'POST', body: { name } }); }
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
+export async function listMachines() { return await request('/api/machines'); }
+export async function createMachine(name) { return await request('/api/machines', { method: 'POST', body: { name } }); }
+export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
+export async function listOperators() { return await request('/api/operators'); }
+export async function createOperator(name) { return await request('/api/operators', { method: 'POST', body: { name } }); }
+export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 
@@ -71,5 +77,11 @@ export default {
   listSuppliers,
   createSupplier,
   deleteSupplier,
+  listMachines,
+  createMachine,
+  deleteMachine,
+  listOperators,
+  createOperator,
+  deleteOperator,
   updateSettings,
 };

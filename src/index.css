@@ -16,8 +16,10 @@
   --muted: #64748b;
   --border: #e6e9ee;
 
-  /* Header / subtle backgrounds */
+/* Header / subtle backgrounds */
   --header-overlay: rgba(255,255,255,0.8);
+  /* Opaque panel background used by modals and sheets to avoid showing underlying UI */
+  --card-bg-solid: #ffffff;
 }
 
 /* Dark theme overrides */
@@ -29,6 +31,8 @@
   --muted: rgba(255,255,255,0.72);
   --border: rgba(255,255,255,0.08);
   --header-overlay: rgba(2,6,23,0.6);
+  /* Opaque panel background for dark theme modals */
+  --card-bg-solid: #0b1220;
 }
 
 /* Small helper utility classes that use the variables */
@@ -66,4 +70,11 @@ body { margin: 0; }
 
   .underline-on-hover { @apply transition-all duration-150; }
   .underline-on-hover:hover { text-decoration: underline; }
+}
+
+/* Modal / sheet helper to ensure the panel background is opaque so the overlay hides underlying UI */
+.modal-sheet {
+  background-color: var(--card-bg-solid);
+  /* subtle elevation so it reads above overlay */
+  box-shadow: 0 8px 24px rgba(2,6,23,0.6);
 }

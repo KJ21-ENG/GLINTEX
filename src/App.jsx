@@ -121,6 +121,26 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateMachine = useCallback(async (name) => {
+    await api.createMachine(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteMachine = useCallback(async (id) => {
+    await api.deleteMachine(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateOperator = useCallback(async (name) => {
+    await api.createOperator(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteOperator = useCallback(async (id) => {
+    await api.deleteOperator(id);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleSaveBrand = useCallback(async (values) => {
     setSavingBrand(true);
     try {
@@ -220,6 +240,10 @@ export default function App() {
             onDeleteFirm={handleDeleteFirm}
             onAddSupplier={handleCreateSupplier}
             onDeleteSupplier={handleDeleteSupplier}
+            onAddMachine={handleCreateMachine}
+            onDeleteMachine={handleDeleteMachine}
+            onAddOperator={handleCreateOperator}
+            onDeleteOperator={handleDeleteOperator}
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}

@@ -12,7 +12,7 @@ export function IssueHistory({ db, rows: rowsProp }) {
   const { cls, theme, brand } = useBrand();
   const exportRef = useRef(null);
   const [exportOpen, setExportOpen] = useState(false);
-  const [filters, setFilters] = useState({ itemId: '', lotSearch: '', from: '', to: '' });
+  const [filters, setFilters] = useState({ itemId: '', lotSearch: '', from: '', to: '', machineId: '', operatorId: '' });
 
   const rows = useMemo(() => {
     return Array.isArray(rowsProp) ? rowsProp.slice() : (db.consumptions || []).slice();
@@ -24,6 +24,8 @@ export function IssueHistory({ db, rows: rowsProp }) {
       if (filters.lotSearch && !String(r.lotNo || '').toLowerCase().includes(filters.lotSearch.toLowerCase())) return false;
       if (filters.from && r.date < filters.from) return false;
       if (filters.to && r.date > filters.to) return false;
+      if (filters.machineId && r.machineId !== filters.machineId) return false;
+      if (filters.operatorId && r.operatorId !== filters.operatorId) return false;
       return true;
     });
 
@@ -35,6 +37,8 @@ export function IssueHistory({ db, rows: rowsProp }) {
   }, [rows, filters]);
 
   const items = db.items || [];
+  const machines = db.machines || [];
+  const operators = db.operators || [];
 
   return (
     <div>
@@ -58,6 +62,20 @@ export function IssueHistory({ db, rows: rowsProp }) {
           <label className={`text-xs ${cls.muted}`}>Lot</label>
           <Input value={filters.lotSearch} onChange={e=>setFilters(f=>({ ...f, lotSearch: e.target.value }))} placeholder="Search lot" />
         </div>
+        <div className="flex-1 min-w-[160px]">
+          <label className={`text-xs ${cls.muted}`}>Machine</label>
+          <Select value={filters.machineId} onChange={e=>setFilters(f=>({ ...f, machineId: e.target.value }))}>
+            <option value="">Any</option>
+            {machines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </Select>
+        </div>
+        <div className="flex-1 min-w-[160px]">
+          <label className={`text-xs ${cls.muted}`}>Operator</label>
+          <Select value={filters.operatorId} onChange={e=>setFilters(f=>({ ...f, operatorId: e.target.value }))}>
+            <option value="">Any</option>
+            {operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </Select>
+        </div>
         <div className="flex-shrink-0">
           <div className="relative" ref={exportRef}>
             <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover} btn-hover`}>
@@ -78,13 +96,15 @@ export function IssueHistory({ db, rows: rowsProp }) {
 
       <div className="overflow-auto">
         <table className="w-full text-sm">
-          <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th></tr></thead>
+          <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Item</th><th className="py-2 pr-2">Lot</th><th className="py-2 pr-2">Machine</th><th className="py-2 pr-2">Operator</th><th className="py-2 pr-2 text-right">Qty</th><th className="py-2 pr-2 text-right">Weight (kg)</th><th className="py-2 pr-2">Pieces</th><th className="py-2 pr-2">Note</th></tr></thead>
           <tbody>
-            {filtered.length===0? <tr><td colSpan={7} className="py-4">No issues match filters.</td></tr> : filtered.map((r, idx) => (
+            {filtered.length===0? <tr><td colSpan={9} className="py-4">No issues match filters.</td></tr> : filtered.map((r, idx) => (
               <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top row-hover`}>
                 <td className="py-2 pr-2">{r.date}</td>
                 <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
                 <td className="py-2 pr-2">{r.lotNo}</td>
+                <td className="py-2 pr-2">{db.machines.find(m=>m.id===r.machineId)?.name || "—"}</td>
+                <td className="py-2 pr-2">{db.operators.find(o=>o.id===r.operatorId)?.name || "—"}</td>
                 <td className="py-2 pr-2 text-right">{r.count}</td>
                 <td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td>
                 <td className="py-2 pr-2 font-mono whitespace-pre-wrap">{r.pieceIds.join(", ")}</td>
@@ -105,6 +125,8 @@ function transformIssuesForExport(issues, db) {
     itemName: db.items.find(i => i.id === r.itemId)?.name || '',
     firmName: '',
     supplierName: '',
+    machineName: db.machines.find(m => m.id === r.machineId)?.name || '',
+    operatorName: db.operators.find(o => o.id === r.operatorId)?.name || '',
     totalPieces: r.count,
     totalWeight: r.totalWeight,
   }));

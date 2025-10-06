@@ -12,6 +12,8 @@ export function IssueToMachine({ db, onIssuePieces, refreshing }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
+  const [machineId, setMachineId] = useState("");
+  const [operatorId, setOperatorId] = useState("");
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState([]);
   const [issuing, setIssuing] = useState(false);
@@ -21,6 +23,18 @@ export function IssueToMachine({ db, onIssuePieces, refreshing }) {
       setItemId("");
     }
   }, [db.items, itemId]);
+
+  useEffect(() => {
+    if (db.machines.length && !db.machines.some(m => m.id === machineId)) {
+      setMachineId("");
+    }
+  }, [db.machines, machineId]);
+
+  useEffect(() => {
+    if (db.operators.length && !db.operators.some(o => o.id === operatorId)) {
+      setOperatorId("");
+    }
+  }, [db.operators, operatorId]);
 
   const candidateLots = useMemo(() => db.lots.filter(l => l.itemId === itemId), [db.lots, itemId]);
   const [lotNo, setLotNo] = useState("");
@@ -48,13 +62,13 @@ export function IssueToMachine({ db, onIssuePieces, refreshing }) {
   function clearSel() { setSelected([]); }
 
   async function issue() {
-    if (!date || !itemId || !lotNo || selected.length===0) return;
+    if (!date || !itemId || !lotNo || !machineId || !operatorId || selected.length===0) return;
     const availSet = new Set(availablePieces.map(p=>p.id));
     const chosen = selected.filter(id => availSet.has(id));
     if (chosen.length===0) { alert("Nothing to issue. Selected pieces are not available."); return; }
     setIssuing(true);
     try {
-      await onIssuePieces({ date, itemId, lotNo, pieceIds: chosen, note });
+      await onIssuePieces({ date, itemId, lotNo, pieceIds: chosen, note, machineId, operatorId });
       const picked = availablePieces.filter(p=> chosen.includes(p.id));
       const totalWeight = picked.reduce((s,p)=>s+p.weight,0);
       alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)`);
@@ -70,11 +84,16 @@ export function IssueToMachine({ db, onIssuePieces, refreshing }) {
   return (
     <div className="space-y-6">
       <Section title="Issue to machine">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 md:gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>setDate(e.target.value)} /></div>
-  <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}><option value="">Select</option>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-  <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}><option value="">Select</option>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
-          <div className="md:col-span-2"><label className={`text-xs ${cls.muted}`}>Note (optional)</label><Input value={note} onChange={e=>setNote(e.target.value)} placeholder="Reference / reason" /></div>
+          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}><option value="">Select</option>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}><option value="">Select</option>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mt-3">
+          <div><label className={`text-xs ${cls.muted}`}>Machine</label><Select value={machineId} onChange={e=>setMachineId(e.target.value)}><option value="">Select</option>{db.machines.length===0? <option>No machines</option> : db.machines.map(m=> <option key={m.id} value={m.id}>{m.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Operator</label><Select value={operatorId} onChange={e=>setOperatorId(e.target.value)}><option value="">Select</option>{db.operators.length===0? <option>No operators</option> : db.operators.map(o=> <option key={o.id} value={o.id}>{o.name}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Note (optional)</label><Input value={note} onChange={e=>setNote(e.target.value)} placeholder="Reference / reason" /></div>
         </div>
 
         <div className="mt-4 flex items-center gap-2">

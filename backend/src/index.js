@@ -19,11 +19,13 @@ app.get('/api/db', async (req, res) => {
   const items = await prisma.item.findMany();
   const firms = await prisma.firm.findMany();
   const suppliers = await prisma.supplier.findMany();
+  const machines = await prisma.machine.findMany();
+  const operators = await prisma.operator.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const consumptions = await prisma.consumption.findMany();
   const settings = await prisma.settings.findMany();
-  res.json({ items, firms, suppliers, lots, inbound_items, consumptions, settings });
+  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, consumptions, settings });
 });
 
 // Return the next lot number preview (value that will be used on save)
@@ -113,7 +115,7 @@ app.post('/api/lots', async (req, res) => {
 
 app.post('/api/consumptions', async (req, res) => {
   try {
-    const { date, itemId, lotNo, pieceIds, note } = req.body;
+    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
     if (!date || !itemId || !lotNo) {
       return res.status(400).json({ error: 'Missing required consumption fields' });
     }
@@ -162,6 +164,8 @@ app.post('/api/consumptions', async (req, res) => {
           pieceIds: pieceIdsCsv,
           reason: 'internal',
           note: note || null,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
         },
       });
     });
@@ -266,6 +270,30 @@ app.delete('/api/suppliers/:id', async (req, res) => {
     return res.status(400).json({ error: 'Supplier is referenced and cannot be deleted' });
   }
   await prisma.supplier.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
+app.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
+app.post('/api/machines', async (req, res) => { const { name } = req.body; const machine = await prisma.machine.create({ data: { name } }); res.json(machine); });
+app.delete('/api/machines/:id', async (req, res) => {
+  const { id } = req.params;
+  const usage = await prisma.consumption.count({ where: { machineId: id } });
+  if (usage > 0) {
+    return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
+  }
+  await prisma.machine.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
+app.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
+app.post('/api/operators', async (req, res) => { const { name } = req.body; const operator = await prisma.operator.create({ data: { name } }); res.json(operator); });
+app.delete('/api/operators/:id', async (req, res) => {
+  const { id } = req.params;
+  const usage = await prisma.consumption.count({ where: { operatorId: id } });
+  if (usage > 0) {
+    return res.status(400).json({ error: 'Operator is referenced and cannot be deleted' });
+  }
+  await prisma.operator.delete({ where: { id } });
   res.json({ ok: true });
 });
 

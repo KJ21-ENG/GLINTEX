@@ -57,7 +57,15 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
       if (filters.itemId && l.itemId !== filters.itemId) return false;
       if (filters.firmId && l.firmId !== filters.firmId) return false;
       if (filters.supplierId && l.supplierId !== filters.supplierId) return false;
-      if (filters.lotSearch && !l.lotNo.toLowerCase().includes(filters.lotSearch.toLowerCase())) return false;
+      if (filters.lotSearch) {
+        // support comma-separated list of lot tokens
+        const tokens = (filters.lotSearch || '').split(',').map(t => t.trim()).filter(Boolean);
+        if (tokens.length) {
+          const lower = l.lotNo.toLowerCase();
+          const matches = tokens.some(t => lower.includes(t.toLowerCase()));
+          if (!matches) return false;
+        }
+      }
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       // client-side type filter: active / inactive
@@ -187,6 +195,28 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   }
 
   const [hoveredSummaryKey, setHoveredSummaryKey] = useState(null);
+  const [persistentOpenKey, setPersistentOpenKey] = useState(null);
+  const hidePopoverTimeout = useRef(null);
+  const popoverRef = useRef(null);
+
+  React.useEffect(() => {
+    return () => { if (hidePopoverTimeout.current) clearTimeout(hidePopoverTimeout.current); };
+  }, []);
+
+  // Close persistent popover when clicking outside
+  React.useEffect(() => {
+    function onDocClick(e) {
+      if (!persistentOpenKey) return;
+      if (popoverRef.current && popoverRef.current.contains(e.target)) return;
+      setPersistentOpenKey(null);
+      setHoveredSummaryKey(null);
+    }
+    if (persistentOpenKey) {
+      document.addEventListener('mousedown', onDocClick);
+      return () => document.removeEventListener('mousedown', onDocClick);
+    }
+    return undefined;
+  }, [persistentOpenKey]);
 
   const displayedLots = useMemo(() => {
     if (!isSummaryView) return filteredLots;
@@ -275,14 +305,59 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                           <div className="flex items-center gap-2">
                             <span>{l.itemName || l.name}</span>
                             <div className="relative">
-                              <button type="button" title="Show lots" onMouseEnter={() => setHoveredSummaryKey(rowKey)} onMouseLeave={() => setHoveredSummaryKey(null)} className={`w-6 h-6 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover`}>
+                              <button
+                                type="button"
+                                title="Show lots"
+                                onMouseEnter={() => {
+                                  if (hidePopoverTimeout.current) { clearTimeout(hidePopoverTimeout.current); hidePopoverTimeout.current = null; }
+                                  setHoveredSummaryKey(rowKey);
+                                }}
+                                onMouseLeave={() => {
+                                  // delay hiding to allow pointer to move to popover
+                                  hidePopoverTimeout.current = setTimeout(() => {
+                                    if (persistentOpenKey !== rowKey) setHoveredSummaryKey(null);
+                                  }, 160);
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (persistentOpenKey === rowKey) {
+                                    setPersistentOpenKey(null);
+                                    setHoveredSummaryKey(null);
+                                  } else {
+                                    setPersistentOpenKey(rowKey);
+                                    setHoveredSummaryKey(rowKey);
+                                  }
+                                }}
+                                className={`w-6 h-6 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover`}
+                              >
                                 <span className="text-xs font-semibold">i</span>
                               </button>
-                            {hoveredSummaryKey === rowKey && (l._sourceLots || []).length > 0 && (
-                                <div className={`absolute right-0 top-full mt-1 z-50`} onMouseEnter={() => setHoveredSummaryKey(rowKey)} onMouseLeave={() => setHoveredSummaryKey(null)}>
-                                  <div className={`popover-panel ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                            {( (hoveredSummaryKey === rowKey) || (persistentOpenKey === rowKey) ) && (l._sourceLots || []).length > 0 && (
+                                <div className={`absolute right-0 top-full mt-1 z-50`} ref={popoverRef} onMouseEnter={() => {
+                                  if (hidePopoverTimeout.current) { clearTimeout(hidePopoverTimeout.current); hidePopoverTimeout.current = null; }
+                                  setHoveredSummaryKey(rowKey);
+                                }} onMouseLeave={() => {
+                                  hidePopoverTimeout.current = setTimeout(() => {
+                                    if (persistentOpenKey !== rowKey) setHoveredSummaryKey(null);
+                                  }, 160);
+                                }}>
+                                  <div className={`popover-panel ${theme === 'dark' ? 'text-white' : 'text-slate-900'} relative`}>
+                                    <button title="Apply lots" className={`apply-arrow border ${cls.cardBorder} ${cls.cardBg} btn-hover`} onClick={(e)=>{
+                                        e.stopPropagation();
+                                        // set filters.lotSearch to comma-separated list and switch off summary view
+                                        setFilters(f => ({ ...f, lotSearch: (l._sourceLots || []).join(',') }));
+                                        setIsSummaryView(false);
+                                        // close persistent open if any
+                                        setPersistentOpenKey(null);
+                                      }}>
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+                                    </button>
                                     <div className="text-xs font-medium mb-1">Lots</div>
-                                    <div className="text-xs">{(l._sourceLots || []).join(', ')}</div>
+                                    <div className="lots-grid text-xs">
+                                      {(l._sourceLots || []).map((lotNoStr) => (
+                                        <div key={lotNoStr} className="lot-chip">{lotNoStr}</div>
+                                      ))}
+                                    </div>
                                   </div>
                                 </div>
                               )}

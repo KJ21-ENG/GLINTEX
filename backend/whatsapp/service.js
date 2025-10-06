@@ -4,12 +4,43 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import EventEmitter from 'events';
 import qrcode from 'qrcode';
+import os from 'os';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
 const SESS_FILE = path.join(SESS_DIR, 'session.json');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function detectChromeExecutable() {
+  // Prefer puppeteer if available
+  try {
+    // eslint-disable-next-line node/no-extraneous-require
+    const puppeteer = require('puppeteer');
+    if (puppeteer && typeof puppeteer.executablePath === 'function') {
+      const p = puppeteer.executablePath();
+      if (p && fs.existsSync(p)) return p;
+    }
+  } catch (_) {}
+
+  // Common system paths
+  const candidates = [];
+  if (os.platform() === 'darwin') {
+    candidates.push('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+    candidates.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
+  } else if (os.platform() === 'win32') {
+    candidates.push(process.env.PROGRAMFILES + '\\Google\\Chrome\\Application\\chrome.exe');
+    candidates.push(process.env['PROGRAMFILES(X86)'] + '\\Google\\Chrome\\Application\\chrome.exe');
+  } else {
+    candidates.push('/usr/bin/google-chrome');
+    candidates.push('/usr/bin/chromium-browser');
+    candidates.push('/usr/bin/chromium');
+  }
+  for (const p of candidates) {
+    try { if (p && fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return null;
 }
 
 // Normalize mobile number to Indian format without '+'; e.g. '9876543210' -> '919876543210'
@@ -42,7 +73,15 @@ class WhatsappService {
     ensureDir(SESS_DIR);
     // Use LocalAuth which stores session data in ~/.local/share but we'll still provide explicit path fallback
     // create client with faster puppeteer flags
-    this.client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--single-process','--disable-extensions'] } });
+    const execPath = detectChromeExecutable();
+    const puppeteerOpts = {
+      headless: true,
+      defaultViewport: null,
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-zygote','--no-first-run','--disable-extensions','--disable-features=site-per-process'],
+    };
+    if (execPath) puppeteerOpts.executablePath = execPath;
+
+    this.client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
 
     this.client.on('qr', async (qr) => {
       this.qrDataUrl = await qrcode.toDataURL(qr);
@@ -85,19 +124,31 @@ class WhatsappService {
       this.client = null;
       // let queue processor know we are disconnected; it will pause
       this._processingQueue = false;
-      // Try to re-init after short delay
-      setTimeout(async () => {
-        try {
-          console.log('Attempting to re-initialize Whatsapp client after disconnect...');
-          await this.init();
-        } catch (err) {
-          console.error('Re-init failed', err);
-        }
-      }, 1000);
+      // Try to re-init with exponential backoff
+      let attempt = 0;
+      const tryReinit = async () => {
+        if (this._shuttingDown) return;
+        attempt += 1;
+        const delay = Math.min(60000, 1000 * Math.pow(2, attempt));
+        console.log(`Re-init attempt #${attempt} in ${delay}ms`);
+        setTimeout(async () => {
+          try {
+            await this.init();
+            console.log('Re-init successful');
+          } catch (err) {
+            console.error('Re-init failed', err && err.message);
+            if (attempt < 6) tryReinit();
+          }
+        }, delay);
+      };
+      tryReinit();
     });
 
     await this.client.initialize();
     this.initialized = true;
+    // attach process exit handlers to gracefully shutdown client
+    process.once('SIGINT', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} process.exit(0); });
+    process.once('exit', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} });
   }
 
   getStatus() {

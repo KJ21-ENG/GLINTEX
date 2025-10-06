@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BrandCtx, useBrand } from './context';
 import { Button, SecondaryButton, Select } from './components';
-import { Inbound, Stock, IssueToMachine, Masters, Reports, AdminData } from './pages';
+import { Inbound, Stock, IssueToMachine, Masters, Reports, Settings } from './pages';
 import { THEME_KEY, defaultBrand, themeClasses, normalizeDb, extractBrandFromDb } from './utils';
 import * as api from './api';
 
@@ -15,7 +15,7 @@ const TABS = [
   { key: "issue", label: "Issue to machine" },
   { key: "masters", label: "Masters" },
   { key: "reports", label: "Reports" },
-  { key: "data", label: "Admin / Data" },
+  { key: "settings", label: "Settings" },
 ];
 
 export default function App() {
@@ -247,7 +247,7 @@ export default function App() {
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}
-          {tab === "data" && <AdminData db={db} onSaveBrand={handleSaveBrand} savingBrand={savingBrand || refreshing} />}
+          {tab === "settings" && <Settings db={db} onSaveBrand={handleSaveBrand} savingBrand={savingBrand || refreshing} refreshDb={refreshDb} />}
         </main>
       </div>
     </BrandCtx.Provider>

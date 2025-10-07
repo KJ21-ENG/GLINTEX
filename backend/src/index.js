@@ -43,9 +43,9 @@ app.get('/api/db', async (req, res) => {
   const operators = await prisma.operator.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
-  const consumptions = await prisma.consumption.findMany();
+  const issue_to_machine = await prisma.issueToMachine.findMany();
   const settings = await prisma.settings.findMany();
-  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, consumptions, settings });
+  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine, settings });
 });
 
 // Return the next lot number preview (value that will be used on save)
@@ -237,17 +237,17 @@ app.post('/api/lots', async (req, res) => {
   }
 });
 
-app.post('/api/consumptions', async (req, res) => {
+app.post('/api/issue_to_machine', async (req, res) => {
   try {
     const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
     if (!date || !itemId || !lotNo) {
-      return res.status(400).json({ error: 'Missing required consumption fields' });
+      return res.status(400).json({ error: 'Missing required issue_to_machine fields' });
     }
     if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
     }
 
-    const consumption = await prisma.$transaction(async (tx) => {
+    const issueRecord = await prisma.$transaction(async (tx) => {
       const pieces = await tx.inboundItem.findMany({
         where: { id: { in: pieceIds } },
         orderBy: { seq: 'asc' },
@@ -277,7 +277,7 @@ app.post('/api/consumptions', async (req, res) => {
         data: { status: 'consumed' },
       });
 
-      return tx.consumption.create({
+      return tx.issueToMachine.create({
         data: {
           id: randomUUID(),
           date,
@@ -294,31 +294,31 @@ app.post('/api/consumptions', async (req, res) => {
       });
     });
 
-    res.json({ ok: true, consumption });
-    // Notify consumption created
+    res.json({ ok: true, issueToMachine: issueRecord });
+    // Notify issue_to_machine created
     try {
-      const itemName = (await prisma.item.findUnique({ where: { id: consumption.itemId } })).name || '';
-      const machineName = consumption.machineId ? (await prisma.machine.findUnique({ where: { id: consumption.machineId } })).name : '';
-      const operatorName = consumption.operatorId ? (await prisma.operator.findUnique({ where: { id: consumption.operatorId } })).name : '';
+      const itemName = (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name || '';
+      const machineName = issueRecord.machineId ? (await prisma.machine.findUnique({ where: { id: issueRecord.machineId } })).name : '';
+      const operatorName = issueRecord.operatorId ? (await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-       sendNotification('consumption_created', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, machineName, machineNumber, operatorName, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [] });
-       // If this consumption made available pieces for this item drop to zero, notify
-       try {
-         const availableAfter = await prisma.inboundItem.count({ where: { itemId: consumption.itemId, status: 'available' } });
-         console.log(`Available pieces after consumption for ${itemName}: ${availableAfter}`);
-         if (availableAfter === 0) {
-           console.log(`Triggering out_of_stock notification for ${itemName}`);
-           // Add small delay to ensure first message is queued before second
-           setTimeout(() => {
-             sendNotification('item_out_of_stock', { itemName, available: 0 });
-           }, 1000);
-         }
-       } catch (e) { console.error('failed to check/send out_of_stock after consumption', e); }
-    } catch (e) { console.error('notify consumption error', e); }
+      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
+      // If this issue_to_machine made available pieces for this item drop to zero, notify
+      try {
+        const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
+        console.log(`Available pieces after issue_to_machine for ${itemName}: ${availableAfter}`);
+        if (availableAfter === 0) {
+          console.log(`Triggering out_of_stock notification for ${itemName}`);
+          // Add small delay to ensure first message is queued before second
+          setTimeout(() => {
+            sendNotification('item_out_of_stock', { itemName, available: 0 });
+          }, 1000);
+        }
+      } catch (e) { console.error('failed to check/send out_of_stock after issue_to_machine', e); }
+    } catch (e) { console.error('notify issue_to_machine error', e); }
   } catch (err) {
-    console.error('Failed to record consumption', err);
-    res.status(400).json({ error: err.message || 'Failed to record consumption' });
+    console.error('Failed to record issue_to_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to record issue_to_machine' });
   }
 });
 
@@ -329,7 +329,7 @@ app.post('/api/import', async (req, res) => {
     if (!data) return res.status(400).json({ error: 'Missing body' });
 
     // Clear existing tables (simple approach for import)
-    await prisma.consumption.deleteMany();
+    await prisma.issueToMachine.deleteMany();
     await prisma.inboundItem.deleteMany();
     await prisma.lot.deleteMany();
     await prisma.item.deleteMany();
@@ -362,9 +362,9 @@ app.post('/api/import', async (req, res) => {
         await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0 } });
       }
     }
-    if (Array.isArray(data.consumptions)) {
-      for (const c of data.consumptions) {
-        await prisma.consumption.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
+    if (Array.isArray(data.issue_to_machine)) {
+      for (const c of data.issue_to_machine) {
+        await prisma.issueToMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
       }
     }
 
@@ -386,7 +386,7 @@ app.get('/api/items', async (req, res) => { res.json(await prisma.item.findMany(
 app.post('/api/items', async (req, res) => { const { name } = req.body; const item = await prisma.item.create({ data: { name } }); res.json(item); });
 app.delete('/api/items/:id', async (req, res) => {
   const { id } = req.params;
-  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.consumption.count({ where: { itemId: id } });
+  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToMachine.count({ where: { itemId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
@@ -422,7 +422,7 @@ app.get('/api/machines', async (req, res) => { res.json(await prisma.machine.fin
 app.post('/api/machines', async (req, res) => { const { name } = req.body; const machine = await prisma.machine.create({ data: { name } }); res.json(machine); });
 app.delete('/api/machines/:id', async (req, res) => {
   const { id } = req.params;
-  const usage = await prisma.consumption.count({ where: { machineId: id } });
+  const usage = await prisma.issueToMachine.count({ where: { machineId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
@@ -434,7 +434,7 @@ app.get('/api/operators', async (req, res) => { res.json(await prisma.operator.f
 app.post('/api/operators', async (req, res) => { const { name } = req.body; const operator = await prisma.operator.create({ data: { name } }); res.json(operator); });
 app.delete('/api/operators/:id', async (req, res) => {
   const { id } = req.params;
-  const usage = await prisma.consumption.count({ where: { operatorId: id } });
+  const usage = await prisma.issueToMachine.count({ where: { operatorId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Operator is referenced and cannot be deleted' });
   }
@@ -442,23 +442,23 @@ app.delete('/api/operators/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/consumptions/:id', async (req, res) => {
+app.delete('/api/issue_to_machine/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Find the consumption record
-    const consumption = await prisma.consumption.findUnique({ where: { id } });
-    if (!consumption) {
-      return res.status(404).json({ error: 'Consumption record not found' });
+    // Find the issue_to_machine record
+    const issueRecord = await prisma.issueToMachine.findUnique({ where: { id } });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    // Get the piece IDs from the consumption record
-    const pieceIds = consumption.pieceIds ? consumption.pieceIds.split(',') : [];
+    // Get the piece IDs from the issue_to_machine record
+    const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
     
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      // Delete the consumption record
-      await tx.consumption.delete({ where: { id } });
+      // Delete the issue_to_machine record
+      await tx.issueToMachine.delete({ where: { id } });
       
       // Mark pieces as available again
       if (pieceIds.length > 0) {
@@ -470,20 +470,20 @@ app.delete('/api/consumptions/:id', async (req, res) => {
     });
 
     res.json({ ok: true });
-    // Notify consumption deleted
+    // Notify issue_to_machine deleted
     try {
-      const itemName = consumption.itemId ? (await prisma.item.findUnique({ where: { id: consumption.itemId } })).name : '';
+      const itemName = issueRecord.itemId ? (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name : '';
       // include machine/operator info if available
-      const machineRec = consumption.machineId ? await prisma.machine.findUnique({ where: { id: consumption.machineId } }) : null;
-      const operatorRec = consumption.operatorId ? await prisma.operator.findUnique({ where: { id: consumption.operatorId } }) : null;
+      const machineRec = issueRecord.machineId ? await prisma.machine.findUnique({ where: { id: issueRecord.machineId } }) : null;
+      const operatorRec = issueRecord.operatorId ? await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } }) : null;
       const machineNameDel = machineRec ? machineRec.name : '';
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
-      sendNotification('consumption_deleted', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [], machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
-    } catch (e) { console.error('notify consumption deleted error', e); }
+      sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [], machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
+    } catch (e) { console.error('notify issue_to_machine deleted error', e); }
   } catch (err) {
-    console.error('Failed to delete consumption', err);
-    res.status(500).json({ error: err.message || 'Failed to delete consumption' });
+    console.error('Failed to delete issue_to_machine record', err);
+    res.status(500).json({ error: err.message || 'Failed to delete issue_to_machine record' });
   }
 });
 
@@ -613,12 +613,12 @@ app.put('/api/inbound_items/:id', async (req, res) => {
   }
 });
 
-// Delete a lot and its inbound items and consumptions
+// Delete a lot and its inbound items and issue-to-machine records
 app.delete('/api/lots/:lotNo', async (req, res) => {
   try {
     const { lotNo } = req.params;
-    // Do not allow delete if any consumption exists for this lot
-    const consCount = await prisma.consumption.count({ where: { lotNo } });
+    // Do not allow delete if any issue_to_machine record exists for this lot
+    const consCount = await prisma.issueToMachine.count({ where: { lotNo } });
     if (consCount > 0) {
       return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
     }
@@ -672,4 +672,3 @@ app.listen(PORT, () => {
     }
   })();
 });
-

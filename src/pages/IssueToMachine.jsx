@@ -8,7 +8,7 @@ import { Section, Button, SecondaryButton, Input, Select, Pill } from '../compon
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
 
-export function IssueToMachine({ db, onIssuePieces, refreshing, refreshDb }) {
+export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) {
   const { cls } = useBrand();
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
@@ -51,9 +51,9 @@ export function IssueToMachine({ db, onIssuePieces, refreshing, refreshDb }) {
     .sort((a,b)=> a.seq - b.seq), [db.inbound_items, lotNo, itemId]);
 
   const lastIssueForLot = useMemo(() => {
-    const rows = db.consumptions.filter(c => c.lotNo===lotNo).sort((a,b)=> b.date.localeCompare(a.date));
+    const rows = db.issue_to_machine.filter(record => record.lotNo === lotNo).sort((a,b)=> b.date.localeCompare(a.date));
     return rows[0] || null;
-  }, [db.consumptions, lotNo]);
+  }, [db.issue_to_machine, lotNo]);
 
   function toggle(id) {
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -68,7 +68,7 @@ export function IssueToMachine({ db, onIssuePieces, refreshing, refreshDb }) {
     if (chosen.length===0) { alert("Nothing to issue. Selected pieces are not available."); return; }
     setIssuing(true);
     try {
-      await onIssuePieces({ date, itemId, lotNo, pieceIds: chosen, note, machineId, operatorId });
+      await onIssueToMachine({ date, itemId, lotNo, pieceIds: chosen, note, machineId, operatorId });
       const picked = availablePieces.filter(p=> chosen.includes(p.id));
       const totalWeight = picked.reduce((s,p)=>s+p.weight,0);
       alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)`);

@@ -113,7 +113,7 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
   }
 
   async function deleteMachine(id) {
-    if (!confirm("Delete machine? You cannot remove it if referenced by consumptions.")) return;
+    if (!confirm("Delete machine? You cannot remove it if referenced by issue to machine records.")) return;
     setWorking(true);
     try {
       await onDeleteMachine(id);
@@ -140,7 +140,7 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
   }
 
   async function deleteOperator(id) {
-    if (!confirm("Delete operator? You cannot remove it if referenced by consumptions.")) return;
+    if (!confirm("Delete operator? You cannot remove it if referenced by issue to machine records.")) return;
     setWorking(true);
     try {
       await onDeleteOperator(id);

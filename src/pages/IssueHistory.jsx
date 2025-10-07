@@ -77,14 +77,14 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   const [sortConfig, setSortConfig] = useState(() => ({ ...ISSUE_DEFAULT_SORT }));
   const [deletingId, setDeletingId] = useState(null);
 
-  const handleDelete = async (consumptionId) => {
+  const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
       return;
     }
     
-    setDeletingId(consumptionId);
+    setDeletingId(issueId);
     try {
-      await api.deleteConsumption(consumptionId);
+      await api.deleteIssueToMachine(issueId);
       await refreshDb();
       alert('Issue record deleted successfully. Pieces are now available again.');
     } catch (err) {
@@ -95,8 +95,8 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   };
 
   const rows = useMemo(() => {
-    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.consumptions || []).slice();
-  }, [db.consumptions, rowsProp]);
+    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.issue_to_machine || []).slice();
+  }, [db.issue_to_machine, rowsProp]);
 
   const items = db.items || [];
   const machines = db.machines || [];

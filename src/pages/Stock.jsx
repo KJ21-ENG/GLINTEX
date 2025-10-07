@@ -79,7 +79,7 @@ function isFilterActive(selectedValues, totalOptions) {
   return selectedValues.length !== totalOptions;
 }
 
-export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
+export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   const { cls, brand, theme } = useBrand();
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
@@ -284,7 +284,7 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
     
     setIssuingLot(lotNo);
     try {
-      await onIssuePieces(payload);
+      await onIssueToMachine(payload);
       alert(`Issued ${pieceIds.length} pcs from Lot ${lotNo}`);
       // clear selection for this lot
       setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));

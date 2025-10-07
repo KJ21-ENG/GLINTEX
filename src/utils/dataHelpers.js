@@ -13,12 +13,12 @@ export function normalizeDb(raw) {
   const operators = ensureArr(raw?.operators);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
-  const consumptions = ensureArr(raw?.consumptions).map((c) => ({
-    ...c,
-    pieceIds: typeof c.pieceIds === 'string' ? c.pieceIds.split(',').filter(Boolean) : ensureArr(c.pieceIds),
+  const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
+    ...record,
+    pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
   }));
   const settings = ensureArr(raw?.settings);
-  return { items, firms, suppliers, machines, operators, lots, inbound_items, consumptions, settings };
+  return { items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine: issueToMachine, settings };
 }
 
 export function extractBrandFromDb(db) {

@@ -41,7 +41,7 @@ async function request(path, { method = 'GET', body } = {}) {
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
-export async function issuePieces(payload) { return await request('/api/consumptions', { method: 'POST', body: payload }); }
+export async function createIssueToMachine(payload) { return await request('/api/issue_to_machine', { method: 'POST', body: payload }); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
@@ -60,7 +60,7 @@ export async function createOperator(name) { return await request('/api/operator
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
-export async function deleteConsumption(id) { return await request(`/api/consumptions/${id}`, { method: 'DELETE' }); }
+export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }
 export async function deleteInboundItem(id) { return await request(`/api/inbound_items/${id}`, { method: 'DELETE' }); }
 export async function whatsappStatus() { return await request('/api/whatsapp/status'); }
 export async function whatsappStart() { return await request('/api/whatsapp/start', { method: 'POST' }); }
@@ -75,10 +75,10 @@ export default {
   health,
   getDB,
   createLot,
-  issuePieces,
+  createIssueToMachine,
   updateInboundItem,
   deleteLot,
-  deleteConsumption,
+  deleteIssueToMachine,
   listItems,
   createItem,
   deleteItem,

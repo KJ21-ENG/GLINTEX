@@ -86,8 +86,8 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
-  const handleIssuePieces = useCallback(async (payload) => {
-    await api.issuePieces(payload);
+  const handleIssueToMachine = useCallback(async (payload) => {
+    await api.createIssueToMachine(payload);
     await refreshDb();
   }, [refreshDb]);
 
@@ -230,8 +230,8 @@ export default function App() {
 
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
-          {tab === "stock" && <Stock db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "issue" && <IssueToMachine db={db} onIssuePieces={handleIssuePieces} refreshing={refreshing} refreshDb={refreshDb} />}
+          {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
+          {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}

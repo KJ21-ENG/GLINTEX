@@ -3,8 +3,8 @@ import prisma from '../src/prismaClient.js';
 async function seed() {
   const defaults = [
     { event: 'inbound_created', enabled: true, template: 'New inbound: {{itemName}} Lot {{lotNo}} - {{totalPieces}} pcs, total {{totalWeight}} kg on {{date}}' },
-    { event: 'consumption_created', enabled: true, template: 'Issued: {{itemName}} Lot {{lotNo}} - {{count}} pcs by {{operatorName}} on {{date}}' },
-    { event: 'consumption_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
+    { event: 'issue_to_machine_created', enabled: true, template: 'Issued: {{itemName}} Lot {{lotNo}} - {{count}} pcs by {{operatorName}} on {{date}}' },
+    { event: 'issue_to_machine_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
     { event: 'inbound_piece_deleted', enabled: true, template: 'Inbound piece deleted: {{itemName}} Lot {{lotNo}} piece {{pieceId}}' },
     { event: 'item_out_of_stock', enabled: true, template: 'Out of stock: {{itemName}} is now out of stock (available: {{available}})' },
   ];
@@ -24,5 +24,4 @@ async function seed() {
 }
 
 seed().catch(e => { console.error(e); process.exit(1); });
-
 

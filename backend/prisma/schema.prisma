@@ -51,18 +51,18 @@ model InboundItem {
 }
 
 model Machine {
-  id          String        @id @default(cuid())
-  name        String
-  consumptions Consumption[]
+  id               String           @id @default(cuid())
+  name             String
+  issueToMachines  IssueToMachine[]
 }
 
 model Operator {
-  id          String        @id @default(cuid())
-  name        String
-  consumptions Consumption[]
+  id               String           @id @default(cuid())
+  name             String
+  issueToMachines  IssueToMachine[]
 }
 
-model Consumption {
+model IssueToMachine {
   id          String  @id
   date        String
   itemId      String
@@ -74,7 +74,7 @@ model Consumption {
   note        String?
   machineId   String?
   operatorId  String?
-  machine     Machine? @relation(fields: [machineId], references: [id])
+  machine     Machine?  @relation(fields: [machineId], references: [id])
   operator    Operator? @relation(fields: [operatorId], references: [id])
 }
 
@@ -97,6 +97,5 @@ model WhatsappTemplate {
   enabled  Boolean @default(true)
   template String
 }
-
 
 

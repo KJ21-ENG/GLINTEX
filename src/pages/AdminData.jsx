@@ -76,7 +76,7 @@ export function AdminData({ db, onSaveBrand, savingBrand }) {
         <RawTable title="Suppliers" rows={db.suppliers} />
         <RawTable title="Lots" rows={db.lots} />
         <RawTable title="Inbound Items" rows={db.inbound_items} />
-        <RawTable title="Issues to Machine" rows={db.consumptions} />
+        <RawTable title="Issues to Machine" rows={db.issue_to_machine} />
       </Section>
     </div>
   );

@@ -6,6 +6,7 @@ async function seed() {
     { event: 'consumption_created', enabled: true, template: 'Issued: {{itemName}} Lot {{lotNo}} - {{count}} pcs by {{operatorName}} on {{date}}' },
     { event: 'consumption_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
     { event: 'inbound_piece_deleted', enabled: true, template: 'Inbound piece deleted: {{itemName}} Lot {{lotNo}} piece {{pieceId}}' },
+    { event: 'item_out_of_stock', enabled: true, template: 'Out of stock: {{itemName}} is now out of stock (available: {{available}})' },
   ];
 
   for (const t of defaults) {

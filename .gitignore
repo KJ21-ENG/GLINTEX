@@ -28,8 +28,9 @@ out/
 .cache/
 
 # WhatsApp WebJS
+.wwebjs_auth/
+.wwebjs_cache/
 backend/.wwebjs_cache/
-backend/.wwebjs_auth/
 
 # Dependency directories
 jspm_packages/

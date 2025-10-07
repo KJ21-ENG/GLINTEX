@@ -16,13 +16,16 @@ const PORT = process.env.PORT || 4000;
 // Helper: send notification for an event using stored templates
 async function sendNotification(event, payload) {
   try {
+    console.log('sendNotification called for', event, 'payload:', payload && JSON.stringify(payload));
     const tpl = await getTemplateByEvent(event);
-    if (!tpl || !tpl.enabled) return;
+    if (!tpl) return console.warn('No template for event', event);
+    if (!tpl.enabled) return console.log('Template disabled for event', event);
     const msg = interpolateTemplate(tpl.template, payload || {});
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (!settings || !settings.whatsappNumber) return console.warn('No whatsappNumber configured, skipping notification');
-    // Fire-and-forget
-    whatsapp.sendTextSafe(settings.whatsappNumber, msg).catch(err => console.error('Failed to send whatsapp notification', err));
+    if (!settings || !settings.whatsappNumber) return console.warn('No whatsappNumber configured, skipping notification for', event);
+    console.log('Using whatsappNumber', settings.whatsappNumber, 'to send event', event);
+    // Fire-and-forget (queued)
+    whatsapp.sendTextSafe(settings.whatsappNumber, msg).then(() => console.log('Notification sent for', event)).catch(err => console.error('Failed to send whatsapp notification', err));
   } catch (err) {
     console.error('sendNotification error', err);
   }
@@ -299,7 +302,19 @@ app.post('/api/consumptions', async (req, res) => {
       const operatorName = consumption.operatorId ? (await prisma.operator.findUnique({ where: { id: consumption.operatorId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-      sendNotification('consumption_created', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, machineName, machineNumber, operatorName, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [] });
+       sendNotification('consumption_created', { itemName, lotNo: consumption.lotNo, date: consumption.date, count: consumption.count, totalWeight: consumption.totalWeight, machineName, machineNumber, operatorName, pieceIds: consumption.pieceIds ? consumption.pieceIds.split(',') : [] });
+       // If this consumption made available pieces for this item drop to zero, notify
+       try {
+         const availableAfter = await prisma.inboundItem.count({ where: { itemId: consumption.itemId, status: 'available' } });
+         console.log(`Available pieces after consumption for ${itemName}: ${availableAfter}`);
+         if (availableAfter === 0) {
+           console.log(`Triggering out_of_stock notification for ${itemName}`);
+           // Add small delay to ensure first message is queued before second
+           setTimeout(() => {
+             sendNotification('item_out_of_stock', { itemName, available: 0 });
+           }, 1000);
+         }
+       } catch (e) { console.error('failed to check/send out_of_stock after consumption', e); }
     } catch (e) { console.error('notify consumption error', e); }
   } catch (err) {
     console.error('Failed to record consumption', err);
@@ -491,6 +506,18 @@ app.delete('/api/inbound_items/:id', async (req, res) => {
     try {
       const itemName = existing.itemId ? (await prisma.item.findUnique({ where: { id: existing.itemId } })).name : '';
       sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id });
+       // If deleting this piece caused available count to become zero, notify
+       try {
+         const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
+         console.log(`Available pieces after inbound piece delete for ${itemName}: ${availableAfter}`);
+         if (availableAfter === 0) {
+           console.log(`Triggering out_of_stock notification for ${itemName}`);
+           // Add small delay to ensure first message is queued before second
+           setTimeout(() => {
+             sendNotification('item_out_of_stock', { itemName, available: 0 });
+           }, 1000);
+         }
+       } catch (e) { console.error('failed to check/send out_of_stock after inbound piece delete', e); }
     } catch (e) { console.error('notify inbound piece deleted error', e); }
   } catch (err) {
     console.error('Failed to delete inbound piece', err);
@@ -610,6 +637,22 @@ app.delete('/api/lots/:lotNo', async (req, res) => {
     // Notify lot deletion
     try {
       sendNotification('lot_deleted', { itemName: itemRec ? itemRec.name : '', lotNo, totalPieces, date: lotRec ? lotRec.date : '' });
+      // After removing the lot's pieces, if item has zero available pieces now, notify
+      try {
+        const itemIdentifier = lotRec ? lotRec.itemId : null;
+        const itemNameForCheck = itemRec ? itemRec.name : (lotRec ? (await prisma.item.findUnique({ where: { id: lotRec.itemId } })).name : '');
+         if (itemIdentifier) {
+           const availableAfter = await prisma.inboundItem.count({ where: { itemId: itemIdentifier, status: 'available' } });
+           console.log(`Available pieces after lot delete for ${itemNameForCheck}: ${availableAfter}`);
+           if (availableAfter === 0) {
+             console.log(`Triggering out_of_stock notification for ${itemNameForCheck}`);
+             // Add small delay to ensure first message is queued before second
+             setTimeout(() => {
+               sendNotification('item_out_of_stock', { itemName: itemNameForCheck || '', available: 0 });
+             }, 1000);
+           }
+         }
+      } catch (e) { console.error('failed to check/send out_of_stock after lot delete', e); }
     } catch (e) { console.error('notify lot deleted error', e); }
   } catch (err) {
     console.error('Failed to delete lot', err);

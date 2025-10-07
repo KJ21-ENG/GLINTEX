@@ -343,10 +343,30 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
     <div className="space-y-6">
       <Section title={null}>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isSummaryView} onChange={e=>setIsSummaryView(e.target.checked)} />
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isSummaryView}
+              onClick={() => setIsSummaryView(v => !v)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsSummaryView(v => !v);
+                }
+              }}
+              className={`relative inline-flex h-8 w-16 items-center rounded-full border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)] ${
+                isSummaryView ? 'border-[var(--brand-primary)] bg-[var(--brand-primary)]/80' : `${cls.cardBorder} ${cls.cardBg}`
+              }`}
+            >
+              <span
+                className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                  isSummaryView ? 'translate-x-8' : 'translate-x-1'
+                }`}
+              />
+            </button>
             <span className={`${cls.muted}`}>Summary view</span>
-          </label>
+          </div>
           <div className="relative" ref={exportRef}>
             <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover} btn-hover`}>
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>

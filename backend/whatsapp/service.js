@@ -5,6 +5,7 @@ const { Client, LocalAuth } = pkg;
 import EventEmitter from 'events';
 import qrcode from 'qrcode';
 import os from 'os';
+import { execSync } from 'child_process';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
 const SESS_FILE = path.join(SESS_DIR, 'session.json');
@@ -43,6 +44,16 @@ function detectChromeExecutable() {
   return null;
 }
 
+// Check whether any running process references the given auth/profile directory
+function isProfileInUse(authDir) {
+  try {
+    const out = execSync('ps aux', { encoding: 'utf8' });
+    return out && out.includes(authDir);
+  } catch (_) {
+    return false;
+  }
+}
+
 // Normalize mobile number to Indian format without '+'; e.g. '9876543210' -> '919876543210'
 function normalizeNumber(number) {
   const digits = String(number || '').replace(/[^0-9]/g, '');
@@ -71,6 +82,22 @@ class WhatsappService {
   async init() {
     if (this.initialized) return;
     ensureDir(SESS_DIR);
+    // Before launching, try to remove stale LocalAuth session lock if present and not in use
+    try {
+      const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
+      const lockFile = path.join(authDir, 'SingletonLock');
+      if (fs.existsSync(lockFile) && !isProfileInUse(authDir)) {
+        try {
+          fs.rmSync(authDir, { recursive: true, force: true });
+          console.log('Removed stale LocalAuth session directory to avoid ProcessSingleton error:', authDir);
+        } catch (e) {
+          console.warn('Failed to remove stale LocalAuth session directory:', e && e.message);
+        }
+      }
+    } catch (e) {
+      // best-effort cleanup; continue to attempt init
+    }
+
     // Use LocalAuth which stores session data in ~/.local/share but we'll still provide explicit path fallback
     // create client with faster puppeteer flags
     const execPath = detectChromeExecutable();
@@ -81,71 +108,99 @@ class WhatsappService {
     };
     if (execPath) puppeteerOpts.executablePath = execPath;
 
-    this.client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
+    // Try multiple times to initialize browser (cleaning stale session dir between attempts)
+    const maxLaunchAttempts = 3;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxLaunchAttempts; attempt++) {
+      try {
+        this.client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
 
-    this.client.on('qr', async (qr) => {
-      this.qrDataUrl = await qrcode.toDataURL(qr);
-      this.status = 'qr';
-      this.emitter.emit('qr', { qr: this.qrDataUrl });
-      this.emitter.emit('status', { status: this.status });
-    });
+        this.client.on('qr', async (qr) => {
+          this.qrDataUrl = await qrcode.toDataURL(qr);
+          this.status = 'qr';
+          this.emitter.emit('qr', { qr: this.qrDataUrl });
+          this.emitter.emit('status', { status: this.status });
+        });
 
-    this.client.on('ready', () => {
-      this.status = 'connected';
-      this.qrDataUrl = null;
-      this.emitter.emit('status', { status: this.status });
-      this.emitter.emit('qr', { qr: null });
-      // flush waiting promises
-      this._flushWaiting();
-      // start processing any queued sends
-      this._processQueue().catch(err => console.error('Queue processor failed', err));
-    });
+        this.client.on('ready', () => {
+          this.status = 'connected';
+          this.qrDataUrl = null;
+          this.emitter.emit('status', { status: this.status });
+          this.emitter.emit('qr', { qr: null });
+          // flush waiting promises
+          this._flushWaiting();
+          // start processing any queued sends
+          this._processQueue().catch(err => console.error('Queue processor failed', err));
+        });
 
-    this.client.on('authenticated', (session) => {
-      this.status = 'authenticated';
-      this.emitter.emit('status', { status: this.status });
-    });
+        this.client.on('authenticated', (session) => {
+          this.status = 'authenticated';
+          this.emitter.emit('status', { status: this.status });
+        });
 
-    this.client.on('auth_failure', (msg) => {
-      this.status = 'disconnected';
-      this.qrDataUrl = null;
-      this.emitter.emit('status', { status: this.status });
-      console.error('Auth failure:', msg);
-    });
+        this.client.on('auth_failure', (msg) => {
+          this.status = 'disconnected';
+          this.qrDataUrl = null;
+          this.emitter.emit('status', { status: this.status });
+          console.error('Auth failure:', msg);
+        });
 
-    this.client.on('disconnected', (reason) => {
-      this.status = 'disconnected';
-      this.qrDataUrl = null;
-      console.log('Whatsapp disconnected', reason);
-      this.emitter.emit('status', { status: this.status });
-      // Do not permanently destroy client here - attempt to re-initialize so LocalAuth session is reused
-      this.initialized = false;
-      // keep client reference removed so sends know it's not available
-      this.client = null;
-      // let queue processor know we are disconnected; it will pause
-      this._processingQueue = false;
-      // Try to re-init with exponential backoff
-      let attempt = 0;
-      const tryReinit = async () => {
-        if (this._shuttingDown) return;
-        attempt += 1;
-        const delay = Math.min(60000, 1000 * Math.pow(2, attempt));
-        console.log(`Re-init attempt #${attempt} in ${delay}ms`);
-        setTimeout(async () => {
-          try {
-            await this.init();
-            console.log('Re-init successful');
-          } catch (err) {
-            console.error('Re-init failed', err && err.message);
-            if (attempt < 6) tryReinit();
+        this.client.on('disconnected', (reason) => {
+          this.status = 'disconnected';
+          this.qrDataUrl = null;
+          console.log('Whatsapp disconnected', reason);
+          this.emitter.emit('status', { status: this.status });
+          // Do not permanently destroy client here - attempt to re-initialize so LocalAuth session is reused
+          this.initialized = false;
+          // keep client reference removed so sends know it's not available
+          this.client = null;
+          // let queue processor know we are disconnected; it will pause
+          this._processingQueue = false;
+          // Try to re-init with exponential backoff
+          let reinitAttempt = 0;
+          const tryReinit = async () => {
+            if (this._shuttingDown) return;
+            reinitAttempt += 1;
+            const delay = Math.min(60000, 1000 * Math.pow(2, reinitAttempt));
+            console.log(`Re-init attempt #${reinitAttempt} in ${delay}ms`);
+            setTimeout(async () => {
+              try {
+                await this.init();
+                console.log('Re-init successful');
+              } catch (err) {
+                console.error('Re-init failed', err && err.message);
+                if (reinitAttempt < 6) tryReinit();
+              }
+            }, delay);
+          };
+          tryReinit();
+        });
+
+        await this.client.initialize();
+        this.initialized = true;
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.error(`Whatsapp client initialize attempt #${attempt} failed:`, err && err.message);
+        // Attempt best-effort cleanup of stale session dir before retrying
+        try {
+          const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
+          const lockFile = path.join(authDir, 'SingletonLock');
+          if (fs.existsSync(lockFile) && !isProfileInUse(authDir)) {
+            fs.rmSync(authDir, { recursive: true, force: true });
+            console.log('Removed stale LocalAuth session directory and will retry initialization:', authDir);
           }
-        }, delay);
-      };
-      tryReinit();
-    });
-
-    await this.client.initialize();
-    this.initialized = true;
+        } catch (cleanupErr) {
+          console.warn('Cleanup during init failure failed', cleanupErr && cleanupErr.message);
+        }
+        if (attempt < maxLaunchAttempts) {
+          await new Promise(r => setTimeout(r, 1000 * attempt));
+          continue;
+        }
+      }
+    }
+    if (lastErr) throw lastErr;
     // attach process exit handlers to gracefully shutdown client
     process.once('SIGINT', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} process.exit(0); });
     process.once('exit', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} });

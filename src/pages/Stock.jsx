@@ -4,17 +4,95 @@
 
 import React, { useState, useMemo, useRef } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, Select, Pill } from '../components';
+import { Section, Button, SecondaryButton, Input, Select, Pill, ColumnFilter, ValueFilterMenu, DateFilterMenu } from '../components';
 import { PieceRow } from '../components/stock';
 import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 
+const STATUS_OPTIONS = [
+  { value: 'active', label: 'Active (pending > 0)' },
+  { value: 'inactive', label: 'Inactive (pending = 0)' },
+];
+
+const DEFAULT_SORT = { key: 'date', direction: 'desc' };
+const EPSILON = 1e-9;
+
+function lotStatus(lot) {
+  const pending = Number(lot.pendingWeight || 0);
+  const initial = Number(lot.totalWeight || 0);
+  if (pending > EPSILON && pending <= initial + EPSILON) return 'active';
+  if (Math.abs(pending) <= EPSILON) return 'inactive';
+  return pending > 0 ? 'active' : 'inactive';
+}
+
+function compareValues(a, b) {
+  if (a === b) return 0;
+  if (a === undefined || a === null) return 1;
+  if (b === undefined || b === null) return -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function getSortValue(lot, key) {
+  switch (key) {
+    case 'lotNo':
+      return lot.lotNo || '';
+    case 'date':
+      return lot.date || '';
+    case 'itemName':
+      return lot.itemName || lot.name || '';
+    case 'firmName':
+      return lot.firmName || lot.firm || '';
+    case 'supplierName':
+      return lot.supplierName || lot.supplier || '';
+    case 'availableCount':
+      return lot.availableCount ?? ((lot.pieces || []).filter(p => p.status === 'available').length);
+    case 'totalWeight':
+      return Number(lot.totalWeight || 0);
+    case 'pendingWeight':
+      return Number(lot.pendingWeight || 0);
+    default:
+      return lot[key] ?? '';
+  }
+}
+
+function sortLots(list, config) {
+  const effective = (config && config.key) ? config : DEFAULT_SORT;
+  const directionFactor = effective.direction === 'asc' ? 1 : -1;
+  return [...list].sort((a, b) => {
+    const primary = compareValues(getSortValue(a, effective.key), getSortValue(b, effective.key));
+    if (primary !== 0) return primary * directionFactor;
+    if (effective.key !== DEFAULT_SORT.key) {
+      const fallbackFactor = DEFAULT_SORT.direction === 'asc' ? 1 : -1;
+      const fallback = compareValues(getSortValue(a, DEFAULT_SORT.key), getSortValue(b, DEFAULT_SORT.key));
+      if (fallback !== 0) return fallback * fallbackFactor;
+    }
+    return 0;
+  });
+}
+
+function isFilterActive(selectedValues, totalOptions) {
+  if (!Array.isArray(selectedValues)) return false;
+  if (selectedValues.length === 0) return true;
+  if (!totalOptions) return selectedValues.length > 0;
+  return selectedValues.length !== totalOptions;
+}
+
 export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   const { cls, brand, theme } = useBrand();
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
-  const [filters, setFilters] = useState({ itemId: '', firmId: '', supplierId: '', from: '', to: '', lotSearch: '', type: 'active' });
+  const [filters, setFilters] = useState({
+    lotNos: null,
+    itemIds: null,
+    firmIds: null,
+    supplierIds: null,
+    from: '',
+    to: '',
+    statuses: ['active'],
+  });
+  const [sortConfig, setSortConfig] = useState(() => ({ ...DEFAULT_SORT }));
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
   const [deletingLot, setDeletingLot] = useState(null);
@@ -45,45 +123,77 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
         m[p.lotNo].pendingWeight = (m[p.lotNo].pendingWeight || 0) + Number(p.weight || 0);
       }
     }
+    Object.values(m).forEach(lot => {
+      lot.statusType = lotStatus(lot);
+    });
     return m;
   }, [db.lots, db.items, db.firms, db.suppliers, db.inbound_items]);
 
   // Include all lots (even those with zero available pieces) so filters like "inactive" work
   const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
 
+  const itemOptions = useMemo(() => {
+    return [...db.items]
+      .map(i => ({ value: i.id, label: i.name || '—', key: i.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.items]);
+
+  const firmOptions = useMemo(() => {
+    return [...db.firms]
+      .map(fm => ({ value: fm.id, label: fm.name || '—', key: fm.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.firms]);
+
+  const supplierOptions = useMemo(() => {
+    return [...db.suppliers]
+      .map(s => ({ value: s.id, label: s.name || '—', key: s.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.suppliers]);
+
+  const statusOptions = useMemo(() => STATUS_OPTIONS.map(opt => ({ ...opt, key: opt.value })), []);
+
+  const lotOptions = useMemo(() => {
+    const map = new Map();
+    for (const lot of allLots) {
+      const value = lot.lotNo ?? null;
+      const key = value ?? '__blank__';
+      if (!map.has(key)) {
+        map.set(key, { value, label: value ?? '(Blank)', key });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => compareValues(a.label, b.label));
+  }, [allLots]);
+
   // Apply filters
   const filteredLots = useMemo(() => {
-    return allLots.filter(l => {
-      if (filters.itemId && l.itemId !== filters.itemId) return false;
-      if (filters.firmId && l.firmId !== filters.firmId) return false;
-      if (filters.supplierId && l.supplierId !== filters.supplierId) return false;
-      if (filters.lotSearch) {
-        // support comma-separated list of lot tokens
-        const tokens = (filters.lotSearch || '').split(',').map(t => t.trim()).filter(Boolean);
-        if (tokens.length) {
-          const lower = l.lotNo.toLowerCase();
-          const matches = tokens.some(t => lower.includes(t.toLowerCase()));
-          if (!matches) return false;
-        }
+    const next = allLots.filter(l => {
+      if (Array.isArray(filters.itemIds)) {
+        if (filters.itemIds.length === 0) return false;
+        if (!filters.itemIds.includes(l.itemId)) return false;
+      }
+      if (Array.isArray(filters.firmIds)) {
+        if (filters.firmIds.length === 0) return false;
+        if (!filters.firmIds.includes(l.firmId)) return false;
+      }
+      if (Array.isArray(filters.supplierIds)) {
+        if (filters.supplierIds.length === 0) return false;
+        if (!filters.supplierIds.includes(l.supplierId)) return false;
+      }
+      if (Array.isArray(filters.lotNos)) {
+        if (filters.lotNos.length === 0) return false;
+        if (!filters.lotNos.includes(l.lotNo)) return false;
       }
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
-      // client-side type filter: active / inactive
-      // pending = weight available to be issued (computed earlier on lotsMap)
-      const pending = Number(l.pendingWeight || 0);
-      const initialWeight = Number(l.totalWeight || 0);
-      if (filters.type === 'active') {
-        // show lots where pending > 0 and pending <= initial
-        if (!(pending > 0 && pending <= initialWeight)) return false;
-      } else if (filters.type === 'inactive') {
-        // show lots where pending === 0
-        if (!(Math.abs(pending) < 1e-9)) return false;
-      } else if (filters.type === 'all') {
-        // no filtering
+      if (Array.isArray(filters.statuses)) {
+        if (filters.statuses.length === 0) return false;
+        const status = l.statusType || lotStatus(l);
+        if (!filters.statuses.includes(status)) return false;
       }
       return true;
-    }).sort((a,b) => (b.date || '').localeCompare(a.date));
-  }, [allLots, filters]);
+    });
+    return sortLots(next, sortConfig);
+  }, [allLots, filters, sortConfig]);
 
   function toggleExpand(lotNo) { setExpandedLot(prev => (prev === lotNo ? null : lotNo)); }
 
@@ -232,66 +342,296 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
   return (
     <div className="space-y-6">
       <Section title={null}>
-        <div className="grid grid-cols-1 md:grid-cols-7 gap-3 md:gap-4 mb-3">
-          <div><label className={`text-xs ${cls.muted}`}>Lot search</label><Input value={filters.lotSearch} onChange={e=>setFilters(f=>({ ...f, lotSearch: e.target.value }))} placeholder="Search lot no" /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Date From</label><Input type="date" value={filters.from} onChange={e=>setFilters(f=>({ ...f, from: e.target.value }))} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Date To</label><Input type="date" value={filters.to} onChange={e=>setFilters(f=>({ ...f, to: e.target.value }))} /></div>
-          <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={filters.itemId} onChange={e=>setFilters(f=>({ ...f, itemId: e.target.value }))}><option value="">Any</option>{db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Firm</label><Select value={filters.firmId} onChange={e=>setFilters(f=>({ ...f, firmId: e.target.value }))}><option value="">Any</option>{db.firms.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Supplier</label><Select value={filters.supplierId} onChange={e=>setFilters(f=>({ ...f, supplierId: e.target.value }))}><option value="">Any</option>{db.suppliers.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>
-          <div>
-            <label className={`text-xs ${cls.muted}`}>Type</label>
-          <div className="relative flex items-center gap-2">
-              <Select value={filters.type} onChange={e=>setFilters(f=>({ ...f, type: e.target.value }))} style={{ minWidth: 120 }}><option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option></Select>
-              <div className="relative" ref={exportRef}>
-                <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover} btn-hover`}>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                </button>
-                {exportOpen && (
-                  <div className={`absolute right-0 mt-2 w-40 rounded-md shadow-lg border ${cls.cardBorder} ${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} z-50`} onClick={e=>e.stopPropagation()}>
-                    <div className="p-2">
-                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportXlsx(filteredLots, piecesByLot()); setExportOpen(false); }}>Export XLSX</button>
-                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportCsv(filteredLots, piecesByLot()); setExportOpen(false); }}>Export CSV</button>
-                      <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportPdf(filteredLots, piecesByLot(), brand); setExportOpen(false); }}>Export PDF</button>
-                    </div>
-                  </div>
-                )}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={isSummaryView} onChange={e=>setIsSummaryView(e.target.checked)} />
+            <span className={`${cls.muted}`}>Summary view</span>
+          </label>
+          <div className="relative" ref={exportRef}>
+            <button type="button" onClick={(e)=>{ e.stopPropagation(); setExportOpen(v=>!v); }} title="Export" className={`w-9 h-9 rounded-md flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} ${cls.navHover} btn-hover`}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+            {exportOpen && (
+              <div className={`absolute right-0 mt-2 w-40 rounded-md shadow-lg border ${cls.cardBorder} ${theme === 'dark' ? 'bg-slate-800' : 'bg-white'} z-50`} onClick={e=>e.stopPropagation()}>
+                <div className="p-2">
+                  <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportXlsx(filteredLots, piecesByLot()); setExportOpen(false); }}>Export XLSX</button>
+                  <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportCsv(filteredLots, piecesByLot()); setExportOpen(false); }}>Export CSV</button>
+                  <button type="button" className={`w-full text-left px-2 py-1 rounded ${theme === 'dark' ? 'hover:bg-slate-700 text-white' : 'hover:bg-slate-100 text-slate-900'} underline-on-hover btn-hover`} onClick={()=>{ exportPdf(filteredLots, piecesByLot(), brand); setExportOpen(false); }}>Export PDF</button>
+                </div>
               </div>
-              {/* Summary view toggle */}
-              <label className="flex items-center gap-2 ml-2 text-sm">
-                <input type="checkbox" checked={isSummaryView} onChange={e=>setIsSummaryView(e.target.checked)} />
-                <span className={`${cls.muted}`}>Summary view</span>
-              </label>
-            </div>
+            )}
           </div>
         </div>
 
-          <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}>
-            <tr>
-              {isSummaryView ? (
-                <>
-                  <th className="py-2 pr-2">Item</th>
-                  <th className="py-2 pr-2">Firm</th>
-                  <th className="py-2 pr-2">Supplier</th>
-                  <th className="py-2 pr-2 text-right">Pieces (available/out)</th>
-                  <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
-                  <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
-                </>
-              ) : (
-                <>
-                  <th className="py-2 pr-2">Lot No</th>
-                  <th className="py-2 pr-2">Date</th>
-                  <th className="py-2 pr-2">Item</th>
-                  <th className="py-2 pr-2">Firm</th>
-                  <th className="py-2 pr-2">Supplier</th>
-                  <th className="py-2 pr-2 text-right">Pieces (available/out)</th>
-                  <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
-                  <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
-                </>
-              )}
-            </tr>
-          </thead>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                {isSummaryView ? (
+                  <>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Item</span>
+                        <ColumnFilter
+                          title="Filter by item"
+                          align="left"
+                          active={isFilterActive(filters.itemIds, itemOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Items"
+                              options={itemOptions}
+                              selectedValues={filters.itemIds}
+                              onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Firm</span>
+                        <ColumnFilter
+                          title="Filter by firm"
+                          active={isFilterActive(filters.firmIds, firmOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Firms"
+                              options={firmOptions}
+                              selectedValues={filters.firmIds}
+                              onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Supplier</span>
+                        <ColumnFilter
+                          title="Filter by supplier"
+                          active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Suppliers"
+                              options={supplierOptions}
+                              selectedValues={filters.supplierIds}
+                              onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2 text-right">
+                      <div className="flex items-center gap-1 justify-end">
+                        <span>Pieces (available/out)</span>
+                        <ColumnFilter
+                          title="Filter by stock status"
+                          active={isFilterActive(filters.statuses, statusOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Status"
+                              options={statusOptions}
+                              selectedValues={filters.statuses}
+                              onApply={(next) => setFilters(f => ({ ...f, statuses: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'availableCount', direction: 'desc', label: 'Sort available high to low', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'availableCount', direction: 'asc', label: 'Sort available low to high', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                    <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Lot No</span>
+                        <ColumnFilter
+                          title="Filter by lot number"
+                          align="left"
+                          active={isFilterActive(filters.lotNos, lotOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Lot numbers"
+                              options={lotOptions}
+                              selectedValues={filters.lotNos}
+                              onApply={(next) => setFilters(f => ({ ...f, lotNos: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'lotNo', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'lotNo', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Date</span>
+                        <ColumnFilter
+                          title="Filter by date"
+                          align="left"
+                          active={Boolean(filters.from || filters.to)}
+                        >
+                          {({ close }) => (
+                            <DateFilterMenu
+                              title="Filter by date"
+                              from={filters.from}
+                              to={filters.to}
+                              onApply={({ from, to }) => setFilters(f => ({ ...f, from, to }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'date', direction: 'desc', label: 'Sort newest to oldest', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'date', direction: 'asc', label: 'Sort oldest to newest', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Item</span>
+                        <ColumnFilter
+                          title="Filter by item"
+                          active={isFilterActive(filters.itemIds, itemOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Items"
+                              options={itemOptions}
+                              selectedValues={filters.itemIds}
+                              onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Firm</span>
+                        <ColumnFilter
+                          title="Filter by firm"
+                          active={isFilterActive(filters.firmIds, firmOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Firms"
+                              options={firmOptions}
+                              selectedValues={filters.firmIds}
+                              onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Supplier</span>
+                        <ColumnFilter
+                          title="Filter by supplier"
+                          active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Suppliers"
+                              options={supplierOptions}
+                              selectedValues={filters.supplierIds}
+                              onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2 text-right">
+                      <div className="flex items-center gap-1 justify-end">
+                        <span>Pieces (available/out)</span>
+                        <ColumnFilter
+                          title="Filter by stock status"
+                          active={isFilterActive(filters.statuses, statusOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Status"
+                              options={statusOptions}
+                              selectedValues={filters.statuses}
+                              onApply={(next) => setFilters(f => ({ ...f, statuses: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'availableCount', direction: 'desc', label: 'Sort available high to low', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'availableCount', direction: 'asc', label: 'Sort available low to high', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                    <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                  </>
+                )}
+              </tr>
+            </thead>
             <tbody>
               {displayedLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : displayedLots.map((l, idx)=> {
                 const isSummary = isSummaryView;
@@ -345,7 +685,8 @@ export function Stock({ db, onIssuePieces, refreshing, refreshDb }) {
                                     <button title="Apply lots" className={`apply-arrow border ${cls.cardBorder} ${cls.cardBg} btn-hover`} onClick={(e)=>{
                                         e.stopPropagation();
                                         // set filters.lotSearch to comma-separated list and switch off summary view
-                                        setFilters(f => ({ ...f, lotSearch: (l._sourceLots || []).join(',') }));
+                                        const lotsToApply = Array.from(new Set(l._sourceLots || []));
+                                        setFilters(f => ({ ...f, lotNos: lotsToApply.length ? lotsToApply : [] }));
                                         setIsSummaryView(false);
                                         // close persistent open if any
                                         setPersistentOpenKey(null);

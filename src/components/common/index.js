@@ -10,3 +10,5 @@ export { Select } from './Select.jsx';
 export { Pill } from './Pill.jsx';
 export { Pagination } from './Pagination.jsx';
 export { Popover } from './Popover.jsx';
+export { ColumnFilter } from './ColumnFilter.jsx';
+export { ValueFilterMenu, DateFilterMenu } from './SheetFilterMenu.jsx';

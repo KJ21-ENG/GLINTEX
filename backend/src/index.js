@@ -22,10 +22,21 @@ async function sendNotification(event, payload) {
     if (!tpl.enabled) return console.log('Template disabled for event', event);
     const msg = interpolateTemplate(tpl.template, payload || {});
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (!settings || !settings.whatsappNumber) return console.warn('No whatsappNumber configured, skipping notification for', event);
-    console.log('Using whatsappNumber', settings.whatsappNumber, 'to send event', event);
-    // Fire-and-forget (queued)
-    whatsapp.sendTextSafe(settings.whatsappNumber, msg).then(() => console.log('Notification sent for', event)).catch(err => console.error('Failed to send whatsapp notification', err));
+    const recipients = [];
+    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) {
+      recipients.push({ type: 'number', value: settings.whatsappNumber });
+    }
+    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
+    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
+    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
+    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
+    if (recipients.length === 0) return console.warn('No recipients configured for', event);
+    const seen = new Set();
+    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    unique.forEach(r => {
+      if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(err => console.error('Failed to send to number', err));
+      else whatsapp.sendToChatIdSafe(r.value, msg).catch(err => console.error('Failed to send to group', err));
+    });
   } catch (err) {
     console.error('sendNotification error', err);
   }
@@ -83,6 +94,19 @@ app.post('/api/whatsapp/start', async (req, res) => {
   }
 });
 
+// List Whatsapp groups
+app.get('/api/whatsapp/groups', async (req, res) => {
+  try {
+    const st = whatsapp.getStatus();
+    if (st.status !== 'connected' || !whatsapp.client) return res.status(409).json({ error: 'not_connected' });
+    const chats = await whatsapp.client.getChats();
+    const groups = (chats || []).filter(c => c.isGroup).map(c => ({ id: c.id?._serialized || c.id || '', name: c.name || '' }));
+    res.json(groups);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // Templates endpoints
 app.get('/api/whatsapp/templates', async (req, res) => {
   try {
@@ -94,8 +118,9 @@ app.get('/api/whatsapp/templates', async (req, res) => {
 app.put('/api/whatsapp/templates/:event', async (req, res) => {
   try {
     const { event } = req.params;
-    const { enabled, template } = req.body;
-    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '' });
+    const { enabled, template, sendToPrimary, groupIds } = req.body;
+    const cleanGroups = Array.isArray(groupIds) ? groupIds.filter(x => typeof x === 'string') : [];
+    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '', sendToPrimary: sendToPrimary !== false, groupIds: cleanGroups });
     res.json(t);
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -107,9 +132,16 @@ app.post('/api/whatsapp/send-event', async (req, res) => {
     if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
     const msg = interpolateTemplate(tpl.template, payload || {});
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (!settings || !settings.whatsappNumber) return res.status(400).json({ error: 'No whatsappNumber configured' });
-    // Fire and forget
-    whatsapp.sendTextSafe(settings.whatsappNumber, msg).catch(err => console.error('Failed to send whatsapp event', err));
+    const recipients = [];
+    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
+    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
+    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
+    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
+    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
+    if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
+    const seen = new Set();
+    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(()=>{}); else whatsapp.sendToChatIdSafe(r.value, msg).catch(()=>{}); });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -527,7 +559,9 @@ app.delete('/api/inbound_items/:id', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
-    const { brandPrimary, brandGold, logoDataUrl, whatsappNumber } = req.body;
+    const { brandPrimary, brandGold, logoDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
+    const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(req.body, 'whatsappNumber');
+    const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(req.body, 'whatsappGroupIds');
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
     function normalizeForStore(num) {
       if (!num) return null;
@@ -538,23 +572,30 @@ app.put('/api/settings', async (req, res) => {
       return d;
     }
     const normalizedWhatsAppNumber = normalizeForStore(whatsappNumber);
+    const cleanGroupIds = Array.isArray(whatsappGroupIds) ? whatsappGroupIds.filter(x => typeof x === 'string') : undefined;
     // Try to upsert including whatsappNumber if DB supports it, otherwise fallback without it
     try {
+      const updateData = {
+        brandPrimary: brandPrimary || '#2E4CA6',
+        brandGold: brandGold || '#D4AF37',
+        logoDataUrl: logoDataUrl || null,
+      };
+      if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
+      if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
+
+      const createData = {
+        id: 1,
+        brandPrimary: brandPrimary || '#2E4CA6',
+        brandGold: brandGold || '#D4AF37',
+        logoDataUrl: logoDataUrl || null,
+      };
+      if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
+      if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
+
       const settings = await prisma.settings.upsert({
         where: { id: 1 },
-        update: {
-          brandPrimary: brandPrimary || '#2E4CA6',
-          brandGold: brandGold || '#D4AF37',
-          logoDataUrl: logoDataUrl || null,
-          whatsappNumber: normalizedWhatsAppNumber || null,
-        },
-        create: {
-          id: 1,
-          brandPrimary: brandPrimary || '#2E4CA6',
-          brandGold: brandGold || '#D4AF37',
-          logoDataUrl: logoDataUrl || null,
-          whatsappNumber: normalizedWhatsAppNumber || null,
-        },
+        update: updateData,
+        create: createData,
       });
       return res.json(settings);
     } catch (innerErr) {

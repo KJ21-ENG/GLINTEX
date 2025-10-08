@@ -264,10 +264,20 @@ class WhatsappService {
     return this.enqueueSend(number, text);
   }
 
+  // Send to a raw chat id (e.g. group id like '12345-67890@g.us')
+  async sendToChatIdSafe(chatId, text) {
+    try {
+      await this._waitUntilConnected(15000);
+    } catch (err) {
+      try { await this.init(); } catch (_) { /* ignore, will enqueue */ }
+    }
+    return this.enqueueSend(null, text, { chatId });
+  }
+
   enqueueSend(number, text, opts = {}) {
     if (this._shuttingDown) return Promise.reject(new Error('Whatsapp service shutting down'));
     return new Promise((resolve, reject) => {
-      const entry = { number, text, resolve, reject, attempts: 0, timeout: opts.timeout || 0 };
+      const entry = { number: number || null, chatId: opts.chatId || null, text, resolve, reject, attempts: 0, timeout: opts.timeout || 0 };
       this._sendQueue.push(entry);
       // kick the processor
       this._processQueue().catch(err => console.error('Queue processor error', err));
@@ -304,12 +314,21 @@ class WhatsappService {
         const entry = this._sendQueue.shift();
         if (!entry) break;
         entry.attempts += 1;
-        const normalized = (() => { try { return normalizeNumber(entry.number); } catch (_) { return null; } })();
-        if (!normalized) {
-          entry.reject(new Error('Invalid phone number'));
+        // Determine chat id: either a provided chatId (group), or normalized phone number
+        let id = null;
+        if (entry.chatId) {
+          id = String(entry.chatId);
+        } else if (entry.number) {
+          const normalized = (() => { try { return normalizeNumber(entry.number); } catch (_) { return null; } })();
+          if (!normalized) {
+            entry.reject(new Error('Invalid phone number'));
+            continue;
+          }
+          id = `${normalized}@c.us`;
+        } else {
+          entry.reject(new Error('No recipient specified'));
           continue;
         }
-        const id = `${normalized}@c.us`;
         try {
           // perform send and await
           await this.client.sendMessage(id, entry.text);

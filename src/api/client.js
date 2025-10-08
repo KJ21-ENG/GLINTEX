@@ -70,6 +70,7 @@ export async function whatsappSendTest(number) { return await request('/api/what
 export async function listWhatsappTemplates() { return await request('/api/whatsapp/templates'); }
 export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
 export async function sendWhatsappEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
+export async function whatsappGroups() { return await request('/api/whatsapp/groups'); }
 
 export default {
   health,

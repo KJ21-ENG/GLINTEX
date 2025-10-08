@@ -12,8 +12,8 @@ async function seed() {
   for (const t of defaults) {
     await prisma.whatsappTemplate.upsert({
       where: { event: t.event },
-      update: { enabled: t.enabled, template: t.template },
-      create: t,
+      update: { enabled: t.enabled, template: t.template, sendToPrimary: true, groupIds: [] },
+      create: { ...t, sendToPrimary: true, groupIds: [] },
     });
     console.log('Upserted', t.event);
   }

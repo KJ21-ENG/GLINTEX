@@ -84,6 +84,7 @@ model Settings {
   brandGold    String
   logoDataUrl  String?
   whatsappNumber String?
+  whatsappGroupIds String[] @default([])
 }
 
 model Sequence {
@@ -96,6 +97,8 @@ model WhatsappTemplate {
   event    String @unique
   enabled  Boolean @default(true)
   template String
+  sendToPrimary Boolean @default(true)
+  groupIds String[] @default([])
 }
 
 

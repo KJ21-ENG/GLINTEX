@@ -2,9 +2,9 @@
  * Masters page component for GLINTEX Inventory
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input } from '../components';
+import { Section, Button, SecondaryButton, Input, SearchableInput } from '../components';
 
 export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, onAddSupplier, onDeleteSupplier, onAddMachine, onDeleteMachine, onAddOperator, onDeleteOperator, refreshing }) {
   const { cls } = useBrand();
@@ -153,6 +153,51 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
 
   const disable = working || refreshing;
 
+  const normalizedQuery = itemName.trim().toLowerCase();
+  const isDuplicate = normalizedQuery !== '' && db.items.some(i => i.name.trim().toLowerCase() === normalizedQuery);
+
+  const filteredItems = useMemo(() => {
+    const q = itemName.trim().toLowerCase();
+    if (!q) return db.items;
+    return db.items.filter(i => i.name.toLowerCase().includes(q));
+  }, [db.items, itemName]);
+
+  // Firms
+  const normalizedFirmQuery = firmName.trim().toLowerCase();
+  const isFirmDuplicate = normalizedFirmQuery !== '' && db.firms.some(f => f.name.trim().toLowerCase() === normalizedFirmQuery);
+  const filteredFirms = useMemo(() => {
+    const q = firmName.trim().toLowerCase();
+    if (!q) return db.firms;
+    return db.firms.filter(f => f.name.toLowerCase().includes(q));
+  }, [db.firms, firmName]);
+
+  // Suppliers
+  const normalizedSupplierQuery = supplierName.trim().toLowerCase();
+  const isSupplierDuplicate = normalizedSupplierQuery !== '' && db.suppliers.some(s => s.name.trim().toLowerCase() === normalizedSupplierQuery);
+  const filteredSuppliers = useMemo(() => {
+    const q = supplierName.trim().toLowerCase();
+    if (!q) return db.suppliers;
+    return db.suppliers.filter(s => s.name.toLowerCase().includes(q));
+  }, [db.suppliers, supplierName]);
+
+  // Machines
+  const normalizedMachineQuery = machineName.trim().toLowerCase();
+  const isMachineDuplicate = normalizedMachineQuery !== '' && db.machines.some(m => m.name.trim().toLowerCase() === normalizedMachineQuery);
+  const filteredMachines = useMemo(() => {
+    const q = machineName.trim().toLowerCase();
+    if (!q) return db.machines;
+    return db.machines.filter(m => m.name.toLowerCase().includes(q));
+  }, [db.machines, machineName]);
+
+  // Operators
+  const normalizedOperatorQuery = operatorName.trim().toLowerCase();
+  const isOperatorDuplicate = normalizedOperatorQuery !== '' && db.operators.some(o => o.name.trim().toLowerCase() === normalizedOperatorQuery);
+  const filteredOperators = useMemo(() => {
+    const q = operatorName.trim().toLowerCase();
+    if (!q) return db.operators;
+    return db.operators.filter(o => o.name.toLowerCase().includes(q));
+  }, [db.operators, operatorName]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
@@ -175,61 +220,31 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
 
       {tab === 'items' && (
         <Section title="Items">
-          <div className="flex gap-2 mb-3"><Input value={itemName} onChange={e=>setItemName(e.target.value)} placeholder="New item name" /><Button onClick={addItem} disabled={disable}>Add</Button></div>
-          <ul className="space-y-2">{db.items.map(i => (
-            <li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-              <span>{i.name}</span>
-              <SecondaryButton onClick={()=>deleteItem(i.id)} disabled={disable}>Delete</SecondaryButton>
-            </li>
-          ))}</ul>
+          <SearchableInput items={db.items} onAdd={onAddItem} onDelete={onDeleteItem} placeholder="New item name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'firms' && (
         <Section title="Firms">
-          <div className="flex gap-2 mb-3"><Input value={firmName} onChange={e=>setFirmName(e.target.value)} placeholder="New firm name" /><Button onClick={addFirm} disabled={disable}>Add</Button></div>
-          <ul className="space-y-2">{db.firms.map(f => (
-            <li key={f.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-              <span>{f.name}</span>
-              <SecondaryButton onClick={()=>deleteFirm(f.id)} disabled={disable}>Delete</SecondaryButton>
-            </li>
-          ))}</ul>
+          <SearchableInput items={db.firms} onAdd={onAddFirm} onDelete={onDeleteFirm} placeholder="New firm name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'suppliers' && (
         <Section title="Suppliers">
-          <div className="flex gap-2 mb-3"><Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="New supplier name" /><Button onClick={addSupplier} disabled={disable}>Add</Button></div>
-          <ul className="space-y-2">{db.suppliers.map(s => (
-            <li key={s.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-              <span>{s.name}</span>
-              <SecondaryButton onClick={()=>deleteSupplier(s.id)} disabled={disable}>Delete</SecondaryButton>
-            </li>
-          ))}</ul>
+          <SearchableInput items={db.suppliers} onAdd={onAddSupplier} onDelete={onDeleteSupplier} placeholder="New supplier name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'machines' && (
         <Section title="Machines">
-          <div className="flex gap-2 mb-3"><Input value={machineName} onChange={e=>setMachineName(e.target.value)} placeholder="New machine name" /><Button onClick={addMachine} disabled={disable}>Add</Button></div>
-          <ul className="space-y-2">{db.machines.map(m => (
-            <li key={m.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-              <span>{m.name}</span>
-              <SecondaryButton onClick={()=>deleteMachine(m.id)} disabled={disable}>Delete</SecondaryButton>
-            </li>
-          ))}</ul>
+          <SearchableInput items={db.machines} onAdd={onAddMachine} onDelete={onDeleteMachine} placeholder="New machine name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'operators' && (
         <Section title="Operators">
-          <div className="flex gap-2 mb-3"><Input value={operatorName} onChange={e=>setOperatorName(e.target.value)} placeholder="New operator name" /><Button onClick={addOperator} disabled={disable}>Add</Button></div>
-          <ul className="space-y-2">{db.operators.map(o => (
-            <li key={o.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-              <span>{o.name}</span>
-              <SecondaryButton onClick={()=>deleteOperator(o.id)} disabled={disable}>Delete</SecondaryButton>
-            </li>
-          ))}</ul>
+          <SearchableInput items={db.operators} onAdd={onAddOperator} onDelete={onDeleteOperator} placeholder="New operator name" disabled={disable} />
         </Section>
       )}
     </div>

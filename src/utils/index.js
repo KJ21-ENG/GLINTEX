@@ -5,3 +5,4 @@
 export * from './formatting.js';
 export * from './theme.js';
 export * from './dataHelpers.js';
+export * from './debounce.js';

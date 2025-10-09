@@ -9,14 +9,16 @@ import { useBrand } from '../../context';
 import { Input } from './Input.jsx';
 import { Button } from './Button.jsx';
 import { SecondaryButton } from './SecondaryButton.jsx';
+import { debounce } from '../../utils';
 
-export const SearchableInput = ({ items = [], onAdd, onDelete, placeholder = 'New item', disabled = false, className = '' }) => {
+export const SearchableInput = ({ items = [], onAdd, onDelete, placeholder = 'New item', disabled = false, className = '', onQueryChange = null, debounceMs = 250 }) => {
   const { cls } = useBrand();
   const [value, setValue] = useState('');
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState(null); // { text, type: 'success'|'error'|'duplicate' }
   const inputRef = useRef(null);
   const timerRef = useRef(null);
+  const debouncedQuery = useRef(null);
 
   const normalized = value.trim().toLowerCase();
   const isDuplicate = normalized !== '' && items.some(i => i.name.trim().toLowerCase() === normalized);
@@ -26,6 +28,15 @@ export const SearchableInput = ({ items = [], onAdd, onDelete, placeholder = 'Ne
     if (!q) return items;
     return items.filter(i => i.name.toLowerCase().includes(q));
   }, [items, value]);
+
+  // Debounced external query callback
+  useEffect(() => {
+    if (typeof onQueryChange !== 'function') return undefined;
+    if (debouncedQuery.current) debouncedQuery.current.cancel?.();
+    debouncedQuery.current = debounce((q) => onQueryChange(q), debounceMs);
+    debouncedQuery.current(value);
+    return () => debouncedQuery.current && debouncedQuery.current.cancel?.();
+  }, [value, onQueryChange, debounceMs]);
 
   async function handleAdd() {
     const name = value.trim();

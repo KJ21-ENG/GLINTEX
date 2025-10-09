@@ -11,7 +11,7 @@ import { Button } from './Button.jsx';
 import { SecondaryButton } from './SecondaryButton.jsx';
 import { debounce } from '../../utils';
 
-export const SearchableInput = ({ items = [], onAdd, onDelete, placeholder = 'New item', disabled = false, className = '', onQueryChange = null, debounceMs = 250 }) => {
+export const SearchableInput = ({ items = [], onAdd, onDelete, onEdit, placeholder = 'New item', disabled = false, className = '', onQueryChange = null, debounceMs = 250 }) => {
   const { cls } = useBrand();
   const [value, setValue] = useState('');
   const [working, setWorking] = useState(false);
@@ -100,15 +100,86 @@ export const SearchableInput = ({ items = [], onAdd, onDelete, placeholder = 'Ne
       )}
 
       <ul className="space-y-2">{filtered.map(i => (
-        <li key={i.id} className={`flex items-center justify-between rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}>
-          <span>{i.name}</span>
-          <SecondaryButton onClick={() => onDelete && onDelete(i.id)} disabled={disabled || working}>Delete</SecondaryButton>
-        </li>
+        <InlineEditable
+          key={i.id}
+          item={i}
+          onDelete={onDelete}
+          onEdit={onEdit}
+          disabled={disabled || working}
+          className={`rounded-xl px-3 py-2 border ${cls.cardBorder} ${cls.cardBg}`}
+        />
       ))}</ul>
     </div>
   );
 };
 
 export default SearchableInput;
+
+function InlineEditable({ item, onDelete, onEdit, disabled, className = '' }) {
+  const { cls } = useBrand();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(item.name);
+  const [working, setWorking] = useState(false);
+  const editRef = useRef(null);
+
+  function startEdit() {
+    setValue(item.name);
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setValue(item.name);
+  }
+
+  // autofocus the edit input when editing starts
+  useEffect(() => {
+    if (editing) {
+      // small timeout allows DOM to render the Input component
+      setTimeout(() => editRef.current && editRef.current.focus(), 0);
+    }
+  }, [editing]);
+
+  async function saveEdit() {
+    const name = value.trim();
+    if (!name || name === item.name) { setEditing(false); return; }
+    if (typeof onEdit !== 'function') { setEditing(false); return; }
+    setWorking(true);
+    try {
+      await onEdit(item.id, name);
+      setEditing(false);
+    } catch (err) {
+      alert(err.message || 'Failed to update');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <li className={`flex items-center justify-between ${className}`}>
+      {!editing ? (
+        <>
+          <div className="flex-1">
+            <span>{item.name}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <SecondaryButton onClick={startEdit} disabled={disabled || working}>Edit</SecondaryButton>
+            <button className="text-sm px-2 py-1 rounded text-red-600" onClick={() => onDelete && onDelete(item.id)} disabled={disabled || working}>Delete</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex-1 mr-4">
+            <Input inputRef={editRef} value={value} onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }} />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button onClick={saveEdit} disabled={disabled || working}>Save</Button>
+            <SecondaryButton onClick={cancelEdit} disabled={disabled || working}>Cancel</SecondaryButton>
+          </div>
+        </>
+      )}
+    </li>
+  );
+}
 
 

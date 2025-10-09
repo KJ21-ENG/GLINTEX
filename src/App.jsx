@@ -141,6 +141,31 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleUpdateItem = useCallback(async (id, name) => {
+    await api.updateItem(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateFirm = useCallback(async (id, name) => {
+    await api.updateFirm(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateSupplier = useCallback(async (id, name) => {
+    await api.updateSupplier(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateMachine = useCallback(async (id, name) => {
+    await api.updateMachine(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateOperator = useCallback(async (id, name) => {
+    await api.updateOperator(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleSaveBrand = useCallback(async (values) => {
     setSavingBrand(true);
     try {
@@ -236,14 +261,19 @@ export default function App() {
             db={db}
             onAddItem={handleCreateItem}
             onDeleteItem={handleDeleteItem}
+            onEditItem={handleUpdateItem}
             onAddFirm={handleCreateFirm}
             onDeleteFirm={handleDeleteFirm}
+            onEditFirm={handleUpdateFirm}
             onAddSupplier={handleCreateSupplier}
             onDeleteSupplier={handleDeleteSupplier}
+            onEditSupplier={handleUpdateSupplier}
             onAddMachine={handleCreateMachine}
             onDeleteMachine={handleDeleteMachine}
+            onEditMachine={handleUpdateMachine}
             onAddOperator={handleCreateOperator}
             onDeleteOperator={handleDeleteOperator}
+            onEditOperator={handleUpdateOperator}
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}

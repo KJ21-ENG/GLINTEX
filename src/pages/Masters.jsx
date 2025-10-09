@@ -6,7 +6,7 @@ import React, { useState, useMemo } from 'react';
 import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, SearchableInput } from '../components';
 
-export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, onAddSupplier, onDeleteSupplier, onAddMachine, onDeleteMachine, onAddOperator, onDeleteOperator, refreshing }) {
+export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, onDeleteFirm, onEditFirm, onAddSupplier, onDeleteSupplier, onEditSupplier, onAddMachine, onDeleteMachine, onEditMachine, onAddOperator, onDeleteOperator, onEditOperator, refreshing }) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
@@ -220,31 +220,31 @@ export function Masters({ db, onAddItem, onDeleteItem, onAddFirm, onDeleteFirm, 
 
       {tab === 'items' && (
         <Section title="Items">
-          <SearchableInput items={db.items} onAdd={onAddItem} onDelete={onDeleteItem} placeholder="New item name" disabled={disable} />
+          <SearchableInput items={db.items} onAdd={onAddItem} onDelete={onDeleteItem} onEdit={onEditItem} placeholder="New item name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'firms' && (
         <Section title="Firms">
-          <SearchableInput items={db.firms} onAdd={onAddFirm} onDelete={onDeleteFirm} placeholder="New firm name" disabled={disable} />
+          <SearchableInput items={db.firms} onAdd={onAddFirm} onDelete={onDeleteFirm} onEdit={onEditFirm} placeholder="New firm name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'suppliers' && (
         <Section title="Suppliers">
-          <SearchableInput items={db.suppliers} onAdd={onAddSupplier} onDelete={onDeleteSupplier} placeholder="New supplier name" disabled={disable} />
+          <SearchableInput items={db.suppliers} onAdd={onAddSupplier} onDelete={onDeleteSupplier} onEdit={onEditSupplier} placeholder="New supplier name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'machines' && (
         <Section title="Machines">
-          <SearchableInput items={db.machines} onAdd={onAddMachine} onDelete={onDeleteMachine} placeholder="New machine name" disabled={disable} />
+          <SearchableInput items={db.machines} onAdd={onAddMachine} onDelete={onDeleteMachine} onEdit={onEditMachine} placeholder="New machine name" disabled={disable} />
         </Section>
       )}
 
       {tab === 'operators' && (
         <Section title="Operators">
-          <SearchableInput items={db.operators} onAdd={onAddOperator} onDelete={onDeleteOperator} placeholder="New operator name" disabled={disable} />
+          <SearchableInput items={db.operators} onAdd={onAddOperator} onDelete={onDeleteOperator} onEdit={onEditOperator} placeholder="New operator name" disabled={disable} />
         </Section>
       )}
     </div>

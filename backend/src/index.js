@@ -425,6 +425,21 @@ app.delete('/api/items/:id', async (req, res) => {
   await prisma.item.delete({ where: { id } });
   res.json({ ok: true });
 });
+// Update item name
+app.put('/api/items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.item.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Item not found' });
+    const updated = await prisma.item.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update item', err);
+    res.status(500).json({ error: err.message || 'Failed to update item' });
+  }
+});
 
 app.get('/api/firms', async (req, res) => { res.json(await prisma.firm.findMany()); });
 app.post('/api/firms', async (req, res) => { const { name } = req.body; const firm = await prisma.firm.create({ data: { name } }); res.json(firm); });
@@ -436,6 +451,21 @@ app.delete('/api/firms/:id', async (req, res) => {
   }
   await prisma.firm.delete({ where: { id } });
   res.json({ ok: true });
+});
+// Update firm name
+app.put('/api/firms/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.firm.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Firm not found' });
+    const updated = await prisma.firm.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update firm', err);
+    res.status(500).json({ error: err.message || 'Failed to update firm' });
+  }
 });
 
 app.get('/api/suppliers', async (req, res) => { res.json(await prisma.supplier.findMany()); });
@@ -449,6 +479,21 @@ app.delete('/api/suppliers/:id', async (req, res) => {
   await prisma.supplier.delete({ where: { id } });
   res.json({ ok: true });
 });
+// Update supplier name
+app.put('/api/suppliers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.supplier.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Supplier not found' });
+    const updated = await prisma.supplier.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update supplier', err);
+    res.status(500).json({ error: err.message || 'Failed to update supplier' });
+  }
+});
 
 app.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
 app.post('/api/machines', async (req, res) => { const { name } = req.body; const machine = await prisma.machine.create({ data: { name } }); res.json(machine); });
@@ -461,6 +506,21 @@ app.delete('/api/machines/:id', async (req, res) => {
   await prisma.machine.delete({ where: { id } });
   res.json({ ok: true });
 });
+// Update machine name
+app.put('/api/machines/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.machine.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Machine not found' });
+    const updated = await prisma.machine.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update machine', err);
+    res.status(500).json({ error: err.message || 'Failed to update machine' });
+  }
+});
 
 app.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
 app.post('/api/operators', async (req, res) => { const { name } = req.body; const operator = await prisma.operator.create({ data: { name } }); res.json(operator); });
@@ -472,6 +532,21 @@ app.delete('/api/operators/:id', async (req, res) => {
   }
   await prisma.operator.delete({ where: { id } });
   res.json({ ok: true });
+});
+// Update operator name
+app.put('/api/operators/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.operator.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Operator not found' });
+    const updated = await prisma.operator.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update operator', err);
+    res.status(500).json({ error: err.message || 'Failed to update operator' });
+  }
 });
 
 app.delete('/api/issue_to_machine/:id', async (req, res) => {

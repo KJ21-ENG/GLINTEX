@@ -46,18 +46,23 @@ export async function updateInboundItem(id, payload) { return await request(`/ap
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
 export async function deleteItem(id) { return await request(`/api/items/${id}`, { method: 'DELETE' }); }
+export async function updateItem(id, name) { return await request(`/api/items/${id}`, { method: 'PUT', body: { name } }); }
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
+export async function updateFirm(id, name) { return await request(`/api/firms/${id}`, { method: 'PUT', body: { name } }); }
 export async function listSuppliers() { return await request('/api/suppliers'); }
 export async function createSupplier(name) { return await request('/api/suppliers', { method: 'POST', body: { name } }); }
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
+export async function updateSupplier(id, name) { return await request(`/api/suppliers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listMachines() { return await request('/api/machines'); }
 export async function createMachine(name) { return await request('/api/machines', { method: 'POST', body: { name } }); }
 export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
+export async function updateMachine(id, name) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name } }); }
 export async function listOperators() { return await request('/api/operators'); }
 export async function createOperator(name) { return await request('/api/operators', { method: 'POST', body: { name } }); }
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
+export async function updateOperator(id, name) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }
@@ -83,17 +88,22 @@ export default {
   listItems,
   createItem,
   deleteItem,
+  updateItem,
   listFirms,
   createFirm,
   deleteFirm,
+  updateFirm,
   listSuppliers,
   createSupplier,
   deleteSupplier,
+  updateSupplier,
   listMachines,
   createMachine,
   deleteMachine,
+  updateMachine,
   listOperators,
   createOperator,
   deleteOperator,
+  updateOperator,
   updateSettings,
 };

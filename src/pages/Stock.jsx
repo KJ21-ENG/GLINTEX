@@ -101,6 +101,14 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
   const [isSummaryView, setIsSummaryView] = useState(false);
 
+  const receiveTotalsMap = useMemo(() => {
+    const map = new Map();
+    (db.receive_piece_totals || []).forEach(row => {
+      map.set(row.pieceId, Number(row.totalNetWeight || 0));
+    });
+    return map;
+  }, [db.receive_piece_totals]);
+
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
     const m = {};
@@ -113,21 +121,27 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
         pieces: [],
         availableCount: 0,
         pendingWeight: 0,
+        totalReceivedWeight: 0,
       };
     }
-    for (const p of db.inbound_items) {
-      if (!m[p.lotNo]) continue;
-      m[p.lotNo].pieces.push(p);
-      if (p.status === 'available') {
-        m[p.lotNo].availableCount = (m[p.lotNo].availableCount || 0) + 1;
-        m[p.lotNo].pendingWeight = (m[p.lotNo].pendingWeight || 0) + Number(p.weight || 0);
+    for (const piece of db.inbound_items) {
+      if (!m[piece.lotNo]) continue;
+      const inboundWeight = Number(piece.weight || 0);
+      const receivedWeight = receiveTotalsMap.get(piece.id) || 0;
+      const pendingForPiece = Math.max(0, inboundWeight - receivedWeight);
+      const pieceEntry = { ...piece, pendingWeight: pendingForPiece, receivedWeight };
+      m[piece.lotNo].pieces.push(pieceEntry);
+      if (piece.status === 'available') {
+        m[piece.lotNo].availableCount = (m[piece.lotNo].availableCount || 0) + 1;
       }
+      m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
+      m[piece.lotNo].totalReceivedWeight = (m[piece.lotNo].totalReceivedWeight || 0) + receivedWeight;
     }
     Object.values(m).forEach(lot => {
       lot.statusType = lotStatus(lot);
     });
     return m;
-  }, [db.lots, db.items, db.firms, db.suppliers, db.inbound_items]);
+  }, [db.lots, db.items, db.firms, db.suppliers, db.inbound_items, receiveTotalsMap]);
 
   // Include all lots (even those with zero available pieces) so filters like "inactive" work
   const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
@@ -775,7 +789,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
                                 <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th></tr></thead>
                                   <tbody>
                                     {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.status === 'available' ? p.weight : 0} />
+                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.pendingWeight ?? 0} />
                                     ))}
                                   </tbody>
                                 </table>

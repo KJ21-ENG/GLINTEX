@@ -10,3 +10,4 @@ export { Masters } from './Masters.jsx';
 export { Reports } from './Reports.jsx';
 export { AdminData } from './AdminData.jsx';
 export { Settings } from './Settings.jsx';
+export { ReceiveFromMachine } from './ReceiveFromMachine.jsx';

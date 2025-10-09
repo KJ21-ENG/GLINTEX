@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BrandCtx, useBrand } from './context';
 import { Button, SecondaryButton, Select } from './components';
-import { Inbound, Stock, IssueToMachine, Masters, Reports, Settings } from './pages';
+import { Inbound, Stock, IssueToMachine, Masters, Reports, Settings, ReceiveFromMachine } from './pages';
 import { THEME_KEY, defaultBrand, themeClasses, normalizeDb, extractBrandFromDb } from './utils';
 import * as api from './api';
 
@@ -13,6 +13,7 @@ const TABS = [
   { key: "inbound", label: "Inbound" },
   { key: "stock", label: "Stock" },
   { key: "issue", label: "Issue to machine" },
+  { key: "receive", label: "Receive from machine" },
   { key: "masters", label: "Masters" },
   { key: "reports", label: "Reports" },
   { key: "settings", label: "Settings" },
@@ -257,6 +258,7 @@ export default function App() {
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
           {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
           {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
+          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}

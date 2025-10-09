@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
+import { parse } from 'csv-parse/sync';
 import prisma from './prismaClient.js';
 import whatsapp from '../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from './utils/whatsappTemplates.js';
@@ -12,6 +13,238 @@ app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
 const PORT = process.env.PORT || 4000;
+const RECEIVE_ROWS_FETCH_LIMIT = 500;
+const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+
+function normalizePieceId(raw) {
+  if (raw === undefined || raw === null) return null;
+  const cleaned = String(raw).trim();
+  if (!cleaned) return null;
+  const parts = cleaned.split('-').map(p => p.trim()).filter(Boolean);
+  if (parts.length === 2 && /^\d+$/.test(parts[0])) {
+    const lot = parts[0].padStart(3, '0');
+    const seqPart = parts[1];
+    if (/^\d+$/.test(seqPart)) {
+      const seq = String(Number(seqPart));
+      return `${lot}-${seq}`;
+    }
+    return `${lot}-${seqPart}`;
+  }
+  return cleaned;
+}
+
+function toNumber(val) {
+  if (val === undefined || val === null) return null;
+  const str = String(val).trim().replace(/,/g, '');
+  if (str === '') return null;
+  const num = Number(str);
+  if (!Number.isFinite(num)) return null;
+  return num;
+}
+
+function toInt(val) {
+  const num = toNumber(val);
+  if (num === null) return null;
+  const rounded = Math.round(num);
+  return Number.isFinite(rounded) ? rounded : null;
+}
+
+function toOptionalString(val) {
+  if (val === undefined || val === null) return null;
+  const str = String(val).trim();
+  return str ? str : null;
+}
+
+function parseReceiveCsvContent(content) {
+  if (!content || typeof content !== 'string') {
+    throw new Error('CSV content missing');
+  }
+  const lines = content.split(/\r?\n/);
+  const headerIndex = lines.findIndex(line => line.toLowerCase().includes('narration'));
+  if (headerIndex === -1) {
+    throw new Error('Unable to locate header row with Narration column');
+  }
+  const trimmedLines = lines.slice(headerIndex).join('\n');
+  const rawRecords = parse(trimmedLines, {
+    columns: true,
+    skip_empty_lines: true,
+    relax_column_count: true,
+  });
+
+  const rows = [];
+  const issues = [];
+  const duplicateVchNos = new Set();
+  const seenInFile = new Set();
+
+  rawRecords.forEach((rec, idx) => {
+    const rowPos = idx + 1; // relative to data portion
+    const values = Object.values(rec || {}).map(val => (val === undefined || val === null) ? '' : String(val).trim());
+    const allEmpty = values.every(v => v === '');
+    if (allEmpty) {
+      return;
+    }
+    const narrationRaw = rec['Narration'] ?? '';
+    const pieceId = normalizePieceId(narrationRaw);
+    const vchNoRaw = rec['VchNo'];
+    const vchNo = toOptionalString(vchNoRaw);
+
+    if (!pieceId && !vchNo) {
+      return;
+    }
+
+    if (!pieceId) {
+      issues.push({ type: 'missing_piece', row: rowPos, message: 'Missing Narration / piece id' });
+      return;
+    }
+    if (!vchNo) {
+      issues.push({ type: 'missing_vch', row: rowPos, message: 'Missing VchNo' });
+      return;
+    }
+    if (seenInFile.has(vchNo)) {
+      duplicateVchNos.add(vchNo);
+      return;
+    }
+    seenInFile.add(vchNo);
+
+    rows.push({
+      pieceId,
+      vchNo,
+      narration: toOptionalString(narrationRaw),
+      date: toOptionalString(rec['Date']),
+      vchBook: toOptionalString(rec['Vch.Book']),
+      barcode: toOptionalString(rec['Barcode']),
+      shift: toOptionalString(rec['Shift']),
+      godownName: toOptionalString(rec['Godown Name']),
+      racNo: toOptionalString(rec['RacNo']),
+      prodIssType: toOptionalString(rec['ProdIss Type']),
+      yarnName: toOptionalString(rec['Yarn Name']),
+      itemName: toOptionalString(rec['Item']),
+      cut: toOptionalString(rec['Cut']),
+      machineNo: toOptionalString(rec['MachineNo']),
+      employee: toOptionalString(rec['Employee']),
+      pktTypeName: toOptionalString(rec['PktTypeName']),
+      pcsTypeName: toOptionalString(rec['PcsTypeName']),
+      pcs: toInt(rec['Pcs']),
+      grossWt: toNumber(rec['Grs Wt']),
+      tareWt: toNumber(rec['Tare Wt']),
+      netWt: toNumber(rec['Net Wt']),
+      pktBoxWt: toNumber(rec['PktBoxWt']),
+      pcsBoxWt: toNumber(rec['PcsBoxWt']),
+      yarnWt: toNumber(rec['YarnWt']),
+      totalKg: toNumber(rec['TotalKg']),
+      createdBy: toOptionalString(rec['CreatedBy']),
+      modifiedBy: toOptionalString(rec['modifyBy']),
+    });
+  });
+
+  if (duplicateVchNos.size > 0) {
+    issues.push({ type: 'duplicate_vch_in_file', rows: Array.from(duplicateVchNos) });
+  }
+
+  return { rows, issues };
+}
+
+function aggregateNetByPiece(rows) {
+  const increments = new Map();
+  for (const row of rows) {
+    const net = Number(row.netWt || 0);
+    if (!Number.isFinite(net) || net <= 0) continue;
+    increments.set(row.pieceId, (increments.get(row.pieceId) || 0) + net);
+  }
+  return increments;
+}
+
+async function fetchInboundAndTotals(pieceIds) {
+  if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
+    return { inboundMap: new Map(), totalsMap: new Map() };
+  }
+  const [inboundPieces, pieceTotals] = await Promise.all([
+    prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } }),
+    prisma.receivePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } }),
+  ]);
+  const inboundMap = new Map(inboundPieces.map(p => [p.id, p]));
+  const totalsMap = new Map(pieceTotals.map(t => [t.pieceId, Number(t.totalNetWeight || 0)]));
+  return { inboundMap, totalsMap };
+}
+
+function buildPieceSummaries(pieceIds, { inboundMap, totalsMap }, incrementsMap = new Map()) {
+  const sortedIds = Array.from(new Set(pieceIds)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  const pieces = [];
+  let totalNetWeight = 0;
+  for (const pieceId of sortedIds) {
+    const inbound = inboundMap.get(pieceId) || null;
+    const inboundWeight = inbound ? Number(inbound.weight || 0) : null;
+    const currentReceived = totalsMap.get(pieceId) || 0;
+    const delta = incrementsMap.get(pieceId) || 0;
+    const nextReceived = currentReceived + delta;
+    const currentPending = inboundWeight == null ? null : Math.max(0, inboundWeight - currentReceived);
+    const nextPending = inboundWeight == null ? null : Math.max(0, inboundWeight - nextReceived);
+    totalNetWeight += delta;
+    pieces.push({
+      pieceId,
+      lotNo: inbound ? inbound.lotNo : null,
+      inboundWeight,
+      currentReceivedWeight: currentReceived,
+      currentPendingWeight: currentPending,
+      incrementWeight: delta,
+      futureReceivedWeight: nextReceived,
+      futurePendingWeight: nextPending,
+      inboundExists: Boolean(inbound),
+    });
+  }
+  return { pieces, totalNetWeight };
+}
+
+function buildLotSummaries(pieces) {
+  const lotMap = new Map();
+  for (const piece of pieces) {
+    if (!piece.lotNo) continue;
+    const lot = lotMap.get(piece.lotNo) || {
+      lotNo: piece.lotNo,
+      inboundWeight: 0,
+      currentReceivedWeight: 0,
+      currentPendingWeight: 0,
+      incrementWeight: 0,
+      futureReceivedWeight: 0,
+      futurePendingWeight: 0,
+      pieceCount: 0,
+    };
+    if (Number.isFinite(piece.inboundWeight)) {
+      lot.inboundWeight += piece.inboundWeight;
+    }
+    if (Number.isFinite(piece.currentReceivedWeight)) {
+      lot.currentReceivedWeight += piece.currentReceivedWeight;
+    }
+    if (Number.isFinite(piece.currentPendingWeight)) {
+      lot.currentPendingWeight += piece.currentPendingWeight;
+    }
+    if (Number.isFinite(piece.incrementWeight)) {
+      lot.incrementWeight += piece.incrementWeight;
+    }
+    if (Number.isFinite(piece.futureReceivedWeight)) {
+      lot.futureReceivedWeight += piece.futureReceivedWeight;
+    }
+    if (Number.isFinite(piece.futurePendingWeight)) {
+      lot.futurePendingWeight += piece.futurePendingWeight;
+    }
+    lot.pieceCount += 1;
+    lotMap.set(piece.lotNo, lot);
+  }
+  return Array.from(lotMap.values()).sort((a, b) => a.lotNo.localeCompare(b.lotNo, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+function buildReceiveSummary({ filename, rows, incrementsMap, pieceMeta }) {
+  const missingPieces = pieceMeta.pieces.filter(p => !p.inboundExists).map(p => p.pieceId);
+  return {
+    filename,
+    rowCount: rows.length,
+    pieceCount: incrementsMap.size,
+    totalNetWeight: pieceMeta.totalNetWeight,
+    pieces: pieceMeta.pieces,
+    lots: buildLotSummaries(pieceMeta.pieces),
+    missingPieces,
+  };
+}
 
 // Helper: send notification for an event using stored templates
 async function sendNotification(event, payload) {
@@ -56,7 +289,10 @@ app.get('/api/db', async (req, res) => {
   const inbound_items = await prisma.inboundItem.findMany();
   const issue_to_machine = await prisma.issueToMachine.findMany();
   const settings = await prisma.settings.findMany();
-  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine, settings });
+  const receive_uploads = await prisma.receiveUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
+  const receive_rows = await prisma.receiveRow.findMany({ orderBy: { createdAt: 'desc' }, take: RECEIVE_ROWS_FETCH_LIMIT });
+  const receive_piece_totals = await prisma.receivePieceTotal.findMany();
+  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine, settings, receive_uploads, receive_rows, receive_piece_totals });
 });
 
 // Return the next lot number preview (value that will be used on save)
@@ -351,6 +587,120 @@ app.post('/api/issue_to_machine', async (req, res) => {
   } catch (err) {
     console.error('Failed to record issue_to_machine', err);
     res.status(400).json({ error: err.message || 'Failed to record issue_to_machine' });
+  }
+});
+
+app.post('/api/receive_from_machine/import', async (req, res) => {
+  try {
+    const { filename, content } = req.body || {};
+    if (!filename || typeof filename !== 'string') {
+      return res.status(400).json({ error: 'Missing filename' });
+    }
+    if (!content || typeof content !== 'string') {
+      return res.status(400).json({ error: 'Missing CSV content' });
+    }
+
+    const { rows, issues } = parseReceiveCsvContent(content);
+    if (issues.length > 0) {
+      return res.status(400).json({ error: 'CSV validation failed', issues });
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'No usable rows found in CSV' });
+    }
+
+    const vchNos = rows.map(r => r.vchNo);
+    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    if (existing.length > 0) {
+      const duplicates = existing.map(r => r.vchNo);
+      return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
+    }
+
+    const pieceIncrements = aggregateNetByPiece(rows);
+    
+    const pieceIds = Array.from(pieceIncrements.keys());
+    const inboundAndTotals = await fetchInboundAndTotals(pieceIds);
+    const pieceMeta = buildPieceSummaries(pieceIds, inboundAndTotals, pieceIncrements);
+    const summary = buildReceiveSummary({ filename, rows, incrementsMap: pieceIncrements, pieceMeta });
+
+    const upload = await prisma.$transaction(async (tx) => {
+      const createdUpload = await tx.receiveUpload.create({
+        data: {
+          originalFilename: filename,
+          rowCount: rows.length,
+        },
+      });
+
+      const createPayload = rows.map(row => ({ ...row, uploadId: createdUpload.id }));
+      if (createPayload.length > 0) {
+        await tx.receiveRow.createMany({ data: createPayload });
+      }
+
+      for (const [pieceId, incrementBy] of pieceIncrements.entries()) {
+        if (!Number.isFinite(incrementBy) || incrementBy === 0) continue;
+        await tx.receivePieceTotal.upsert({
+          where: { pieceId },
+          update: { totalNetWeight: { increment: incrementBy } },
+          create: { pieceId, totalNetWeight: incrementBy },
+        });
+      }
+
+      return createdUpload;
+    });
+
+    res.json({
+      ok: true,
+      upload: {
+        id: upload.id,
+        originalFilename: upload.originalFilename,
+        uploadedAt: upload.uploadedAt,
+        rowCount: upload.rowCount,
+      },
+      summary,
+    });
+  } catch (err) {
+    console.error('Failed to import receive-from-machine CSV', err);
+    res.status(400).json({ error: err.message || 'Failed to import receive-from-machine CSV' });
+  }
+});
+
+app.post('/api/receive_from_machine/preview', async (req, res) => {
+  try {
+    const { filename, content } = req.body || {};
+    if (!filename || typeof filename !== 'string') {
+      return res.status(400).json({ error: 'Missing filename' });
+    }
+    if (!content || typeof content !== 'string') {
+      return res.status(400).json({ error: 'Missing CSV content' });
+    }
+
+    const { rows, issues } = parseReceiveCsvContent(content);
+    if (issues.length > 0) {
+      return res.status(400).json({ error: 'CSV validation failed', issues });
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'No usable rows found in CSV' });
+    }
+
+    const vchNos = rows.map(r => r.vchNo);
+    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    if (existing.length > 0) {
+      const duplicates = existing.map(r => r.vchNo);
+      return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
+    }
+
+    const pieceIncrements = aggregateNetByPiece(rows);
+    const pieceIds = Array.from(pieceIncrements.keys());
+    const inboundAndTotals = await fetchInboundAndTotals(pieceIds);
+    const pieceMeta = buildPieceSummaries(pieceIds, inboundAndTotals, pieceIncrements);
+    const summary = buildReceiveSummary({ filename, rows, incrementsMap: pieceIncrements, pieceMeta });
+
+    res.json({
+      ok: true,
+      preview: summary,
+    });
+  } catch (err) {
+    console.error('Failed to preview receive-from-machine CSV', err);
+    res.status(400).json({ error: err.message || 'Failed to preview receive-from-machine CSV' });
   }
 });
 

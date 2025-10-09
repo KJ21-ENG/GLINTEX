@@ -78,6 +78,54 @@ model IssueToMachine {
   operator    Operator? @relation(fields: [operatorId], references: [id])
 }
 
+model ReceiveUpload {
+  id               String       @id @default(cuid())
+  originalFilename String
+  uploadedAt       DateTime     @default(now())
+  rowCount         Int          @default(0)
+  rows             ReceiveRow[]
+}
+
+model ReceiveRow {
+  id            String         @id @default(cuid())
+  uploadId      String
+  pieceId       String
+  vchNo         String         @unique
+  narration     String?
+  date          String?
+  vchBook       String?
+  barcode       String?
+  shift         String?
+  godownName    String?
+  racNo         String?
+  prodIssType   String?
+  yarnName      String?
+  itemName      String?
+  cut           String?
+  machineNo     String?
+  employee      String?
+  pktTypeName   String?
+  pcsTypeName   String?
+  pcs           Int?
+  grossWt       Float?
+  tareWt        Float?
+  netWt         Float?
+  pktBoxWt      Float?
+  pcsBoxWt      Float?
+  yarnWt        Float?
+  totalKg       Float?
+  createdBy     String?
+  modifiedBy    String?
+  createdAt     DateTime       @default(now())
+  upload        ReceiveUpload  @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+}
+
+model ReceivePieceTotal {
+  pieceId        String   @id
+  totalNetWeight Float    @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
 model Settings {
   id           Int    @id @default(1)
   brandPrimary String
@@ -100,5 +148,4 @@ model WhatsappTemplate {
   sendToPrimary Boolean @default(true)
   groupIds String[] @default([])
 }
-
 

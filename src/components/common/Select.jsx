@@ -36,7 +36,8 @@ export const Select = ({
       const props = ch.props || {};
       const val = props.value;
       const lab = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) ? props.children.join('') : String(props.children || ''));
-      arr.push({ key: props.key ?? String(val ?? lab), label: lab, value: val });
+      const nodeKey = ch.key != null ? String(ch.key) : null;
+      arr.push({ key: nodeKey ?? String(val ?? lab), label: lab, value: val });
     });
     return arr;
   }, [options, children, labelKey, valueKey]);

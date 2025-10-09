@@ -32,6 +32,9 @@ out/
 .wwebjs_cache/
 backend/.wwebjs_cache/
 
+# Temporary references
+temp_ref/
+
 # Dependency directories
 jspm_packages/
 

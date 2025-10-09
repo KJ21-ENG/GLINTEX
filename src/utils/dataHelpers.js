@@ -18,7 +18,23 @@ export function normalizeDb(raw) {
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
   }));
   const settings = ensureArr(raw?.settings);
-  return { items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine: issueToMachine, settings };
+  const receiveUploads = ensureArr(raw?.receive_uploads);
+  const receiveRows = ensureArr(raw?.receive_rows);
+  const receivePieceTotals = ensureArr(raw?.receive_piece_totals);
+  return {
+    items,
+    firms,
+    suppliers,
+    machines,
+    operators,
+    lots,
+    inbound_items,
+    issue_to_machine: issueToMachine,
+    settings,
+    receive_uploads: receiveUploads,
+    receive_rows: receiveRows,
+    receive_piece_totals: receivePieceTotals,
+  };
 }
 
 export function extractBrandFromDb(db) {

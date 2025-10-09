@@ -25,14 +25,20 @@ async function request(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     const raw = await res.text();
     let message = raw;
+    let parsed = null;
     try {
-      const parsed = JSON.parse(raw);
+      parsed = JSON.parse(raw);
       message = parsed.error || parsed.message || message;
     } catch (_) {
       // not json, fall back to raw text
     }
     if (!message) message = `API ${method} ${path} failed with ${res.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = res.status;
+    if (parsed && typeof parsed === 'object') {
+      error.details = parsed;
+    }
+    throw error;
   }
   if (res.status === 204) return null;
   return await res.json();
@@ -42,6 +48,8 @@ export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await request('/api/issue_to_machine', { method: 'POST', body: payload }); }
+export async function importReceiveFromMachine(payload) { return await request('/api/receive_from_machine/import', { method: 'POST', body: payload }); }
+export async function previewReceiveFromMachine(payload) { return await request('/api/receive_from_machine/preview', { method: 'POST', body: payload }); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }

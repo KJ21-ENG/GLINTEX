@@ -2,9 +2,9 @@
  * Stock page component for GLINTEX Inventory
  */
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, Select, Pill, ColumnFilter, ValueFilterMenu, DateFilterMenu } from '../components';
+import { Section, Button, SecondaryButton, Input, Select, Pill, ColumnFilter, ValueFilterMenu, DateFilterMenu, Pagination } from '../components';
 import { PieceRow } from '../components/stock';
 import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
@@ -100,6 +100,8 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
   const [isSummaryView, setIsSummaryView] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
 
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
@@ -352,6 +354,12 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
       return filteredLots;
     }
   }, [filteredLots, isSummaryView]);
+
+  useEffect(() => { setPage(1); }, [filters, sortConfig, isSummaryView]);
+  const pagedDisplayedLots = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return displayedLots.slice(start, start + pageSize);
+  }, [displayedLots, page, pageSize]);
 
   return (
     <div className="space-y-6">
@@ -667,7 +675,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
               </tr>
             </thead>
             <tbody>
-              {displayedLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : displayedLots.map((l, idx)=> {
+              {displayedLots.length===0? <tr><td colSpan={8} className="py-4">No lots match filters.</td></tr> : pagedDisplayedLots.map((l, idx)=> {
                 const isSummary = isSummaryView;
                 const rowKey = l.lotNo || `${l.itemName || l.name || ''}-${l.firmName || l.firm || ''}-${l.supplierName || l.supplier || ''}-${idx}`;
                 return (
@@ -807,6 +815,9 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
           </table>
         </div>
       </Section>
+      <div className="mt-2">
+        <Pagination total={displayedLots.length} page={page} setPage={setPage} pageSize={pageSize} />
+      </div>
 
       {/* Issue Modal */}
       {issueModalOpen && (

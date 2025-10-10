@@ -2,9 +2,9 @@
  * ReceiveFromMachine page component for GLINTEX Inventory
  */
 
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Pill } from '../components';
+import { Section, Button, SecondaryButton, Pill, Pagination } from '../components';
 import { formatKg } from '../utils';
 import * as api from '../api';
 
@@ -70,10 +70,10 @@ function SummaryCard({ title, summary, meta, cls, actions }) {
               <th className="py-2 pr-2">Status</th>
             </tr>
           </thead>
-          <tbody>
+            <tbody>
             {pieces.length === 0 ? (
               <tr><td className="py-3 pr-2" colSpan={8}>No rows.</td></tr>
-            ) : pieces.map(piece => {
+            ) : limitedKnownPieces.map(piece => {
               const missing = !piece.inboundExists;
               return (
                 <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>
@@ -145,6 +145,11 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   const [actionError, setActionError] = useState(null);
   const [actionIssues, setActionIssues] = useState([]);
   const [dragActive, setDragActive] = useState(false);
+  const [pieceReceivePage, setPieceReceivePage] = useState(1);
+  const [orphanPage, setOrphanPage] = useState(1);
+  const [uploadsPage, setUploadsPage] = useState(1);
+  const [rowsPage, setRowsPage] = useState(1);
+  const pageSize = 8;
 
   const inboundPieceMap = useMemo(() => {
     const map = new Map();
@@ -189,13 +194,13 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     return { knownPieces: known, orphanPieces: orphan, totalReceivedWeight: runningTotal };
   }, [inboundPieceMap, receiveTotalsMap]);
 
-  const recentUploads = useMemo(() => (db.receive_uploads || []).slice(0, 10), [db.receive_uploads]);
+  const recentUploads = useMemo(() => (db.receive_uploads || []).slice(), [db.receive_uploads]);
   const uploadLookup = useMemo(() => {
     const map = new Map();
     (db.receive_uploads || []).forEach((u) => map.set(u.id, u));
     return map;
   }, [db.receive_uploads]);
-  const latestRows = useMemo(() => (db.receive_rows || []).slice(0, 50), [db.receive_rows]);
+  const latestRows = useMemo(() => (db.receive_rows || []).slice(), [db.receive_rows]);
 
   function clearSelection() {
     setSelectedFile(null);
@@ -290,7 +295,31 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   }
 
   const piecesWithReceipts = receiveTotalsMap.size;
-  const limitedKnownPieces = knownPieces.slice(0, 50);
+
+  useEffect(() => { setPieceReceivePage(1); }, [knownPieces]);
+  useEffect(() => { setOrphanPage(1); }, [/* orphanPieces depends on receiveTotalsMap/inboundPieceMap */ receiveTotalsMap, inboundPieceMap]);
+  useEffect(() => { setUploadsPage(1); }, [recentUploads]);
+  useEffect(() => { setRowsPage(1); }, [latestRows]);
+
+  const limitedKnownPieces = useMemo(() => {
+    const start = (pieceReceivePage - 1) * pageSize;
+    return knownPieces.slice(start, start + pageSize);
+  }, [knownPieces, pieceReceivePage]);
+
+  const pagedOrphanPieces = useMemo(() => {
+    const start = (orphanPage - 1) * pageSize;
+    return orphanPieces.slice(start, start + pageSize);
+  }, [orphanPieces, orphanPage]);
+
+  const pagedRecentUploads = useMemo(() => {
+    const start = (uploadsPage - 1) * pageSize;
+    return recentUploads.slice(start, start + pageSize);
+  }, [recentUploads, uploadsPage]);
+
+  const pagedLatestRows = useMemo(() => {
+    const start = (rowsPage - 1) * pageSize;
+    return latestRows.slice(start, start + pageSize);
+  }, [latestRows, rowsPage]);
 
   return (
     <div className="space-y-6">
@@ -373,7 +402,10 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             />
           )}
         </div>
-      </Section>
+          </Section>
+          <div className="mt-2">
+            <Pagination total={knownPieces.length} page={pieceReceivePage} setPage={setPieceReceivePage} pageSize={pageSize} />
+          </div>
 
       <Section title="Piece receive totals (top 50 by pending)">
         <div className="overflow-x-auto">
@@ -388,7 +420,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               </tr>
             </thead>
             <tbody>
-              {limitedKnownPieces.length === 0 ? (
+            {limitedKnownPieces.length === 0 ? (
                 <tr>
                   <td className="py-3 pr-2" colSpan={5}>No receive data yet.</td>
                 </tr>
@@ -408,7 +440,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
         </div>
       </Section>
 
-      {orphanPieces.length > 0 && (
+          {orphanPieces.length > 0 && (
         <Section title="Pieces in receive data without inbound match">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -419,7 +451,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                 </tr>
               </thead>
               <tbody>
-                {orphanPieces.map((piece) => (
+                {pagedOrphanPieces.map((piece) => (
                   <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2 font-mono">{piece.pieceId}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
@@ -428,10 +460,13 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               </tbody>
             </table>
           </div>
+          <div className="mt-2">
+            <Pagination total={orphanPieces.length} page={orphanPage} setPage={setOrphanPage} pageSize={pageSize} />
+          </div>
         </Section>
       )}
 
-      <Section title="Recent uploads">
+          <Section title="Recent uploads">
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className={`text-left ${cls.muted}`}>
@@ -442,12 +477,12 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               </tr>
             </thead>
             <tbody>
-              {recentUploads.length === 0 ? (
+              {pagedRecentUploads.length === 0 ? (
                 <tr>
                   <td className="py-3 pr-2" colSpan={3}>No uploads yet.</td>
                 </tr>
               ) : (
-                recentUploads.map((upload) => (
+                pagedRecentUploads.map((upload) => (
                   <tr key={upload.id} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2">{formatDateTime(upload.uploadedAt)}</td>
                     <td className="py-2 pr-2 break-all">{upload.originalFilename}</td>
@@ -457,6 +492,9 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               )}
             </tbody>
           </table>
+        </div>
+        <div className="mt-2">
+          <Pagination total={recentUploads.length} page={uploadsPage} setPage={setUploadsPage} pageSize={pageSize} />
         </div>
       </Section>
 
@@ -475,12 +513,12 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               </tr>
             </thead>
             <tbody>
-              {latestRows.length === 0 ? (
+              {pagedLatestRows.length === 0 ? (
                 <tr>
                   <td className="py-3 pr-2" colSpan={7}>No rows imported yet.</td>
                 </tr>
               ) : (
-                latestRows.map((row) => {
+                pagedLatestRows.map((row) => {
                   const upload = uploadLookup.get(row.uploadId);
                   return (
                     <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
@@ -497,6 +535,9 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               )}
             </tbody>
           </table>
+        </div>
+        <div className="mt-2">
+          <Pagination total={latestRows.length} page={rowsPage} setPage={setRowsPage} pageSize={pageSize} />
         </div>
       </Section>
     </div>

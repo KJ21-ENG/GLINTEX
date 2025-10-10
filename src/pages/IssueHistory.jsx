@@ -2,10 +2,10 @@
  * IssueHistory page component for GLINTEX Inventory
  */
 
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useBrand } from '../context';
 import { formatKg } from '../utils';
-import { ColumnFilter, ValueFilterMenu, DateFilterMenu } from '../components';
+import { ColumnFilter, ValueFilterMenu, DateFilterMenu, Pagination } from '../components';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 import * as api from '../api';
 
@@ -76,6 +76,8 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   });
   const [sortConfig, setSortConfig] = useState(() => ({ ...ISSUE_DEFAULT_SORT }));
   const [deletingId, setDeletingId] = useState(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
 
   const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
@@ -177,6 +179,12 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
       operatorName: operatorNameById,
     });
   }, [rows, filters, sortConfig, itemNameById, machineNameById, operatorNameById]);
+
+  useEffect(() => { setPage(1); }, [filters, sortConfig]);
+  const paged = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   return (
     <div>
@@ -335,7 +343,7 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.length===0? <tr><td colSpan={10} className="py-4">No issues match filters.</td></tr> : filtered.map((r, idx) => (
+            {filtered.length===0? <tr><td colSpan={10} className="py-4">No issues match filters.</td></tr> : paged.map((r, idx) => (
               <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top row-hover`}>
                 <td className="py-2 pr-2">{r.date}</td>
                 <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
@@ -367,6 +375,9 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="mt-3">
+        <Pagination total={filtered.length} page={page} setPage={setPage} pageSize={pageSize} />
       </div>
     </div>
   );

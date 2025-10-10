@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, Select, Pill } from '../components';
+import { Section, Button, SecondaryButton, Input, Select, Pill, Pagination } from '../components';
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
 
@@ -17,6 +17,8 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState([]);
   const [issuing, setIssuing] = useState(false);
+  const [piecePage, setPiecePage] = useState(1);
+  const piecePageSize = 8;
 
   useEffect(() => {
     if (db.items.length && !db.items.some(i => i.id === itemId)) {
@@ -109,7 +111,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
             <table className="w-full text-sm">
               <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
               <tbody>
-                {availablePieces.length===0? <tr><td colSpan={3} className="py-4">No available pieces in this lot.</td></tr> : availablePieces.map(p=> (
+                {availablePieces.length===0? <tr><td colSpan={3} className="py-4">No available pieces in this lot.</td></tr> : availablePieces.slice((piecePage-1)*piecePageSize, (piecePage-1)*piecePageSize + piecePageSize).map(p=> (
                   <tr key={p.id} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2"><input type="checkbox" checked={selected.includes(p.id)} onChange={()=>toggle(p.id)} /></td>
                     <td className="py-2 pr-2 font-mono">{p.id}</td>
@@ -118,6 +120,9 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
                 ))}
               </tbody>
             </table>
+            <div className="mt-2">
+              <Pagination total={availablePieces.length} page={piecePage} setPage={setPiecePage} pageSize={piecePageSize} />
+            </div>
           </div>
 
           <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>

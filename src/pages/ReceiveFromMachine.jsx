@@ -135,7 +135,7 @@ function SummaryCard({ title, summary, meta, cls, actions }) {
 }
 
 export function ReceiveFromMachine({ db, refreshDb }) {
-  const { cls } = useBrand();
+  const { cls, brand } = useBrand();
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -144,6 +144,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   const [importResult, setImportResult] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [actionIssues, setActionIssues] = useState([]);
+  const [dragActive, setDragActive] = useState(false);
 
   const inboundPieceMap = useMemo(() => {
     const map = new Map();
@@ -203,6 +204,32 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     setActionIssues([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  }
+
+  function handleDragLeave(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragActive) setDragActive(false);
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    const file = e.dataTransfer?.files?.[0] || null;
+    if (file) {
+      setSelectedFile(file);
+      setPreviewData(null);
+      setActionError(null);
+      setActionIssues([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
@@ -275,20 +302,35 @@ export function ReceiveFromMachine({ db, refreshDb }) {
       >
         <div className="space-y-4">
           <div className="flex flex-col md:flex-row md:items-center md:gap-4">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null;
-                setSelectedFile(file);
-                setPreviewData(null);
-                setActionError(null);
-                setActionIssues([]);
-              }}
-            />
+            <div className="w-full md:w-1/2">
+              <label
+                htmlFor="receive-file"
+                className={`block w-full cursor-pointer rounded-lg p-4 md:p-6 border ${cls.cardBorder} ${cls.cardBg} flex items-center justify-between gap-4 ${dragActive ? 'ring-2 ring-offset-2' : ''}`}
+                onDragOver={handleDragOver}
+                onDragEnter={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <div className={`${cls.muted} text-sm md:text-base`}>Drop CSV here or click to choose</div>
+                <div className="text-sm font-mono">{selectedFile ? selectedFile.name : 'No file chosen'}</div>
+                <input
+                  id="receive-file"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                    setPreviewData(null);
+                    setActionError(null);
+                    setActionIssues([]);
+                  }}
+                />
+              </label>
+            </div>
             <div className="flex items-center gap-2 mt-3 md:mt-0">
-              <Button onClick={handlePreview} disabled={!selectedFile || previewing}>
+              <Button onClick={handlePreview} disabled={!selectedFile || previewing} className="border-2" style={{ borderColor: brand?.gold }}>
                 {previewing ? 'Previewing…' : previewData ? 'Re-preview' : 'Preview CSV'}
               </Button>
               {selectedFile && (
@@ -297,11 +339,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Pill>Tracked pieces: {piecesWithReceipts}</Pill>
-            <Pill>Tracked net weight: {formatKg(totalReceivedWeight)}</Pill>
-            <Pill>Recent uploads: {recentUploads.length}</Pill>
-          </div>
+          {/* tracking pills removed */}
 
           {actionError && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm">

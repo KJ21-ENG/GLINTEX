@@ -307,6 +307,24 @@ app.get('/api/sequence/next', async (req, res) => {
   }
 });
 
+// Set the lot sequence to a specific integer value (so the next created lot becomes value+1)
+app.post('/api/sequence/set', async (req, res) => {
+  try {
+    const { next } = req.body || {};
+    const num = Number(next);
+    if (!Number.isInteger(num) || num < 0) return res.status(400).json({ error: 'next must be a non-negative integer' });
+    const updated = await prisma.sequence.upsert({
+      where: { id: 'lot_sequence' },
+      update: { nextValue: num },
+      create: { id: 'lot_sequence', nextValue: num },
+    });
+    res.json({ ok: true, nextValue: updated.nextValue });
+  } catch (err) {
+    console.error('Failed to set sequence', err);
+    res.status(500).json({ error: 'Failed to set sequence' });
+  }
+});
+
 // Whatsapp control endpoints
 app.get('/api/whatsapp/status', async (req, res) => {
   try {

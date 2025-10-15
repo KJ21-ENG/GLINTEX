@@ -77,7 +77,7 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   const [sortConfig, setSortConfig] = useState(() => ({ ...ISSUE_DEFAULT_SORT }));
   const [deletingId, setDeletingId] = useState(null);
   const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 50;
 
   const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {

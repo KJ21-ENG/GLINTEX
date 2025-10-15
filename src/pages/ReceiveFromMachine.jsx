@@ -149,7 +149,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   const [orphanPage, setOrphanPage] = useState(1);
   const [uploadsPage, setUploadsPage] = useState(1);
   const [rowsPage, setRowsPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 50;
 
   const inboundPieceMap = useMemo(() => {
     const map = new Map();

@@ -5,7 +5,7 @@
 import React from 'react';
 import { SecondaryButton } from './SecondaryButton';
 
-export function Pagination({ total, page, setPage, pageSize = 8 }) {
+export function Pagination({ total, page, setPage, pageSize = 50 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (totalPages <= 1) return null;
   const pages = [];

@@ -73,7 +73,7 @@ export function RecentLots({ db }) {
     to: '',
   });
   const [sortConfig, setSortConfig] = useState(() => ({ ...DEFAULT_SORT }));
-  const pageSize = 8;
+  const pageSize = 50;
 
   const baseRows = useMemo(() => {
     return db.lots.map(l => ({

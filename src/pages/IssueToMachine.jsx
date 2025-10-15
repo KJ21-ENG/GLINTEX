@@ -18,7 +18,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
   const [selected, setSelected] = useState([]);
   const [issuing, setIssuing] = useState(false);
   const [piecePage, setPiecePage] = useState(1);
-  const piecePageSize = 8;
+  const piecePageSize = 50;
 
   useEffect(() => {
     if (db.items.length && !db.items.some(i => i.id === itemId)) {

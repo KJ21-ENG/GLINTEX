@@ -10,7 +10,7 @@ export function RawTable({ title, rows }) {
   const { cls } = useBrand();
   const keys = Object.keys(rows[0] || {});
   const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 50;
   const start = (page-1)*pageSize;
   const pageRows = rows.slice(start, start+pageSize);
   return (

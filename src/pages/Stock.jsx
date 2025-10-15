@@ -101,7 +101,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
   const [isSummaryView, setIsSummaryView] = useState(false);
   const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 50;
 
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();

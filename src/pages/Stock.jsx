@@ -15,7 +15,7 @@ const STATUS_OPTIONS = [
   { value: 'inactive', label: 'Inactive (pending = 0)' },
 ];
 
-const DEFAULT_SORT = { key: 'date', direction: 'desc' };
+const DEFAULT_SORT = { key: 'lotNo', direction: 'asc' };
 const EPSILON = 1e-9;
 
 function lotStatus(lot) {
@@ -39,7 +39,7 @@ function getSortValue(lot, key) {
     case 'lotNo':
       return lot.lotNo || '';
     case 'date':
-      return lot.date || '';
+      return lot.dateISO || lot.date || '';
     case 'itemName':
       return lot.itemName || lot.name || '';
     case 'firmName':

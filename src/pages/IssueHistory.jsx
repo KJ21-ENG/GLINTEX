@@ -29,7 +29,8 @@ function isFilterActive(selectedValues, totalOptions) {
 function getIssueSortValue(row, key, maps) {
   switch (key) {
     case 'date':
-      return row.date || '';
+      // prefer normalized dateISO if available (set during normalizeDb)
+      return row.dateISO || row.date || '';
     case 'itemName':
       return maps.itemName.get(row.itemId) || '';
     case 'lotNo':

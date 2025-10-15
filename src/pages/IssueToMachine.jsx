@@ -38,7 +38,19 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     }
   }, [db.operators, operatorId]);
 
-  const candidateLots = useMemo(() => db.lots.filter(l => l.itemId === itemId), [db.lots, itemId]);
+  const candidateLots = useMemo(() => {
+    const parse = (s) => (s && typeof s === 'string') ? s : '';
+    return db.lots.filter(l => l.itemId === itemId).slice().sort((a, b) => {
+      // prefer ISO dates if present on lot record, fall back to raw date
+      const aDate = a.date || '';
+      const bDate = b.date || '';
+      // normalize to ISO using simple string patterns (YYYY-MM-DD > others)
+      const aIso = a.date && a.date.match(/^\d{4}-\d{2}-\d{2}$/) ? a.date : parse(aDate);
+      const bIso = b.date && b.date.match(/^\d{4}-\d{2}-\d{2}$/) ? b.date : parse(bDate);
+      // localeCompare on ISO-like strings gives correct chronological ordering
+      return (bIso || bDate).localeCompare(aIso || aDate);
+    });
+  }, [db.lots, itemId]);
   const [lotNo, setLotNo] = useState("");
 
   useEffect(() => {

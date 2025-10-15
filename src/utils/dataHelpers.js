@@ -16,6 +16,19 @@ export function normalizeDb(raw) {
   const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
     ...record,
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
+    // Normalize date to canonical ISO (YYYY-MM-DD) for sorting, keep original for display if needed
+    dateISO: (function() {
+      try {
+        // lazy-load formatting helper to avoid cycles
+        const { parseDateToISO } = require('./formatting');
+        return parseDateToISO(record.date || '');
+      } catch (e) {
+        // fallback simple normalization
+        const d = record.date || '';
+        if (typeof d === 'string' && d.match(/^\d{4}-\d{2}-\d{2}$/)) return d;
+        return '';
+      }
+    })(),
   }));
   const settings = ensureArr(raw?.settings);
   const receiveUploads = ensureArr(raw?.receive_uploads);

@@ -73,7 +73,7 @@ function SummaryCard({ title, summary, meta, cls, actions }) {
             <tbody>
             {pieces.length === 0 ? (
               <tr><td className="py-3 pr-2" colSpan={8}>No rows.</td></tr>
-            ) : limitedKnownPieces.map(piece => {
+            ) : pieces.map(piece => {
               const missing = !piece.inboundExists;
               return (
                 <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>

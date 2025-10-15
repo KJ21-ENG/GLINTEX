@@ -20,7 +20,9 @@ function normalizePieceId(raw) {
   if (raw === undefined || raw === null) return null;
   const cleaned = String(raw).trim();
   if (!cleaned) return null;
-  const parts = cleaned.split('-').map(p => p.trim()).filter(Boolean);
+  // Treat underscore as dash so CSVs using 12_5 map to 12-5
+  const normalizedSeparators = cleaned.replace(/_/g, '-');
+  const parts = normalizedSeparators.split('-').map(p => p.trim()).filter(Boolean);
   if (parts.length === 2 && /^\d+$/.test(parts[0])) {
     const lot = parts[0].padStart(3, '0');
     const seqPart = parts[1];
@@ -30,7 +32,7 @@ function normalizePieceId(raw) {
     }
     return `${lot}-${seqPart}`;
   }
-  return cleaned;
+  return normalizedSeparators;
 }
 
 function toNumber(val) {

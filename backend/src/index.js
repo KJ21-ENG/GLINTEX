@@ -683,6 +683,54 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
   }
 });
 
+// Mark remaining pending weight for a piece as wastage (only if piece was issued to machine)
+app.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
+  try {
+    const { pieceId } = req.body || {};
+    if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
+
+    // Check inbound item exists
+    const inbound = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    if (!inbound) return res.status(404).json({ error: 'Piece not found' });
+
+    // Verify piece was issued to machine at least once
+    const issuedCount = await prisma.issueToMachine.count({ where: { pieceIds: { contains: pieceId } } });
+    if (issuedCount === 0) return res.status(400).json({ error: 'Piece was not issued to machine' });
+
+    // Fetch current received and wastage totals
+    const currentTotal = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
+    const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
+
+    const inboundWeight = Number(inbound.weight || 0);
+    const remaining = Math.max(0, inboundWeight - received - existingWastage);
+    if (remaining <= 0) return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
+
+    // Upsert wastage increment inside transaction
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.receivePieceTotal.upsert({
+        where: { pieceId },
+        update: { wastageNetWeight: { increment: remaining } },
+        create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining },
+      });
+      return tx.receivePieceTotal.findUnique({ where: { pieceId } });
+    });
+
+    // Send notification
+    try {
+      const lotNo = inbound.lotNo || '';
+      const itemRec = inbound.itemId ? await prisma.item.findUnique({ where: { id: inbound.itemId } }) : null;
+      const itemName = itemRec ? itemRec.name || '' : '';
+      sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: remaining });
+    } catch (e) { console.error('notify piece wastage error', e); }
+
+    res.json({ ok: true, pieceId, marked: remaining, updated });
+  } catch (err) {
+    console.error('Failed to mark wastage', err);
+    res.status(500).json({ error: err.message || 'Failed to mark wastage' });
+  }
+});
+
 app.post('/api/receive_from_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};

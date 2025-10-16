@@ -50,6 +50,7 @@ export async function createLot(payload) { return await request('/api/lots', { m
 export async function createIssueToMachine(payload) { return await request('/api/issue_to_machine', { method: 'POST', body: payload }); }
 export async function importReceiveFromMachine(payload) { return await request('/api/receive_from_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromMachine(payload) { return await request('/api/receive_from_machine/preview', { method: 'POST', body: payload }); }
+export async function markPieceWastage(payload) { return await request('/api/receive_from_machine/mark_wastage', { method: 'POST', body: payload }); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }

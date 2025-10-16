@@ -123,6 +123,7 @@ model ReceiveRow {
 model ReceivePieceTotal {
   pieceId        String   @id
   totalNetWeight Float    @default(0)
+  wastageNetWeight Float  @default(0)
   updatedAt      DateTime @updatedAt
 }
 

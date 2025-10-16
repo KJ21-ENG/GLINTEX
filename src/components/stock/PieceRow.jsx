@@ -16,6 +16,11 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
 
   useEffect(() => { setWeight(p.weight); }, [p.weight]);
 
+  // Treat a piece as "wastage marked" when its pending weight reaches 0 and
+  // it has a recorded wastage weight. Only in that case apply strike-through
+  // and disabled formatting in the expanded view.
+  const isWastageMarked = Number(pendingWeight || 0) === 0 && Number(wastageWeight || 0) > 0;
+
   async function save() {
     if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) { alert('Weight must be positive'); return; }
     setSaving(true);
@@ -33,7 +38,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
   const isAvailable = p.status === 'available';
 
   return (
-    <tr className={`border-t ${cls.rowBorder} ${!isAvailable ? 'piece-disabled' : ''} row-hover`}>
+    <tr className={`border-t ${cls.rowBorder} ${isWastageMarked ? 'piece-disabled' : ''} row-hover`}>
       <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} disabled={!isAvailable} /></td>
       <td className="py-2 pr-2 font-mono">{p.id}</td>
       <td className="py-2 pr-2">{p.seq}</td>
@@ -51,8 +56,8 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
             </>
           ) : (
             <>
-              <span className={`mr-2 ${!isAvailable ? 'line-through' : ''}`}>{formatKg(p.weight)}</span>
-              <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted} underline-on-hover`} title="Edit weight" disabled={!isAvailable}>
+              <span className={`mr-2 ${isWastageMarked ? 'line-through' : ''}`}>{formatKg(p.weight)}</span>
+              <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted} underline-on-hover`} title="Edit weight" disabled={isWastageMarked}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z"/></svg>
               </button>
             </>
@@ -70,8 +75,37 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
             )}
           </span>
           {isIssued && pendingWeight > 0 && wastageWeight === 0 && (
-            <button onClick={(e) => { e.stopPropagation(); onMarkWastage(p.id); }} disabled={isMarking} title="Mark remaining as wastage" className={`text-xs px-2 py-1 rounded border ${cls.cardBorder} ${cls.cardBg} btn-hover`} style={{ textDecoration: 'none', textDecorationLine: 'none', textDecorationColor: 'transparent', opacity: 1, display: 'inline-block' }}>
-              {isMarking ? 'Marking…' : 'Mark wastage'}
+            <button
+              onClick={(e) => { e.stopPropagation(); onMarkWastage(p.id); }}
+              disabled={isMarking}
+              title="Mark Wastage"
+              aria-label="Mark Wastage"
+              className={`w-6 h-6 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover text-xs`}
+            >
+              {isMarking ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="animate-spin w-4 h-4 text-red-400"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"
+                  />
+                </svg>
+              ) : (
+                <span className="font-semibold leading-none">W</span>
+              )}
             </button>
           )}
         </div>

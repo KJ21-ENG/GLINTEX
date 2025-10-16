@@ -8,7 +8,7 @@ import { Input } from '../common';
 import { formatKg } from '../../utils';
 import * as api from '../../api';
 
-export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0 }) {
+export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0, isIssued = false, wastageWeight = 0, onMarkWastage, isMarking = false }) {
   const { cls } = useBrand();
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -51,7 +51,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
             </>
           ) : (
             <>
-              <span className="mr-2">{formatKg(p.weight)}</span>
+              <span className={`mr-2 ${!isAvailable ? 'line-through' : ''}`}>{formatKg(p.weight)}</span>
               <button onClick={(e)=>{ e.stopPropagation(); setEditing(true); }} className={`text-sm ${cls.muted} underline-on-hover`} title="Edit weight" disabled={!isAvailable}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3z"/></svg>
               </button>
@@ -59,7 +59,23 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
           )}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right">{formatKg(pendingWeight)}</td>
+      <td className="py-2 pr-2 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <span style={{ textDecoration: 'none', textDecorationLine: 'none', textDecorationColor: 'transparent', opacity: 1, display: 'inline-block' }}>
+            {formatKg(pendingWeight)}
+            {wastageWeight > 0 && (
+              <span className="ml-2 text-xs text-slate-400" style={{ textDecoration: 'none', textDecorationLine: 'none', textDecorationColor: 'transparent', opacity: 1, display: 'inline-block' }}>
+                ({formatKg(wastageWeight)} kg, {((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(2)}%)
+              </span>
+            )}
+          </span>
+          {isIssued && pendingWeight > 0 && wastageWeight === 0 && (
+            <button onClick={(e) => { e.stopPropagation(); onMarkWastage(p.id); }} disabled={isMarking} title="Mark remaining as wastage" className={`text-xs px-2 py-1 rounded border ${cls.cardBorder} ${cls.cardBg} btn-hover`} style={{ textDecoration: 'none', textDecorationLine: 'none', textDecorationColor: 'transparent', opacity: 1, display: 'inline-block' }}>
+              {isMarking ? 'Marking…' : 'Mark wastage'}
+            </button>
+          )}
+        </div>
+      </td>
     </tr>
   );
 }

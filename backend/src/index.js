@@ -721,7 +721,10 @@ app.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
       const lotNo = inbound.lotNo || '';
       const itemRec = inbound.itemId ? await prisma.item.findUnique({ where: { id: inbound.itemId } }) : null;
       const itemName = itemRec ? itemRec.name || '' : '';
-      sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: remaining });
+      const wastageFormatted = Number(remaining).toFixed(3);
+      const inboundWeight = Number(inbound.weight || 0);
+      const wastagePercent = inboundWeight > 0 ? ((remaining / inboundWeight) * 100).toFixed(2) : '0.00';
+      sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
     } catch (e) { console.error('notify piece wastage error', e); }
 
     res.json({ ok: true, pieceId, marked: remaining, updated });

@@ -163,7 +163,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
     (db.receive_piece_totals || []).forEach((row) => {
-      map.set(row.pieceId, { received: Number(row.totalNetWeight || 0), wastage: Number(row.wastageNetWeight || 0) });
+      map.set(row.pieceId, Number(row.totalNetWeight || 0));
     });
     return map;
   }, [db.receive_piece_totals]);
@@ -172,20 +172,16 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     const known = [];
     const orphan = [];
     let runningTotal = 0;
-    for (const [pieceId, totals] of receiveTotalsMap.entries()) {
-      const received = totals ? totals.received || 0 : 0;
-      const wastage = totals ? totals.wastage || 0 : 0;
+    for (const [pieceId, received] of receiveTotalsMap.entries()) {
       runningTotal += received;
       const inbound = inboundPieceMap.get(pieceId) || null;
       const inboundWeight = inbound ? Number(inbound.weight || 0) : null;
-      const pending = inboundWeight === null ? null : Math.max(0, inboundWeight - received - wastage);
       const summary = {
         pieceId,
         lotNo: inbound ? inbound.lotNo : null,
         inboundWeight,
         receivedWeight: received,
-        pendingWeight: pending,
-        wastageWeight: wastage,
+        pendingWeight: inboundWeight === null ? null : Math.max(0, inboundWeight - received),
       };
       if (inbound) known.push(summary);
       else orphan.push(summary);
@@ -198,40 +194,6 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     orphan.sort((a, b) => a.pieceId.localeCompare(b.pieceId, undefined, { numeric: true, sensitivity: 'base' }));
     return { knownPieces: known, orphanPieces: orphan, totalReceivedWeight: runningTotal };
   }, [inboundPieceMap, receiveTotalsMap]);
-
-  // Build set of pieceIds that have been issued to machine (from issue_to_machine records)
-  const issuedPieceIds = useMemo(() => {
-    const set = new Set();
-    (db.issue_to_machine || []).forEach((rec) => {
-      if (rec && rec.pieceIds) {
-        (String(rec.pieceIds) || '').split(',').map(s => s.trim()).filter(Boolean).forEach(pid => set.add(pid));
-      }
-    });
-    return set;
-  }, [db.issue_to_machine]);
-
-  const [markingPieces, setMarkingPieces] = useState(() => new Set());
-
-  async function handleMarkWastage(pieceId) {
-    if (!pieceId) return;
-    const ok = window.confirm(`Mark remaining pending weight for ${pieceId} as wastage? This cannot be undone.`);
-    if (!ok) return;
-    // mark as loading for this piece
-    setMarkingPieces(prev => new Set(prev).add(pieceId));
-    try {
-      await api.markPieceWastage({ pieceId });
-      try { await refreshDb(); } catch (e) { console.error('Failed to refresh DB after marking wastage', e); }
-    } catch (err) {
-      console.error('Failed to mark wastage', err);
-      window.alert(err.message || 'Failed to mark wastage');
-    } finally {
-      setMarkingPieces(prev => {
-        const s = new Set(prev);
-        s.delete(pieceId);
-        return s;
-      });
-    }
-  }
 
   const recentUploads = useMemo(() => (db.receive_uploads || []).slice(), [db.receive_uploads]);
   const uploadLookup = useMemo(() => {
@@ -471,13 +433,6 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                   <td className="py-2 pr-2 text-right">{piece.inboundWeight == null ? '—' : formatKg(piece.inboundWeight)}</td>
                   <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.pendingWeight == null ? '—' : formatKg(piece.pendingWeight)}</td>
-                  <td className="py-2 pr-2">
-                    {issuedPieceIds.has(piece.pieceId) && piece.pendingWeight > 0 ? (
-                      <Button onClick={() => handleMarkWastage(piece.pieceId)} disabled={markingPieces.has(piece.pieceId)} className="text-xs">
-                        {markingPieces.has(piece.pieceId) ? 'Marking…' : 'Mark wastage'}
-                      </Button>
-                    ) : null}
-                  </td>
                 </tr>
                 ))
               )}

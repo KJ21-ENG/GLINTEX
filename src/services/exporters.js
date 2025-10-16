@@ -69,25 +69,51 @@ export function exportCsv(lots, piecesByLot) {
 
 export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold: '#D4AF37' }) {
   const doc = new jsPDF({ orientation: 'portrait' });
-  doc.setFontSize(12);
-  doc.text('Stock — Lots (Summary)', 14, 14);
 
-  const header = [['Lot No', 'Date', 'Item', 'Firm', 'Supplier', 'Total Pcs', 'Remaining Pcs', 'Total Weight (kg)', 'Remaining Weight (kg)']];
+  // Build timestamp string in format hh:mm am/pm & DD/MM/YYYY
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const hours = now.getHours();
+  const minutes = pad(now.getMinutes());
+  const ampm = hours >= 12 ? 'pm' : 'am';
+  const displayHour = pad(hours % 12 === 0 ? 12 : hours % 12);
+  const dateStr = `${displayHour}:${minutes} ${ampm} & ${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()}`;
+
+  const title = `Metallic Rolls Stock As On ${dateStr}`;
+  doc.setFontSize(12);
+  // Center the title horizontally
+  doc.text(title, doc.internal.pageSize.getWidth() / 2, 14, { align: 'center' });
+
+  // Match frontend table columns: Lot No, Date, Item, Firm, Supplier, Pieces (available/out), Initial Weight, Pending Weight
+  const header = [['Lot No', 'Date', 'Item', 'Firm', 'Supplier', 'Pieces (available/out)', 'Initial Weight (kg)', 'Pending Weight (kg)']];
   const body = [];
   for (const lot of lots) {
+    // Prefer authoritative lot-level fields when available (these are computed in the UI)
+    // Fallback to piecesByLot when lot-level totals are not present.
     const pieces = piecesByLot[lot.lotNo] || [];
-    const remainingPcs = pieces.length;
-    const remainingWeight = pieces.reduce((s, p) => s + (Number(p.weight) || 0), 0);
-    const totalPcs = Number(lot.totalPieces ?? lot.pieces ?? remainingPcs);
-    const totalWeight = Number(lot.totalWeight ?? (remainingWeight));
+    const remainingPcsFromPieces = pieces.length;
+    const remainingWeightFromPieces = pieces.reduce((s, p) => s + (Number(p.weight) || 0), 0);
+
+    // totalPieces may be stored as totalPieces or total; if absent fall back to pieces count
+    const totalPcs = Number(lot.totalPieces ?? lot.total ?? remainingPcsFromPieces);
+
+    // remaining pieces: prefer availableCount (UI shows available/out using availableCount),
+    // otherwise fall back to piecesByLot length
+    const availableCount = (lot.availableCount !== undefined && lot.availableCount !== null) ? Number(lot.availableCount) : remainingPcsFromPieces;
+    const piecesCell = `${availableCount} / ${totalPcs}`;
+
+    // totalWeight: prefer lot.totalWeight if present, otherwise derive from pieces
+    const totalWeight = Number(lot.totalWeight ?? remainingWeightFromPieces);
+
+    // remaining weight: prefer pendingWeight (UI shows pending weight), otherwise derive from pieces
+    const remainingWeight = (lot.pendingWeight !== undefined && lot.pendingWeight !== null) ? Number(lot.pendingWeight) : remainingWeightFromPieces;
     body.push([
       lot.lotNo,
       lot.date || '',
       lot.itemName || '',
       lot.firmName || '',
       lot.supplierName || '',
-      String(totalPcs),
-      String(remainingPcs),
+      piecesCell,
       String(totalWeight.toFixed ? totalWeight.toFixed(3) : totalWeight),
       String(remainingWeight.toFixed ? remainingWeight.toFixed(3) : remainingWeight),
     ]);
@@ -97,8 +123,8 @@ export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold:
     startY: 22,
     head: header,
     body,
-    styles: { fontSize: 9 },
-    headStyles: { fillColor: [30, 76, 166], textColor: 255 },
+    styles: { fontSize: 9, halign: 'center', valign: 'middle' },
+    headStyles: { fillColor: [30, 76, 166], textColor: 255, halign: 'center', valign: 'middle' },
     theme: 'grid',
     willDrawCell: (data) => {
       // no-op placeholder for possible future styling per cell

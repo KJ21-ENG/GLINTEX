@@ -8,6 +8,9 @@ import os from 'os';
 import { execSync } from 'child_process';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
+const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
+const LOCK_FILE = path.join(AUTH_DIR, 'SingletonLock');
+const STALE_LOCK_AGE_MS = 10 * 60 * 1000;
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -49,6 +52,31 @@ function isProfileInUse(authDir) {
     const out = execSync('ps aux', { encoding: 'utf8' });
     return out && out.includes(authDir);
   } catch (_) {
+    return false;
+  }
+}
+
+function cleanupStaleAuthDir({ force = false, reason = '' } = {}) {
+  if (!fs.existsSync(LOCK_FILE)) return false;
+  try {
+    const inUse = !force && isProfileInUse(AUTH_DIR);
+    if (inUse) {
+      try {
+        const stats = fs.statSync(LOCK_FILE);
+        const ageMs = Date.now() - (stats.mtimeMs ?? stats.ctimeMs ?? Date.now());
+        if (ageMs < STALE_LOCK_AGE_MS) {
+          console.log('SingletonLock present but appears active; skipping cleanup for now');
+          return false;
+        }
+      } catch (_) {
+        // If we cannot read stats, fall through to removal after logging below.
+      }
+    }
+    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    console.log(`Removed LocalAuth session directory (${reason || 'stale lock'}):`, AUTH_DIR);
+    return true;
+  } catch (err) {
+    console.warn('Failed to cleanup LocalAuth session directory:', err && err.message ? err.message : err);
     return false;
   }
 }
@@ -104,20 +132,7 @@ class WhatsappService {
     await this._destroyClient();
     ensureDir(SESS_DIR);
     // Before launching, try to remove stale LocalAuth session lock if present and not in use
-    try {
-      const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
-      const lockFile = path.join(authDir, 'SingletonLock');
-      if (fs.existsSync(lockFile) && !isProfileInUse(authDir)) {
-        try {
-          fs.rmSync(authDir, { recursive: true, force: true });
-          console.log('Removed stale LocalAuth session directory to avoid ProcessSingleton error:', authDir);
-        } catch (e) {
-          console.warn('Failed to remove stale LocalAuth session directory:', e && e.message);
-        }
-      }
-    } catch (e) {
-      // best-effort cleanup; continue to attempt init
-    }
+    cleanupStaleAuthDir({ force: true, reason: 'pre-init check' });
 
     // Use LocalAuth which stores session data in ~/.local/share but we'll still provide explicit path fallback
     // create client with faster puppeteer flags
@@ -184,16 +199,7 @@ class WhatsappService {
         console.error(`Whatsapp client initialize attempt #${attempt} failed:`, err && err.message);
         await this._destroyClient();
         // Attempt best-effort cleanup of stale session dir before retrying
-        try {
-          const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
-          const lockFile = path.join(authDir, 'SingletonLock');
-          if (fs.existsSync(lockFile) && !isProfileInUse(authDir)) {
-            fs.rmSync(authDir, { recursive: true, force: true });
-            console.log('Removed stale LocalAuth session directory and will retry initialization:', authDir);
-          }
-        } catch (cleanupErr) {
-          console.warn('Cleanup during init failure failed', cleanupErr && cleanupErr.message);
-        }
+        cleanupStaleAuthDir({ force: true, reason: 'init retry' });
         if (attempt < maxLaunchAttempts) {
           await new Promise(r => setTimeout(r, 1000 * attempt));
           continue;
@@ -516,5 +522,3 @@ class WhatsappService {
 
 const svc = new WhatsappService();
 export default svc;
-
-

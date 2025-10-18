@@ -339,10 +339,8 @@ app.get('/api/whatsapp/status', async (req, res) => {
 
 app.post('/api/whatsapp/start', async (req, res) => {
   try {
-    // initialize client
-    if (!whatsapp.client) {
-      await whatsapp.init();
-    }
+    const force = req.body && (req.body.force === true || req.body.force === 'true');
+    await whatsapp.init({ force });
     res.status(202).json({ ok: true });
   } catch (err) {
     console.error('Failed to start whatsapp', err);

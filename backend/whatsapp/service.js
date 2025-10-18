@@ -8,7 +8,6 @@ import os from 'os';
 import { execSync } from 'child_process';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
-const SESS_FILE = path.join(SESS_DIR, 'session.json');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -77,10 +76,32 @@ class WhatsappService {
     this._processingQueue = false;
     this._maxSendAttempts = 3;
     this._shuttingDown = false;
+    this._initializingPromise = null;
+    this._healthInterval = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempts = 0;
+    this._exitHandlersBound = false;
   }
 
-  async init() {
-    if (this.initialized) return;
+  async init(opts = {}) {
+    const { force = false } = opts;
+    if (this._shuttingDown) throw new Error('Whatsapp service shutting down');
+    if (this._initializingPromise) {
+      if (!force) return this._initializingPromise;
+      try { await this._initializingPromise; } catch (_) { /* ignore, will retry below */ }
+    }
+    if (!force && this.initialized && this.client && this.status === 'connected') return;
+
+    this._initializingPromise = this._initializeInternal();
+    try {
+      await this._initializingPromise;
+    } finally {
+      this._initializingPromise = null;
+    }
+  }
+
+  async _initializeInternal() {
+    await this._destroyClient();
     ensureDir(SESS_DIR);
     // Before launching, try to remove stale LocalAuth session lock if present and not in use
     try {
@@ -113,16 +134,16 @@ class WhatsappService {
     let lastErr = null;
     for (let attempt = 1; attempt <= maxLaunchAttempts; attempt++) {
       try {
-        this.client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
+        const client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
 
-        this.client.on('qr', async (qr) => {
+        client.on('qr', async (qr) => {
           this.qrDataUrl = await qrcode.toDataURL(qr);
           this.status = 'qr';
           this.emitter.emit('qr', { qr: this.qrDataUrl });
           this.emitter.emit('status', { status: this.status });
         });
 
-        this.client.on('ready', () => {
+        client.on('ready', () => {
           this.status = 'connected';
           this.qrDataUrl = null;
           this.emitter.emit('status', { status: this.status });
@@ -131,58 +152,37 @@ class WhatsappService {
           this._flushWaiting();
           // start processing any queued sends
           this._processQueue().catch(err => console.error('Queue processor failed', err));
+          this._clearReconnectTimer();
+          this._startHealthChecks();
         });
 
-        this.client.on('authenticated', (session) => {
+        client.on('authenticated', (session) => {
           this.status = 'authenticated';
           this.emitter.emit('status', { status: this.status });
         });
 
-        this.client.on('auth_failure', (msg) => {
-          this.status = 'disconnected';
-          this.qrDataUrl = null;
-          this.emitter.emit('status', { status: this.status });
+        client.on('auth_failure', async (msg) => {
           console.error('Auth failure:', msg);
+          await this._handleFatalDisconnect('auth_failure');
         });
 
-        this.client.on('disconnected', (reason) => {
-          this.status = 'disconnected';
-          this.qrDataUrl = null;
+        client.on('disconnected', async (reason) => {
           console.log('Whatsapp disconnected', reason);
-          this.emitter.emit('status', { status: this.status });
-          // Do not permanently destroy client here - attempt to re-initialize so LocalAuth session is reused
-          this.initialized = false;
-          // keep client reference removed so sends know it's not available
-          this.client = null;
-          // let queue processor know we are disconnected; it will pause
-          this._processingQueue = false;
-          // Try to re-init with exponential backoff
-          let reinitAttempt = 0;
-          const tryReinit = async () => {
-            if (this._shuttingDown) return;
-            reinitAttempt += 1;
-            const delay = Math.min(60000, 1000 * Math.pow(2, reinitAttempt));
-            console.log(`Re-init attempt #${reinitAttempt} in ${delay}ms`);
-            setTimeout(async () => {
-              try {
-                await this.init();
-                console.log('Re-init successful');
-              } catch (err) {
-                console.error('Re-init failed', err && err.message);
-                if (reinitAttempt < 6) tryReinit();
-              }
-            }, delay);
-          };
-          tryReinit();
+          await this._handleFatalDisconnect('disconnected');
         });
 
-        await this.client.initialize();
+        this.client = client;
+        this.status = 'initializing';
+        this.emitter.emit('status', { status: this.status });
+
+        await client.initialize();
         this.initialized = true;
         lastErr = null;
         break;
       } catch (err) {
         lastErr = err;
         console.error(`Whatsapp client initialize attempt #${attempt} failed:`, err && err.message);
+        await this._destroyClient();
         // Attempt best-effort cleanup of stale session dir before retrying
         try {
           const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
@@ -200,10 +200,17 @@ class WhatsappService {
         }
       }
     }
-    if (lastErr) throw lastErr;
+    if (lastErr) {
+      this.status = 'disconnected';
+      this.emitter.emit('status', { status: this.status });
+      throw lastErr;
+    }
     // attach process exit handlers to gracefully shutdown client
-    process.once('SIGINT', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} process.exit(0); });
-    process.once('exit', async () => { this._shuttingDown = true; try { if (this.client) { await this.client.destroy(); } } catch (_) {} });
+    if (!this._exitHandlersBound) {
+      this._exitHandlersBound = true;
+      process.once('SIGINT', async () => { this._shuttingDown = true; await this._destroyClient(); process.exit(0); });
+      process.once('exit', async () => { this._shuttingDown = true; await this._destroyClient(); });
+    }
   }
 
   getStatus() {
@@ -219,17 +226,10 @@ class WhatsappService {
     try {
       if (this.client) {
         await this.client.logout();
-        try { await this.client.destroy(); } catch (_) {}
       }
     } catch (e) { console.error(e); }
-    this.status = 'disconnected';
-    this.qrDataUrl = null;
-    this.emitter.emit('status', { status: this.status });
-    // reject any queued sends because logout is explicit
-    for (const item of this._sendQueue) {
-      try { item.reject(new Error('Whatsapp logged out')); } catch (_) {}
-    }
-    this._sendQueue = [];
+    await this._destroyClient();
+    this._setDisconnectedState({ reason: 'logout', error: new Error('Whatsapp logged out'), scheduleReconnect: false });
     // remove LocalAuth session directory used by whatsapp-web.js for this client
     try {
       const authDir = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
@@ -237,8 +237,6 @@ class WhatsappService {
         fs.rmSync(authDir, { recursive: true, force: true });
       }
     } catch (e) { console.error('Failed to clear auth dir', e); }
-    this.initialized = false;
-    this.client = null;
     this._shuttingDown = false;
   }
 
@@ -277,7 +275,16 @@ class WhatsappService {
   enqueueSend(number, text, opts = {}) {
     if (this._shuttingDown) return Promise.reject(new Error('Whatsapp service shutting down'));
     return new Promise((resolve, reject) => {
-      const entry = { number: number || null, chatId: opts.chatId || null, text, resolve, reject, attempts: 0, timeout: opts.timeout || 0 };
+      const entry = {
+        number: number || null,
+        chatId: opts.chatId || null,
+        text,
+        resolve,
+        reject,
+        attempts: 0,
+        timeoutMs: opts.timeout || 0,
+        enqueuedAt: Date.now(),
+      };
       this._sendQueue.push(entry);
       // kick the processor
       this._processQueue().catch(err => console.error('Queue processor error', err));
@@ -295,13 +302,13 @@ class WhatsappService {
           try {
             await this._waitUntilConnected(30000);
           } catch (e) {
-            // If still not connected, reject oldest entries after their timeout
-            const nowQueue = this._sendQueue.slice();
-            for (const item of nowQueue) {
-              item.attempts += 1;
-              if (item.attempts >= this._maxSendAttempts || (item.timeout && item.timeout <= 0)) {
-                // final rejection
-                try { item.reject(new Error('Whatsapp client not available')); } catch (_) {}
+            const now = Date.now();
+            const snapshot = [...this._sendQueue];
+            for (const item of snapshot) {
+              const expired = item.timeoutMs > 0 && (now - item.enqueuedAt) >= item.timeoutMs;
+              if (expired || item.attempts >= this._maxSendAttempts) {
+                const errMsg = expired ? 'Whatsapp send timed out waiting for connection' : 'Whatsapp client not available';
+                try { item.reject(new Error(errMsg)); } catch (_) {}
                 const idx = this._sendQueue.indexOf(item);
                 if (idx >= 0) this._sendQueue.splice(idx, 1);
               }
@@ -313,6 +320,11 @@ class WhatsappService {
 
         const entry = this._sendQueue.shift();
         if (!entry) break;
+        const now = Date.now();
+        if (entry.timeoutMs > 0 && (now - entry.enqueuedAt) >= entry.timeoutMs) {
+          try { entry.reject(new Error('Whatsapp send timed out')); } catch (_) {}
+          continue;
+        }
         entry.attempts += 1;
         // Determine chat id: either a provided chatId (group), or normalized phone number
         let id = null;
@@ -339,8 +351,8 @@ class WhatsappService {
           if (entry.attempts < this._maxSendAttempts) {
             this._sendQueue.push(entry);
             // if error looks like session/page closed, attempt re-init
-            if (err && /Session closed|Session not created|Target closed|Protocol error/.test(String(err))) {
-              try { this.initialized = false; this.client = null; await this.init(); } catch (e) { console.error('Re-init during send failure failed', e); }
+            if (this._isFatalError(err)) {
+              await this._handleFatalDisconnect('send_failure');
             }
             // small delay to avoid tight loop
             await new Promise(r => setTimeout(r, 500));
@@ -355,25 +367,151 @@ class WhatsappService {
   }
 
   _waitUntilConnected(timeout = 10000) {
-    if (this.status === 'connected') return Promise.resolve();
+    if (this.status === 'connected' && this.client) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const idx = this._waiting.indexOf(onReady);
+      const entry = { timer: null, resolve: null, reject: null };
+      const cleanup = () => {
+        if (entry.timer) clearTimeout(entry.timer);
+        const idx = this._waiting.indexOf(entry);
         if (idx >= 0) this._waiting.splice(idx, 1);
-        reject(new Error('Timeout waiting for whatsapp connection'));
-      }, timeout);
-      const onReady = () => { clearTimeout(timer); resolve(); };
-      this._waiting.push(onReady);
+      };
+      entry.resolve = () => { cleanup(); resolve(); };
+      entry.reject = (err) => { cleanup(); reject(err); };
+      if (timeout > 0) {
+        entry.timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Timeout waiting for whatsapp connection'));
+        }, timeout);
+        entry.timer.unref?.();
+      }
+      this._waiting.push(entry);
     });
   }
 
-  _flushWaiting() {
+  _flushWaiting(err = null) {
     const waits = this._waiting.slice();
     this._waiting = [];
-    for (const fn of waits) fn();
+    for (const waiter of waits) {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      try {
+        if (err) waiter.reject(err);
+        else waiter.resolve();
+      } catch (_) {}
+    }
   }
 
   getEmitter() { return this.emitter; }
+
+  async _destroyClient() {
+    const client = this.client;
+    this.client = null;
+    if (client) {
+      try { await client.destroy(); } catch (e) { console.warn('Failed to destroy whatsapp client', e && e.message); }
+    }
+    this.initialized = false;
+    this._stopHealthChecks();
+  }
+
+  _setDisconnectedState({ reason, error = null, scheduleReconnect = true } = {}) {
+    this.status = 'disconnected';
+    this.qrDataUrl = null;
+    this.emitter.emit('status', { status: this.status, reason });
+    if (error) this.emitter.emit('error', { reason, message: error.message });
+    this.initialized = false;
+    this._flushWaiting(error || new Error('Whatsapp disconnected'));
+    this._processingQueue = false;
+    if (error) {
+      const pending = this._sendQueue.splice(0);
+      for (const item of pending) {
+        try { item.reject(error); } catch (_) {}
+      }
+    }
+    if (!scheduleReconnect) {
+      this._clearReconnectTimer();
+      return;
+    }
+    this._scheduleReconnect();
+  }
+
+  _scheduleReconnect() {
+    if (this._shuttingDown) return;
+    if (this._reconnectTimer) return;
+    const attempt = this._reconnectAttempts + 1;
+    const delay = Math.min(60000, 1000 * Math.pow(2, attempt - 1));
+    console.log(`Re-init attempt #${attempt} in ${delay}ms`);
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      this._reconnectAttempts = attempt;
+      try {
+        if (this._initializingPromise) {
+          try {
+            await this._initializingPromise;
+          } catch (_) {
+            // ignore and proceed to force init below
+          }
+          if (this.status === 'connected' && this.client) {
+            this._reconnectAttempts = 0;
+            console.log('Reconnect timer skipped; service already connected');
+            return;
+          }
+        }
+        await this.init({ force: true });
+        this._reconnectAttempts = 0;
+        console.log('Re-init successful');
+      } catch (err) {
+        console.error('Re-init failed', err && err.message);
+        this._scheduleReconnect();
+      }
+    }, delay);
+    this._reconnectTimer.unref?.();
+  }
+
+  _clearReconnectTimer() {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    this._reconnectAttempts = 0;
+  }
+
+  _startHealthChecks() {
+    if (this._healthInterval) return;
+    this._healthInterval = setInterval(() => {
+      this._runHealthCheck().catch(err => console.warn('Whatsapp health check failed', err && err.message));
+    }, 60000);
+    this._healthInterval.unref?.();
+  }
+
+  _stopHealthChecks() {
+    if (this._healthInterval) {
+      clearInterval(this._healthInterval);
+      this._healthInterval = null;
+    }
+  }
+
+  async _runHealthCheck() {
+    if (!this.client || this.status !== 'connected' || this._initializingPromise) return;
+    try {
+      const state = await this.client.getState();
+      if (state !== 'CONNECTED') {
+        throw new Error(`Unexpected whatsapp state: ${state}`);
+      }
+    } catch (err) {
+      await this._handleFatalDisconnect('health_check');
+      throw err;
+    }
+  }
+
+  _isFatalError(err) {
+    if (!err) return false;
+    const msg = String(err.message || err || '').toLowerCase();
+    return /session closed|session not created|target closed|protocol error|page crashed/.test(msg);
+  }
+
+  async _handleFatalDisconnect(reason) {
+    await this._destroyClient();
+    this._setDisconnectedState({ reason, scheduleReconnect: !this._shuttingDown });
+  }
 }
 
 const svc = new WhatsappService();

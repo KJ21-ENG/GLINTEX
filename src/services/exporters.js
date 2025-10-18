@@ -2,9 +2,24 @@ import { utils, write } from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+function orderLotsForExport(lots) {
+  return [...lots].sort((a, b) => {
+    const itemA = String(a?.itemName ?? '').toLowerCase();
+    const itemB = String(b?.itemName ?? '').toLowerCase();
+    if (itemA !== itemB) return itemA.localeCompare(itemB);
+
+    const lotA = String(a?.lotNo ?? '').toLowerCase();
+    const lotB = String(b?.lotNo ?? '').toLowerCase();
+    if (lotA !== lotB) return lotA.localeCompare(lotB, undefined, { numeric: true, sensitivity: 'base' });
+
+    return 0;
+  });
+}
+
 function flattenLots(lots, piecesByLot) {
+  const orderedLots = orderLotsForExport(lots);
   const rows = [];
-  for (const lot of lots) {
+  for (const lot of orderedLots) {
     const pieces = piecesByLot[lot.lotNo] || [];
     for (const p of pieces) {
       rows.push({
@@ -23,8 +38,9 @@ function flattenLots(lots, piecesByLot) {
 }
 
 export function exportXlsx(lots, piecesByLot) {
-  const lotsSheet = lots.map(l => ({ Lot: l.lotNo, Date: l.date, Item: l.itemName, Firm: l.firmName, Supplier: l.supplierName, "Available Pieces": (piecesByLot[l.lotNo] || []).length }));
-  const pieces = flattenLots(lots, piecesByLot);
+  const orderedLots = orderLotsForExport(lots);
+  const lotsSheet = orderedLots.map(l => ({ Lot: l.lotNo, Date: l.date, Item: l.itemName, Firm: l.firmName, Supplier: l.supplierName, "Available Pieces": (piecesByLot[l.lotNo] || []).length }));
+  const pieces = flattenLots(orderedLots, piecesByLot);
   const wb = utils.book_new();
   const ws1 = utils.json_to_sheet(lotsSheet);
   const ws2 = utils.json_to_sheet(pieces);
@@ -41,7 +57,8 @@ export function exportXlsx(lots, piecesByLot) {
 }
 
 export function exportCsv(lots, piecesByLot) {
-  const pieces = flattenLots(lots, piecesByLot);
+  const orderedLots = orderLotsForExport(lots);
+  const pieces = flattenLots(orderedLots, piecesByLot);
   if (pieces.length === 0) {
     const csvEmpty = 'No data';
     const blob = new Blob([csvEmpty], { type: 'text/csv' });
@@ -68,6 +85,7 @@ export function exportCsv(lots, piecesByLot) {
 }
 
 export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold: '#D4AF37' }) {
+  const orderedLots = orderLotsForExport(lots);
   const doc = new jsPDF({ orientation: 'portrait' });
 
   // Build timestamp string in format hh:mm am/pm & DD/MM/YYYY
@@ -87,7 +105,7 @@ export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold:
   // Match frontend table columns: Lot No, Date, Item, Firm, Supplier, Pieces (available/out), Initial Weight, Pending Weight
   const header = [['Lot No', 'Date', 'Item', 'Firm', 'Supplier', 'Pieces (available/out)', 'Initial Weight (kg)', 'Pending Weight (kg)']];
   const body = [];
-  for (const lot of lots) {
+  for (const lot of orderedLots) {
     // Prefer authoritative lot-level fields when available (these are computed in the UI)
     // Fallback to piecesByLot when lot-level totals are not present.
     const pieces = piecesByLot[lot.lotNo] || [];

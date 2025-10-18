@@ -403,10 +403,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             />
           )}
         </div>
-          </Section>
-          <div className="mt-2">
-            <Pagination total={knownPieces.length} page={pieceReceivePage} setPage={setPieceReceivePage} pageSize={pageSize} />
-          </div>
+      </Section>
 
       <Section title="Piece receive totals (top 50 by pending)">
         <div className="overflow-x-auto">
@@ -438,6 +435,9 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               )}
             </tbody>
           </table>
+        </div>
+        <div className="mt-2">
+          <Pagination total={knownPieces.length} page={pieceReceivePage} setPage={setPieceReceivePage} pageSize={pageSize} />
         </div>
       </Section>
 

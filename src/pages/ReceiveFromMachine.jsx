@@ -159,11 +159,14 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     return map;
   }, [db.inbound_items]);
 
-  // Map pieceId -> { received: number, wastage: number }
+  // Map pieceId -> { received: number, wastage: number, totalPieces: number }
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
     (db.receive_piece_totals || []).forEach((row) => {
-      map.set(row.pieceId, Number(row.totalNetWeight || 0));
+      map.set(row.pieceId, {
+        received: Number(row.totalNetWeight || 0),
+        totalPieces: Number(row.totalPieces || 0),
+      });
     });
     return map;
   }, [db.receive_piece_totals]);
@@ -172,7 +175,9 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     const known = [];
     const orphan = [];
     let runningTotal = 0;
-    for (const [pieceId, received] of receiveTotalsMap.entries()) {
+    for (const [pieceId, totals] of receiveTotalsMap.entries()) {
+      const received = totals.received || 0;
+      const totalPieces = totals.totalPieces || 0;
       runningTotal += received;
       const inbound = inboundPieceMap.get(pieceId) || null;
       const inboundWeight = inbound ? Number(inbound.weight || 0) : null;
@@ -182,6 +187,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
         inboundWeight,
         receivedWeight: received,
         pendingWeight: inboundWeight === null ? null : Math.max(0, inboundWeight - received),
+        totalPieces,
       };
       if (inbound) known.push(summary);
       else orphan.push(summary);
@@ -415,12 +421,13 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                 <th className="py-2 pr-2 text-right">Inbound (kg)</th>
                 <th className="py-2 pr-2 text-right">Received (kg)</th>
                 <th className="py-2 pr-2 text-right">Pending (kg)</th>
+                <th className="py-2 pr-2 text-right">Total Pcs</th>
               </tr>
             </thead>
             <tbody>
             {limitedKnownPieces.length === 0 ? (
                 <tr>
-                  <td className="py-3 pr-2" colSpan={5}>No receive data yet.</td>
+                  <td className="py-3 pr-2" colSpan={6}>No receive data yet.</td>
                 </tr>
               ) : (
                 limitedKnownPieces.map((piece) => (
@@ -430,6 +437,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                   <td className="py-2 pr-2 text-right">{piece.inboundWeight == null ? '—' : formatKg(piece.inboundWeight)}</td>
                   <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.pendingWeight == null ? '—' : formatKg(piece.pendingWeight)}</td>
+                  <td className="py-2 pr-2 text-right">{piece.totalPieces || 0}</td>
                 </tr>
                 ))
               )}
@@ -446,16 +454,18 @@ export function ReceiveFromMachine({ db, refreshDb }) {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className={`text-left ${cls.muted}`}>
-                <tr>
-                  <th className="py-2 pr-2">Piece</th>
-                  <th className="py-2 pr-2 text-right">Received (kg)</th>
-                </tr>
+                  <tr>
+                    <th className="py-2 pr-2">Piece</th>
+                    <th className="py-2 pr-2 text-right">Received (kg)</th>
+                    <th className="py-2 pr-2 text-right">Total Pcs</th>
+                  </tr>
               </thead>
               <tbody>
                 {pagedOrphanPieces.map((piece) => (
                   <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2 font-mono">{piece.pieceId}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
+                    <td className="py-2 pr-2 text-right">{piece.totalPieces || 0}</td>
                   </tr>
                 ))}
               </tbody>
@@ -509,6 +519,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                 <th className="py-2 pr-2">Machine</th>
                 <th className="py-2 pr-2">Employee</th>
                 <th className="py-2 pr-2 text-right">Net Wt (kg)</th>
+                <th className="py-2 pr-2 text-right">Pcs</th>
                 <th className="py-2 pr-2">CSV Date</th>
                 <th className="py-2 pr-2">Imported</th>
               </tr>
@@ -516,7 +527,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             <tbody>
               {pagedLatestRows.length === 0 ? (
                 <tr>
-                  <td className="py-3 pr-2" colSpan={7}>No rows imported yet.</td>
+                  <td className="py-3 pr-2" colSpan={8}>No rows imported yet.</td>
                 </tr>
               ) : (
                 pagedLatestRows.map((row) => {
@@ -528,6 +539,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                       <td className="py-2 pr-2">{row.machineNo || '—'}</td>
                       <td className="py-2 pr-2">{row.employee || '—'}</td>
                       <td className="py-2 pr-2 text-right">{row.netWt == null ? '—' : formatKg(row.netWt)}</td>
+                      <td className="py-2 pr-2 text-right">{row.pcs == null ? '—' : row.pcs}</td>
                       <td className="py-2 pr-2">{row.date || '—'}</td>
                       <td className="py-2 pr-2">{formatDateTime(upload?.uploadedAt || row.createdAt)}</td>
                     </tr>

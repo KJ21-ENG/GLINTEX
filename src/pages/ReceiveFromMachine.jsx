@@ -657,17 +657,78 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
 
   const boxes = useMemo(() => (db.boxes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.boxes]);
   const bobbins = useMemo(() => (db.bobbins || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.bobbins]);
-  const lotOptions = useMemo(() => (db.lots || []).slice().sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true, sensitivity: 'base' })), [db.lots]);
+  const issuedPieceIds = useMemo(() => {
+    const set = new Set();
+    (db.issue_to_machine || []).forEach(record => {
+      const list = Array.isArray(record.pieceIds)
+        ? record.pieceIds
+        : String(record.pieceIds || '')
+            .split(',')
+            .map(id => id.trim())
+            .filter(Boolean);
+      list.forEach(id => set.add(id));
+    });
+    return set;
+  }, [db.issue_to_machine]);
+  const itemNameById = useMemo(() => {
+    const map = new Map();
+    (db.items || []).forEach(item => map.set(item.id, item.name || ''));
+    return map;
+  }, [db.items]);
+  const lotOptions = useMemo(() => (
+    (db.lots || [])
+      .map(lot => ({ ...lot, itemName: itemNameById.get(lot.itemId) || '' }))
+      .sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true, sensitivity: 'base' }))
+  ), [db.lots, itemNameById]);
+  const pendingByPiece = useMemo(() => {
+    const map = new Map();
+    (db.inbound_items || []).forEach(item => {
+      const totals = receiveTotalsMap.get(item.id) || { received: 0, wastage: 0 };
+      const inboundWeight = Number(item.weight || 0);
+      const pending = Math.max(0, inboundWeight - Number(totals.received || 0) - Number(totals.wastage || 0));
+      map.set(item.id, pending);
+    });
+    return map;
+  }, [db.inbound_items, receiveTotalsMap]);
+  const cartNetByPiece = useMemo(() => {
+    const map = new Map();
+    cart.forEach(entry => {
+      map.set(entry.pieceId, (map.get(entry.pieceId) || 0) + entry.netWeight);
+    });
+    return map;
+  }, [cart]);
+  const wastageLockedPieces = useMemo(() => {
+    const locked = new Set();
+    cart.forEach(entry => {
+      if (entry.markWastage) locked.add(entry.pieceId);
+    });
+    return locked;
+  }, [cart]);
+
   const pieceOptions = useMemo(() => {
     if (!lotNo) return [];
     return (db.inbound_items || [])
       .filter(item => item.lotNo === lotNo)
+      .map(item => {
+        const pending = pendingByPiece.get(item.id) ?? 0;
+        const staged = cartNetByPiece.get(item.id) || 0;
+        const remaining = Math.max(0, pending - staged);
+        return { ...item, pendingWeight: remaining };
+      })
+      .filter(item => {
+        const statusOk = !item.status || String(item.status).toLowerCase() === 'available';
+        return statusOk && item.pendingWeight > 0;
+      })
       .sort((a, b) => {
         const seqDiff = (a.seq || 0) - (b.seq || 0);
         if (seqDiff !== 0) return seqDiff;
         return (a.id || '').localeCompare(b.id || '', undefined, { numeric: true, sensitivity: 'base' });
       });
-  }, [db.inbound_items, lotNo]);
+  }, [db.inbound_items, lotNo, pendingByPiece, cartNetByPiece]);
+
+  useEffect(() => {
+    setMarkRemainingWastage(false);
+  }, [pieceId]);
 
   useEffect(() => {
     if (lotNo && !lotOptions.some(l => l.lotNo === lotNo)) {
@@ -705,9 +766,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     const received = Number(totals.received || 0);
     const wastage = Number(totals.wastage || 0);
     const pendingFromDb = Math.max(0, inboundWeight - received - wastage);
-    const cartNetForPiece = cart
-      .filter(entry => entry.pieceId === pieceId)
-      .reduce((sum, entry) => sum + entry.netWeight, 0);
+    const cartNetForPiece = cartNetByPiece.get(pieceId) || 0;
     return {
       pieceId,
       lotNo: inbound.lotNo,
@@ -718,7 +777,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
       cartNet: cartNetForPiece,
       pendingAfterCart: Math.max(0, pendingFromDb - cartNetForPiece),
     };
-  }, [pieceId, inboundPieceMap, receiveTotalsMap, cart]);
+  }, [pieceId, inboundPieceMap, receiveTotalsMap, cartNetByPiece]);
 
   const cartTotals = useMemo(() => cart.reduce((acc, entry) => {
     acc.totalGross += entry.grossWeight;
@@ -750,7 +809,8 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     !Number.isFinite(boxWeight) ||
     !Number.isFinite(bobbinWeight) ||
     boxWeight <= 0 ||
-    bobbinWeight <= 0
+    bobbinWeight <= 0 ||
+    (pieceId && wastageLockedPieces.has(pieceId))
   );
 
   function resetForm() {
@@ -771,6 +831,14 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     setFormError('');
     if (disableAdd) {
       setFormError('Fill all required fields with valid values before adding.');
+      return;
+    }
+    if (pieceId && wastageLockedPieces.has(pieceId)) {
+      setFormError('This piece is already marked for wastage in the staged entries. Remove the existing entry if you need to add more boxes.');
+      return;
+    }
+    if (markRemainingWastage && (!pieceId || !issuedPieceIds.has(pieceId))) {
+      setFormError('Cannot mark remaining pending as wastage because this piece was not issued to machine.');
       return;
     }
     const entryLot = selectedPiece?.lotNo || lotNo;
@@ -806,12 +874,6 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     setCart(prev => prev.filter(entry => entry.id !== entryId));
   }
 
-  function toggleEntryWastage(entryId, value) {
-    setCart(prev => prev.map(entry => (
-      entry.id === entryId ? { ...entry, markWastage: value } : entry
-    )));
-  }
-
   function clearCart() {
     if (saving || cart.length === 0) return;
     if (!window.confirm('Clear all staged boxes?')) return;
@@ -825,6 +887,8 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     setFormError('');
     setProgressText('Starting…');
     const snapshot = cart.slice();
+    const piecesToMark = Array.from(new Set(snapshot.filter(entry => entry.markWastage).map(entry => entry.pieceId)));
+    const wastageWarnings = [];
     try {
       for (let idx = 0; idx < snapshot.length; idx += 1) {
         const entry = snapshot[idx];
@@ -840,16 +904,27 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
           grossWeight: entry.grossWeight,
           receiveDate: entry.receiveDate,
         });
-        if (entry.markWastage) {
-          setProgressText(`Marking wastage for ${entry.pieceId}`);
-          await api.markPieceWastage({ pieceId: entry.pieceId });
-        }
         setCart(prev => prev.filter(item => item.id !== entry.id));
       }
       setProgressText('Refreshing data…');
       await refreshDb();
+      setProgressText(piecesToMark.length ? 'Marking wastage…' : '');
+      for (const piece of piecesToMark) {
+        try {
+          await api.markPieceWastage({ pieceId: piece });
+        } catch (err) {
+          console.error('Failed to mark wastage for manual entry', piece, err);
+          wastageWarnings.push(`Could not mark wastage for ${piece}: ${err.message || 'Unknown error'}`);
+        }
+      }
       setProgressText('');
-      alert('Manual entries saved successfully.');
+      if (wastageWarnings.length > 0) {
+        setFormError(wastageWarnings.join(' '));
+        alert(`Manual entries saved, but some wastage calls failed:\n${wastageWarnings.join('\n')}`);
+      } else {
+        setFormError('');
+        alert('Manual entries saved successfully.');
+      }
     } catch (err) {
       console.error('Failed to save manual entries', err);
       setFormError(err.message || 'Failed to save manual entries');
@@ -878,7 +953,9 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
               {lotOptions.length === 0 ? (
                 <option value="">No lots available</option>
               ) : lotOptions.map(lot => (
-                <option key={lot.id || lot.lotNo} value={lot.lotNo}>{lot.lotNo}</option>
+                <option key={lot.id || lot.lotNo} value={lot.lotNo}>
+                  {lot.lotNo}{lot.itemName ? ` · ${lot.itemName}` : ''}
+                </option>
               ))}
             </Select>
           </div>
@@ -887,7 +964,9 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
             <Select value={pieceId} onChange={(e) => setPieceId(e.target.value)} disabled={!lotNo || saving}>
               <option value="">{lotNo ? 'Select piece' : 'Choose lot first'}</option>
               {pieceOptions.map(piece => (
-                <option key={piece.id} value={piece.id}>{piece.id} · {formatKg(piece.weight)} kg</option>
+                <option key={piece.id} value={piece.id}>
+                  {piece.id} · {formatKg(piece.weight)} kg · Pending {formatKg(piece.pendingWeight || 0)} kg
+                </option>
               ))}
             </Select>
           </div>
@@ -991,11 +1070,31 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
               ))}
             </Select>
           </div>
-          <div className="flex items-end justify-between gap-2">
+          <div className="flex flex-col gap-1 justify-end">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" className="h-4 w-4" checked={markRemainingWastage} disabled={!pieceId || saving} onChange={(e) => setMarkRemainingWastage(e.target.checked)} />
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={markRemainingWastage}
+                disabled={
+                  !pieceId ||
+                  saving ||
+                  !issuedPieceIds.has(pieceId) ||
+                  (pieceId && wastageLockedPieces.has(pieceId))
+                }
+                onChange={(e) => setMarkRemainingWastage(e.target.checked)}
+              />
               <span>Mark remaining pending as wastage</span>
             </label>
+            {!pieceId ? null : issuedPieceIds.has(pieceId) ? (
+              wastageLockedPieces.has(pieceId) ? (
+                <span className="text-xs text-orange-300">Already marked for wastage in cart; remove staged entry to change.</span>
+              ) : (
+                <span className={`text-xs ${cls.muted}`}>Same as Stock → Mark wastage.</span>
+              )
+            ) : (
+              <span className="text-xs text-orange-300">Piece was not issued to a machine; cannot mark as wastage.</span>
+            )}
           </div>
         </div>
 
@@ -1041,7 +1140,6 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
                 <th className="py-2 pr-2 text-right">Tare</th>
                 <th className="py-2 pr-2 text-right">Net</th>
                 <th className="py-2 pr-2">Operator / Helper</th>
-                <th className="py-2 pr-2">Wastage</th>
                 <th className="py-2 pr-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -1071,18 +1169,9 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
                   <td className="py-2 pr-2">
                     <div>{entry.operatorName || '—'}</div>
                     <div className={`text-xs ${cls.muted}`}>{entry.helperName || 'No helper'}</div>
-                  </td>
-                  <td className="py-2 pr-2">
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4"
-                        checked={entry.markWastage}
-                        disabled={saving}
-                        onChange={(e) => toggleEntryWastage(entry.id, e.target.checked)}
-                      />
-                      Mark
-                    </label>
+                    {entry.markWastage && (
+                      <div className="text-xs text-orange-300 mt-1">Mark pending as wastage</div>
+                    )}
                   </td>
                   <td className="py-2 pr-2 text-right">
                     <button type="button" className="text-red-400 underline text-sm" disabled={saving} onClick={() => removeEntry(entry.id)}>

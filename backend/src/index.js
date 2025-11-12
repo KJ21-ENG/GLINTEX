@@ -191,6 +191,16 @@ function aggregateNetByPiece(rows) {
   return increments;
 }
 
+function aggregatePieceCounts(rows) {
+  const counts = new Map();
+  for (const row of rows) {
+    const pcs = Number(row.pcs || 0);
+    if (!Number.isFinite(pcs) || pcs <= 0) continue;
+    counts.set(row.pieceId, (counts.get(row.pieceId) || 0) + pcs);
+  }
+  return counts;
+}
+
 async function fetchInboundAndTotals(pieceIds) {
   if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
     return { inboundMap: new Map(), totalsMap: new Map() };
@@ -721,6 +731,7 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
     }
 
     const pieceIncrements = aggregateNetByPiece(rows);
+    const pieceCountIncrements = aggregatePieceCounts(rows);
     
     const pieceIds = Array.from(pieceIncrements.keys());
     const inboundAndTotals = await fetchInboundAndTotals(pieceIds);
@@ -793,10 +804,17 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
 
       for (const [pieceId, incrementBy] of pieceIncrements.entries()) {
         if (!Number.isFinite(incrementBy) || incrementBy === 0) continue;
+        const pcsIncrement = pieceCountIncrements.get(pieceId) || 0;
+        const updateData = {
+          totalNetWeight: { increment: incrementBy },
+        };
+        if (pcsIncrement > 0) {
+          updateData.totalPieces = { increment: pcsIncrement };
+        }
         await tx.receivePieceTotal.upsert({
           where: { pieceId },
-          update: { totalNetWeight: { increment: incrementBy } },
-          create: { pieceId, totalNetWeight: incrementBy },
+          update: updateData,
+          create: { pieceId, totalNetWeight: incrementBy, totalPieces: pcsIncrement > 0 ? pcsIncrement : 0 },
         });
       }
 
@@ -908,6 +926,9 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
     }
 
     const bobbinQty = Math.max(0, toInt(bobbinQuantity) || 0);
+    if (bobbinQty <= 0) {
+      return res.status(400).json({ error: 'Bobbin quantity must be greater than zero' });
+    }
     const gross = toNumber(grossWeight);
     if (gross === null || !Number.isFinite(gross) || gross <= 0) {
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
@@ -979,12 +1000,12 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
         where: { pieceId },
         update: {
           totalNetWeight: { increment: net },
-          totalPieces: { increment: 1 },
+          totalPieces: { increment: bobbinQty },
         },
         create: {
           pieceId,
           totalNetWeight: net,
-          totalPieces: 1,
+          totalPieces: bobbinQty,
         },
       });
 

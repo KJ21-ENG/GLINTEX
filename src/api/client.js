@@ -50,6 +50,7 @@ export async function createLot(payload) { return await request('/api/lots', { m
 export async function createIssueToMachine(payload) { return await request('/api/issue_to_machine', { method: 'POST', body: payload }); }
 export async function importReceiveFromMachine(payload) { return await request('/api/receive_from_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromMachine(payload) { return await request('/api/receive_from_machine/preview', { method: 'POST', body: payload }); }
+export async function manualReceiveFromMachine(payload) { return await request('/api/receive_from_machine/manual', { method: 'POST', body: payload }); }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_machine/mark_wastage', { method: 'POST', body: payload }); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
@@ -69,13 +70,17 @@ export async function createMachine(name) { return await request('/api/machines'
 export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
 export async function updateMachine(id, name) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name } }); }
 export async function listOperators() { return await request('/api/operators'); }
-export async function createOperator(name) { return await request('/api/operators', { method: 'POST', body: { name } }); }
+export async function createOperator(name, role = 'operator') { return await request('/api/operators', { method: 'POST', body: { name, role } }); }
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
-export async function updateOperator(id, name) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateOperator(id, name, role) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name, role } }); }
 export async function listBobbins() { return await request('/api/bobbins'); }
 export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
 export async function updateBobbin(id, name, weight) { return await request(`/api/bobbins/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listBoxes() { return await request('/api/boxes'); }
+export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
+export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
+export async function updateBox(id, name, weight) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }
@@ -118,5 +123,9 @@ export default {
   createOperator,
   deleteOperator,
   updateOperator,
+  listBoxes,
+  createBox,
+  deleteBox,
+  updateBox,
   updateSettings,
 };

@@ -4,17 +4,41 @@
 
 import React, { useState, useMemo } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, SearchableInput, BobbinEditor } from '../components';
+import { Section, Button, SecondaryButton, Input, SearchableInput, BobbinEditor, Select } from '../components';
+import { formatKg } from '../utils';
 
-export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, onDeleteFirm, onEditFirm, onAddSupplier, onDeleteSupplier, onEditSupplier, onAddMachine, onDeleteMachine, onEditMachine, onAddOperator, onDeleteOperator, onEditOperator, onAddBobbin, onDeleteBobbin, onEditBobbin, refreshing }) {
+export function Masters({
+  db,
+  onAddItem,
+  onDeleteItem,
+  onEditItem,
+  onAddFirm,
+  onDeleteFirm,
+  onEditFirm,
+  onAddSupplier,
+  onDeleteSupplier,
+  onEditSupplier,
+  onAddMachine,
+  onDeleteMachine,
+  onEditMachine,
+  onAddWorker,
+  onDeleteWorker,
+  onEditWorker,
+  onAddBobbin,
+  onDeleteBobbin,
+  onEditBobbin,
+  onAddBox,
+  onDeleteBox,
+  onEditBox,
+  refreshing,
+}) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
-  const [operatorName, setOperatorName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | operators | bobbins
+  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | workers | bobbins | boxes
 
   async function addItem() {
     const name = itemName.trim();
@@ -124,33 +148,6 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     }
   }
 
-  async function addOperator() {
-    const name = operatorName.trim();
-    if (!name) return;
-    if (db.operators.some(o => o.name.toLowerCase() === name.toLowerCase())) { alert("Operator already exists"); return; }
-    setWorking(true);
-    try {
-      await onAddOperator(name);
-      setOperatorName("");
-    } catch (err) {
-      alert(err.message || 'Failed to add operator');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function deleteOperator(id) {
-    if (!confirm("Delete operator? You cannot remove it if referenced by issue to machine records.")) return;
-    setWorking(true);
-    try {
-      await onDeleteOperator(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete operator');
-    } finally {
-      setWorking(false);
-    }
-  }
-
   async function addBobbin(name, weight) {
     setWorking(true);
     try {
@@ -212,14 +209,19 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     return db.machines.filter(m => m.name.toLowerCase().includes(q));
   }, [db.machines, machineName]);
 
-  // Operators
-  const normalizedOperatorQuery = operatorName.trim().toLowerCase();
-  const isOperatorDuplicate = normalizedOperatorQuery !== '' && db.operators.some(o => o.name.trim().toLowerCase() === normalizedOperatorQuery);
-  const filteredOperators = useMemo(() => {
-    const q = operatorName.trim().toLowerCase();
-    if (!q) return db.operators;
-    return db.operators.filter(o => o.name.toLowerCase().includes(q));
-  }, [db.operators, operatorName]);
+  const workersList = useMemo(() => {
+    if (Array.isArray(db.workers) && db.workers.length > 0) {
+      return db.workers.map(w => ({ ...w, role: (w.role || 'operator') }));
+    }
+    const merged = [];
+    (db.operators || []).forEach(op => merged.push({ ...op, role: 'operator' }));
+    (db.helpers || []).forEach(helper => {
+      if (!merged.some(w => w.id === helper.id)) merged.push({ ...helper, role: 'helper' });
+    });
+    return merged;
+  }, [db.workers, db.operators, db.helpers]);
+
+  const boxes = useMemo(() => db.boxes || [], [db.boxes]);
 
 
   return (
@@ -237,11 +239,14 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
         <button onClick={() => setTab('machines')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='machines' ? cls.navActive : 'border-transparent'} ${tab!=='machines' ? cls.navHover : ''}`}>
           Machines
         </button>
-        <button onClick={() => setTab('operators')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='operators' ? cls.navActive : 'border-transparent'} ${tab!=='operators' ? cls.navHover : ''}`}>
-          Operators
+        <button onClick={() => setTab('workers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='workers' ? cls.navActive : 'border-transparent'} ${tab!=='workers' ? cls.navHover : ''}`}>
+          Workers
         </button>
         <button onClick={() => setTab('bobbins')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='bobbins' ? cls.navActive : 'border-transparent'} ${tab!=='bobbins' ? cls.navHover : ''}`}>
           Bobbins
+        </button>
+        <button onClick={() => setTab('boxes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='boxes' ? cls.navActive : 'border-transparent'} ${tab!=='boxes' ? cls.navHover : ''}`}>
+          Boxes
         </button>
       </div>
 
@@ -269,9 +274,16 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
         </Section>
       )}
 
-      {tab === 'operators' && (
-        <Section title="Operators">
-          <SearchableInput items={db.operators} onAdd={onAddOperator} onDelete={onDeleteOperator} onEdit={onEditOperator} placeholder="New operator name" disabled={disable} />
+      {tab === 'workers' && (
+        <Section title="Workers">
+          <WorkersPanel
+            workers={workersList}
+            onAdd={onAddWorker}
+            onDelete={onDeleteWorker}
+            onEdit={onEditWorker}
+            disabled={disable}
+            cls={cls}
+          />
         </Section>
       )}
 
@@ -280,6 +292,270 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
           <BobbinEditor items={db.bobbins} onAdd={addBobbin} onDelete={deleteBobbin} onEdit={onEditBobbin} disabled={disable} />
         </Section>
       )}
+
+      {tab === 'boxes' && (
+        <Section title="Boxes">
+          <BoxesPanel
+            boxes={boxes}
+            onAdd={onAddBox}
+            onDelete={onDeleteBox}
+            onEdit={onEditBox}
+            disabled={disable}
+            cls={cls}
+          />
+        </Section>
+      )}
     </div>
+  );
+}
+
+function WorkersPanel({ workers, onAdd, onDelete, onEdit, disabled, cls }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('operator');
+  const [message, setMessage] = useState(null);
+
+  async function addWorker() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      await onAdd(trimmed, role);
+      setName('');
+      setRole('operator');
+      setMessage(null);
+    } catch (err) {
+      alert(err.message || 'Failed to add worker');
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Worker name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled} placeholder="e.g. Arjun" />
+        </div>
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Role</label>
+          <Select value={role} onChange={(e) => setRole(e.target.value)} disabled={disabled}>
+            <option value="operator">Operator</option>
+            <option value="helper">Helper</option>
+          </Select>
+        </div>
+        <div className="flex items-end">
+          <Button onClick={addWorker} disabled={disabled || !name.trim()}>
+            Add worker
+          </Button>
+        </div>
+      </div>
+      {message && <div className={`text-sm ${cls.muted}`}>{message}</div>}
+      <div className="overflow-auto">
+        <table className="min-w-full text-sm">
+          <thead className={`text-left ${cls.muted}`}>
+            <tr>
+              <th className="py-2 pr-2">Name</th>
+              <th className="py-2 pr-2">Role</th>
+              <th className="py-2 pr-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {workers.length === 0 ? (
+              <tr><td colSpan={3} className="py-4 text-center text-sm">No workers yet.</td></tr>
+            ) : workers.map(worker => (
+              <WorkerRow
+                key={worker.id}
+                worker={worker}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                disabled={disabled}
+                cls={cls}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function WorkerRow({ worker, onEdit, onDelete, disabled, cls }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(worker.name);
+  const [role, setRole] = useState(worker.role || 'operator');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      await onEdit(worker.id, trimmed, role);
+      setEditing(false);
+    } catch (err) {
+      alert(err.message || 'Failed to update worker');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!confirm('Delete this worker?')) return;
+    try {
+      await onDelete(worker.id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete worker');
+    }
+  }
+
+  if (editing) {
+    return (
+      <tr className={`border-t ${cls.rowBorder}`}>
+        <td className="py-2 pr-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} />
+        </td>
+        <td className="py-2 pr-2">
+          <Select value={role} onChange={(e) => setRole(e.target.value)} disabled={disabled || saving}>
+            <option value="operator">Operator</option>
+            <option value="helper">Helper</option>
+          </Select>
+        </td>
+        <td className="py-2 pr-2 text-right flex gap-2 justify-end">
+          <Button onClick={save} disabled={disabled || saving}>{saving ? 'Saving…' : 'Save'}</Button>
+          <SecondaryButton onClick={() => setEditing(false)} disabled={disabled || saving}>Cancel</SecondaryButton>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr className={`border-t ${cls.rowBorder}`}>
+      <td className="py-2 pr-2">{worker.name}</td>
+      <td className="py-2 pr-2 capitalize">{worker.role || 'operator'}</td>
+      <td className="py-2 pr-2 text-right flex gap-2 justify-end">
+        <SecondaryButton onClick={() => setEditing(true)} disabled={disabled}>Edit</SecondaryButton>
+        <button className="text-sm text-red-500 underline" onClick={remove} disabled={disabled}>Delete</button>
+      </td>
+    </tr>
+  );
+}
+
+function BoxesPanel({ boxes, onAdd, onDelete, onEdit, disabled, cls }) {
+  const [name, setName] = useState('');
+  const [weight, setWeight] = useState('');
+
+  async function addBox() {
+    const trimmed = name.trim();
+    const weightNum = Number(weight);
+    if (!trimmed || !Number.isFinite(weightNum) || weightNum <= 0) {
+      alert('Enter a valid name and positive weight.');
+      return;
+    }
+    try {
+      await onAdd(trimmed, weightNum);
+      setName('');
+      setWeight('');
+    } catch (err) {
+      alert(err.message || 'Failed to add box');
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid md:grid-cols-3 gap-3">
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Box name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled} placeholder="Carton 1" />
+        </div>
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Weight (kg)</label>
+          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled} placeholder="0.650" />
+        </div>
+        <div className="flex items-end">
+          <Button onClick={addBox} disabled={disabled || !name.trim()}>
+            Add box
+          </Button>
+        </div>
+      </div>
+
+      <div className="overflow-auto">
+        <table className="min-w-full text-sm">
+          <thead className={`text-left ${cls.muted}`}>
+            <tr>
+              <th className="py-2 pr-2">Name</th>
+              <th className="py-2 pr-2 text-right">Weight (kg)</th>
+              <th className="py-2 pr-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {boxes.length === 0 ? (
+              <tr><td colSpan={3} className="py-4 text-center text-sm">No boxes yet.</td></tr>
+            ) : boxes.map(box => (
+              <BoxRow key={box.id} box={box} onEdit={onEdit} onDelete={onDelete} disabled={disabled} cls={cls} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BoxRow({ box, onEdit, onDelete, disabled, cls }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(box.name);
+  const [weight, setWeight] = useState(String(box.weight ?? ''));
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const trimmed = name.trim();
+    const weightNum = Number(weight);
+    if (!trimmed || !Number.isFinite(weightNum) || weightNum <= 0) {
+      alert('Enter valid values.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await onEdit(box.id, trimmed, weightNum);
+      setEditing(false);
+    } catch (err) {
+      alert(err.message || 'Failed to update box');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!confirm('Delete this box?')) return;
+    try {
+      await onDelete(box.id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete box');
+    }
+  }
+
+  if (editing) {
+    return (
+      <tr className={`border-t ${cls.rowBorder}`}>
+        <td className="py-2 pr-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} />
+        </td>
+        <td className="py-2 pr-2 text-right">
+          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} />
+        </td>
+        <td className="py-2 pr-2 text-right flex gap-2 justify-end">
+          <Button onClick={save} disabled={disabled || saving}>{saving ? 'Saving…' : 'Save'}</Button>
+          <SecondaryButton onClick={() => setEditing(false)} disabled={disabled || saving}>Cancel</SecondaryButton>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr className={`border-t ${cls.rowBorder}`}>
+      <td className="py-2 pr-2">{box.name}</td>
+      <td className="py-2 pr-2 text-right">{formatKg(box.weight || 0)} kg</td>
+      <td className="py-2 pr-2 text-right flex gap-2 justify-end">
+        <SecondaryButton onClick={() => setEditing(true)} disabled={disabled}>Edit</SecondaryButton>
+        <button className="text-sm text-red-500 underline" onClick={remove} disabled={disabled}>Delete</button>
+      </td>
+    </tr>
   );
 }

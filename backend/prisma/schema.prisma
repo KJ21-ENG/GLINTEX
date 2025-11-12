@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model Item {
@@ -59,7 +60,10 @@ model Machine {
 model Operator {
   id               String           @id @default(cuid())
   name             String
+  role             String           @default("operator")
   issueToMachines  IssueToMachine[]
+  receiveRows      ReceiveRow[]     @relation("OperatorReceiveRows")
+  helperRows       ReceiveRow[]     @relation("HelperReceiveRows")
 }
 
 model Bobbin {
@@ -114,6 +118,9 @@ model ReceiveRow {
   pktTypeName   String?
   pcsTypeName   String?
   bobbinId      String?
+  boxId         String?
+  operatorId    String?
+  helperId      String?
   pcs           Int?
   grossWt       Float?
   tareWt        Float?
@@ -127,6 +134,9 @@ model ReceiveRow {
   createdAt     DateTime       @default(now())
   upload        ReceiveUpload  @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   bobbin        Bobbin?        @relation(fields: [bobbinId], references: [id])
+  box           Box?           @relation(fields: [boxId], references: [id])
+  operator      Operator?      @relation("OperatorReceiveRows", fields: [operatorId], references: [id])
+  helper        Operator?      @relation("HelperReceiveRows", fields: [helperId], references: [id])
 }
 
 model ReceivePieceTotal {
@@ -160,3 +170,9 @@ model WhatsappTemplate {
   groupIds String[] @default([])
 }
 
+model Box {
+  id          String       @id @default(cuid())
+  name        String
+  weight      Float
+  receiveRows ReceiveRow[]
+}

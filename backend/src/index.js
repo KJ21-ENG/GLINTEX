@@ -57,6 +57,11 @@ function toOptionalString(val) {
   return str ? str : null;
 }
 
+function normalizeWorkerRole(role) {
+  const val = typeof role === 'string' ? role.toLowerCase().trim() : '';
+  return val === 'helper' ? 'helper' : 'operator';
+}
+
 // Helper: Get or create bobbin by name (normalize to "Bobbin" if empty/null)
 async function getOrCreateBobbin(pcsTypeName) {
   if (!pcsTypeName || !String(pcsTypeName).trim()) {
@@ -316,8 +321,11 @@ app.get('/api/db', async (req, res) => {
   const firms = await prisma.firm.findMany();
   const suppliers = await prisma.supplier.findMany();
   const machines = await prisma.machine.findMany();
-  const operators = await prisma.operator.findMany();
+  const workers = await prisma.operator.findMany();
+  const operators = workers.filter(w => (w.role || 'operator') === 'operator');
+  const helpers = workers.filter(w => (w.role || 'operator') === 'helper');
   const bobbins = await prisma.bobbin.findMany();
+  const boxes = await prisma.box.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const issue_to_machine = await prisma.issueToMachine.findMany();
@@ -331,12 +339,49 @@ app.get('/api/db', async (req, res) => {
         select: {
           id: true,
           name: true,
+          weight: true,
+        },
+      },
+      box: {
+        select: {
+          id: true,
+          name: true,
+          weight: true,
+        },
+      },
+      operator: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      helper: {
+        select: {
+          id: true,
+          name: true,
         },
       },
     },
   });
   const receive_piece_totals = await prisma.receivePieceTotal.findMany();
-  res.json({ items, firms, suppliers, machines, operators, bobbins, lots, inbound_items, issue_to_machine, settings, receive_uploads, receive_rows, receive_piece_totals });
+  res.json({
+    items,
+    firms,
+    suppliers,
+    machines,
+    workers,
+    operators,
+    helpers,
+    bobbins,
+    boxes,
+    lots,
+    inbound_items,
+    issue_to_machine,
+    settings,
+    receive_uploads,
+    receive_rows,
+    receive_piece_totals,
+  });
 });
 
 // Return the next lot number preview (value that will be used on save)
@@ -825,6 +870,163 @@ app.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
   }
 });
 
+app.post('/api/receive_from_machine/manual', async (req, res) => {
+  try {
+    const {
+      pieceId,
+      lotNo,
+      bobbinId,
+      boxId,
+      bobbinQuantity,
+      operatorId,
+      helperId,
+      grossWeight,
+      receiveDate,
+    } = req.body || {};
+
+    if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
+    if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
+    if (!bobbinId) return res.status(400).json({ error: 'Missing bobbin selection' });
+    if (!operatorId) return res.status(400).json({ error: 'Missing operator' });
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Piece not found' });
+    if (lotNo && piece.lotNo !== lotNo) return res.status(400).json({ error: 'Piece does not belong to selected lot' });
+
+    const bobbin = await prisma.bobbin.findUnique({ where: { id: bobbinId } });
+    if (!bobbin) return res.status(404).json({ error: 'Bobbin not found' });
+    const box = await prisma.box.findUnique({ where: { id: boxId } });
+    if (!box) return res.status(404).json({ error: 'Box not found' });
+
+    const operatorRec = await prisma.operator.findUnique({ where: { id: operatorId } });
+    if (!operatorRec || normalizeWorkerRole(operatorRec.role) !== 'operator') {
+      return res.status(400).json({ error: 'Invalid operator selected' });
+    }
+    const helperRec = helperId ? await prisma.operator.findUnique({ where: { id: helperId } }) : null;
+    if (helperId && (!helperRec || normalizeWorkerRole(helperRec.role) !== 'helper')) {
+      return res.status(400).json({ error: 'Invalid helper selected' });
+    }
+
+    const bobbinQty = Math.max(0, toInt(bobbinQuantity) || 0);
+    const gross = toNumber(grossWeight);
+    if (gross === null || !Number.isFinite(gross) || gross <= 0) {
+      return res.status(400).json({ error: 'Gross weight must be a positive number' });
+    }
+
+    const bobbinWeight = Number(bobbin.weight);
+    if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+      return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
+    }
+    const boxWeight = Number(box.weight);
+    if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+      return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+    }
+
+    const computedTare = boxWeight + bobbinWeight * bobbinQty;
+    const net = gross - computedTare;
+    if (!Number.isFinite(net) || net <= 0) {
+      return res.status(400).json({ error: 'Computed net weight must be positive. Check weights and quantity.' });
+    }
+
+    const inboundWeight = Number(piece.weight || 0);
+    const currentTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
+    const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
+    const pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+    if (pendingBefore <= 0) {
+      return res.status(400).json({ error: 'Piece has no pending weight remaining' });
+    }
+    if (net - pendingBefore > 1e-6) {
+      return res.status(400).json({ error: 'Net weight exceeds pending weight' });
+    }
+
+    const receiveDateStr = toOptionalString(receiveDate) || new Date().toISOString().slice(0, 10);
+    const vchNo = `MAN-${randomUUID().slice(0, 8)}`;
+
+    const txResult = await prisma.$transaction(async (tx) => {
+      const upload = await tx.receiveUpload.create({
+        data: {
+          originalFilename: 'manual-entry',
+          rowCount: 1,
+        },
+      });
+
+      const createdRow = await tx.receiveRow.create({
+        data: {
+          uploadId: upload.id,
+          pieceId,
+          vchNo,
+          date: receiveDateStr,
+          grossWt: gross,
+          tareWt: computedTare,
+          netWt: net,
+          totalKg: net,
+          pktTypeName: box.name,
+          pcsTypeName: bobbin.name,
+          bobbinId: bobbin.id,
+          boxId: box.id,
+          operatorId: operatorRec.id,
+          helperId: helperRec ? helperRec.id : null,
+          pcs: bobbinQty,
+          employee: operatorRec.name,
+          shift: helperRec ? helperRec.name : null,
+          narration: 'Manual entry',
+          createdBy: 'manual',
+        },
+      });
+
+      await tx.receivePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalNetWeight: { increment: net },
+          totalPieces: { increment: 1 },
+        },
+        create: {
+          pieceId,
+          totalNetWeight: net,
+          totalPieces: 1,
+        },
+      });
+
+      return {
+        rowId: createdRow.id,
+        upload,
+      };
+    });
+
+    const rowWithRelations = await prisma.receiveRow.findUnique({
+      where: { id: txResult.rowId },
+      include: {
+        bobbin: { select: { id: true, name: true, weight: true } },
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!rowWithRelations) {
+      return res.status(500).json({ error: 'Failed to load manual entry' });
+    }
+
+    const updatedTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const pendingAfter = Math.max(
+      0,
+      inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
+    );
+
+    res.json({
+      ok: true,
+      row: rowWithRelations,
+      upload: txResult.upload,
+      pendingBefore,
+      pendingAfter,
+    });
+  } catch (err) {
+    console.error('Failed to record manual receive', err);
+    res.status(500).json({ error: err.message || 'Failed to record manual receive' });
+  }
+});
+
 app.post('/api/receive_from_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
@@ -874,11 +1076,17 @@ app.post('/api/import', async (req, res) => {
 
     // Clear existing tables (simple approach for import)
     await prisma.issueToMachine.deleteMany();
+    await prisma.receiveRow.deleteMany();
+    await prisma.receiveUpload.deleteMany();
+    await prisma.receivePieceTotal.deleteMany();
     await prisma.inboundItem.deleteMany();
     await prisma.lot.deleteMany();
     await prisma.item.deleteMany();
     await prisma.firm.deleteMany();
     await prisma.supplier.deleteMany();
+    await prisma.operator.deleteMany();
+    await prisma.bobbin.deleteMany();
+    await prisma.box.deleteMany();
 
     // Bulk create
     if (Array.isArray(data.items)) {
@@ -909,6 +1117,21 @@ app.post('/api/import', async (req, res) => {
     if (Array.isArray(data.issue_to_machine)) {
       for (const c of data.issue_to_machine) {
         await prisma.issueToMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
+      }
+    }
+    if (Array.isArray(data.workers)) {
+      for (const w of data.workers) {
+        await prisma.operator.create({ data: { id: w.id || undefined, name: w.name, role: normalizeWorkerRole(w.role) } });
+      }
+    }
+    if (Array.isArray(data.bobbins)) {
+      for (const b of data.bobbins) {
+        await prisma.bobbin.create({ data: { id: b.id || undefined, name: b.name, weight: b.weight != null ? Number(b.weight) : null } });
+      }
+    }
+    if (Array.isArray(data.boxes)) {
+      for (const box of data.boxes) {
+        await prisma.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0) } });
       }
     }
 
@@ -1035,10 +1258,25 @@ app.put('/api/machines/:id', async (req, res) => {
 });
 
 app.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
-app.post('/api/operators', async (req, res) => { const { name } = req.body; const operator = await prisma.operator.create({ data: { name } }); res.json(operator); });
+app.post('/api/operators', async (req, res) => {
+  const { name, role } = req.body;
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  const workerRole = normalizeWorkerRole(role);
+  const worker = await prisma.operator.create({ data: { name, role: workerRole } });
+  res.json(worker);
+});
 app.delete('/api/operators/:id', async (req, res) => {
   const { id } = req.params;
-  const usage = await prisma.issueToMachine.count({ where: { operatorId: id } });
+  const usage =
+    (await prisma.issueToMachine.count({ where: { operatorId: id } })) +
+    (await prisma.receiveRow.count({
+      where: {
+        OR: [
+          { operatorId: id },
+          { helperId: id },
+        ],
+      },
+    }));
   if (usage > 0) {
     return res.status(400).json({ error: 'Operator is referenced and cannot be deleted' });
   }
@@ -1049,11 +1287,13 @@ app.delete('/api/operators/:id', async (req, res) => {
 app.put('/api/operators/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, role } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.operator.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Operator not found' });
-    const updated = await prisma.operator.update({ where: { id }, data: { name } });
+    const data = { name };
+    if (role !== undefined) data.role = normalizeWorkerRole(role);
+    const updated = await prisma.operator.update({ where: { id }, data });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update operator', err);
@@ -1102,6 +1342,52 @@ app.put('/api/bobbins/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to update bobbin', err);
     res.status(500).json({ error: err.message || 'Failed to update bobbin' });
+  }
+});
+
+app.get('/api/boxes', async (req, res) => { res.json(await prisma.box.findMany()); });
+app.post('/api/boxes', async (req, res) => {
+  const { name, weight } = req.body;
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  const weightNum = Number(weight);
+  if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
+  const box = await prisma.box.create({
+    data: {
+      name,
+      weight: weightNum,
+    },
+  });
+  res.json(box);
+});
+app.delete('/api/boxes/:id', async (req, res) => {
+  const { id } = req.params;
+  const usage = await prisma.receiveRow.count({ where: { boxId: id } });
+  if (usage > 0) {
+    return res.status(400).json({ error: 'Box is referenced and cannot be deleted' });
+  }
+  await prisma.box.delete({ where: { id } });
+  res.json({ ok: true });
+});
+app.put('/api/boxes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, weight } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const weightNum = Number(weight);
+    if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
+    const existing = await prisma.box.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Box not found' });
+    const updated = await prisma.box.update({
+      where: { id },
+      data: {
+        name,
+        weight: weightNum,
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update box', err);
+    res.status(500).json({ error: err.message || 'Failed to update box' });
   }
 });
 

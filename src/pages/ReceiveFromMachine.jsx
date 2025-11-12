@@ -4,8 +4,8 @@
 
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Pill, Pagination } from '../components';
-import { formatKg } from '../utils';
+import { Section, Button, SecondaryButton, Pill, Pagination, Select, Input } from '../components';
+import { formatKg, uid, todayISO } from '../utils';
 import * as api from '../api';
 
 function formatBytes(bytes) {
@@ -149,6 +149,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   const [orphanPage, setOrphanPage] = useState(1);
   const [uploadsPage, setUploadsPage] = useState(1);
   const [rowsPage, setRowsPage] = useState(1);
+  const [mode, setMode] = useState('csv');
   const pageSize = 50;
 
   const inboundPieceMap = useMemo(() => {
@@ -165,6 +166,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     (db.receive_piece_totals || []).forEach((row) => {
       map.set(row.pieceId, {
         received: Number(row.totalNetWeight || 0),
+        wastage: Number(row.wastageNetWeight || 0),
         totalPieces: Number(row.totalPieces || 0),
       });
     });
@@ -358,83 +360,107 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     <div className="space-y-6">
       <Section
         title="Receive from machine"
-        actions={(selectedFile || previewData) ? (
+        actions={mode === 'csv' && (selectedFile || previewData) ? (
           <SecondaryButton onClick={clearSelection}>Clear selection</SecondaryButton>
         ) : null}
       >
-        <div className="space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center md:gap-4">
-            <div className="w-full md:w-1/2">
-              <label
-                htmlFor="receive-file"
-                className={`block w-full cursor-pointer rounded-lg p-4 md:p-6 border ${cls.cardBorder} ${cls.cardBg} flex items-center justify-between gap-4 ${dragActive ? 'ring-2 ring-offset-2' : ''}`}
-                onDragOver={handleDragOver}
-                onDragEnter={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <div className={`${cls.muted} text-sm md:text-base`}>Drop CSV here or click to choose</div>
-                <div className="text-sm font-mono">{selectedFile ? selectedFile.name : 'No file chosen'}</div>
-                <input
-                  id="receive-file"
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setSelectedFile(file);
-                    setPreviewData(null);
-                    setActionError(null);
-                    setActionIssues([]);
-                  }}
-                />
-              </label>
-            </div>
-            <div className="flex items-center gap-2 mt-3 md:mt-0">
-              <Button onClick={handlePreview} disabled={!selectedFile || previewing} className="border-2" style={{ borderColor: brand?.gold }}>
-                {previewing ? 'Previewing…' : previewData ? 'Re-preview' : 'Preview CSV'}
-              </Button>
-              {selectedFile && (
-                <Pill>{selectedFile.name} · {formatBytes(selectedFile.size)}</Pill>
-              )}
-            </div>
-          </div>
-
-          {/* tracking pills removed */}
-
-          {actionError && (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm">
-              <div className="font-medium">{actionError}</div>
-              {renderIssues(actionIssues)}
-            </div>
-          )}
-
-          {previewData && (
-            <SummaryCard
-              title="Preview"
-              summary={previewData}
-              cls={cls}
-              actions={(
-                <>
-                  <Button onClick={handleConfirmImport} disabled={confirming}>
-                    {confirming ? 'Saving…' : 'Continue & save'}
-                  </Button>
-                  <SecondaryButton onClick={() => { setPreviewData(null); }} disabled={confirming}>Cancel preview</SecondaryButton>
-                </>
-              )}
-            />
-          )}
-
-          {importResult?.summary && (
-            <SummaryCard
-              title="Last upload summary"
-              summary={importResult.summary}
-              cls={cls}
-              meta={importResult.upload}
-            />
-          )}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <button
+            type="button"
+            onClick={() => setMode('csv')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${mode === 'csv' ? cls.navActive : `${cls.cardBorder} ${cls.navHover}`}`}
+          >
+            CSV upload
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('manual')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${mode === 'manual' ? cls.navActive : `${cls.cardBorder} ${cls.navHover}`}`}
+          >
+            Manual entry
+          </button>
         </div>
+        {mode === 'csv' ? (
+          <div className="space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center md:gap-4">
+              <div className="w-full md:w-1/2">
+                <label
+                  htmlFor="receive-file"
+                  className={`block w-full cursor-pointer rounded-lg p-4 md:p-6 border ${cls.cardBorder} ${cls.cardBg} flex items-center justify-between gap-4 ${dragActive ? 'ring-2 ring-offset-2' : ''}`}
+                  onDragOver={handleDragOver}
+                  onDragEnter={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  <div className={`${cls.muted} text-sm md:text-base`}>Drop CSV here or click to choose</div>
+                  <div className="text-sm font-mono">{selectedFile ? selectedFile.name : 'No file chosen'}</div>
+                  <input
+                    id="receive-file"
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setSelectedFile(file);
+                      setPreviewData(null);
+                      setActionError(null);
+                      setActionIssues([]);
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="flex items-center gap-2 mt-3 md:mt-0">
+                <Button onClick={handlePreview} disabled={!selectedFile || previewing} className="border-2" style={{ borderColor: brand?.gold }}>
+                  {previewing ? 'Previewing…' : previewData ? 'Re-preview' : 'Preview CSV'}
+                </Button>
+                {selectedFile && (
+                  <Pill>{selectedFile.name} · {formatBytes(selectedFile.size)}</Pill>
+                )}
+              </div>
+            </div>
+
+            {actionError && (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm">
+                <div className="font-medium">{actionError}</div>
+                {renderIssues(actionIssues)}
+              </div>
+            )}
+
+            {previewData && (
+              <SummaryCard
+                title="Preview"
+                summary={previewData}
+                cls={cls}
+                actions={(
+                  <>
+                    <Button onClick={handleConfirmImport} disabled={confirming}>
+                      {confirming ? 'Saving…' : 'Continue & save'}
+                    </Button>
+                    <SecondaryButton onClick={() => { setPreviewData(null); }} disabled={confirming}>Cancel preview</SecondaryButton>
+                  </>
+                )}
+              />
+            )}
+
+            {importResult?.summary && (
+              <SummaryCard
+                title="Last upload summary"
+                summary={importResult.summary}
+                cls={cls}
+                meta={importResult.upload}
+              />
+            )}
+          </div>
+        ) : (
+          <ManualReceiveForm
+            db={db}
+            inboundPieceMap={inboundPieceMap}
+            receiveTotalsMap={receiveTotalsMap}
+            refreshDb={refreshDb}
+            cls={cls}
+          />
+        )}
       </Section>
 
       <Section title="Piece receive totals (top 50 by pending)">
@@ -585,6 +611,490 @@ export function ReceiveFromMachine({ db, refreshDb }) {
           <Pagination total={latestRows.length} page={rowsPage} setPage={setRowsPage} pageSize={pageSize} />
         </div>
       </Section>
+    </div>
+  );
+}
+
+function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, cls }) {
+  const [lotNo, setLotNo] = useState('');
+  const [pieceId, setPieceId] = useState('');
+  const [bobbinId, setBobbinId] = useState('');
+  const [boxId, setBoxId] = useState('');
+  const [bobbinQty, setBobbinQty] = useState('');
+  const [grossWeight, setGrossWeight] = useState('');
+  const [operatorId, setOperatorId] = useState('');
+  const [helperId, setHelperId] = useState('');
+  const [receiveDate, setReceiveDate] = useState(todayISO());
+  const [markRemainingWastage, setMarkRemainingWastage] = useState(false);
+  const [cart, setCart] = useState([]);
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [progressText, setProgressText] = useState('');
+
+  const workers = useMemo(() => {
+    if (Array.isArray(db.workers) && db.workers.length > 0) {
+      return db.workers.map(w => ({
+        ...w,
+        role: (w.role || 'operator').toLowerCase() === 'helper' ? 'helper' : 'operator',
+      }));
+    }
+    const merged = [];
+    (db.operators || []).forEach(op => merged.push({ ...op, role: 'operator' }));
+    (db.helpers || []).forEach(helper => {
+      if (!merged.some(w => w.id === helper.id)) merged.push({ ...helper, role: 'helper' });
+    });
+    return merged;
+  }, [db.workers, db.operators, db.helpers]);
+
+  const workerById = useMemo(() => {
+    const map = new Map();
+    workers.forEach(w => map.set(w.id, w));
+    return map;
+  }, [workers]);
+
+  const operatorOptions = useMemo(() => workers.filter(w => w.role === 'operator'), [workers]);
+  const helperOptions = useMemo(() => workers.filter(w => w.role === 'helper'), [workers]);
+
+  const boxes = useMemo(() => (db.boxes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.boxes]);
+  const bobbins = useMemo(() => (db.bobbins || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.bobbins]);
+  const lotOptions = useMemo(() => (db.lots || []).slice().sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true, sensitivity: 'base' })), [db.lots]);
+  const pieceOptions = useMemo(() => {
+    if (!lotNo) return [];
+    return (db.inbound_items || [])
+      .filter(item => item.lotNo === lotNo)
+      .sort((a, b) => {
+        const seqDiff = (a.seq || 0) - (b.seq || 0);
+        if (seqDiff !== 0) return seqDiff;
+        return (a.id || '').localeCompare(b.id || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
+  }, [db.inbound_items, lotNo]);
+
+  useEffect(() => {
+    if (lotNo && !lotOptions.some(l => l.lotNo === lotNo)) {
+      setLotNo('');
+      setPieceId('');
+    }
+  }, [lotNo, lotOptions]);
+
+  useEffect(() => {
+    if (pieceId && !pieceOptions.some(p => p.id === pieceId)) {
+      setPieceId('');
+    }
+  }, [pieceId, pieceOptions]);
+
+  const selectedPiece = pieceId ? inboundPieceMap.get(pieceId) : null;
+  const selectedBobbin = bobbins.find(b => b.id === bobbinId) || null;
+  const selectedBox = boxes.find(b => b.id === boxId) || null;
+  const quantityNum = bobbinQty === '' ? NaN : Number(bobbinQty);
+  const grossNum = grossWeight === '' ? NaN : Number(grossWeight);
+  const bobbinWeight = selectedBobbin && selectedBobbin.weight != null ? Number(selectedBobbin.weight) : null;
+  const boxWeight = selectedBox ? Number(selectedBox.weight) : null;
+  const tareWeight = Number.isFinite(boxWeight) && Number.isFinite(bobbinWeight) && Number.isFinite(quantityNum)
+    ? boxWeight + bobbinWeight * quantityNum
+    : null;
+  const netWeight = Number.isFinite(grossNum) && tareWeight != null
+    ? grossNum - tareWeight
+    : null;
+
+  const pendingSummary = useMemo(() => {
+    if (!pieceId) return null;
+    const inbound = inboundPieceMap.get(pieceId);
+    if (!inbound) return null;
+    const totals = receiveTotalsMap.get(pieceId) || { received: 0, wastage: 0 };
+    const inboundWeight = Number(inbound.weight || 0);
+    const received = Number(totals.received || 0);
+    const wastage = Number(totals.wastage || 0);
+    const pendingFromDb = Math.max(0, inboundWeight - received - wastage);
+    const cartNetForPiece = cart
+      .filter(entry => entry.pieceId === pieceId)
+      .reduce((sum, entry) => sum + entry.netWeight, 0);
+    return {
+      pieceId,
+      lotNo: inbound.lotNo,
+      inboundWeight,
+      received,
+      wastage,
+      pendingFromDb,
+      cartNet: cartNetForPiece,
+      pendingAfterCart: Math.max(0, pendingFromDb - cartNetForPiece),
+    };
+  }, [pieceId, inboundPieceMap, receiveTotalsMap, cart]);
+
+  const cartTotals = useMemo(() => cart.reduce((acc, entry) => {
+    acc.totalGross += entry.grossWeight;
+    acc.totalTare += entry.tareWeight;
+    acc.totalNet += entry.netWeight;
+    return acc;
+  }, { totalGross: 0, totalTare: 0, totalNet: 0 }), [cart]);
+
+  const disableAdd = (
+    saving ||
+    !lotNo ||
+    !pieceId ||
+    !selectedPiece ||
+    !boxId ||
+    !bobbinId ||
+    !operatorId ||
+    !receiveDate ||
+    !Number.isFinite(quantityNum) ||
+    quantityNum <= 0 ||
+    !Number.isInteger(quantityNum) ||
+    !Number.isFinite(grossNum) ||
+    grossNum <= 0 ||
+    tareWeight == null ||
+    netWeight == null ||
+    netWeight <= 0 ||
+    !pendingSummary ||
+    pendingSummary.pendingAfterCart <= 0 ||
+    netWeight - pendingSummary.pendingAfterCart > 1e-6 ||
+    !Number.isFinite(boxWeight) ||
+    !Number.isFinite(bobbinWeight) ||
+    boxWeight <= 0 ||
+    bobbinWeight <= 0
+  );
+
+  function resetForm() {
+    setLotNo('');
+    setPieceId('');
+    setBobbinId('');
+    setBoxId('');
+    setBobbinQty('');
+    setGrossWeight('');
+    setOperatorId('');
+    setHelperId('');
+    setReceiveDate(todayISO());
+    setMarkRemainingWastage(false);
+    setFormError('');
+  }
+
+  function handleAddEntry() {
+    setFormError('');
+    if (disableAdd) {
+      setFormError('Fill all required fields with valid values before adding.');
+      return;
+    }
+    const entryLot = selectedPiece?.lotNo || lotNo;
+    const entry = {
+      id: uid('manual'),
+      lotNo: entryLot,
+      pieceId,
+      bobbinId,
+      bobbinName: selectedBobbin?.name || '',
+      bobbinWeight,
+      bobbinQty: Number(quantityNum),
+      boxId,
+      boxName: selectedBox?.name || '',
+      boxWeight,
+      grossWeight: Number(grossNum),
+      tareWeight,
+      netWeight,
+      operatorId,
+      operatorName: workerById.get(operatorId)?.name || '',
+      helperId: helperId || null,
+      helperName: helperId ? (workerById.get(helperId)?.name || '') : '',
+      receiveDate: receiveDate || todayISO(),
+      markWastage: markRemainingWastage,
+    };
+    setCart(prev => [...prev, entry]);
+    setGrossWeight('');
+    setBobbinQty('');
+    setMarkRemainingWastage(false);
+  }
+
+  function removeEntry(entryId) {
+    if (saving) return;
+    setCart(prev => prev.filter(entry => entry.id !== entryId));
+  }
+
+  function toggleEntryWastage(entryId, value) {
+    setCart(prev => prev.map(entry => (
+      entry.id === entryId ? { ...entry, markWastage: value } : entry
+    )));
+  }
+
+  function clearCart() {
+    if (saving || cart.length === 0) return;
+    if (!window.confirm('Clear all staged boxes?')) return;
+    setCart([]);
+  }
+
+  async function handleSaveCart() {
+    if (cart.length === 0 || saving) return;
+    if (!window.confirm(`Conceal and save ${cart.length} entr${cart.length === 1 ? 'y' : 'ies'}?`)) return;
+    setSaving(true);
+    setFormError('');
+    setProgressText('Starting…');
+    const snapshot = cart.slice();
+    try {
+      for (let idx = 0; idx < snapshot.length; idx += 1) {
+        const entry = snapshot[idx];
+        setProgressText(`Saving ${entry.pieceId} (${idx + 1}/${snapshot.length})`);
+        await api.manualReceiveFromMachine({
+          pieceId: entry.pieceId,
+          lotNo: entry.lotNo,
+          bobbinId: entry.bobbinId,
+          boxId: entry.boxId,
+          bobbinQuantity: entry.bobbinQty,
+          operatorId: entry.operatorId,
+          helperId: entry.helperId,
+          grossWeight: entry.grossWeight,
+          receiveDate: entry.receiveDate,
+        });
+        if (entry.markWastage) {
+          setProgressText(`Marking wastage for ${entry.pieceId}`);
+          await api.markPieceWastage({ pieceId: entry.pieceId });
+        }
+        setCart(prev => prev.filter(item => item.id !== entry.id));
+      }
+      setProgressText('Refreshing data…');
+      await refreshDb();
+      setProgressText('');
+      alert('Manual entries saved successfully.');
+    } catch (err) {
+      console.error('Failed to save manual entries', err);
+      setFormError(err.message || 'Failed to save manual entries');
+      try {
+        await refreshDb();
+      } catch (refreshErr) {
+        console.error('Failed to refresh after error', refreshErr);
+      }
+    } finally {
+      setProgressText('');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className={`rounded-xl border ${cls.cardBorder} ${cls.cardBg} p-4`}>
+        <div className="text-sm mb-3">
+          Add each box to the staging cart, then click <strong>Conceal & save</strong> to create receive entries. Net weight is auto-calculated as Gross − (Box + Bobbin×Qty). Use the wastage checkbox if you want to mark the remaining pending balance the same way as the Stock page’s “Mark wastage” action.
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Lot</label>
+            <Select value={lotNo} onChange={(e) => { setLotNo(e.target.value); setPieceId(''); }} disabled={saving}>
+              <option value="">Select lot</option>
+              {lotOptions.length === 0 ? (
+                <option value="">No lots available</option>
+              ) : lotOptions.map(lot => (
+                <option key={lot.id || lot.lotNo} value={lot.lotNo}>{lot.lotNo}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Piece</label>
+            <Select value={pieceId} onChange={(e) => setPieceId(e.target.value)} disabled={!lotNo || saving}>
+              <option value="">{lotNo ? 'Select piece' : 'Choose lot first'}</option>
+              {pieceOptions.map(piece => (
+                <option key={piece.id} value={piece.id}>{piece.id} · {formatKg(piece.weight)} kg</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Receive date</label>
+            <Input type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} disabled={saving} />
+          </div>
+        </div>
+
+        {pendingSummary ? (
+          <div className={`mt-3 grid gap-3 sm:grid-cols-2`}>
+            <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+              <div className="text-xs font-semibold uppercase tracking-wide">Inbound</div>
+              <div className="text-lg font-semibold">{formatKg(pendingSummary.inboundWeight)} kg</div>
+              <div className={`text-xs ${cls.muted}`}>Received {formatKg(pendingSummary.received)} · Wastage {formatKg(pendingSummary.wastage)}</div>
+            </div>
+            <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+              <div className="text-xs font-semibold uppercase tracking-wide">Pending after cart</div>
+              <div className="text-lg font-semibold">{formatKg(pendingSummary.pendingAfterCart)} kg</div>
+              <div className={`text-xs ${cls.muted}`}>Cart staged {formatKg(pendingSummary.cartNet)} kg</div>
+            </div>
+          </div>
+        ) : (
+          <div className={`mt-3 text-sm ${cls.muted}`}>Select a piece to view its pending balance.</div>
+        )}
+
+        <div className="grid gap-3 md:grid-cols-3 mt-4">
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Bobbin</label>
+            <Select value={bobbinId} onChange={(e) => setBobbinId(e.target.value)} disabled={saving}>
+              <option value="">Select bobbin</option>
+              {bobbins.length === 0 && (
+                <option value="">Add bobbins in Masters</option>
+              )}
+              {bobbins.map(bobbin => (
+                <option key={bobbin.id} value={bobbin.id}>
+                  {bobbin.name} {bobbin.weight != null ? `(${formatKg(bobbin.weight)} kg)` : '(set weight in Masters)'}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Box</label>
+            <Select value={boxId} onChange={(e) => setBoxId(e.target.value)} disabled={saving}>
+              <option value="">Select box</option>
+              {boxes.length === 0 && (
+                <option value="">Add boxes in Masters</option>
+              )}
+              {boxes.map(box => (
+                <option key={box.id} value={box.id}>
+                  {box.name} ({formatKg(box.weight || 0)} kg)
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Bobbin qty</label>
+              <Input type="number" min="1" step="1" value={bobbinQty} onChange={(e) => setBobbinQty(e.target.value)} disabled={saving} placeholder="e.g. 12" />
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Gross weight (kg)</label>
+              <Input type="number" min="0" step="0.001" value={grossWeight} onChange={(e) => setGrossWeight(e.target.value)} disabled={saving} placeholder="e.g. 25.350" />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 mt-4">
+          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+            <div className="text-xs uppercase font-semibold">Auto tare</div>
+            <div className="text-2xl font-semibold">{tareWeight != null && tareWeight > 0 ? `${formatKg(tareWeight)} kg` : '—'}</div>
+            <div className={`text-xs ${cls.muted}`}>Box {boxWeight != null ? formatKg(boxWeight) : '—'} + Bobbin {bobbinWeight != null ? formatKg(bobbinWeight) : '—'} × Qty {Number.isFinite(quantityNum) ? quantityNum : '—'}</div>
+          </div>
+          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+            <div className="text-xs uppercase font-semibold">Net (auto)</div>
+            <div className={`text-2xl font-semibold ${pendingSummary && netWeight != null && netWeight - pendingSummary.pendingAfterCart > 1e-6 ? 'text-red-400' : ''}`}>
+              {netWeight != null && netWeight > 0 ? `${formatKg(netWeight)} kg` : '—'}
+            </div>
+            <div className={`text-xs ${cls.muted}`}>Cannot exceed pending balance</div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3 mt-4">
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Operator</label>
+            <Select value={operatorId} onChange={(e) => setOperatorId(e.target.value)} disabled={saving}>
+              <option value="">Select operator</option>
+              {operatorOptions.length === 0 ? (
+                <option value="">Add operators in Masters</option>
+              ) : operatorOptions.map(op => (
+                <option key={op.id} value={op.id}>{op.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Helper (optional)</label>
+            <Select value={helperId} onChange={(e) => setHelperId(e.target.value)} disabled={saving}>
+              <option value="">No helper</option>
+              {helperOptions.map(helper => (
+                <option key={helper.id} value={helper.id}>{helper.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex items-end justify-between gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="h-4 w-4" checked={markRemainingWastage} disabled={!pieceId || saving} onChange={(e) => setMarkRemainingWastage(e.target.checked)} />
+              <span>Mark remaining pending as wastage</span>
+            </label>
+          </div>
+        </div>
+
+        {formError && (
+          <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+            {formError}
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="button" onClick={handleAddEntry} disabled={disableAdd}>Add box</Button>
+          <SecondaryButton type="button" onClick={resetForm} disabled={saving}>Reset form</SecondaryButton>
+        </div>
+      </div>
+
+      <div className={`rounded-xl border ${cls.cardBorder} ${cls.cardBg} p-4`}>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="font-semibold text-base">Staged boxes</div>
+          <Pill>{cart.length} entries</Pill>
+          <Pill>Total net {formatKg(cartTotals.totalNet)} kg</Pill>
+          <div className="ml-auto flex gap-2">
+            <SecondaryButton type="button" onClick={clearCart} disabled={saving || cart.length === 0}>Clear cart</SecondaryButton>
+            <Button type="button" onClick={handleSaveCart} disabled={saving || cart.length === 0}>
+              {saving ? 'Saving…' : `Conceal & save (${cart.length})`}
+            </Button>
+          </div>
+        </div>
+
+        {progressText && (
+          <div className={`text-sm mb-3 ${cls.muted}`}>{progressText}</div>
+        )}
+
+        <div className="overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">Piece</th>
+                <th className="py-2 pr-2">Lot</th>
+                <th className="py-2 pr-2">Bobbin</th>
+                <th className="py-2 pr-2 text-right">Qty</th>
+                <th className="py-2 pr-2">Box</th>
+                <th className="py-2 pr-2 text-right">Gross</th>
+                <th className="py-2 pr-2 text-right">Tare</th>
+                <th className="py-2 pr-2 text-right">Net</th>
+                <th className="py-2 pr-2">Operator / Helper</th>
+                <th className="py-2 pr-2">Wastage</th>
+                <th className="py-2 pr-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cart.length === 0 ? (
+                <tr>
+                  <td className="py-4 text-center text-sm" colSpan={11}>
+                    No boxes staged yet. Add a box to begin.
+                  </td>
+                </tr>
+              ) : cart.map(entry => (
+                <tr key={entry.id} className={`border-t ${cls.rowBorder}`}>
+                  <td className="py-2 pr-2 font-mono">{entry.pieceId}</td>
+                  <td className="py-2 pr-2 font-mono">{entry.lotNo}</td>
+                  <td className="py-2 pr-2">
+                    {entry.bobbinName}
+                    <div className={`text-xs ${cls.muted}`}>{formatKg(entry.bobbinWeight)} kg</div>
+                  </td>
+                  <td className="py-2 pr-2 text-right">{entry.bobbinQty}</td>
+                  <td className="py-2 pr-2">
+                    {entry.boxName}
+                    <div className={`text-xs ${cls.muted}`}>{formatKg(entry.boxWeight)} kg</div>
+                  </td>
+                  <td className="py-2 pr-2 text-right">{formatKg(entry.grossWeight)}</td>
+                  <td className="py-2 pr-2 text-right">{formatKg(entry.tareWeight)}</td>
+                  <td className="py-2 pr-2 text-right">{formatKg(entry.netWeight)}</td>
+                  <td className="py-2 pr-2">
+                    <div>{entry.operatorName || '—'}</div>
+                    <div className={`text-xs ${cls.muted}`}>{entry.helperName || 'No helper'}</div>
+                  </td>
+                  <td className="py-2 pr-2">
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={entry.markWastage}
+                        disabled={saving}
+                        onChange={(e) => toggleEntryWastage(entry.id, e.target.checked)}
+                      />
+                      Mark
+                    </label>
+                  </td>
+                  <td className="py-2 pr-2 text-right">
+                    <button type="button" className="text-red-400 underline text-sm" disabled={saving} onClick={() => removeEntry(entry.id)}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

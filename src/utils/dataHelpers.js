@@ -10,8 +10,15 @@ export function normalizeDb(raw) {
   const firms = ensureArr(raw?.firms);
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
-  const operators = ensureArr(raw?.operators);
+  const workersRaw = ensureArr(raw?.workers?.length ? raw?.workers : raw?.operators);
+  const workers = workersRaw.map((worker) => ({
+    ...worker,
+    role: (worker.role || 'operator').toLowerCase() === 'helper' ? 'helper' : 'operator',
+  }));
+  const operators = workers.filter((w) => w.role === 'operator');
+  const helpers = workers.filter((w) => w.role === 'helper');
   const bobbins = ensureArr(raw?.bobbins);
+  const boxes = ensureArr(raw?.boxes);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
@@ -40,8 +47,11 @@ export function normalizeDb(raw) {
     firms,
     suppliers,
     machines,
+    workers,
     operators,
+    helpers,
     bobbins,
+    boxes,
     lots,
     inbound_items,
     issue_to_machine: issueToMachine,

@@ -132,12 +132,12 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
-  const handleCreateOperator = useCallback(async (name) => {
-    await api.createOperator(name);
+  const handleCreateWorker = useCallback(async (name, role) => {
+    await api.createOperator(name, role);
     await refreshDb();
   }, [refreshDb]);
 
-  const handleDeleteOperator = useCallback(async (id) => {
+  const handleDeleteWorker = useCallback(async (id) => {
     await api.deleteOperator(id);
     await refreshDb();
   }, [refreshDb]);
@@ -162,8 +162,8 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
-  const handleUpdateOperator = useCallback(async (id, name) => {
-    await api.updateOperator(id, name);
+  const handleUpdateWorker = useCallback(async (id, name, role) => {
+    await api.updateOperator(id, name, role);
     await refreshDb();
   }, [refreshDb]);
 
@@ -179,6 +179,21 @@ export default function App() {
 
   const handleUpdateBobbin = useCallback(async (id, name, weight) => {
     await api.updateBobbin(id, name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateBox = useCallback(async (name, weight) => {
+    await api.createBox(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteBox = useCallback(async (id) => {
+    await api.deleteBox(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateBox = useCallback(async (id, name, weight) => {
+    await api.updateBox(id, name, weight);
     await refreshDb();
   }, [refreshDb]);
 
@@ -288,12 +303,15 @@ export default function App() {
             onAddMachine={handleCreateMachine}
             onDeleteMachine={handleDeleteMachine}
             onEditMachine={handleUpdateMachine}
-            onAddOperator={handleCreateOperator}
-            onDeleteOperator={handleDeleteOperator}
-            onEditOperator={handleUpdateOperator}
+            onAddWorker={handleCreateWorker}
+            onDeleteWorker={handleDeleteWorker}
+            onEditWorker={handleUpdateWorker}
             onAddBobbin={handleCreateBobbin}
             onDeleteBobbin={handleDeleteBobbin}
             onEditBobbin={handleUpdateBobbin}
+            onAddBox={handleCreateBox}
+            onDeleteBox={handleDeleteBox}
+            onEditBox={handleUpdateBox}
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}

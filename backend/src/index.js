@@ -323,7 +323,18 @@ app.get('/api/db', async (req, res) => {
   const issue_to_machine = await prisma.issueToMachine.findMany();
   const settings = await prisma.settings.findMany();
   const receive_uploads = await prisma.receiveUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
-  const receive_rows = await prisma.receiveRow.findMany({ orderBy: { createdAt: 'desc' }, take: RECEIVE_ROWS_FETCH_LIMIT });
+  const receive_rows = await prisma.receiveRow.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+    include: {
+      bobbin: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
   const receive_piece_totals = await prisma.receivePieceTotal.findMany();
   res.json({ items, firms, suppliers, machines, operators, bobbins, lots, inbound_items, issue_to_machine, settings, receive_uploads, receive_rows, receive_piece_totals });
 });

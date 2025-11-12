@@ -171,6 +171,31 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     return map;
   }, [db.receive_piece_totals]);
 
+  // Map pieceId -> most common bobbin name from receive rows
+  const pieceBobbinMap = useMemo(() => {
+    const map = new Map();
+    const pieceBobbinCounts = new Map();
+    
+    (db.receive_rows || []).forEach((row) => {
+      if (!row.pieceId) return;
+      const bobbinName = row.bobbin?.name || row.pcsTypeName || null;
+      if (!bobbinName) return;
+      
+      const key = `${row.pieceId}|${bobbinName}`;
+      const count = pieceBobbinCounts.get(key) || 0;
+      pieceBobbinCounts.set(key, count + 1);
+      
+      // Track the most common bobbin for each piece
+      const currentBest = map.get(row.pieceId);
+      const currentBestCount = currentBest ? pieceBobbinCounts.get(`${row.pieceId}|${currentBest}`) || 0 : 0;
+      if (count + 1 > currentBestCount) {
+        map.set(row.pieceId, bobbinName);
+      }
+    });
+    
+    return map;
+  }, [db.receive_rows]);
+
   const { knownPieces, orphanPieces, totalReceivedWeight } = useMemo(() => {
     const known = [];
     const orphan = [];
@@ -188,6 +213,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
         receivedWeight: received,
         pendingWeight: inboundWeight === null ? null : Math.max(0, inboundWeight - received),
         totalPieces,
+        bobbinName: pieceBobbinMap.get(pieceId) || '—',
       };
       if (inbound) known.push(summary);
       else orphan.push(summary);
@@ -208,13 +234,6 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     return map;
   }, [db.receive_uploads]);
   const latestRows = useMemo(() => (db.receive_rows || []).slice(), [db.receive_rows]);
-  
-  // Map bobbin IDs to names
-  const bobbinMap = useMemo(() => {
-    const map = new Map();
-    (db.bobbins || []).forEach((b) => map.set(b.id, b.name));
-    return map;
-  }, [db.bobbins]);
 
   function clearSelection() {
     setSelectedFile(null);
@@ -429,12 +448,13 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                 <th className="py-2 pr-2 text-right">Received (kg)</th>
                 <th className="py-2 pr-2 text-right">Pending (kg)</th>
                 <th className="py-2 pr-2 text-right">Total Pcs</th>
+                <th className="py-2 pr-2">Bobbin</th>
               </tr>
             </thead>
             <tbody>
             {limitedKnownPieces.length === 0 ? (
                 <tr>
-                  <td className="py-3 pr-2" colSpan={6}>No receive data yet.</td>
+                  <td className="py-3 pr-2" colSpan={7}>No receive data yet.</td>
                 </tr>
               ) : (
                 limitedKnownPieces.map((piece) => (
@@ -445,6 +465,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                   <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.pendingWeight == null ? '—' : formatKg(piece.pendingWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.totalPieces || 0}</td>
+                  <td className="py-2 pr-2">{piece.bobbinName}</td>
                 </tr>
                 ))
               )}
@@ -540,7 +561,8 @@ export function ReceiveFromMachine({ db, refreshDb }) {
               ) : (
                 pagedLatestRows.map((row) => {
                   const upload = uploadLookup.get(row.uploadId);
-                  const bobbinName = row.bobbinId ? (bobbinMap.get(row.bobbinId) || row.pcsTypeName || '—') : (row.pcsTypeName || '—');
+                  // Use bobbin relation if available, fallback to pcsTypeName for backward compatibility
+                  const bobbinName = row.bobbin?.name || row.pcsTypeName || '—';
                   return (
                     <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
                       <td className="py-2 pr-2 font-mono">{row.vchNo}</td>

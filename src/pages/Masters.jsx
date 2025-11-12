@@ -4,7 +4,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, SearchableInput } from '../components';
+import { Section, Button, SecondaryButton, Input, SearchableInput, BobbinEditor } from '../components';
 
 export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, onDeleteFirm, onEditFirm, onAddSupplier, onDeleteSupplier, onEditSupplier, onAddMachine, onDeleteMachine, onEditMachine, onAddOperator, onDeleteOperator, onEditOperator, onAddBobbin, onDeleteBobbin, onEditBobbin, refreshing }) {
   const { cls } = useBrand();
@@ -13,7 +13,6 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [operatorName, setOperatorName] = useState("");
-  const [bobbinName, setBobbinName] = useState("");
   const [working, setWorking] = useState(false);
   const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | operators | bobbins
 
@@ -152,14 +151,10 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     }
   }
 
-  async function addBobbin() {
-    const name = bobbinName.trim();
-    if (!name) return;
-    if (db.bobbins.some(b => b.name.toLowerCase() === name.toLowerCase())) { alert("Bobbin already exists"); return; }
+  async function addBobbin(name, weight) {
     setWorking(true);
     try {
-      await onAddBobbin(name);
-      setBobbinName("");
+      await onAddBobbin(name, weight);
     } catch (err) {
       alert(err.message || 'Failed to add bobbin');
     } finally {
@@ -226,14 +221,6 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     return db.operators.filter(o => o.name.toLowerCase().includes(q));
   }, [db.operators, operatorName]);
 
-  // Bobbins
-  const normalizedBobbinQuery = bobbinName.trim().toLowerCase();
-  const isBobbinDuplicate = normalizedBobbinQuery !== '' && db.bobbins.some(b => b.name.trim().toLowerCase() === normalizedBobbinQuery);
-  const filteredBobbins = useMemo(() => {
-    const q = bobbinName.trim().toLowerCase();
-    if (!q) return db.bobbins;
-    return db.bobbins.filter(b => b.name.toLowerCase().includes(q));
-  }, [db.bobbins, bobbinName]);
 
   return (
     <div className="space-y-6">
@@ -290,7 +277,7 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
 
       {tab === 'bobbins' && (
         <Section title="Bobbins">
-          <SearchableInput items={db.bobbins} onAdd={onAddBobbin} onDelete={onDeleteBobbin} onEdit={onEditBobbin} placeholder="New bobbin name" disabled={disable} />
+          <BobbinEditor items={db.bobbins} onAdd={addBobbin} onDelete={deleteBobbin} onEdit={onEditBobbin} disabled={disable} />
         </Section>
       )}
     </div>

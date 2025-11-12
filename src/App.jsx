@@ -167,8 +167,8 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
-  const handleCreateBobbin = useCallback(async (name) => {
-    await api.createBobbin(name);
+  const handleCreateBobbin = useCallback(async (name, weight) => {
+    await api.createBobbin(name, weight);
     await refreshDb();
   }, [refreshDb]);
 
@@ -177,8 +177,8 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
-  const handleUpdateBobbin = useCallback(async (id, name) => {
-    await api.updateBobbin(id, name);
+  const handleUpdateBobbin = useCallback(async (id, name, weight) => {
+    await api.updateBobbin(id, name, weight);
     await refreshDb();
   }, [refreshDb]);
 

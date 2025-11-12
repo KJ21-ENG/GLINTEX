@@ -1062,7 +1062,17 @@ app.put('/api/operators/:id', async (req, res) => {
 });
 
 app.get('/api/bobbins', async (req, res) => { res.json(await prisma.bobbin.findMany()); });
-app.post('/api/bobbins', async (req, res) => { const { name } = req.body; const bobbin = await prisma.bobbin.create({ data: { name } }); res.json(bobbin); });
+app.post('/api/bobbins', async (req, res) => {
+  const { name, weight } = req.body;
+  const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+  const bobbin = await prisma.bobbin.create({
+    data: {
+      name,
+      weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+    },
+  });
+  res.json(bobbin);
+});
 app.delete('/api/bobbins/:id', async (req, res) => {
   const { id } = req.params;
   const usage = await prisma.receiveRow.count({ where: { bobbinId: id } });
@@ -1072,15 +1082,22 @@ app.delete('/api/bobbins/:id', async (req, res) => {
   await prisma.bobbin.delete({ where: { id } });
   res.json({ ok: true });
 });
-// Update bobbin name
+// Update bobbin name and weight
 app.put('/api/bobbins/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, weight } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.bobbin.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Bobbin not found' });
-    const updated = await prisma.bobbin.update({ where: { id }, data: { name } });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const updated = await prisma.bobbin.update({
+      where: { id },
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update bobbin', err);

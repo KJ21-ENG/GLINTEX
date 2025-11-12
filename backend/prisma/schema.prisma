@@ -65,6 +65,7 @@ model Operator {
 model Bobbin {
   id          String       @id @default(cuid())
   name        String
+  weight      Float?       // Weight in kg (BoxWt)
   receiveRows ReceiveRow[]
 }
 

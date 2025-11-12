@@ -73,9 +73,9 @@ export async function createOperator(name) { return await request('/api/operator
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
 export async function updateOperator(id, name) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name } }); }
 export async function listBobbins() { return await request('/api/bobbins'); }
-export async function createBobbin(name) { return await request('/api/bobbins', { method: 'POST', body: { name } }); }
+export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
-export async function updateBobbin(id, name) { return await request(`/api/bobbins/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateBobbin(id, name, weight) { return await request(`/api/bobbins/${id}`, { method: 'PUT', body: { name, weight } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Bobbin" ADD COLUMN IF NOT EXISTS "weight" DOUBLE PRECISION;
+

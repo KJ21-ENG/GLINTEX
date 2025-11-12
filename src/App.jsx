@@ -167,6 +167,21 @@ export default function App() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateBobbin = useCallback(async (name) => {
+    await api.createBobbin(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteBobbin = useCallback(async (id) => {
+    await api.deleteBobbin(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateBobbin = useCallback(async (id, name) => {
+    await api.updateBobbin(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleSaveBrand = useCallback(async (values) => {
     setSavingBrand(true);
     try {
@@ -276,6 +291,9 @@ export default function App() {
             onAddOperator={handleCreateOperator}
             onDeleteOperator={handleDeleteOperator}
             onEditOperator={handleUpdateOperator}
+            onAddBobbin={handleCreateBobbin}
+            onDeleteBobbin={handleDeleteBobbin}
+            onEditBobbin={handleUpdateBobbin}
             refreshing={refreshing}
           />}
           {tab === "reports" && <Reports db={db} />}

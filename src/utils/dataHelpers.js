@@ -11,6 +11,7 @@ export function normalizeDb(raw) {
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
   const operators = ensureArr(raw?.operators);
+  const bobbins = ensureArr(raw?.bobbins);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
@@ -40,6 +41,7 @@ export function normalizeDb(raw) {
     suppliers,
     machines,
     operators,
+    bobbins,
     lots,
     inbound_items,
     issue_to_machine: issueToMachine,

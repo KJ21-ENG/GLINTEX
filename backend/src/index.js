@@ -57,6 +57,36 @@ function toOptionalString(val) {
   return str ? str : null;
 }
 
+// Helper: Get or create bobbin by name (normalize to "Bobbin" if empty/null)
+async function getOrCreateBobbin(pcsTypeName) {
+  if (!pcsTypeName || !String(pcsTypeName).trim()) {
+    // Default to "Bobbin" if PcsTypeName is empty
+    pcsTypeName = 'Bobbin';
+  }
+  const normalizedName = String(pcsTypeName).trim();
+  
+  // Try to find existing bobbin (case-insensitive)
+  const existing = await prisma.bobbin.findFirst({
+    where: {
+      name: {
+        equals: normalizedName,
+        mode: 'insensitive',
+      },
+    },
+  });
+  
+  if (existing) {
+    return existing.id;
+  }
+  
+  // Create new bobbin
+  const newBobbin = await prisma.bobbin.create({
+    data: { name: normalizedName },
+  });
+  
+  return newBobbin.id;
+}
+
 function parseReceiveCsvContent(content) {
   if (!content || typeof content !== 'string') {
     throw new Error('CSV content missing');
@@ -287,6 +317,7 @@ app.get('/api/db', async (req, res) => {
   const suppliers = await prisma.supplier.findMany();
   const machines = await prisma.machine.findMany();
   const operators = await prisma.operator.findMany();
+  const bobbins = await prisma.bobbin.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const issue_to_machine = await prisma.issueToMachine.findMany();
@@ -294,7 +325,7 @@ app.get('/api/db', async (req, res) => {
   const receive_uploads = await prisma.receiveUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
   const receive_rows = await prisma.receiveRow.findMany({ orderBy: { createdAt: 'desc' }, take: RECEIVE_ROWS_FETCH_LIMIT });
   const receive_piece_totals = await prisma.receivePieceTotal.findMany();
-  res.json({ items, firms, suppliers, machines, operators, lots, inbound_items, issue_to_machine, settings, receive_uploads, receive_rows, receive_piece_totals });
+  res.json({ items, firms, suppliers, machines, operators, bobbins, lots, inbound_items, issue_to_machine, settings, receive_uploads, receive_rows, receive_piece_totals });
 });
 
 // Return the next lot number preview (value that will be used on save)
@@ -641,6 +672,52 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
     const summary = buildReceiveSummary({ filename, rows, incrementsMap: pieceIncrements, pieceMeta });
 
     const upload = await prisma.$transaction(async (tx) => {
+      // Normalize PcsTypeName to bobbin IDs (create bobbins if they don't exist)
+      const uniquePcsTypeNames = [...new Set(rows.map(r => r.pcsTypeName).filter(Boolean))];
+      const bobbinIdMap = new Map();
+      
+      for (const pcsTypeName of uniquePcsTypeNames) {
+        const normalizedName = pcsTypeName.trim() || 'Bobbin';
+        // Find or create bobbin (case-insensitive)
+        let bobbin = await tx.bobbin.findFirst({
+          where: {
+            name: {
+              equals: normalizedName,
+              mode: 'insensitive',
+            },
+          },
+        });
+        
+        if (!bobbin) {
+          bobbin = await tx.bobbin.create({
+            data: { name: normalizedName },
+          });
+        }
+        
+        bobbinIdMap.set(pcsTypeName, bobbin.id);
+      }
+      
+      // Also ensure "Bobbin" exists for empty/null values
+      if (!bobbinIdMap.has(null) && !bobbinIdMap.has('')) {
+        let defaultBobbin = await tx.bobbin.findFirst({
+          where: {
+            name: {
+              equals: 'Bobbin',
+              mode: 'insensitive',
+            },
+          },
+        });
+        
+        if (!defaultBobbin) {
+          defaultBobbin = await tx.bobbin.create({
+            data: { name: 'Bobbin' },
+          });
+        }
+        
+        bobbinIdMap.set(null, defaultBobbin.id);
+        bobbinIdMap.set('', defaultBobbin.id);
+      }
+
       const createdUpload = await tx.receiveUpload.create({
         data: {
           originalFilename: filename,
@@ -648,7 +725,12 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
         },
       });
 
-      const createPayload = rows.map(row => ({ ...row, uploadId: createdUpload.id }));
+      const createPayload = rows.map(row => ({
+        ...row,
+        uploadId: createdUpload.id,
+        bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
+      }));
+      
       if (createPayload.length > 0) {
         await tx.receiveRow.createMany({ data: createPayload });
       }
@@ -965,6 +1047,33 @@ app.put('/api/operators/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to update operator', err);
     res.status(500).json({ error: err.message || 'Failed to update operator' });
+  }
+});
+
+app.get('/api/bobbins', async (req, res) => { res.json(await prisma.bobbin.findMany()); });
+app.post('/api/bobbins', async (req, res) => { const { name } = req.body; const bobbin = await prisma.bobbin.create({ data: { name } }); res.json(bobbin); });
+app.delete('/api/bobbins/:id', async (req, res) => {
+  const { id } = req.params;
+  const usage = await prisma.receiveRow.count({ where: { bobbinId: id } });
+  if (usage > 0) {
+    return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
+  }
+  await prisma.bobbin.delete({ where: { id } });
+  res.json({ ok: true });
+});
+// Update bobbin name
+app.put('/api/bobbins/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.bobbin.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Bobbin not found' });
+    const updated = await prisma.bobbin.update({ where: { id }, data: { name } });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update bobbin', err);
+    res.status(500).json({ error: err.message || 'Failed to update bobbin' });
   }
 });
 

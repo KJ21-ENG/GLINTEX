@@ -6,15 +6,16 @@ import React, { useState, useMemo } from 'react';
 import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, SearchableInput } from '../components';
 
-export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, onDeleteFirm, onEditFirm, onAddSupplier, onDeleteSupplier, onEditSupplier, onAddMachine, onDeleteMachine, onEditMachine, onAddOperator, onDeleteOperator, onEditOperator, refreshing }) {
+export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, onDeleteFirm, onEditFirm, onAddSupplier, onDeleteSupplier, onEditSupplier, onAddMachine, onDeleteMachine, onEditMachine, onAddOperator, onDeleteOperator, onEditOperator, onAddBobbin, onDeleteBobbin, onEditBobbin, refreshing }) {
   const { cls } = useBrand();
   const [itemName, setItemName] = useState("");
   const [firmName, setFirmName] = useState("");
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [operatorName, setOperatorName] = useState("");
+  const [bobbinName, setBobbinName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | operators
+  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | operators | bobbins
 
   async function addItem() {
     const name = itemName.trim();
@@ -151,6 +152,33 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     }
   }
 
+  async function addBobbin() {
+    const name = bobbinName.trim();
+    if (!name) return;
+    if (db.bobbins.some(b => b.name.toLowerCase() === name.toLowerCase())) { alert("Bobbin already exists"); return; }
+    setWorking(true);
+    try {
+      await onAddBobbin(name);
+      setBobbinName("");
+    } catch (err) {
+      alert(err.message || 'Failed to add bobbin');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function deleteBobbin(id) {
+    if (!confirm("Delete bobbin? You cannot remove it if referenced by receive rows.")) return;
+    setWorking(true);
+    try {
+      await onDeleteBobbin(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete bobbin');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const disable = working || refreshing;
 
   const normalizedQuery = itemName.trim().toLowerCase();
@@ -198,6 +226,15 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
     return db.operators.filter(o => o.name.toLowerCase().includes(q));
   }, [db.operators, operatorName]);
 
+  // Bobbins
+  const normalizedBobbinQuery = bobbinName.trim().toLowerCase();
+  const isBobbinDuplicate = normalizedBobbinQuery !== '' && db.bobbins.some(b => b.name.trim().toLowerCase() === normalizedBobbinQuery);
+  const filteredBobbins = useMemo(() => {
+    const q = bobbinName.trim().toLowerCase();
+    if (!q) return db.bobbins;
+    return db.bobbins.filter(b => b.name.toLowerCase().includes(q));
+  }, [db.bobbins, bobbinName]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
@@ -215,6 +252,9 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
         </button>
         <button onClick={() => setTab('operators')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='operators' ? cls.navActive : 'border-transparent'} ${tab!=='operators' ? cls.navHover : ''}`}>
           Operators
+        </button>
+        <button onClick={() => setTab('bobbins')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='bobbins' ? cls.navActive : 'border-transparent'} ${tab!=='bobbins' ? cls.navHover : ''}`}>
+          Bobbins
         </button>
       </div>
 
@@ -245,6 +285,12 @@ export function Masters({ db, onAddItem, onDeleteItem, onEditItem, onAddFirm, on
       {tab === 'operators' && (
         <Section title="Operators">
           <SearchableInput items={db.operators} onAdd={onAddOperator} onDelete={onDeleteOperator} onEdit={onEditOperator} placeholder="New operator name" disabled={disable} />
+        </Section>
+      )}
+
+      {tab === 'bobbins' && (
+        <Section title="Bobbins">
+          <SearchableInput items={db.bobbins} onAdd={onAddBobbin} onDelete={onDeleteBobbin} onEdit={onEditBobbin} placeholder="New bobbin name" disabled={disable} />
         </Section>
       )}
     </div>

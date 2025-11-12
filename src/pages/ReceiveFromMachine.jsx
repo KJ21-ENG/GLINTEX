@@ -208,6 +208,13 @@ export function ReceiveFromMachine({ db, refreshDb }) {
     return map;
   }, [db.receive_uploads]);
   const latestRows = useMemo(() => (db.receive_rows || []).slice(), [db.receive_rows]);
+  
+  // Map bobbin IDs to names
+  const bobbinMap = useMemo(() => {
+    const map = new Map();
+    (db.bobbins || []).forEach((b) => map.set(b.id, b.name));
+    return map;
+  }, [db.bobbins]);
 
   function clearSelection() {
     setSelectedFile(null);
@@ -520,6 +527,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                 <th className="py-2 pr-2">Employee</th>
                 <th className="py-2 pr-2 text-right">Net Wt (kg)</th>
                 <th className="py-2 pr-2 text-right">Pcs</th>
+                <th className="py-2 pr-2">Bobbin</th>
                 <th className="py-2 pr-2">CSV Date</th>
                 <th className="py-2 pr-2">Imported</th>
               </tr>
@@ -527,11 +535,12 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             <tbody>
               {pagedLatestRows.length === 0 ? (
                 <tr>
-                  <td className="py-3 pr-2" colSpan={8}>No rows imported yet.</td>
+                  <td className="py-3 pr-2" colSpan={9}>No rows imported yet.</td>
                 </tr>
               ) : (
                 pagedLatestRows.map((row) => {
                   const upload = uploadLookup.get(row.uploadId);
+                  const bobbinName = row.bobbinId ? (bobbinMap.get(row.bobbinId) || row.pcsTypeName || '—') : (row.pcsTypeName || '—');
                   return (
                     <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
                       <td className="py-2 pr-2 font-mono">{row.vchNo}</td>
@@ -540,6 +549,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
                       <td className="py-2 pr-2">{row.employee || '—'}</td>
                       <td className="py-2 pr-2 text-right">{row.netWt == null ? '—' : formatKg(row.netWt)}</td>
                       <td className="py-2 pr-2 text-right">{row.pcs == null ? '—' : row.pcs}</td>
+                      <td className="py-2 pr-2">{bobbinName}</td>
                       <td className="py-2 pr-2">{row.date || '—'}</td>
                       <td className="py-2 pr-2">{formatDateTime(upload?.uploadedAt || row.createdAt)}</td>
                     </tr>

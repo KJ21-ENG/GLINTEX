@@ -62,6 +62,12 @@ model Operator {
   issueToMachines  IssueToMachine[]
 }
 
+model Bobbin {
+  id          String       @id @default(cuid())
+  name        String
+  receiveRows ReceiveRow[]
+}
+
 model IssueToMachine {
   id          String  @id
   date        String
@@ -106,6 +112,7 @@ model ReceiveRow {
   employee      String?
   pktTypeName   String?
   pcsTypeName   String?
+  bobbinId      String?
   pcs           Int?
   grossWt       Float?
   tareWt        Float?
@@ -118,6 +125,7 @@ model ReceiveRow {
   modifiedBy    String?
   createdAt     DateTime       @default(now())
   upload        ReceiveUpload  @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  bobbin        Bobbin?        @relation(fields: [bobbinId], references: [id])
 }
 
 model ReceivePieceTotal {

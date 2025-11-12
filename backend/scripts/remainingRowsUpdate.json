@@ -1,0 +1,24 @@
+{
+  "updates": [
+    {
+      "lotNo": "005",
+      "bobbinName": "BLUE BOBIN"
+    },
+    {
+      "lotNo": "007",
+      "bobbinName": "BLUE BOBIN"
+    },
+    {
+      "lotNo": "009",
+      "bobbinName": "BLUE BOBIN"
+    },
+    {
+      "lotNo": "010",
+      "bobbinName": "BLUE BOBIN"
+    },
+    {
+      "lotNo": "026",
+      "bobbinName": "REGULAR BOBIN"
+    }
+  ]
+}

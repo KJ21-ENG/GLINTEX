@@ -149,7 +149,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
   const [orphanPage, setOrphanPage] = useState(1);
   const [uploadsPage, setUploadsPage] = useState(1);
   const [rowsPage, setRowsPage] = useState(1);
-  const [mode, setMode] = useState('csv');
+  const [mode, setMode] = useState('manual');
   const pageSize = 50;
 
   const inboundPieceMap = useMemo(() => {
@@ -367,17 +367,17 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <button
             type="button"
-            onClick={() => setMode('csv')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${mode === 'csv' ? cls.navActive : `${cls.cardBorder} ${cls.navHover}`}`}
-          >
-            CSV upload
-          </button>
-          <button
-            type="button"
             onClick={() => setMode('manual')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${mode === 'manual' ? cls.navActive : `${cls.cardBorder} ${cls.navHover}`}`}
           >
             Manual entry
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('csv')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${mode === 'csv' ? cls.navActive : `${cls.cardBorder} ${cls.navHover}`}`}
+          >
+            CSV upload
           </button>
         </div>
         {mode === 'csv' ? (

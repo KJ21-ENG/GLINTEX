@@ -25,7 +25,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState("inbound");
+  const LAST_TAB_KEY = "glintex_last_tab";
+  const [tab, setTab] = useState(() => localStorage.getItem(LAST_TAB_KEY) || "inbound");
   const [brandPreview, setBrandPreview] = useState(defaultBrand);
   const [savingBrand, setSavingBrand] = useState(false);
 
@@ -75,6 +76,8 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem(THEME_KEY, theme); }, [theme]);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  // Persist last active tab so a reload restores where the user was
+  useEffect(() => { localStorage.setItem(LAST_TAB_KEY, tab); }, [tab]);
   useEffect(() => {
     document.documentElement.style.setProperty('--brand-primary', brandPreview.primary);
     document.documentElement.style.setProperty('--brand-gold', brandPreview.gold);

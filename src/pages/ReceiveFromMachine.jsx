@@ -134,7 +134,7 @@ function SummaryCard({ title, summary, meta, cls, actions }) {
   );
 }
 
-export function ReceiveFromMachine({ db, refreshDb }) {
+export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
   const { cls, brand } = useBrand();
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -458,6 +458,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
             inboundPieceMap={inboundPieceMap}
             receiveTotalsMap={receiveTotalsMap}
             refreshDb={refreshDb}
+            onIssueToMachine={onIssueToMachine}
             cls={cls}
           />
         )}
@@ -615,7 +616,7 @@ export function ReceiveFromMachine({ db, refreshDb }) {
   );
 }
 
-function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, cls }) {
+function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, onIssueToMachine, cls }) {
   const [lotNo, setLotNo] = useState('');
   const [pieceId, setPieceId] = useState('');
   const [bobbinId, setBobbinId] = useState('');
@@ -630,6 +631,18 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [progressText, setProgressText] = useState('');
+  const [issueModalOpen, setIssueModalOpen] = useState(false);
+  const [issueModalData, setIssueModalData] = useState({
+    date: todayISO(),
+    machineId: '',
+    operatorId: '',
+    note: '',
+    lotNo: '',
+    pieceIds: [],
+    itemId: null,
+  });
+  const [issuingPiece, setIssuingPiece] = useState(null);
+  const [issuingFromModal, setIssuingFromModal] = useState(false);
 
   const workers = useMemo(() => {
     if (Array.isArray(db.workers) && db.workers.length > 0) {
@@ -657,6 +670,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
 
   const boxes = useMemo(() => (db.boxes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.boxes]);
   const bobbins = useMemo(() => (db.bobbins || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.bobbins]);
+  const machines = useMemo(() => (db.machines || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.machines]);
   const issuedPieceIds = useMemo(() => {
     const set = new Set();
     (db.issue_to_machine || []).forEach(record => {
@@ -675,11 +689,6 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     (db.items || []).forEach(item => map.set(item.id, item.name || ''));
     return map;
   }, [db.items]);
-  const lotOptions = useMemo(() => (
-    (db.lots || [])
-      .map(lot => ({ ...lot, itemName: itemNameById.get(lot.itemId) || '' }))
-      .sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true, sensitivity: 'base' }))
-  ), [db.lots, itemNameById]);
   const pendingByPiece = useMemo(() => {
     const map = new Map();
     (db.inbound_items || []).forEach(item => {
@@ -705,6 +714,27 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     return locked;
   }, [cart]);
 
+  const lotHasEligiblePiece = useMemo(() => {
+    const set = new Set();
+    (db.inbound_items || []).forEach(item => {
+      const pending = pendingByPiece.get(item.id) ?? 0;
+      const staged = cartNetByPiece.get(item.id) || 0;
+      const remaining = Math.max(0, pending - staged);
+      const statusVal = String(item.status || '').toLowerCase();
+      if (remaining > 0 && statusVal === 'consumed' && item.lotNo) {
+        set.add(item.lotNo);
+      }
+    });
+    return set;
+  }, [db.inbound_items, pendingByPiece, cartNetByPiece]);
+
+  const lotOptions = useMemo(() => (
+    (db.lots || [])
+      .filter(lot => lotHasEligiblePiece.has(lot.lotNo))
+      .map(lot => ({ ...lot, itemName: itemNameById.get(lot.itemId) || '' }))
+      .sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true, sensitivity: 'base' }))
+  ), [db.lots, itemNameById, lotHasEligiblePiece]);
+
   const pieceOptions = useMemo(() => {
     if (!lotNo) return [];
     return (db.inbound_items || [])
@@ -716,7 +746,8 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
         return { ...item, pendingWeight: remaining };
       })
       .filter(item => {
-        const statusOk = !item.status || String(item.status).toLowerCase() === 'available';
+        const statusVal = String(item.status || '').toLowerCase();
+        const statusOk = statusVal === 'consumed';
         return statusOk && item.pendingWeight > 0;
       })
       .sort((a, b) => {
@@ -880,6 +911,66 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
     setCart([]);
   }
 
+  function openIssueModalForPiece() {
+    if (!pieceId || !selectedPiece || !onIssueToMachine) return;
+    const itemId = selectedPiece.itemId || null;
+    const lotForPiece = selectedPiece.lotNo || lotNo;
+    setIssueModalData({
+      date: todayISO(),
+      machineId: '',
+      operatorId: '',
+      note: '',
+      pieceIds: [pieceId],
+      lotNo: lotForPiece,
+      itemId,
+    });
+    setIssuingPiece(pieceId);
+    setIssueModalOpen(true);
+  }
+
+  function closeIssueModal() {
+    setIssueModalOpen(false);
+    setIssuingPiece(null);
+    setIssueModalData({
+      date: todayISO(),
+      machineId: '',
+      operatorId: '',
+      note: '',
+      lotNo: '',
+      pieceIds: [],
+      itemId: null,
+    });
+  }
+
+  async function handleIssueModalSubmit() {
+    if (!onIssueToMachine || !issueModalData || !issuingPiece) {
+      closeIssueModal();
+      return;
+    }
+    const { lotNo: issueLotNo, itemId, pieceIds = [issuingPiece], date, machineId, operatorId, note } = issueModalData;
+    if (!machineId) { alert('Select a machine before issuing.'); return; }
+    if (!operatorId) { alert('Select an operator before issuing.'); return; }
+    setIssuingFromModal(true);
+    try {
+      await onIssueToMachine({
+        date,
+        itemId: itemId || (selectedPiece?.itemId ?? ''),
+        lotNo: issueLotNo,
+        pieceIds,
+        note,
+        machineId,
+        operatorId,
+      });
+      await refreshDb();
+      alert(`Piece ${pieceIds.join(', ')} issued successfully.`);
+      closeIssueModal();
+    } catch (err) {
+      alert(err.message || 'Failed to issue piece');
+    } finally {
+      setIssuingFromModal(false);
+    }
+  }
+
   async function handleSaveCart() {
     if (cart.length === 0 || saving) return;
     if (!window.confirm(`Conceal and save ${cart.length} entr${cart.length === 1 ? 'y' : 'ies'}?`)) return;
@@ -942,9 +1033,6 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
   return (
     <div className="space-y-4">
       <div className={`rounded-xl border ${cls.cardBorder} ${cls.cardBg} p-4`}>
-        <div className="text-sm mb-3">
-          Add each box to the staging cart, then click <strong>Conceal & save</strong> to create receive entries. Net weight is auto-calculated as Gross − (Box + Bobbin×Qty). Use the wastage checkbox if you want to mark the remaining pending balance the same way as the Stock page’s “Mark wastage” action.
-        </div>
         <div className="grid gap-3 md:grid-cols-3">
           <div>
             <label className={`text-xs ${cls.muted}`}>Lot</label>
@@ -1034,21 +1122,6 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2 mt-4">
-          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
-            <div className="text-xs uppercase font-semibold">Auto tare</div>
-            <div className="text-2xl font-semibold">{tareWeight != null && tareWeight > 0 ? `${formatKg(tareWeight)} kg` : '—'}</div>
-            <div className={`text-xs ${cls.muted}`}>Box {boxWeight != null ? formatKg(boxWeight) : '—'} + Bobbin {bobbinWeight != null ? formatKg(bobbinWeight) : '—'} × Qty {Number.isFinite(quantityNum) ? quantityNum : '—'}</div>
-          </div>
-          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
-            <div className="text-xs uppercase font-semibold">Net (auto)</div>
-            <div className={`text-2xl font-semibold ${pendingSummary && netWeight != null && netWeight - pendingSummary.pendingAfterCart > 1e-6 ? 'text-red-400' : ''}`}>
-              {netWeight != null && netWeight > 0 ? `${formatKg(netWeight)} kg` : '—'}
-            </div>
-            <div className={`text-xs ${cls.muted}`}>Cannot exceed pending balance</div>
-          </div>
-        </div>
-
         <div className="grid gap-3 md:grid-cols-3 mt-4">
           <div>
             <label className={`text-xs ${cls.muted}`}>Operator</label>
@@ -1079,22 +1152,30 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
                 disabled={
                   !pieceId ||
                   saving ||
-                  !issuedPieceIds.has(pieceId) ||
                   (pieceId && wastageLockedPieces.has(pieceId))
                 }
                 onChange={(e) => setMarkRemainingWastage(e.target.checked)}
               />
               <span>Mark remaining pending as wastage</span>
             </label>
-            {!pieceId ? null : issuedPieceIds.has(pieceId) ? (
-              wastageLockedPieces.has(pieceId) ? (
-                <span className="text-xs text-orange-300">Already marked for wastage in cart; remove staged entry to change.</span>
-              ) : (
-                <span className={`text-xs ${cls.muted}`}>Same as Stock → Mark wastage.</span>
-              )
-            ) : (
-              <span className="text-xs text-orange-300">Piece was not issued to a machine; cannot mark as wastage.</span>
+            {pieceId && wastageLockedPieces.has(pieceId) && (
+              <span className="text-xs text-orange-300">Already marked for wastage in cart; remove staged entry to change.</span>
             )}
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 mt-4">
+          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+            <div className="text-xs uppercase font-semibold">Auto tare</div>
+            <div className="text-2xl font-semibold">{tareWeight != null && tareWeight > 0 ? `${formatKg(tareWeight)} kg` : '—'}</div>
+            <div className={`text-xs ${cls.muted}`}>Box {boxWeight != null ? formatKg(boxWeight) : '—'} + Bobbin {bobbinWeight != null ? formatKg(bobbinWeight) : '—'} × Qty {Number.isFinite(quantityNum) ? quantityNum : '—'}</div>
+          </div>
+          <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+            <div className="text-xs uppercase font-semibold">Net (auto)</div>
+            <div className={`text-2xl font-semibold ${pendingSummary && netWeight != null && netWeight - pendingSummary.pendingAfterCart > 1e-6 ? 'text-red-400' : ''}`}>
+              {netWeight != null && netWeight > 0 ? `${formatKg(netWeight)} kg` : '—'}
+            </div>
+            <div className={`text-xs ${cls.muted}`}>Cannot exceed pending balance</div>
           </div>
         </div>
 
@@ -1184,6 +1265,70 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, c
           </table>
         </div>
       </div>
+
+      {issueModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={closeIssueModal}>
+          <div className={`w-full max-w-md rounded-2xl border ${cls.cardBorder} ${cls.cardBg} p-6`} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-lg font-semibold">Issue piece</div>
+                <div className={`text-xs ${cls.muted}`}>Lot {issueModalData.lotNo || lotNo} · Piece {issueModalData.pieceIds?.[0] || pieceId}</div>
+              </div>
+              <button type="button" onClick={closeIssueModal} className={`w-8 h-8 rounded-full border ${cls.cardBorder} ${cls.cardBg}`}>
+                ✕
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Date</label>
+                <Input
+                  type="date"
+                  value={issueModalData.date}
+                  onChange={(e) => setIssueModalData(prev => ({ ...prev, date: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Machine *</label>
+                <Select
+                  value={issueModalData.machineId}
+                  onChange={(e) => setIssueModalData(prev => ({ ...prev, machineId: e.target.value }))}
+                >
+                  <option value="">Select machine</option>
+                  {machines.map(machine => (
+                    <option key={machine.id} value={machine.id}>{machine.name}</option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Operator *</label>
+                <Select
+                  value={issueModalData.operatorId}
+                  onChange={(e) => setIssueModalData(prev => ({ ...prev, operatorId: e.target.value }))}
+                >
+                  <option value="">Select operator</option>
+                  {operatorOptions.map(op => (
+                    <option key={op.id} value={op.id}>{op.name}</option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Note (optional)</label>
+                <Input
+                  value={issueModalData.note}
+                  onChange={(e) => setIssueModalData(prev => ({ ...prev, note: e.target.value }))}
+                  placeholder="Reference / reason"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <SecondaryButton type="button" onClick={closeIssueModal} className="flex-1">Cancel</SecondaryButton>
+                <Button type="button" onClick={handleIssueModalSubmit} disabled={issuingFromModal} className="flex-1">
+                  {issuingFromModal ? 'Issuing…' : 'Issue piece'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

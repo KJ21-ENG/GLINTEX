@@ -288,7 +288,7 @@ export default function App() {
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
           {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
           {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} />}
+          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} onIssueToMachine={handleIssueToMachine} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}

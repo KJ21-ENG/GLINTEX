@@ -6,6 +6,7 @@ import { parse } from 'csv-parse/sync';
 import prisma from './prismaClient.js';
 import whatsapp from '../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from './utils/whatsappTemplates.js';
+import { logCrud } from './utils/auditLogger.js';
 
 dotenv.config();
 const app = express();
@@ -601,6 +602,23 @@ app.post('/api/lots', async (req, res) => {
 
       await tx.inboundItem.createMany({ data: updatedPieces });
 
+      await logCrud({
+        entityType: 'lot',
+        entityId: lot.id,
+        action: 'create',
+        payload: {
+          lotNo,
+          date,
+          itemId,
+          firmId,
+          supplierId,
+          totalPieces,
+          totalWeight,
+          pieces: updatedPieces.map(p => ({ id: p.id, seq: p.seq, weight: p.weight })),
+        },
+        client: tx,
+      });
+
       return lot;
     });
 
@@ -675,6 +693,22 @@ app.post('/api/issue_to_machine', async (req, res) => {
           operatorId: operatorId || null,
         },
       });
+    });
+
+    await logCrud({
+      entityType: 'issue_to_machine',
+      entityId: issueRecord.id,
+      action: 'create',
+      payload: {
+        lotNo: issueRecord.lotNo,
+        date: issueRecord.date,
+        itemId: issueRecord.itemId,
+        count: issueRecord.count,
+        totalWeight: issueRecord.totalWeight,
+        pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [],
+        machineId: issueRecord.machineId,
+        operatorId: issueRecord.operatorId,
+      },
     });
 
     res.json({ ok: true, issueToMachine: issueRecord });
@@ -821,6 +855,17 @@ app.post('/api/receive_from_machine/import', async (req, res) => {
       return createdUpload;
     });
 
+    await logCrud({
+      entityType: 'receive_upload',
+      entityId: upload.id,
+      action: 'create',
+      payload: {
+        filename,
+        rowCount: upload.rowCount,
+        summary,
+      },
+    });
+
     res.json({
       ok: true,
       upload: {
@@ -880,6 +925,13 @@ app.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
       const wastagePercent = inboundWeight > 0 ? ((remaining / inboundWeight) * 100).toFixed(2) : '0.00';
       sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
     } catch (e) { console.error('notify piece wastage error', e); }
+
+    await logCrud({
+      entityType: 'receive_piece_total',
+      entityId: pieceId,
+      action: 'update',
+      payload: { action: 'mark_wastage', marked: remaining, totals: updated },
+    });
 
     res.json({ ok: true, pieceId, marked: remaining, updated });
   } catch (err) {
@@ -1035,6 +1087,21 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
       inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
     );
 
+    await logCrud({
+      entityType: 'receive_row',
+      entityId: rowWithRelations.id,
+      action: 'create',
+      payload: {
+        pieceId,
+        lotNo,
+        uploadId: txResult.upload.id,
+        operatorId,
+        helperId,
+        netWeight: net,
+        bobbinQuantity: bobbinQty,
+      },
+    });
+
     res.json({
       ok: true,
       row: rowWithRelations,
@@ -1162,6 +1229,25 @@ app.post('/api/import', async (req, res) => {
       await prisma.settings.upsert({ where: { id: 1 }, update: { brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null }, create: { id: 1, brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null } });
     }
 
+    await logCrud({
+      entityType: 'import',
+      entityId: null,
+      action: 'import',
+      payload: {
+        counts: {
+          items: Array.isArray(data.items) ? data.items.length : 0,
+          firms: Array.isArray(data.firms) ? data.firms.length : 0,
+          suppliers: Array.isArray(data.suppliers) ? data.suppliers.length : 0,
+          lots: Array.isArray(data.lots) ? data.lots.length : 0,
+          inboundItems: Array.isArray(data.inbound_items) ? data.inbound_items.length : 0,
+          issues: Array.isArray(data.issue_to_machine) ? data.issue_to_machine.length : 0,
+          workers: Array.isArray(data.workers) ? data.workers.length : 0,
+          bobbins: Array.isArray(data.bobbins) ? data.bobbins.length : 0,
+          boxes: Array.isArray(data.boxes) ? data.boxes.length : 0,
+        },
+      },
+    });
+
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1171,14 +1257,34 @@ app.post('/api/import', async (req, res) => {
 
 // Basic CRUD endpoints (items example)
 app.get('/api/items', async (req, res) => { res.json(await prisma.item.findMany()); });
-app.post('/api/items', async (req, res) => { const { name } = req.body; const item = await prisma.item.create({ data: { name } }); res.json(item); });
+app.post('/api/items', async (req, res) => {
+  const { name } = req.body;
+  const item = await prisma.item.create({ data: { name } });
+  await logCrud({
+    entityType: 'item',
+    entityId: item.id,
+    action: 'create',
+    payload: item,
+  });
+  res.json(item);
+});
 app.delete('/api/items/:id', async (req, res) => {
   const { id } = req.params;
+  const existingItem = await prisma.item.findUnique({ where: { id } });
+  if (!existingItem) {
+    return res.status(404).json({ error: 'Item not found' });
+  }
   const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToMachine.count({ where: { itemId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
   await prisma.item.delete({ where: { id } });
+  await logCrud({
+    entityType: 'item',
+    entityId: id,
+    action: 'delete',
+    payload: existingItem,
+  });
   res.json({ ok: true });
 });
 // Update item name
@@ -1190,6 +1296,12 @@ app.put('/api/items/:id', async (req, res) => {
     const existing = await prisma.item.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Item not found' });
     const updated = await prisma.item.update({ where: { id }, data: { name } });
+    await logCrud({
+      entityType: 'item',
+      entityId: id,
+      action: 'update',
+      payload: { before: existing, after: updated },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update item', err);
@@ -1198,14 +1310,22 @@ app.put('/api/items/:id', async (req, res) => {
 });
 
 app.get('/api/firms', async (req, res) => { res.json(await prisma.firm.findMany()); });
-app.post('/api/firms', async (req, res) => { const { name } = req.body; const firm = await prisma.firm.create({ data: { name } }); res.json(firm); });
+app.post('/api/firms', async (req, res) => {
+  const { name } = req.body;
+  const firm = await prisma.firm.create({ data: { name } });
+  await logCrud({ entityType: 'firm', entityId: firm.id, action: 'create', payload: firm });
+  res.json(firm);
+});
 app.delete('/api/firms/:id', async (req, res) => {
   const { id } = req.params;
+  const existingFirm = await prisma.firm.findUnique({ where: { id } });
+  if (!existingFirm) return res.status(404).json({ error: 'Firm not found' });
   const usage = await prisma.lot.count({ where: { firmId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Firm is referenced and cannot be deleted' });
   }
   await prisma.firm.delete({ where: { id } });
+  await logCrud({ entityType: 'firm', entityId: id, action: 'delete', payload: existingFirm });
   res.json({ ok: true });
 });
 // Update firm name
@@ -1217,6 +1337,7 @@ app.put('/api/firms/:id', async (req, res) => {
     const existing = await prisma.firm.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Firm not found' });
     const updated = await prisma.firm.update({ where: { id }, data: { name } });
+    await logCrud({ entityType: 'firm', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update firm', err);
@@ -1225,14 +1346,22 @@ app.put('/api/firms/:id', async (req, res) => {
 });
 
 app.get('/api/suppliers', async (req, res) => { res.json(await prisma.supplier.findMany()); });
-app.post('/api/suppliers', async (req, res) => { const { name } = req.body; const seller = await prisma.supplier.create({ data: { name } }); res.json(seller); });
+app.post('/api/suppliers', async (req, res) => {
+  const { name } = req.body;
+  const seller = await prisma.supplier.create({ data: { name } });
+  await logCrud({ entityType: 'supplier', entityId: seller.id, action: 'create', payload: seller });
+  res.json(seller);
+});
 app.delete('/api/suppliers/:id', async (req, res) => {
   const { id } = req.params;
+  const existingSupplier = await prisma.supplier.findUnique({ where: { id } });
+  if (!existingSupplier) return res.status(404).json({ error: 'Supplier not found' });
   const usage = await prisma.lot.count({ where: { supplierId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Supplier is referenced and cannot be deleted' });
   }
   await prisma.supplier.delete({ where: { id } });
+  await logCrud({ entityType: 'supplier', entityId: id, action: 'delete', payload: existingSupplier });
   res.json({ ok: true });
 });
 // Update supplier name
@@ -1244,6 +1373,7 @@ app.put('/api/suppliers/:id', async (req, res) => {
     const existing = await prisma.supplier.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Supplier not found' });
     const updated = await prisma.supplier.update({ where: { id }, data: { name } });
+    await logCrud({ entityType: 'supplier', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update supplier', err);
@@ -1252,14 +1382,22 @@ app.put('/api/suppliers/:id', async (req, res) => {
 });
 
 app.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
-app.post('/api/machines', async (req, res) => { const { name } = req.body; const machine = await prisma.machine.create({ data: { name } }); res.json(machine); });
+app.post('/api/machines', async (req, res) => {
+  const { name } = req.body;
+  const machine = await prisma.machine.create({ data: { name } });
+  await logCrud({ entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
+  res.json(machine);
+});
 app.delete('/api/machines/:id', async (req, res) => {
   const { id } = req.params;
+  const existingMachine = await prisma.machine.findUnique({ where: { id } });
+  if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
   const usage = await prisma.issueToMachine.count({ where: { machineId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
   await prisma.machine.delete({ where: { id } });
+  await logCrud({ entityType: 'machine', entityId: id, action: 'delete', payload: existingMachine });
   res.json({ ok: true });
 });
 // Update machine name
@@ -1271,6 +1409,7 @@ app.put('/api/machines/:id', async (req, res) => {
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
     const updated = await prisma.machine.update({ where: { id }, data: { name } });
+    await logCrud({ entityType: 'machine', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update machine', err);
@@ -1284,10 +1423,13 @@ app.post('/api/operators', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const workerRole = normalizeWorkerRole(role);
   const worker = await prisma.operator.create({ data: { name, role: workerRole } });
+  await logCrud({ entityType: 'operator', entityId: worker.id, action: 'create', payload: worker });
   res.json(worker);
 });
 app.delete('/api/operators/:id', async (req, res) => {
   const { id } = req.params;
+  const existingOperator = await prisma.operator.findUnique({ where: { id } });
+  if (!existingOperator) return res.status(404).json({ error: 'Operator not found' });
   const usage =
     (await prisma.issueToMachine.count({ where: { operatorId: id } })) +
     (await prisma.receiveRow.count({
@@ -1302,6 +1444,7 @@ app.delete('/api/operators/:id', async (req, res) => {
     return res.status(400).json({ error: 'Operator is referenced and cannot be deleted' });
   }
   await prisma.operator.delete({ where: { id } });
+  await logCrud({ entityType: 'operator', entityId: id, action: 'delete', payload: existingOperator });
   res.json({ ok: true });
 });
 // Update operator name
@@ -1315,6 +1458,7 @@ app.put('/api/operators/:id', async (req, res) => {
     const data = { name };
     if (role !== undefined) data.role = normalizeWorkerRole(role);
     const updated = await prisma.operator.update({ where: { id }, data });
+    await logCrud({ entityType: 'operator', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update operator', err);
@@ -1332,15 +1476,19 @@ app.post('/api/bobbins', async (req, res) => {
       weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
     },
   });
+  await logCrud({ entityType: 'bobbin', entityId: bobbin.id, action: 'create', payload: bobbin });
   res.json(bobbin);
 });
 app.delete('/api/bobbins/:id', async (req, res) => {
   const { id } = req.params;
+  const existingBobbin = await prisma.bobbin.findUnique({ where: { id } });
+  if (!existingBobbin) return res.status(404).json({ error: 'Bobbin not found' });
   const usage = await prisma.receiveRow.count({ where: { bobbinId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
   }
   await prisma.bobbin.delete({ where: { id } });
+  await logCrud({ entityType: 'bobbin', entityId: id, action: 'delete', payload: existingBobbin });
   res.json({ ok: true });
 });
 // Update bobbin name and weight
@@ -1359,6 +1507,7 @@ app.put('/api/bobbins/:id', async (req, res) => {
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
       },
     });
+    await logCrud({ entityType: 'bobbin', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update bobbin', err);
@@ -1378,15 +1527,19 @@ app.post('/api/boxes', async (req, res) => {
       weight: weightNum,
     },
   });
+  await logCrud({ entityType: 'box', entityId: box.id, action: 'create', payload: box });
   res.json(box);
 });
 app.delete('/api/boxes/:id', async (req, res) => {
   const { id } = req.params;
+  const existingBox = await prisma.box.findUnique({ where: { id } });
+  if (!existingBox) return res.status(404).json({ error: 'Box not found' });
   const usage = await prisma.receiveRow.count({ where: { boxId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Box is referenced and cannot be deleted' });
   }
   await prisma.box.delete({ where: { id } });
+  await logCrud({ entityType: 'box', entityId: id, action: 'delete', payload: existingBox });
   res.json({ ok: true });
 });
 app.put('/api/boxes/:id', async (req, res) => {
@@ -1405,6 +1558,7 @@ app.put('/api/boxes/:id', async (req, res) => {
         weight: weightNum,
       },
     });
+    await logCrud({ entityType: 'box', entityId: id, action: 'update', payload: { before: existing, after: updated } });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update box', err);
@@ -1478,6 +1632,18 @@ app.delete('/api/inbound_items/:id', async (req, res) => {
     const totalWeight = Number(agg._sum.weight || 0);
     const totalPieces = Number(agg._count.id || 0);
     await prisma.lot.update({ where: { lotNo: existing.lotNo }, data: { totalWeight, totalPieces } });
+
+    await logCrud({
+      entityType: 'inbound_item',
+      entityId: id,
+      action: 'delete',
+      payload: {
+        lotNo: existing.lotNo,
+        itemId: existing.itemId,
+        weight: existing.weight,
+      },
+    });
+
     res.json({ ok: true });
     // Notify inbound piece deleted
     try {
@@ -1542,6 +1708,12 @@ app.put('/api/settings', async (req, res) => {
         update: updateData,
         create: createData,
       });
+      await logCrud({
+        entityType: 'settings',
+        entityId: '1',
+        action: 'update',
+        payload: settings,
+      });
       return res.json(settings);
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
@@ -1559,6 +1731,12 @@ app.put('/api/settings', async (req, res) => {
           brandGold: brandGold || '#D4AF37',
           logoDataUrl: logoDataUrl || null,
         },
+      });
+      await logCrud({
+        entityType: 'settings',
+        entityId: '1',
+        action: 'update',
+        payload: settings,
       });
       return res.json(settings);
     }
@@ -1592,6 +1770,16 @@ app.put('/api/inbound_items/:id', async (req, res) => {
       return updated;
     });
 
+    await logCrud({
+      entityType: 'inbound_item',
+      entityId: id,
+      action: 'update',
+      payload: {
+        seq,
+        weight,
+      },
+    });
+
     res.json({ ok: true, inboundItem: result });
   } catch (err) {
     console.error('Failed to update inbound item', err);
@@ -1616,6 +1804,18 @@ app.delete('/api/lots/:lotNo', async (req, res) => {
     await prisma.$transaction(async (tx) => {
       await tx.inboundItem.deleteMany({ where: { lotNo } });
       await tx.lot.deleteMany({ where: { lotNo } });
+      await logCrud({
+        entityType: 'lot',
+        entityId: lotRec ? lotRec.id : null,
+        action: 'delete',
+        payload: {
+          lotNo,
+          itemId: lotRec ? lotRec.itemId : null,
+          totalPieces,
+          totalWeight: lotRec ? lotRec.totalWeight : null,
+        },
+        client: tx,
+      });
     });
 
     res.json({ ok: true });

@@ -176,3 +176,12 @@ model Box {
   weight      Float
   receiveRows ReceiveRow[]
 }
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String?
+  action     String
+  payload    Json?
+  createdAt  DateTime @default(now())
+}

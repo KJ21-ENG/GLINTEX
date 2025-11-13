@@ -857,7 +857,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
                               const initialWeight = Number(l.totalWeight || 0);
                               const pendingWeightVal = Number(l.pendingWeight || 0);
                               return (
-                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th><th className="py-2 pr-2 text-right">Received Pcs</th></tr></thead>
+                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Barcode</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th><th className="py-2 pr-2 text-right">Received Pcs</th></tr></thead>
                                   <tbody>
                                     {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
                                       <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.pendingWeight ?? 0} isIssued={issuedPieceIds.has(p.id)} wastageWeight={p.wastageWeight || 0} totalPieces={p.totalPieces || 0} onMarkWastage={handleMarkWastage} isMarking={markingPieces.has(p.id)} />

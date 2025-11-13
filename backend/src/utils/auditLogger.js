@@ -57,7 +57,7 @@ export async function logCrud({ entityType, entityId = null, action, before, aft
       finalPayload = null;
     }
     const payloadText = finalPayload ? JSON.stringify(finalPayload, null, 2) : null;
-    const compactPayload = payload !== undefined ? sanitize(payload) : undefined;
+    const compactPayload = sanitize(payload);
 
     await target.auditLog.create({
       data: {

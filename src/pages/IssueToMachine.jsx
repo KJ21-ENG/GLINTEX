@@ -7,6 +7,7 @@ import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, Select, Pill, Pagination } from '../components';
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
+import * as api from '../api';
 
 export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) {
   const { cls } = useBrand();
@@ -18,6 +19,8 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
   const [selected, setSelected] = useState([]);
   const [issuing, setIssuing] = useState(false);
   const [piecePage, setPiecePage] = useState(1);
+  const [barcodeScan, setBarcodeScan] = useState('');
+  const [scanLoading, setScanLoading] = useState(false);
   const piecePageSize = 50;
 
   useEffect(() => {
@@ -75,6 +78,27 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
   function selectAll() { setSelected(availablePieces.map(p=>p.id)); }
   function clearSel() { setSelected([]); }
 
+  async function handleBarcodeSubmit(e) {
+    e.preventDefault();
+    const code = barcodeScan.trim();
+    if (!code) return;
+    setScanLoading(true);
+    try {
+      const piece = await api.getInboundByBarcode(code);
+      if (!piece) throw new Error('Barcode not found');
+      if (piece.status !== 'available') throw new Error('Piece is not available');
+      if (itemId !== piece.itemId) setItemId(piece.itemId);
+      if (lotNo !== piece.lotNo) setLotNo(piece.lotNo);
+      setSelected(prev => (prev.includes(piece.id) ? prev : [...prev, piece.id]));
+      alert(`Scanned ${piece.id} and added to selection`);
+    } catch (err) {
+      alert(err.message || 'Failed to lookup barcode');
+    } finally {
+      setBarcodeScan('');
+      setScanLoading(false);
+    }
+  }
+
   async function issue() {
     if (!date || !itemId || !lotNo || !machineId || !operatorId || selected.length===0) return;
     const availSet = new Set(availablePieces.map(p=>p.id));
@@ -82,11 +106,14 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     if (chosen.length===0) { alert("Nothing to issue. Selected pieces are not available."); return; }
     setIssuing(true);
     try {
-      await onIssueToMachine({ date, itemId, lotNo, pieceIds: chosen, note, machineId, operatorId });
+      const result = await onIssueToMachine({ date, itemId, lotNo, pieceIds: chosen, note, machineId, operatorId });
       const picked = availablePieces.filter(p=> chosen.includes(p.id));
       const totalWeight = picked.reduce((s,p)=>s+p.weight,0);
-      alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)`);
-      setSelected([]);
+      const crateSummary = result?.issueToMachine?.barcode
+        ? `\nIssue barcode: ${result.issueToMachine.barcode}\nPrint multiple stickers with this code.`
+        : '';
+      alert(`Issued ${chosen.length} pcs from Lot ${lotNo} (Total ${formatKg(totalWeight)} kg)${crateSummary}`);
+     setSelected([]);
       setNote("");
     } catch (err) {
       alert(err.message || 'Failed to issue pieces');
@@ -110,6 +137,16 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
           <div><label className={`text-xs ${cls.muted}`}>Note (optional)</label><Input value={note} onChange={e=>setNote(e.target.value)} placeholder="Reference / reason" /></div>
         </div>
 
+        <form onSubmit={handleBarcodeSubmit} className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+          <div className="md:col-span-2">
+            <label className={`text-xs ${cls.muted}`}>Scan roll barcode</label>
+            <Input value={barcodeScan} onChange={e=>setBarcodeScan(e.target.value)} placeholder="Scan or type barcode" disabled={scanLoading} />
+          </div>
+          <div className="flex items-end">
+            <Button type="submit" disabled={scanLoading || !barcodeScan.trim()}>{scanLoading ? 'Scanning…' : 'Apply'}</Button>
+          </div>
+        </form>
+
         <div className="mt-4 flex items-center gap-2">
           <Pill>Available: {availablePieces.length} pcs</Pill>
           <Pill>Selected: {selected.length} pcs</Pill>
@@ -121,12 +158,17 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="overflow-auto">
             <table className="w-full text-sm">
-              <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
+              <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Barcode</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
               <tbody>
-                {availablePieces.length===0? <tr><td colSpan={3} className="py-4">No available pieces in this lot.</td></tr> : availablePieces.slice((piecePage-1)*piecePageSize, (piecePage-1)*piecePageSize + piecePageSize).map(p=> (
+                {availablePieces.length===0? <tr><td colSpan={4} className="py-4">No available pieces in this lot.</td></tr> : availablePieces.slice((piecePage-1)*piecePageSize, (piecePage-1)*piecePageSize + piecePageSize).map(p=> (
                   <tr key={p.id} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2"><input type="checkbox" checked={selected.includes(p.id)} onChange={()=>toggle(p.id)} /></td>
                     <td className="py-2 pr-2 font-mono">{p.id}</td>
+                    <td className="py-2 pr-2">
+                      {p.barcode ? (
+                        <a href={api.barcodeImageUrl(p.barcode)} target="_blank" rel="noreferrer" className="underline text-xs">{p.barcode}</a>
+                      ) : '—'}
+                    </td>
                     <td className="py-2 pr-2 text-right">{formatKg(p.weight)}</td>
                   </tr>
                 ))}

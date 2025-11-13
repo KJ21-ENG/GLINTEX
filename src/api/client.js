@@ -85,6 +85,16 @@ export async function updateSettings(payload) { return await request('/api/setti
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }
 export async function deleteInboundItem(id) { return await request(`/api/inbound_items/${id}`, { method: 'DELETE' }); }
+export async function getInboundByBarcode(code) { return await request(`/api/inbound_items/barcode/${encodeURIComponent(code)}`); }
+export async function getIssueByBarcode(code) { return await request(`/api/issue_to_machine/lookup?barcode=${encodeURIComponent(code)}`); }
+
+export function barcodeImageUrl(code, options = {}) {
+  if (!code) return '';
+  const params = new URLSearchParams({ code });
+  if (options.scale) params.set('scale', String(options.scale));
+  if (options.height) params.set('height', String(options.height));
+  return `${BASE}/api/barcodes/render?${params.toString()}`;
+}
 export async function whatsappStatus() { return await request('/api/whatsapp/status'); }
 export async function whatsappStart() { return await request('/api/whatsapp/start', { method: 'POST' }); }
 export async function whatsappQr() { return await request('/api/whatsapp/qrcode'); }
@@ -128,4 +138,7 @@ export default {
   deleteBox,
   updateBox,
   updateSettings,
+  getInboundByBarcode,
+  getIssueByBarcode,
+  barcodeImageUrl,
 };

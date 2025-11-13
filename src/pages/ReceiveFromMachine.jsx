@@ -631,6 +631,9 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [progressText, setProgressText] = useState('');
+  const [issueBarcodeInput, setIssueBarcodeInput] = useState('');
+  const [currentIssueBarcode, setCurrentIssueBarcode] = useState('');
+  const [issueLookupLoading, setIssueLookupLoading] = useState(false);
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({
     date: todayISO(),
@@ -856,6 +859,8 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
     setReceiveDate(todayISO());
     setMarkRemainingWastage(false);
     setFormError('');
+    setCurrentIssueBarcode('');
+    setIssueBarcodeInput('');
   }
 
   function handleAddEntry() {
@@ -893,11 +898,35 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
       helperName: helperId ? (workerById.get(helperId)?.name || '') : '',
       receiveDate: receiveDate || todayISO(),
       markWastage: markRemainingWastage,
+      issueBarcode: currentIssueBarcode || null,
     };
     setCart(prev => [...prev, entry]);
     setGrossWeight('');
     setBobbinQty('');
     setMarkRemainingWastage(false);
+  }
+
+  async function handleIssueBarcodeSubmit(e) {
+    e.preventDefault();
+    const code = issueBarcodeInput.trim();
+    if (!code) return;
+    setIssueLookupLoading(true);
+    try {
+      const issue = await api.getIssueByBarcode(code);
+      if (!issue) throw new Error('Issue barcode not found');
+      const pieceIds = Array.isArray(issue.pieceIds) ? issue.pieceIds : (String(issue.pieceIds || '').split(',').filter(Boolean));
+      if (pieceIds.length !== 1) throw new Error('Issue barcode must reference a single piece');
+      setLotNo(issue.lotNo || '');
+      setPieceId(pieceIds[0]);
+      const normalized = code.trim().toUpperCase();
+      setCurrentIssueBarcode(normalized);
+      alert(`Loaded issue ${normalized} for piece ${pieceIds[0]}`);
+    } catch (err) {
+      alert(err.message || 'Failed to lookup issue barcode');
+    } finally {
+      setIssueBarcodeInput('');
+      setIssueLookupLoading(false);
+    }
   }
 
   function removeEntry(entryId) {
@@ -994,6 +1023,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
           helperId: entry.helperId,
           grossWeight: entry.grossWeight,
           receiveDate: entry.receiveDate,
+          issueBarcode: entry.issueBarcode,
         });
         setCart(prev => prev.filter(item => item.id !== entry.id));
       }
@@ -1061,10 +1091,25 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
           <div>
             <label className={`text-xs ${cls.muted}`}>Receive date</label>
             <Input type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} disabled={saving} />
-          </div>
         </div>
+      </div>
 
-        {pendingSummary ? (
+      <form onSubmit={handleIssueBarcodeSubmit} className="grid gap-3 md:grid-cols-3 mt-3">
+        <div className="md:col-span-2">
+          <label className={`text-xs ${cls.muted}`}>Scan issue barcode</label>
+          <Input value={issueBarcodeInput} onChange={(e)=>setIssueBarcodeInput(e.target.value)} placeholder="Scan ISM-MET-001" disabled={issueLookupLoading} />
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" disabled={issueLookupLoading || !issueBarcodeInput.trim()}>{issueLookupLoading ? 'Scanning…' : 'Load issue'}</Button>
+        </div>
+      </form>
+      {currentIssueBarcode && (
+        <div className={`text-xs mt-1 ${cls.muted}`}>
+          Linked issue barcode: {currentIssueBarcode}
+        </div>
+      )}
+
+      {pendingSummary ? (
           <div className={`mt-3 grid gap-3 sm:grid-cols-2`}>
             <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
               <div className="text-xs font-semibold uppercase tracking-wide">Inbound</div>
@@ -1214,6 +1259,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
               <tr>
                 <th className="py-2 pr-2">Piece</th>
                 <th className="py-2 pr-2">Lot</th>
+                <th className="py-2 pr-2">Issue barcode</th>
                 <th className="py-2 pr-2">Bobbin</th>
                 <th className="py-2 pr-2 text-right">Qty</th>
                 <th className="py-2 pr-2">Box</th>
@@ -1235,6 +1281,11 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
                 <tr key={entry.id} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2 font-mono">{entry.pieceId}</td>
                   <td className="py-2 pr-2 font-mono">{entry.lotNo}</td>
+                  <td className="py-2 pr-2">
+                    {entry.issueBarcode ? (
+                      <span className="text-xs">{entry.issueBarcode}</span>
+                    ) : <span className={`text-xs ${cls.muted}`}>Manual</span>}
+                  </td>
                   <td className="py-2 pr-2">
                     {entry.bobbinName}
                     <div className={`text-xs ${cls.muted}`}>{formatKg(entry.bobbinWeight)} kg</div>

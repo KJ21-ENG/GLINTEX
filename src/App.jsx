@@ -91,8 +91,9 @@ export default function App() {
   }, [refreshDb]);
 
   const handleIssueToMachine = useCallback(async (payload) => {
-    await api.createIssueToMachine(payload);
+    const result = await api.createIssueToMachine(payload);
     await refreshDb();
+    return result;
   }, [refreshDb]);
 
   const handleCreateItem = useCallback(async (name) => {

@@ -58,6 +58,13 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
     <tr ref={rowRef} onContextMenu={openContextMenu} className={`border-t ${cls.rowBorder} ${isWastageMarked ? 'piece-disabled' : ''} row-hover`}>
       <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} disabled={!isAvailable} /></td>
       <td className="py-2 pr-2 font-mono">{p.id}</td>
+      <td className="py-2 pr-2">
+        {p.barcode ? (
+          <a href={api.barcodeImageUrl(p.barcode)} target="_blank" rel="noreferrer" className="underline text-xs">
+            {p.barcode}
+          </a>
+        ) : '—'}
+      </td>
       <td className="py-2 pr-2">{p.seq}</td>
       <td className="py-2 pr-2 text-right">
         <div className="flex items-center justify-end gap-2">

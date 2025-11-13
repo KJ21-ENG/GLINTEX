@@ -48,6 +48,7 @@ model InboundItem {
   weight    Float
   status    String
   seq       Int
+  barcode   String  @unique
   createdAt DateTime @default(now())
 }
 
@@ -85,6 +86,7 @@ model IssueToMachine {
   note        String?
   machineId   String?
   operatorId  String?
+  barcode     String  @unique
   machine     Machine?  @relation(fields: [machineId], references: [id])
   operator    Operator? @relation(fields: [operatorId], references: [id])
 }
@@ -176,6 +178,7 @@ model Box {
   weight      Float
   receiveRows ReceiveRow[]
 }
+
 
 model AuditLog {
   id         String   @id @default(cuid())

@@ -7,6 +7,8 @@ import prisma from './prismaClient.js';
 import whatsapp from '../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from './utils/whatsappTemplates.js';
 import { logCrud } from './utils/auditLogger.js';
+import bwipjs from 'bwip-js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode } from './utils/barcodeHelpers.js';
 
 dotenv.config();
 const app = express();
@@ -16,6 +18,10 @@ app.use(express.json({ limit: '5mb' }));
 const PORT = process.env.PORT || 4000;
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+
+function normalizeBarcodeInput(value) {
+  return String(value || '').trim().toUpperCase();
+}
 
 function normalizePieceId(raw) {
   if (raw === undefined || raw === null) return null;
@@ -395,6 +401,69 @@ app.get('/api/db', async (req, res) => {
   });
 });
 
+app.get('/api/issue_to_machine', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Missing barcode query param' });
+    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+    const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').filter(Boolean) : [];
+    res.json({ ...issue, pieceIds });
+  } catch (err) {
+    console.error('Failed to fetch issue by barcode', err);
+    res.status(500).json({ error: 'Failed to fetch issue' });
+  }
+});
+
+app.get('/api/inbound_items/barcode/:code', async (req, res) => {
+  try {
+    const code = normalizeBarcodeInput(req.params.code);
+    if (!code) return res.status(400).json({ error: 'Missing barcode' });
+    const piece = await prisma.inboundItem.findUnique({ where: { barcode: code } });
+    if (!piece) return res.status(404).json({ error: 'Barcode not found' });
+    res.json(piece);
+  } catch (err) {
+    console.error('Failed to lookup inbound barcode', err);
+    res.status(500).json({ error: 'Failed to lookup barcode' });
+  }
+});
+
+app.get('/api/issue_to_machine/lookup', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
+    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
+    res.json({ ...issue, pieceIds });
+  } catch (err) {
+    console.error('Failed to lookup issue barcode', err);
+    res.status(500).json({ error: 'Failed to lookup barcode' });
+  }
+});
+
+app.get('/api/barcodes/render', async (req, res) => {
+  try {
+    const code = normalizeBarcodeInput(req.query.code);
+    if (!code) return res.status(400).json({ error: 'Missing code' });
+    const scale = Math.min(Math.max(Number(req.query.scale) || 3, 2), 8);
+    const height = Math.min(Math.max(Number(req.query.height) || 12, 8), 30);
+    const buffer = await bwipjs.toBuffer({
+      bcid: 'code128',
+      text: code,
+      scale,
+      height,
+      includetext: true,
+      textxalign: 'center',
+    });
+    res.setHeader('Content-Type', 'image/png');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Failed to render barcode', err);
+    res.status(500).json({ error: 'Failed to render barcode' });
+  }
+});
+
 // Return the next lot number preview (value that will be used on save)
 app.get('/api/sequence/next', async (req, res) => {
   try {
@@ -565,6 +634,10 @@ app.post('/api/lots', async (req, res) => {
       };
     });
 
+      const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
+      if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+      const materialCode = deriveMaterialCodeFromItem(itemRecord);
+
     const totalPieces = preparedPieces.length;
     const totalWeight = preparedPieces.reduce((sum, piece) => sum + piece.weight, 0);
 
@@ -580,13 +653,18 @@ app.post('/api/lots', async (req, res) => {
       const lotNo = String(sequence.nextValue).padStart(3, "0");
       
       // Update piece IDs with the actual lot number
-      const updatedPieces = preparedPieces.map((piece, idx) => ({
-        ...piece,
-        id: `${lotNo}-${idx + 1}`,
-        lotNo,
-        itemId,
-        status: 'available',
-      }));
+      const updatedPieces = preparedPieces.map((piece, idx) => {
+        const seq = idx + 1;
+        return {
+          ...piece,
+          id: `${lotNo}-${seq}`,
+          lotNo,
+          itemId,
+          seq,
+          status: 'available',
+          barcode: makeInboundBarcode({ materialCode, lotNo, seq }),
+        };
+      });
 
       const lot = await tx.lot.create({
         data: {
@@ -648,7 +726,11 @@ app.post('/api/issue_to_machine', async (req, res) => {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
     }
 
-    const issueRecord = await prisma.$transaction(async (tx) => {
+    const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    const materialCode = deriveMaterialCodeFromItem(itemRecord);
+
+    const { issueRecord } = await prisma.$transaction(async (tx) => {
       const pieces = await tx.inboundItem.findMany({
         where: { id: { in: pieceIds } },
         orderBy: { seq: 'asc' },
@@ -678,22 +760,26 @@ app.post('/api/issue_to_machine', async (req, res) => {
         data: { status: 'consumed' },
       });
 
-      return tx.issueToMachine.create({
+      const firstSeq = pieces[0]?.seq ?? 0;
+      const issueRow = await tx.issueToMachine.create({
         data: {
           id: randomUUID(),
           date,
           itemId,
-          lotNo,
-          count: pieceIds.length,
-          totalWeight,
-          pieceIds: pieceIdsCsv,
-          reason: 'internal',
-          note: note || null,
-          machineId: machineId || null,
+            lotNo,
+            count: pieceIds.length,
+            totalWeight,
+            pieceIds: pieceIdsCsv,
+            reason: 'internal',
+            note: note || null,
+            machineId: machineId || null,
           operatorId: operatorId || null,
+          barcode: makeIssueBarcode({ materialCode, lotNo, seq: firstSeq }),
         },
       });
-    });
+
+        return { issueRecord: issueRow };
+      });
 
     await logCrud({
       entityType: 'issue_to_machine',
@@ -954,16 +1040,32 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
       helperId,
       grossWeight,
       receiveDate,
+      issueBarcode,
     } = req.body || {};
 
-    if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
     if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
     if (!bobbinId) return res.status(400).json({ error: 'Missing bobbin selection' });
     if (!operatorId) return res.status(400).json({ error: 'Missing operator' });
 
-    const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    const normalizedIssueCode = issueBarcode ? normalizeBarcodeInput(issueBarcode) : '';
+    let resolvedPieceId = pieceId;
+    let resolvedLotNo = lotNo;
+    if (normalizedIssueCode) {
+      const issue = await prisma.issueToMachine.findUnique({ where: { barcode: normalizedIssueCode } });
+      if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+      const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
+      if (pieceIds.length !== 1) {
+        return res.status(400).json({ error: 'Issue barcode must reference exactly one piece' });
+      }
+      resolvedPieceId = pieceIds[0];
+      resolvedLotNo = issue.lotNo;
+    }
+
+    if (!resolvedPieceId || typeof resolvedPieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: resolvedPieceId } });
     if (!piece) return res.status(404).json({ error: 'Piece not found' });
-    if (lotNo && piece.lotNo !== lotNo) return res.status(400).json({ error: 'Piece does not belong to selected lot' });
+    if (resolvedLotNo && piece.lotNo !== resolvedLotNo) return res.status(400).json({ error: 'Piece does not belong to the scanned issue' });
 
     const bobbin = await prisma.bobbin.findUnique({ where: { id: bobbinId } });
     if (!bobbin) return res.status(404).json({ error: 'Bobbin not found' });
@@ -1004,7 +1106,7 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
     }
 
     const inboundWeight = Number(piece.weight || 0);
-    const currentTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const currentTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
     const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
     const pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
@@ -1026,10 +1128,12 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
         },
       });
 
+      const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: 1 });
+
       const createdRow = await tx.receiveRow.create({
         data: {
           uploadId: upload.id,
-          pieceId,
+          pieceId: resolvedPieceId,
           vchNo,
           date: receiveDateStr,
           grossWt: gross,
@@ -1047,17 +1151,18 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
           shift: helperRec ? helperRec.name : null,
           narration: 'Manual entry',
           createdBy: 'manual',
+          barcode: receiveBarcode,
         },
       });
 
       await tx.receivePieceTotal.upsert({
-        where: { pieceId },
+        where: { pieceId: resolvedPieceId },
         update: {
           totalNetWeight: { increment: net },
           totalPieces: { increment: bobbinQty },
         },
         create: {
-          pieceId,
+          pieceId: resolvedPieceId,
           totalNetWeight: net,
           totalPieces: bobbinQty,
         },
@@ -1066,6 +1171,7 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
       return {
         rowId: createdRow.id,
         upload,
+        receiveBarcode,
       };
     });
 
@@ -1083,26 +1189,11 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
       return res.status(500).json({ error: 'Failed to load manual entry' });
     }
 
-    const updatedTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const updatedTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const pendingAfter = Math.max(
       0,
       inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
     );
-
-    await logCrud({
-      entityType: 'receive_row',
-      entityId: rowWithRelations.id,
-      action: 'create',
-      payload: {
-        pieceId,
-        lotNo,
-        uploadId: txResult.upload.id,
-        operatorId,
-        helperId,
-        netWeight: net,
-        bobbinQuantity: bobbinQty,
-      },
-    });
 
     res.json({
       ok: true,
@@ -1110,13 +1201,13 @@ app.post('/api/receive_from_machine/manual', async (req, res) => {
       upload: txResult.upload,
       pendingBefore,
       pendingAfter,
+      receiveBarcode: txResult.receiveBarcode,
     });
   } catch (err) {
     console.error('Failed to record manual receive', err);
     res.status(500).json({ error: err.message || 'Failed to record manual receive' });
   }
 });
-
 app.post('/api/receive_from_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};

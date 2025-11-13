@@ -1424,6 +1424,13 @@ app.delete('/api/issue_to_machine/:id', async (req, res) => {
 
     // Get the piece IDs from the issue_to_machine record
     const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
+    const cleanPieceIds = pieceIds.map(p => String(p).trim()).filter(Boolean);
+    if (cleanPieceIds.length > 0) {
+      const receiveCount = await prisma.receiveRow.count({ where: { pieceId: { in: cleanPieceIds } } });
+      if (receiveCount > 0) {
+        return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
+      }
+    }
     
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
@@ -1431,9 +1438,9 @@ app.delete('/api/issue_to_machine/:id', async (req, res) => {
       await tx.issueToMachine.delete({ where: { id } });
       
       // Mark pieces as available again
-      if (pieceIds.length > 0) {
+      if (cleanPieceIds.length > 0) {
         await tx.inboundItem.updateMany({
-          where: { id: { in: pieceIds } },
+          where: { id: { in: cleanPieceIds } },
           data: { status: 'available' },
         });
       }
@@ -1449,7 +1456,7 @@ app.delete('/api/issue_to_machine/:id', async (req, res) => {
       const machineNameDel = machineRec ? machineRec.name : '';
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
-      sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [], machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
+      sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
     } catch (e) { console.error('notify issue_to_machine deleted error', e); }
   } catch (err) {
     console.error('Failed to delete issue_to_machine record', err);

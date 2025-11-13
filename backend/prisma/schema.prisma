@@ -183,5 +183,6 @@ model AuditLog {
   entityId   String?
   action     String
   payload    Json?
+  payloadText String?
   createdAt  DateTime @default(now())
 }

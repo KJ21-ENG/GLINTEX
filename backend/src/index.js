@@ -930,7 +930,9 @@ app.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
       entityType: 'receive_piece_total',
       entityId: pieceId,
       action: 'update',
-      payload: { action: 'mark_wastage', marked: remaining, totals: updated },
+      before: currentTotal,
+      after: updated,
+      payload: { action: 'mark_wastage', marked: remaining },
     });
 
     res.json({ ok: true, pieceId, marked: remaining, updated });
@@ -1300,7 +1302,12 @@ app.put('/api/items/:id', async (req, res) => {
       entityType: 'item',
       entityId: id,
       action: 'update',
-      payload: { before: existing, after: updated },
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+      },
     });
     res.json(updated);
   } catch (err) {
@@ -1337,7 +1344,17 @@ app.put('/api/firms/:id', async (req, res) => {
     const existing = await prisma.firm.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Firm not found' });
     const updated = await prisma.firm.update({ where: { id }, data: { name } });
-    await logCrud({ entityType: 'firm', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'firm',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update firm', err);
@@ -1373,7 +1390,17 @@ app.put('/api/suppliers/:id', async (req, res) => {
     const existing = await prisma.supplier.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Supplier not found' });
     const updated = await prisma.supplier.update({ where: { id }, data: { name } });
-    await logCrud({ entityType: 'supplier', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'supplier',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update supplier', err);
@@ -1409,7 +1436,17 @@ app.put('/api/machines/:id', async (req, res) => {
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
     const updated = await prisma.machine.update({ where: { id }, data: { name } });
-    await logCrud({ entityType: 'machine', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'machine',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update machine', err);
@@ -1458,7 +1495,19 @@ app.put('/api/operators/:id', async (req, res) => {
     const data = { name };
     if (role !== undefined) data.role = normalizeWorkerRole(role);
     const updated = await prisma.operator.update({ where: { id }, data });
-    await logCrud({ entityType: 'operator', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'operator',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+        oldRole: existing.role,
+        newRole: updated.role,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update operator', err);
@@ -1507,7 +1556,19 @@ app.put('/api/bobbins/:id', async (req, res) => {
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
       },
     });
-    await logCrud({ entityType: 'bobbin', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'bobbin',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+        oldWeight: existing.weight,
+        newWeight: updated.weight,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update bobbin', err);
@@ -1558,7 +1619,19 @@ app.put('/api/boxes/:id', async (req, res) => {
         weight: weightNum,
       },
     });
-    await logCrud({ entityType: 'box', entityId: id, action: 'update', payload: { before: existing, after: updated } });
+    await logCrud({
+      entityType: 'box',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldName: existing.name,
+        newName: updated.name,
+        oldWeight: existing.weight,
+        newWeight: updated.weight,
+      },
+    });
     res.json(updated);
   } catch (err) {
     console.error('Failed to update box', err);
@@ -1673,6 +1746,7 @@ app.put('/api/settings', async (req, res) => {
     const { brandPrimary, brandGold, logoDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
     const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(req.body, 'whatsappNumber');
     const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(req.body, 'whatsappGroupIds');
+    const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
     function normalizeForStore(num) {
       if (!num) return null;
@@ -1708,12 +1782,14 @@ app.put('/api/settings', async (req, res) => {
         update: updateData,
         create: createData,
       });
-      await logCrud({
-        entityType: 'settings',
-        entityId: '1',
-        action: 'update',
-        payload: settings,
-      });
+    await logCrud({
+      entityType: 'settings',
+      entityId: '1',
+      action: 'update',
+      before: previousSettings,
+      after: settings,
+      payload: settings,
+    });
       return res.json(settings);
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
@@ -1736,6 +1812,8 @@ app.put('/api/settings', async (req, res) => {
         entityType: 'settings',
         entityId: '1',
         action: 'update',
+        before: previousSettings,
+        after: settings,
         payload: settings,
       });
       return res.json(settings);
@@ -1754,9 +1832,11 @@ app.put('/api/inbound_items/:id', async (req, res) => {
     if (seq !== undefined && (!Number.isInteger(seq) || seq < 1)) return res.status(400).json({ error: 'seq must be a positive integer' });
     if (weight !== undefined && (!Number.isFinite(Number(weight)) || Number(weight) <= 0)) return res.status(400).json({ error: 'weight must be a positive number' });
 
+    let beforeInbound = null;
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.inboundItem.findUnique({ where: { id } });
       if (!existing) throw new Error('Inbound piece not found');
+      beforeInbound = existing;
 
       const updated = await tx.inboundItem.update({ where: { id }, data: { ...(seq !== undefined ? { seq } : {}), ...(weight !== undefined ? { weight: Number(weight) } : {}) } });
 
@@ -1770,14 +1850,16 @@ app.put('/api/inbound_items/:id', async (req, res) => {
       return updated;
     });
 
+    const payload = {};
+    if (seq !== undefined) payload.seq = seq;
+    if (weight !== undefined) payload.weight = weight;
     await logCrud({
       entityType: 'inbound_item',
       entityId: id,
       action: 'update',
-      payload: {
-        seq,
-        weight,
-      },
+      before: beforeInbound,
+      after: result,
+      payload: Object.keys(payload).length ? payload : undefined,
     });
 
     res.json({ ok: true, inboundItem: result });

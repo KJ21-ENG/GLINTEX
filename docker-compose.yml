@@ -19,7 +19,7 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./apps/backend
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex
@@ -29,7 +29,7 @@ services:
     volumes:
       - backend-whatsapp-auth:/app/.wwebjs_auth
     ports:
-      - "4000:4000"
+      - "${BACKEND_PORT:-4001}:4000"
     depends_on:
       db:
         condition: service_healthy
@@ -37,10 +37,10 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./apps/frontend
+      dockerfile: Dockerfile
       args:
-        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:4001}
     ports:
       - "4173:80"
     depends_on:

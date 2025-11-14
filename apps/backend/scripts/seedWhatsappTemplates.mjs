@@ -1,0 +1,27 @@
+import prisma from '../src/lib/prisma.js';
+
+async function seed() {
+  const defaults = [
+    { event: 'inbound_created', enabled: true, template: 'New inbound: {{itemName}} Lot {{lotNo}} - {{totalPieces}} pcs, total {{totalWeight}} kg on {{date}}' },
+    { event: 'issue_to_machine_created', enabled: true, template: 'Issued: {{itemName}} Lot {{lotNo}} - {{count}} pcs by {{operatorName}} on {{date}}' },
+    { event: 'issue_to_machine_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
+    { event: 'inbound_piece_deleted', enabled: true, template: 'Inbound piece deleted: {{itemName}} Lot {{lotNo}} piece {{pieceId}}' },
+    { event: 'item_out_of_stock', enabled: true, template: 'Out of stock: {{itemName}} is now out of stock (available: {{available}})' },
+  ];
+
+  for (const t of defaults) {
+    await prisma.whatsappTemplate.upsert({
+      where: { event: t.event },
+      update: { enabled: t.enabled, template: t.template, sendToPrimary: true, groupIds: [] },
+      create: { ...t, sendToPrimary: true, groupIds: [] },
+    });
+    console.log('Upserted', t.event);
+  }
+
+  const all = await prisma.whatsappTemplate.findMany();
+  console.log('Total templates:', all.length);
+  process.exit(0);
+}
+
+seed().catch(e => { console.error(e); process.exit(1); });
+

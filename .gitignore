@@ -19,6 +19,7 @@ coverage/
 
 # Build outputs
 dist/
+apps/frontend/dist/
 build/
 .next/
 out/
@@ -30,10 +31,11 @@ out/
 # WhatsApp WebJS
 .wwebjs_auth/
 .wwebjs_cache/
-backend/.wwebjs_cache/
+apps/backend/.wwebjs_cache/
 
 # Temporary references
 temp_ref/
+apps/backend/backups/
 
 # Dependency directories
 jspm_packages/

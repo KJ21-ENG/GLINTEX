@@ -1,24 +1,17 @@
 {
-  "name": "glintex-inventory",
+  "name": "glintex-monorepo",
   "private": true,
   "version": "1.0.0",
-  "type": "module",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "xlsx": "^0.18.5",
-    "jspdf": "^2.5.1",
-    "jspdf-autotable": "^3.5.28"
-  },
-  "devDependencies": {
-    "vite": "^5.4.0",
-    "tailwindcss": "^3.4.9",
-    "postcss": "^8.4.41",
-    "autoprefixer": "^10.4.20"
+    "dev:frontend": "npm run dev --workspace apps/frontend",
+    "dev:backend": "npm run dev --workspace apps/backend",
+    "build:frontend": "npm run build --workspace apps/frontend",
+    "build:backend": "npm run build --workspace apps/backend",
+    "preview:frontend": "npm run preview --workspace apps/frontend",
+    "start:backend": "npm run start --workspace apps/backend"
   }
 }

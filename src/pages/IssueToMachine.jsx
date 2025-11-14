@@ -55,13 +55,29 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     });
   }, [db.lots, itemId]);
   const [lotNo, setLotNo] = useState("");
+  const [preserveSelectionOnLotChange, setPreserveSelectionOnLotChange] = useState(false);
+
+  const setLotNoWithOptions = (nextLot, { preserveSelection = false } = {}) => {
+    if (preserveSelection) {
+      setPreserveSelectionOnLotChange(true);
+    }
+    setLotNo(nextLot);
+  };
 
   useEffect(() => {
     // Do not auto-select first lot; leave user to choose from Select
-    if (!candidateLots.some(l => l.lotNo === lotNo)) setLotNo("");
-  }, [candidateLots]);
+    if (!candidateLots.some(l => l.lotNo === lotNo)) {
+      setLotNoWithOptions("");
+    }
+  }, [candidateLots, lotNo]);
 
-  useEffect(() => { setSelected([]); }, [lotNo]);
+  useEffect(() => {
+    if (preserveSelectionOnLotChange) {
+      setPreserveSelectionOnLotChange(false);
+      return;
+    }
+    setSelected([]);
+  }, [lotNo, preserveSelectionOnLotChange]);
 
   const availablePieces = useMemo(() => db.inbound_items
     .filter(ii => ii.lotNo===lotNo && ii.itemId===itemId && ii.status==='available')
@@ -88,7 +104,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
       if (!piece) throw new Error('Barcode not found');
       if (piece.status !== 'available') throw new Error('Piece is not available');
       if (itemId !== piece.itemId) setItemId(piece.itemId);
-      if (lotNo !== piece.lotNo) setLotNo(piece.lotNo);
+      if (lotNo !== piece.lotNo) setLotNoWithOptions(piece.lotNo, { preserveSelection: true });
       setSelected(prev => (prev.includes(piece.id) ? prev : [...prev, piece.id]));
       alert(`Scanned ${piece.id} and added to selection`);
     } catch (err) {
@@ -128,7 +144,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
           <div><label className={`text-xs ${cls.muted}`}>Date</label><Input type="date" value={date} onChange={e=>setDate(e.target.value)} /></div>
           <div><label className={`text-xs ${cls.muted}`}>Item</label><Select value={itemId} onChange={e=>setItemId(e.target.value)}><option value="">Select</option>{db.items.length===0? <option>No items</option> : db.items.map(i=> <option key={i.id} value={i.id}>{i.name}</option>)}</Select></div>
-          <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNo(e.target.value)}><option value="">Select</option>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
+          <div><label className={`text-xs ${cls.muted}`}>Lot</label><Select value={lotNo} onChange={e=>setLotNoWithOptions(e.target.value)}><option value="">Select</option>{candidateLots.length===0? <option>No lots</option> : candidateLots.map(l=> <option key={l.lotNo} value={l.lotNo}>{l.lotNo}</option>)}</Select></div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mt-3">

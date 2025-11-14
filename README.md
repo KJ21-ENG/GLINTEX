@@ -11,6 +11,34 @@ npm run dev
 
 Then open the local URL shown in your terminal.
 
+## Docker
+
+Spin up the entire stack (frontend, backend API, and PostgreSQL) with Docker:
+
+```bash
+docker compose build           # build frontend/backend images
+docker compose up -d           # start db + backend + frontend
+```
+
+Services will be available at:
+
+- Frontend: http://localhost:4173
+- Backend API: http://localhost:4000
+- PostgreSQL 17: localhost:5433 (`glintex` / `glintex`) — override host binding via `POSTGRES_PORT`.
+
+Environment knobs:
+
+- `BARCODE_MATERIAL_CODE` – override the default `MET` code in generated barcodes.
+- `VITE_API_BASE` – optional build arg that forces a specific API URL in the frontend bundle.
+- `POSTGRES_PORT` – change the host port that Postgres binds to (container still listens on 5432).
+
+Persistent data:
+
+- Database storage lives in the `postgres-data` named volume.
+- WhatsApp auth sessions persist in the `backend-whatsapp-auth` volume so you only need to scan the QR code once per environment.
+
+Use `docker compose logs -f backend` to watch the API (and WhatsApp) logs, and `docker compose down -v` if you need to reset all state.
+
 ## Build
 
 ```bash

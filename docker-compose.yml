@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: glintex
+      POSTGRES_USER: glintex
+      POSTGRES_PASSWORD: glintex
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glintex -d glintex"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex
+      SHADOW_DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex_shadow
+      PORT: 4000
+      BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
+    volumes:
+      - backend-whatsapp-auth:/app/.wwebjs_auth
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+    ports:
+      - "4173:80"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  backend-whatsapp-auth:

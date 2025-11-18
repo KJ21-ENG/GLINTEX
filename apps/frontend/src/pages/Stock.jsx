@@ -105,7 +105,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
 
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
-    (db.receive_piece_totals || []).forEach(row => {
+    (db.receive_from_cutter_machine_piece_totals || []).forEach(row => {
       map.set(row.pieceId, {
         received: Number(row.totalNetWeight || 0),
         wastage: Number(row.wastageNetWeight || 0),
@@ -113,7 +113,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
       });
     });
     return map;
-  }, [db.receive_piece_totals]);
+  }, [db.receive_from_cutter_machine_piece_totals]);
 
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
@@ -165,13 +165,13 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   // Build set of issued piece IDs from issue_to_machine records
   const issuedPieceIds = useMemo(() => {
     const set = new Set();
-    (db.issue_to_machine || []).forEach((rec) => {
+    (db.issue_to_cutter_machine || []).forEach((rec) => {
       if (rec && rec.pieceIds) {
         (String(rec.pieceIds) || '').split(',').map(s => s.trim()).filter(Boolean).forEach(pid => set.add(pid));
       }
     });
     return set;
-  }, [db.issue_to_machine]);
+  }, [db.issue_to_cutter_machine]);
 
   const [markingPieces, setMarkingPieces] = useState(() => new Set());
 

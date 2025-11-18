@@ -98,8 +98,8 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   };
 
   const rows = useMemo(() => {
-    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.issue_to_machine || []).slice();
-  }, [db.issue_to_machine, rowsProp]);
+    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.issue_to_cutter_machine || []).slice();
+  }, [db.issue_to_cutter_machine, rowsProp]);
 
   const items = db.items || [];
   const machines = db.machines || [];

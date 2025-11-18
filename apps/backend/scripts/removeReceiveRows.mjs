@@ -14,7 +14,7 @@ async function main() {
   const results = [];
   await prisma.$transaction(async (tx) => {
     for (const id of ids) {
-      const row = await tx.receiveRow.findUnique({ where: { id } });
+      const row = await tx.receiveFromCutterMachineRow.findUnique({ where: { id } });
       if (!row) {
         results.push({ id, status: 'missing' });
         continue;
@@ -23,14 +23,14 @@ async function main() {
       const net = Number(row.netWt || row.netWt || 0);
 
       // delete the receive row
-      await tx.receiveRow.delete({ where: { id } });
+      await tx.receiveFromCutterMachineRow.delete({ where: { id } });
 
       // adjust receivePieceTotal
-      const rpt = await tx.receivePieceTotal.findUnique({ where: { pieceId } });
+      const rpt = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
       if (rpt) {
         const curr = Number(rpt.totalNetWeight || 0);
         const next = Math.max(0, curr - net);
-        await tx.receivePieceTotal.update({ where: { pieceId }, data: { totalNetWeight: next } });
+        await tx.receiveFromCutterMachinePieceTotal.update({ where: { pieceId }, data: { totalNetWeight: next } });
         results.push({ id, status: 'deleted', pieceId, net, prevTotal: curr, newTotal: next });
       } else {
         results.push({ id, status: 'deleted_no_total', pieceId, net });

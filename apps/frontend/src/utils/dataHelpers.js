@@ -21,7 +21,7 @@ export function normalizeDb(raw) {
   const boxes = ensureArr(raw?.boxes);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
-  const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
+  const issueToCutterMachine = ensureArr(raw?.issue_to_cutter_machine).map((record) => ({
     ...record,
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
     // Normalize date to canonical ISO (YYYY-MM-DD) for sorting, keep original for display if needed
@@ -39,9 +39,9 @@ export function normalizeDb(raw) {
     })(),
   }));
   const settings = ensureArr(raw?.settings);
-  const receiveUploads = ensureArr(raw?.receive_uploads);
-  const receiveRows = ensureArr(raw?.receive_rows);
-  const receivePieceTotals = ensureArr(raw?.receive_piece_totals);
+  const receiveUploads = ensureArr(raw?.receive_from_cutter_machine_uploads);
+  const receiveRows = ensureArr(raw?.receive_from_cutter_machine_rows);
+  const receivePieceTotals = ensureArr(raw?.receive_from_cutter_machine_piece_totals);
   return {
     items,
     firms,
@@ -54,11 +54,11 @@ export function normalizeDb(raw) {
     boxes,
     lots,
     inbound_items,
-    issue_to_machine: issueToMachine,
+    issue_to_cutter_machine: issueToCutterMachine,
     settings,
-    receive_uploads: receiveUploads,
-    receive_rows: receiveRows,
-    receive_piece_totals: receivePieceTotals,
+    receive_from_cutter_machine_uploads: receiveUploads,
+    receive_from_cutter_machine_rows: receiveRows,
+    receive_from_cutter_machine_piece_totals: receivePieceTotals,
   };
 }
 

@@ -40,12 +40,12 @@ async function normalizeLots() {
 }
 
 async function normalizeIssues() {
-  const rows = await prisma.issueToMachine.findMany();
+  const rows = await prisma.issueToCutterMachine.findMany();
   let updated = 0;
   for (const r of rows) {
     const iso = parseDateToISO(r.date || '');
     if (iso && iso !== r.date) {
-      await prisma.issueToMachine.update({ where: { id: r.id }, data: { date: iso } });
+      await prisma.issueToCutterMachine.update({ where: { id: r.id }, data: { date: iso } });
       updated++;
       console.log(`Updated issue ${r.id}: ${r.date} -> ${iso}`);
     }
@@ -54,12 +54,12 @@ async function normalizeIssues() {
 }
 
 async function normalizeReceiveRows() {
-  const rows = await prisma.receiveRow.findMany();
+  const rows = await prisma.receiveFromCutterMachineRow.findMany();
   let updated = 0;
   for (const r of rows) {
     const iso = parseDateToISO(r.date || '');
     if (iso && iso !== r.date) {
-      await prisma.receiveRow.update({ where: { id: r.id }, data: { date: iso } });
+      await prisma.receiveFromCutterMachineRow.update({ where: { id: r.id }, data: { date: iso } });
       updated++;
       console.log(`Updated receive row ${r.id}: ${r.date} -> ${iso}`);
     }
@@ -83,5 +83,4 @@ async function main() {
 
 // Call main when executed directly
 main();
-
 

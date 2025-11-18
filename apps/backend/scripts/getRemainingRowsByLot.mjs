@@ -20,7 +20,7 @@ async function main() {
     }
 
     // Get remaining rows
-    const remainingRows = await prisma.receiveRow.findMany({
+    const remainingRows = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         bobbinId: defaultBobbin.id,
       },

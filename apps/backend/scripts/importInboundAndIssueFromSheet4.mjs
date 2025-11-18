@@ -23,7 +23,7 @@ const firms = new Map();
 const suppliers = new Map();
 const lots = [];
 const inbound_items = [];
-const issue_to_machine = [];
+const issue_to_cutter_machine = [];
 const overrides = {}; // SO -> lotNo
 
 // We will assign new lot numbers after existing ones: we cannot know DB last; caller can remap later.
@@ -76,7 +76,7 @@ for (const r of rows) {
     const count = done.length;
     const totalDoneWeight = done.reduce((s,p)=>s+(p.w||0),0);
     const latestDate = done.map(p=>p.date).filter(Boolean).sort().slice(-1)[0] || '';
-    issue_to_machine.push({ id, date: latestDate, itemId, lotNo, count, totalWeight: totalDoneWeight, pieceIds: done.map(p=>p.id), reason: 'import_legacy', note: 'Imported from sheet4' });
+    issue_to_cutter_machine.push({ id, date: latestDate, itemId, lotNo, count, totalWeight: totalDoneWeight, pieceIds: done.map(p=>p.id), reason: 'import_legacy', note: 'Imported from sheet4' });
   }
 }
 
@@ -86,7 +86,7 @@ const out = {
   suppliers: Array.from(suppliers, ([name,id])=>({ id, name })),
   lots,
   inbound_items,
-  issue_to_machine,
+  issue_to_cutter_machine,
 };
 
 fs.writeFileSync(outImportJson, JSON.stringify(out, null, 2));

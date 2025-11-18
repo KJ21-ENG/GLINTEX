@@ -61,7 +61,7 @@ async function main() {
     }
 
     // Get rows without bobbin
-    const rowsWithoutBobbin = await prisma.receiveRow.findMany({
+    const rowsWithoutBobbin = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         OR: [
           { pcsTypeName: null },
@@ -79,7 +79,7 @@ async function main() {
     });
 
     // Get rows with bobbin
-    const rowsWithBobbin = await prisma.receiveRow.findMany({
+    const rowsWithBobbin = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         AND: [
           { pcsTypeName: { not: null } },
@@ -221,7 +221,7 @@ async function main() {
 
     for (const update of updates) {
       try {
-        await prisma.receiveRow.update({
+        await prisma.receiveFromCutterMachineRow.update({
           where: { id: update.id },
           data: { 
             bobbinId: update.newBobbinId,
@@ -241,7 +241,7 @@ async function main() {
 
     // Verify
     console.log('\nSample of updated records:');
-    const sampleUpdated = await prisma.receiveRow.findMany({
+    const sampleUpdated = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         id: { in: updates.slice(0, 5).map(u => u.id) },
       },

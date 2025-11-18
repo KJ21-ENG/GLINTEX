@@ -26,36 +26,36 @@ async function renameLot(oldLotNo, newLotNo) {
 
   await prisma.$transaction(async (tx) => {
     // Update ReceiveRow: pieceId and vchNo
-    const recRows = await tx.receiveRow.findMany({ where: { OR: [ { pieceId: { startsWith: `${oldLotNo}-` } }, { vchNo: { startsWith: `${oldLotNo}-` } } ] } });
+    const recRows = await tx.receiveFromCutterMachineRow.findMany({ where: { OR: [ { pieceId: { startsWith: `${oldLotNo}-` } }, { vchNo: { startsWith: `${oldLotNo}-` } } ] } });
     for (const rr of recRows) {
       const oldPiece = rr.pieceId;
       const newPiece = oldPiece && oldPiece.startsWith(`${oldLotNo}-`) ? oldPiece.replace(`${oldLotNo}-`, `${newLotNo}-`) : oldPiece;
       const oldVch = rr.vchNo;
       const newVch = oldVch && oldVch.startsWith(`${oldLotNo}-`) ? oldVch.replace(`${oldLotNo}-`, `${newLotNo}-`) : oldVch;
       if (newPiece !== rr.pieceId || newVch !== rr.vchNo) {
-        await tx.receiveRow.update({ where: { id: rr.id }, data: { pieceId: newPiece, vchNo: newVch } });
+        await tx.receiveFromCutterMachineRow.update({ where: { id: rr.id }, data: { pieceId: newPiece, vchNo: newVch } });
       }
     }
 
     // Update ReceivePieceTotal keys
-    const rpt = await tx.receivePieceTotal.findMany({ where: { pieceId: { startsWith: `${oldLotNo}-` } } });
+    const rpt = await tx.receiveFromCutterMachinePieceTotal.findMany({ where: { pieceId: { startsWith: `${oldLotNo}-` } } });
     for (const t of rpt) {
       const newId = t.pieceId.replace(`${oldLotNo}-`, `${newLotNo}-`);
       // Upsert to new key then delete old
-      await tx.receivePieceTotal.upsert({
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId: newId },
         update: { totalNetWeight: { increment: Number(t.totalNetWeight || 0) } },
         create: { pieceId: newId, totalNetWeight: Number(t.totalNetWeight || 0) },
       });
-      await tx.receivePieceTotal.delete({ where: { pieceId: t.pieceId } });
+      await tx.receiveFromCutterMachinePieceTotal.delete({ where: { pieceId: t.pieceId } });
     }
 
     // Update IssueToMachine for this lot
-    const issues = await tx.issueToMachine.findMany({ where: { lotNo: oldLotNo } });
+    const issues = await tx.issueToCutterMachine.findMany({ where: { lotNo: oldLotNo } });
     for (const is of issues) {
       const pieces = (is.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
       const newPieces = pieces.map(pid => pid.startsWith(`${oldLotNo}-`) ? pid.replace(`${oldLotNo}-`, `${newLotNo}-`) : pid);
-      await tx.issueToMachine.update({ where: { id: is.id }, data: { lotNo: newLotNo, pieceIds: newPieces.join(',') } });
+      await tx.issueToCutterMachine.update({ where: { id: is.id }, data: { lotNo: newLotNo, pieceIds: newPieces.join(',') } });
     }
 
     // Update InboundItem ids and lotNo

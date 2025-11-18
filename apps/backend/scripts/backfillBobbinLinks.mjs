@@ -6,7 +6,7 @@ async function main() {
     console.log('Backfilling bobbin links in ReceiveRow records...\n');
 
     // Fetch all receive rows that have pcsTypeName but no bobbinId
-    const rowsToUpdate = await prisma.receiveRow.findMany({
+    const rowsToUpdate = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         OR: [
           { bobbinId: null },
@@ -91,7 +91,7 @@ async function main() {
         continue;
       }
 
-      await prisma.receiveRow.update({
+      await prisma.receiveFromCutterMachineRow.update({
         where: { id: row.id },
         data: { bobbinId: targetBobbinId },
       });
@@ -106,7 +106,7 @@ async function main() {
 
     // Verify: Show sample of updated records
     console.log('\nSample of updated records:');
-    const sample = await prisma.receiveRow.findMany({
+    const sample = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         bobbinId: { not: null },
       },

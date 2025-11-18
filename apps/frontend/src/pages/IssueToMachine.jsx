@@ -84,9 +84,9 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     .sort((a,b)=> a.seq - b.seq), [db.inbound_items, lotNo, itemId]);
 
   const lastIssueForLot = useMemo(() => {
-    const rows = db.issue_to_machine.filter(record => record.lotNo === lotNo).sort((a,b)=> b.date.localeCompare(a.date));
+    const rows = db.issue_to_cutter_machine.filter(record => record.lotNo === lotNo).sort((a,b)=> b.date.localeCompare(a.date));
     return rows[0] || null;
-  }, [db.issue_to_machine, lotNo]);
+  }, [db.issue_to_cutter_machine, lotNo]);
 
   function toggle(id) {
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);

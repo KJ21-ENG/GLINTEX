@@ -161,7 +161,7 @@ function parseReceiveCsvContent(content) {
       employee: toOptionalString(rec['Employee']),
       pktTypeName: toOptionalString(rec['PktTypeName']),
       pcsTypeName: toOptionalString(rec['PcsTypeName']),
-      pcs: toInt(rec['Pcs']),
+      bobbinQuantity: toInt(rec['Pcs']),
       grossWt: toNumber(rec['Grs Wt']),
       tareWt: toNumber(rec['Tare Wt']),
       netWt: toNumber(rec['Net Wt']),
@@ -194,9 +194,9 @@ function aggregateNetByPiece(rows) {
 function aggregatePieceCounts(rows) {
   const counts = new Map();
   for (const row of rows) {
-    const pcs = Number(row.pcs || 0);
-    if (!Number.isFinite(pcs) || pcs <= 0) continue;
-    counts.set(row.pieceId, (counts.get(row.pieceId) || 0) + pcs);
+    const qty = Number(row.bobbinQuantity || 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    counts.set(row.pieceId, (counts.get(row.pieceId) || 0) + qty);
   }
   return counts;
 }
@@ -207,7 +207,7 @@ async function fetchInboundAndTotals(pieceIds) {
   }
   const [inboundPieces, pieceTotals] = await Promise.all([
     prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } }),
-    prisma.receivePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } }),
+    prisma.receiveFromCutterMachinePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } }),
   ]);
   const inboundMap = new Map(inboundPieces.map(p => [p.id, p]));
   const totalsMap = new Map(pieceTotals.map(t => [t.pieceId, Number(t.totalNetWeight || 0)]));
@@ -338,10 +338,10 @@ router.get('/api/db', async (req, res) => {
   const boxes = await prisma.box.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
-  const issue_to_machine = await prisma.issueToMachine.findMany();
+  const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany();
   const settings = await prisma.settings.findMany();
-  const receive_uploads = await prisma.receiveUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
-  const receive_rows = await prisma.receiveRow.findMany({
+  const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
+  const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
     include: {
@@ -373,7 +373,7 @@ router.get('/api/db', async (req, res) => {
       },
     },
   });
-  const receive_piece_totals = await prisma.receivePieceTotal.findMany();
+  const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
   res.json({
     items,
     firms,
@@ -386,19 +386,19 @@ router.get('/api/db', async (req, res) => {
     boxes,
     lots,
     inbound_items,
-    issue_to_machine,
+    issue_to_cutter_machine,
     settings,
-    receive_uploads,
-    receive_rows,
-    receive_piece_totals,
+    receive_from_cutter_machine_uploads,
+    receive_from_cutter_machine_rows,
+    receive_from_cutter_machine_piece_totals,
   });
 });
 
-router.get('/api/issue_to_machine', async (req, res) => {
+router.get('/api/issue_to_cutter_machine', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode query param' });
-    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
@@ -421,11 +421,11 @@ router.get('/api/inbound_items/barcode/:code', async (req, res) => {
   }
 });
 
-router.get('/api/issue_to_machine/lookup', async (req, res) => {
+router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
@@ -709,11 +709,11 @@ router.post('/api/lots', async (req, res) => {
   }
 });
 
-router.post('/api/issue_to_machine', async (req, res) => {
+router.post('/api/issue_to_cutter_machine', async (req, res) => {
   try {
     const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
     if (!date || !itemId || !lotNo) {
-      return res.status(400).json({ error: 'Missing required issue_to_machine fields' });
+      return res.status(400).json({ error: 'Missing required issue_to_cutter_machine fields' });
     }
     if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
@@ -754,7 +754,7 @@ router.post('/api/issue_to_machine', async (req, res) => {
       });
 
       const firstSeq = pieces[0]?.seq ?? 0;
-      const issueRow = await tx.issueToMachine.create({
+      const issueRow = await tx.issueToCutterMachine.create({
         data: {
           id: randomUUID(),
           date,
@@ -775,7 +775,7 @@ router.post('/api/issue_to_machine', async (req, res) => {
       });
 
     await logCrud({
-      entityType: 'issue_to_machine',
+      entityType: 'issue_to_cutter_machine',
       entityId: issueRecord.id,
       action: 'create',
       payload: {
@@ -790,8 +790,8 @@ router.post('/api/issue_to_machine', async (req, res) => {
       },
     });
 
-    res.json({ ok: true, issueToMachine: issueRecord });
-    // Notify issue_to_machine created
+    res.json({ ok: true, issueToCutterMachine: issueRecord, issueToMachine: issueRecord });
+    // Notify issue_to_cutter_machine created
     try {
       const itemName = (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name || '';
       const machineName = issueRecord.machineId ? (await prisma.machine.findUnique({ where: { id: issueRecord.machineId } })).name : '';
@@ -799,10 +799,10 @@ router.post('/api/issue_to_machine', async (req, res) => {
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
       sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
-      // If this issue_to_machine made available pieces for this item drop to zero, notify
+      // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
-        console.log(`Available pieces after issue_to_machine for ${itemName}: ${availableAfter}`);
+        console.log(`Available pieces after issue_to_cutter_machine for ${itemName}: ${availableAfter}`);
         if (availableAfter === 0) {
           console.log(`Triggering out_of_stock notification for ${itemName}`);
           // Add small delay to ensure first message is queued before second
@@ -810,15 +810,15 @@ router.post('/api/issue_to_machine', async (req, res) => {
             sendNotification('item_out_of_stock', { itemName, available: 0 });
           }, 1000);
         }
-      } catch (e) { console.error('failed to check/send out_of_stock after issue_to_machine', e); }
-    } catch (e) { console.error('notify issue_to_machine error', e); }
+      } catch (e) { console.error('failed to check/send out_of_stock after issue_to_cutter_machine', e); }
+    } catch (e) { console.error('notify issue_to_cutter_machine error', e); }
   } catch (err) {
-    console.error('Failed to record issue_to_machine', err);
-    res.status(400).json({ error: err.message || 'Failed to record issue_to_machine' });
+    console.error('Failed to record issue_to_cutter_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to record issue_to_cutter_machine' });
   }
 });
 
-router.post('/api/receive_from_machine/import', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
@@ -837,7 +837,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
     }
 
     const vchNos = rows.map(r => r.vchNo);
-    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    const existing = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
     if (existing.length > 0) {
       const duplicates = existing.map(r => r.vchNo);
       return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
@@ -898,7 +898,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
         bobbinIdMap.set('', defaultBobbin.id);
       }
 
-      const createdUpload = await tx.receiveUpload.create({
+      const createdUpload = await tx.receiveFromCutterMachineUpload.create({
         data: {
           originalFilename: filename,
           rowCount: rows.length,
@@ -908,11 +908,12 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
       const createPayload = rows.map(row => ({
         ...row,
         uploadId: createdUpload.id,
+        bobbinQuantity: row.bobbinQuantity,
         bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
       }));
       
       if (createPayload.length > 0) {
-        await tx.receiveRow.createMany({ data: createPayload });
+        await tx.receiveFromCutterMachineRow.createMany({ data: createPayload });
       }
 
       for (const [pieceId, incrementBy] of pieceIncrements.entries()) {
@@ -924,7 +925,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
         if (pcsIncrement > 0) {
           updateData.totalPieces = { increment: pcsIncrement };
         }
-        await tx.receivePieceTotal.upsert({
+        await tx.receiveFromCutterMachinePieceTotal.upsert({
           where: { pieceId },
           update: updateData,
           create: { pieceId, totalNetWeight: incrementBy, totalPieces: pcsIncrement > 0 ? pcsIncrement : 0 },
@@ -962,7 +963,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
 });
 
 // Mark remaining pending weight for a piece as wastage (only if piece was issued to machine)
-router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) => {
   try {
     const { pieceId } = req.body || {};
     if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
@@ -972,11 +973,11 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
     if (!inbound) return res.status(404).json({ error: 'Piece not found' });
 
     // Verify piece was issued to machine at least once
-    const issuedCount = await prisma.issueToMachine.count({ where: { pieceIds: { contains: pieceId } } });
+    const issuedCount = await prisma.issueToCutterMachine.count({ where: { pieceIds: { contains: pieceId } } });
     if (issuedCount === 0) return res.status(400).json({ error: 'Piece was not issued to machine' });
 
     // Fetch current received and wastage totals
-    const currentTotal = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const currentTotal = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
     const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
 
@@ -986,12 +987,12 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
 
     // Upsert wastage increment inside transaction
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.receivePieceTotal.upsert({
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId },
         update: { wastageNetWeight: { increment: remaining } },
         create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining },
       });
-      return tx.receivePieceTotal.findUnique({ where: { pieceId } });
+      return tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     });
 
     // Send notification
@@ -1021,7 +1022,7 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_machine/manual', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
   try {
     const {
       pieceId,
@@ -1044,7 +1045,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     let resolvedPieceId = pieceId;
     let resolvedLotNo = lotNo;
     if (normalizedIssueCode) {
-      const issue = await prisma.issueToMachine.findUnique({ where: { barcode: normalizedIssueCode } });
+      const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode: normalizedIssueCode } });
       if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
       const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
       if (pieceIds.length !== 1) {
@@ -1099,7 +1100,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     }
 
     const inboundWeight = Number(piece.weight || 0);
-    const currentTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+    const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
     const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
     const pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
@@ -1114,7 +1115,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     const vchNo = `MAN-${randomUUID().slice(0, 8)}`;
 
     const txResult = await prisma.$transaction(async (tx) => {
-      const upload = await tx.receiveUpload.create({
+      const upload = await tx.receiveFromCutterMachineUpload.create({
         data: {
           originalFilename: 'manual-entry',
           rowCount: 1,
@@ -1123,7 +1124,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
 
       const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: 1 });
 
-      const createdRow = await tx.receiveRow.create({
+      const createdRow = await tx.receiveFromCutterMachineRow.create({
         data: {
           uploadId: upload.id,
           pieceId: resolvedPieceId,
@@ -1139,7 +1140,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
           boxId: box.id,
           operatorId: operatorRec.id,
           helperId: helperRec ? helperRec.id : null,
-          pcs: bobbinQty,
+          bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
           shift: helperRec ? helperRec.name : null,
           narration: 'Manual entry',
@@ -1148,7 +1149,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
         },
       });
 
-      await tx.receivePieceTotal.upsert({
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId: resolvedPieceId },
         update: {
           totalNetWeight: { increment: net },
@@ -1168,7 +1169,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       };
     });
 
-    const rowWithRelations = await prisma.receiveRow.findUnique({
+    const rowWithRelations = await prisma.receiveFromCutterMachineRow.findUnique({
       where: { id: txResult.rowId },
       include: {
         bobbin: { select: { id: true, name: true, weight: true } },
@@ -1182,7 +1183,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       return res.status(500).json({ error: 'Failed to load manual entry' });
     }
 
-    const updatedTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+    const updatedTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const pendingAfter = Math.max(
       0,
       inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
@@ -1201,7 +1202,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to record manual receive' });
   }
 });
-router.post('/api/receive_from_machine/preview', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
@@ -1220,7 +1221,7 @@ router.post('/api/receive_from_machine/preview', async (req, res) => {
     }
 
     const vchNos = rows.map(r => r.vchNo);
-    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    const existing = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
     if (existing.length > 0) {
       const duplicates = existing.map(r => r.vchNo);
       return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
@@ -1249,10 +1250,10 @@ router.post('/api/import', async (req, res) => {
     if (!data) return res.status(400).json({ error: 'Missing body' });
 
     // Clear existing tables (simple approach for import)
-    await prisma.issueToMachine.deleteMany();
-    await prisma.receiveRow.deleteMany();
-    await prisma.receiveUpload.deleteMany();
-    await prisma.receivePieceTotal.deleteMany();
+    await prisma.issueToCutterMachine.deleteMany();
+    await prisma.receiveFromCutterMachineRow.deleteMany();
+    await prisma.receiveFromCutterMachineUpload.deleteMany();
+    await prisma.receiveFromCutterMachinePieceTotal.deleteMany();
     await prisma.inboundItem.deleteMany();
     await prisma.lot.deleteMany();
     await prisma.item.deleteMany();
@@ -1288,9 +1289,9 @@ router.post('/api/import', async (req, res) => {
         await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0 } });
       }
     }
-    if (Array.isArray(data.issue_to_machine)) {
-      for (const c of data.issue_to_machine) {
-        await prisma.issueToMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
+    if (Array.isArray(data.issue_to_cutter_machine)) {
+      for (const c of data.issue_to_cutter_machine) {
+        await prisma.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
       }
     }
     if (Array.isArray(data.workers)) {
@@ -1326,7 +1327,7 @@ router.post('/api/import', async (req, res) => {
           suppliers: Array.isArray(data.suppliers) ? data.suppliers.length : 0,
           lots: Array.isArray(data.lots) ? data.lots.length : 0,
           inboundItems: Array.isArray(data.inbound_items) ? data.inbound_items.length : 0,
-          issues: Array.isArray(data.issue_to_machine) ? data.issue_to_machine.length : 0,
+          issues: Array.isArray(data.issue_to_cutter_machine) ? data.issue_to_cutter_machine.length : 0,
           workers: Array.isArray(data.workers) ? data.workers.length : 0,
           bobbins: Array.isArray(data.bobbins) ? data.bobbins.length : 0,
           boxes: Array.isArray(data.boxes) ? data.boxes.length : 0,
@@ -1360,7 +1361,7 @@ router.delete('/api/items/:id', async (req, res) => {
   if (!existingItem) {
     return res.status(404).json({ error: 'Item not found' });
   }
-  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToMachine.count({ where: { itemId: id } });
+  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToCutterMachine.count({ where: { itemId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
@@ -1503,7 +1504,7 @@ router.delete('/api/machines/:id', async (req, res) => {
   const { id } = req.params;
   const existingMachine = await prisma.machine.findUnique({ where: { id } });
   if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
-  const usage = await prisma.issueToMachine.count({ where: { machineId: id } });
+  const usage = await prisma.issueToCutterMachine.count({ where: { machineId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
@@ -1552,8 +1553,8 @@ router.delete('/api/operators/:id', async (req, res) => {
   const existingOperator = await prisma.operator.findUnique({ where: { id } });
   if (!existingOperator) return res.status(404).json({ error: 'Operator not found' });
   const usage =
-    (await prisma.issueToMachine.count({ where: { operatorId: id } })) +
-    (await prisma.receiveRow.count({
+    (await prisma.issueToCutterMachine.count({ where: { operatorId: id } })) +
+    (await prisma.receiveFromCutterMachineRow.count({
       where: {
         OR: [
           { operatorId: id },
@@ -1616,7 +1617,7 @@ router.delete('/api/bobbins/:id', async (req, res) => {
   const { id } = req.params;
   const existingBobbin = await prisma.bobbin.findUnique({ where: { id } });
   if (!existingBobbin) return res.status(404).json({ error: 'Bobbin not found' });
-  const usage = await prisma.receiveRow.count({ where: { bobbinId: id } });
+  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { bobbinId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
   }
@@ -1679,7 +1680,7 @@ router.delete('/api/boxes/:id', async (req, res) => {
   const { id } = req.params;
   const existingBox = await prisma.box.findUnique({ where: { id } });
   if (!existingBox) return res.status(404).json({ error: 'Box not found' });
-  const usage = await prisma.receiveRow.count({ where: { boxId: id } });
+  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Box is referenced and cannot be deleted' });
   }
@@ -1723,21 +1724,21 @@ router.put('/api/boxes/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/issue_to_machine/:id', async (req, res) => {
+router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Find the issue_to_machine record
-    const issueRecord = await prisma.issueToMachine.findUnique({ where: { id } });
+    // Find the issue_to_cutter_machine record
+    const issueRecord = await prisma.issueToCutterMachine.findUnique({ where: { id } });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    // Get the piece IDs from the issue_to_machine record
+    // Get the piece IDs from the issue_to_cutter_machine record
     const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
     const cleanPieceIds = pieceIds.map(p => String(p).trim()).filter(Boolean);
     if (cleanPieceIds.length > 0) {
-      const receiveCount = await prisma.receiveRow.count({ where: { pieceId: { in: cleanPieceIds } } });
+      const receiveCount = await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: { in: cleanPieceIds } } });
       if (receiveCount > 0) {
         return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
       }
@@ -1745,8 +1746,8 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
     
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      // Delete the issue_to_machine record
-      await tx.issueToMachine.delete({ where: { id } });
+      // Delete the issue_to_cutter_machine record
+      await tx.issueToCutterMachine.delete({ where: { id } });
       
       // Mark pieces as available again
       if (cleanPieceIds.length > 0) {
@@ -1758,7 +1759,7 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
     });
 
     res.json({ ok: true });
-    // Notify issue_to_machine deleted
+    // Notify issue_to_cutter_machine deleted
     try {
       const itemName = issueRecord.itemId ? (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name : '';
       // include machine/operator info if available
@@ -1768,10 +1769,10 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
       sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
-    } catch (e) { console.error('notify issue_to_machine deleted error', e); }
+    } catch (e) { console.error('notify issue_to_cutter_machine deleted error', e); }
   } catch (err) {
-    console.error('Failed to delete issue_to_machine record', err);
-    res.status(500).json({ error: err.message || 'Failed to delete issue_to_machine record' });
+    console.error('Failed to delete issue_to_cutter_machine record', err);
+    res.status(500).json({ error: err.message || 'Failed to delete issue_to_cutter_machine record' });
   }
 });
 
@@ -1957,8 +1958,8 @@ router.put('/api/inbound_items/:id', async (req, res) => {
 router.delete('/api/lots/:lotNo', async (req, res) => {
   try {
     const { lotNo } = req.params;
-    // Do not allow delete if any issue_to_machine record exists for this lot
-    const consCount = await prisma.issueToMachine.count({ where: { lotNo } });
+    // Do not allow delete if any issue_to_cutter_machine record exists for this lot
+    const consCount = await prisma.issueToCutterMachine.count({ where: { lotNo } });
     if (consCount > 0) {
       return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
     }

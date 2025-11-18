@@ -6,8 +6,8 @@ const prisma = new PrismaClient();
 
 async function main() {
   // Find receive rows with missing or placeholder challan (vchNo empty or contains '-X')
-  const rowsEmpty = await prisma.receiveRow.findMany({ where: { vchNo: '' } });
-  const rowsPlaceholder = await prisma.receiveRow.findMany({ where: { vchNo: { contains: '-X' } } });
+  const rowsEmpty = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: '' } });
+  const rowsPlaceholder = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: { contains: '-X' } } });
   const rows = [...rowsEmpty, ...rowsPlaceholder];
   if (!rows.length) {
     console.log('No receive rows without challan found');
@@ -21,13 +21,13 @@ async function main() {
       const pieceId = row.pieceId;
       const net = Number(row.netWt || 0);
       // delete receive row
-      await tx.receiveRow.delete({ where: { id } });
+      await tx.receiveFromCutterMachineRow.delete({ where: { id } });
       // adjust receivePieceTotal
-      const rpt = await tx.receivePieceTotal.findUnique({ where: { pieceId } });
+      const rpt = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
       if (rpt) {
         const curr = Number(rpt.totalNetWeight || 0);
         const next = Math.max(0, curr - net);
-        await tx.receivePieceTotal.update({ where: { pieceId }, data: { totalNetWeight: next } });
+        await tx.receiveFromCutterMachinePieceTotal.update({ where: { pieceId }, data: { totalNetWeight: next } });
         results.push({ id, pieceId, net, prevTotal: curr, newTotal: next });
       } else {
         results.push({ id, pieceId, net, prevTotal: null, newTotal: null });

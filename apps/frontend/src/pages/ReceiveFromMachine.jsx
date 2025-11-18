@@ -163,7 +163,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
   // Map pieceId -> { received: number, wastage: number, totalPieces: number }
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
-    (db.receive_piece_totals || []).forEach((row) => {
+    (db.receive_from_cutter_machine_piece_totals || []).forEach((row) => {
       map.set(row.pieceId, {
         received: Number(row.totalNetWeight || 0),
         wastage: Number(row.wastageNetWeight || 0),
@@ -171,14 +171,14 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
       });
     });
     return map;
-  }, [db.receive_piece_totals]);
+  }, [db.receive_from_cutter_machine_piece_totals]);
 
   // Map pieceId -> most common bobbin name from receive rows
   const pieceBobbinMap = useMemo(() => {
     const map = new Map();
     const pieceBobbinCounts = new Map();
     
-    (db.receive_rows || []).forEach((row) => {
+    (db.receive_from_cutter_machine_rows || []).forEach((row) => {
       if (!row.pieceId) return;
       const bobbinName = row.bobbin?.name || row.pcsTypeName || null;
       if (!bobbinName) return;
@@ -196,7 +196,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     });
     
     return map;
-  }, [db.receive_rows]);
+  }, [db.receive_from_cutter_machine_rows]);
 
   const { knownPieces, orphanPieces, totalReceivedWeight } = useMemo(() => {
     const known = [];
@@ -229,13 +229,13 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     return { knownPieces: known, orphanPieces: orphan, totalReceivedWeight: runningTotal };
   }, [inboundPieceMap, receiveTotalsMap]);
 
-  const recentUploads = useMemo(() => (db.receive_uploads || []).slice(), [db.receive_uploads]);
+  const recentUploads = useMemo(() => (db.receive_from_cutter_machine_uploads || []).slice(), [db.receive_from_cutter_machine_uploads]);
   const uploadLookup = useMemo(() => {
     const map = new Map();
-    (db.receive_uploads || []).forEach((u) => map.set(u.id, u));
+    (db.receive_from_cutter_machine_uploads || []).forEach((u) => map.set(u.id, u));
     return map;
-  }, [db.receive_uploads]);
-  const latestRows = useMemo(() => (db.receive_rows || []).slice(), [db.receive_rows]);
+  }, [db.receive_from_cutter_machine_uploads]);
+  const latestRows = useMemo(() => (db.receive_from_cutter_machine_rows || []).slice(), [db.receive_from_cutter_machine_rows]);
 
   function clearSelection() {
     setSelectedFile(null);
@@ -574,7 +574,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                 <th className="py-2 pr-2">Machine</th>
                 <th className="py-2 pr-2">Employee</th>
                 <th className="py-2 pr-2 text-right">Net Wt (kg)</th>
-                <th className="py-2 pr-2 text-right">Pcs</th>
+                <th className="py-2 pr-2 text-right">Bobbin qty</th>
                 <th className="py-2 pr-2">Bobbin</th>
                 <th className="py-2 pr-2">CSV Date</th>
                 <th className="py-2 pr-2">Imported</th>
@@ -597,7 +597,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                       <td className="py-2 pr-2">{row.machineNo || '—'}</td>
                       <td className="py-2 pr-2">{row.employee || '—'}</td>
                       <td className="py-2 pr-2 text-right">{row.netWt == null ? '—' : formatKg(row.netWt)}</td>
-                      <td className="py-2 pr-2 text-right">{row.pcs == null ? '—' : row.pcs}</td>
+                      <td className="py-2 pr-2 text-right">{row.bobbinQuantity == null ? '—' : row.bobbinQuantity}</td>
                       <td className="py-2 pr-2">{bobbinName}</td>
                       <td className="py-2 pr-2">{row.date || '—'}</td>
                       <td className="py-2 pr-2">{formatDateTime(upload?.uploadedAt || row.createdAt)}</td>
@@ -676,7 +676,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   const machines = useMemo(() => (db.machines || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.machines]);
   const issuedPieceIds = useMemo(() => {
     const set = new Set();
-    (db.issue_to_machine || []).forEach(record => {
+    (db.issue_to_cutter_machine || []).forEach(record => {
       const list = Array.isArray(record.pieceIds)
         ? record.pieceIds
         : String(record.pieceIds || '')
@@ -686,7 +686,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
       list.forEach(id => set.add(id));
     });
     return set;
-  }, [db.issue_to_machine]);
+  }, [db.issue_to_cutter_machine]);
   const itemNameById = useMemo(() => {
     const map = new Map();
     (db.items || []).forEach(item => map.set(item.id, item.name || ''));

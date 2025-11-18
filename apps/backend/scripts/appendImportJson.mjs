@@ -94,18 +94,17 @@ async function main() {
   }
 
   // Issue to machine
-  for (const c of (data.issue_to_machine || [])) {
-    const exists = await prisma.issueToMachine.findUnique({ where: { id: c.id } });
+  for (const c of (data.issue_to_cutter_machine || [])) {
+    const exists = await prisma.issueToCutterMachine.findUnique({ where: { id: c.id } });
     if (exists) continue;
     const itemName = providedIdToName.get(c.itemId) || '';
     const itemId = itemIdMap.get(itemName) || await getOrCreateByName(prisma.item, itemName);
     const pieceIds = Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || '');
-    await prisma.issueToMachine.create({ data: { id: c.id, date: trim(c.date||''), itemId, lotNo: c.lotNo, count: Number(c.count||0), totalWeight: Number(c.totalWeight||0), pieceIds, reason: trim(c.reason||'internal'), note: c.note || null } });
+    await prisma.issueToCutterMachine.create({ data: { id: c.id, date: trim(c.date||''), itemId, lotNo: c.lotNo, count: Number(c.count||0), totalWeight: Number(c.totalWeight||0), pieceIds, reason: trim(c.reason||'internal'), note: c.note || null } });
   }
 
   console.log('Append import completed');
 }
 
 main().finally(()=>prisma.$disconnect());
-
 

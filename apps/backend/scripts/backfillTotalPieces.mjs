@@ -3,7 +3,7 @@ import prisma from '../src/lib/prisma.js';
 
 async function main() {
   try {
-    console.log('Backfilling totalPieces in ReceivePieceTotal from ReceiveRow records...');
+    console.log('Backfilling totalBob in ReceivePieceTotal from ReceiveRow records...');
 
     // Fetch all receive rows with pcs values
     const allRows = await prisma.receiveFromCutterMachineRow.findMany({
@@ -37,24 +37,23 @@ async function main() {
     let created = 0;
     let unchanged = 0;
 
-    for (const [pieceId, totalPcs] of piecePcsMap.entries()) {
+    for (const [pieceId, totalBob] of piecePcsMap.entries()) {
       const existing = await prisma.receiveFromCutterMachinePieceTotal.findUnique({
         where: { pieceId },
       });
 
       if (existing) {
         // Update existing record
-        const existingPcs = existing.totalPieces || 0;
-        if (existingPcs === totalPcs) {
+        const existingBob = existing.totalBob || 0;
+        if (existingBob === totalBob) {
           unchanged++;
         } else {
           await prisma.receiveFromCutterMachinePieceTotal.update({
             where: { pieceId },
-            data: { totalPieces: totalPcs },
+            data: { totalBob: totalBob },
           });
           updated++;
-          const existingPcs = existing.totalPieces || 0;
-          console.log(`Updated ${pieceId}: ${existingPcs} -> ${totalPcs}`);
+          console.log(`Updated ${pieceId}: ${existingBob} -> ${totalBob}`);
         }
       } else {
         // Create new record (with 0 weight if no weight data exists)
@@ -62,12 +61,12 @@ async function main() {
           data: {
             pieceId,
             totalNetWeight: 0,
-            totalPieces: totalPcs,
+            totalBob: totalBob,
             wastageNetWeight: 0,
           },
         });
         created++;
-        console.log(`Created ${pieceId}: totalPieces = ${totalPcs}`);
+        console.log(`Created ${pieceId}: totalBob = ${totalBob}`);
       }
     }
 
@@ -85,7 +84,7 @@ async function main() {
       },
       select: {
         pieceId: true,
-        totalPieces: true,
+        totalBob: true,
         totalNetWeight: true,
       },
     });

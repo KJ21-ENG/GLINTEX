@@ -923,12 +923,12 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
           totalNetWeight: { increment: incrementBy },
         };
         if (pcsIncrement > 0) {
-          updateData.totalPieces = { increment: pcsIncrement };
+          updateData.totalBob = { increment: pcsIncrement };
         }
         await tx.receiveFromCutterMachinePieceTotal.upsert({
           where: { pieceId },
           update: updateData,
-          create: { pieceId, totalNetWeight: incrementBy, totalPieces: pcsIncrement > 0 ? pcsIncrement : 0 },
+          create: { pieceId, totalNetWeight: incrementBy, totalBob: pcsIncrement > 0 ? pcsIncrement : 0 },
         });
       }
 
@@ -1153,12 +1153,12 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
         where: { pieceId: resolvedPieceId },
         update: {
           totalNetWeight: { increment: net },
-          totalPieces: { increment: bobbinQty },
+          totalBob: { increment: bobbinQty },
         },
         create: {
           pieceId: resolvedPieceId,
           totalNetWeight: net,
-          totalPieces: bobbinQty,
+          totalBob: bobbinQty,
         },
       });
 

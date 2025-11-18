@@ -124,6 +124,7 @@ model ReceiveFromCutterMachineRow {
   operatorId    String?
   helperId      String?
   bobbinQuantity Int? @map("bobbin_quantity")
+  issuedBobbins  Int   @default(0)
   grossWt       Float?
   tareWt        Float?
   netWt         Float?
@@ -144,7 +145,7 @@ model ReceiveFromCutterMachineRow {
 model ReceiveFromCutterMachinePieceTotal {
   pieceId        String   @id
   totalNetWeight Float    @default(0)
-  totalPieces    Int      @default(0)
+  totalBob       Int      @default(0)
   wastageNetWeight Float  @default(0)
   updatedAt      DateTime @updatedAt
 }

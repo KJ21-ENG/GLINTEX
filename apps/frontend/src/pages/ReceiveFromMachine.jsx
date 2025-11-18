@@ -160,14 +160,14 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     return map;
   }, [db.inbound_items]);
 
-  // Map pieceId -> { received: number, wastage: number, totalPieces: number }
+  // Map pieceId -> { received: number, wastage: number, totalBob: number }
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
     (db.receive_from_cutter_machine_piece_totals || []).forEach((row) => {
       map.set(row.pieceId, {
         received: Number(row.totalNetWeight || 0),
         wastage: Number(row.wastageNetWeight || 0),
-        totalPieces: Number(row.totalPieces || 0),
+        totalBob: Number(row.totalBob || 0),
       });
     });
     return map;
@@ -204,7 +204,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     let runningTotal = 0;
     for (const [pieceId, totals] of receiveTotalsMap.entries()) {
       const received = totals.received || 0;
-      const totalPieces = totals.totalPieces || 0;
+      const totalBob = totals.totalBob || 0;
       runningTotal += received;
       const inbound = inboundPieceMap.get(pieceId) || null;
       const inboundWeight = inbound ? Number(inbound.weight || 0) : null;
@@ -214,7 +214,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
         inboundWeight,
         receivedWeight: received,
         pendingWeight: inboundWeight === null ? null : Math.max(0, inboundWeight - received),
-        totalPieces,
+        totalBob,
         bobbinName: pieceBobbinMap.get(pieceId) || '—',
       };
       if (inbound) known.push(summary);
@@ -491,7 +491,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                   <td className="py-2 pr-2 text-right">{piece.inboundWeight == null ? '—' : formatKg(piece.inboundWeight)}</td>
                   <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.pendingWeight == null ? '—' : formatKg(piece.pendingWeight)}</td>
-                  <td className="py-2 pr-2 text-right">{piece.totalPieces || 0}</td>
+                      <td className="py-2 pr-2 text-right">{piece.totalBob || 0}</td>
                   <td className="py-2 pr-2">{piece.bobbinName}</td>
                 </tr>
                 ))
@@ -520,7 +520,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                   <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2 font-mono">{piece.pieceId}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
-                    <td className="py-2 pr-2 text-right">{piece.totalPieces || 0}</td>
+                    <td className="py-2 pr-2 text-right">{piece.totalBob || 0}</td>
                   </tr>
                 ))}
               </tbody>

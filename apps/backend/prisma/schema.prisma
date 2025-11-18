@@ -56,6 +56,8 @@ model Machine {
   id                    String                  @id @default(cuid())
   name                  String
   issueToCutterMachines IssueToCutterMachine[]
+  issueToHoloMachines   IssueToHoloMachine[]
+  issueToConingMachines IssueToConingMachine[]
 }
 
 model Operator {
@@ -65,6 +67,12 @@ model Operator {
   issueToCutterMachines IssueToCutterMachine[]
   receiveRows           ReceiveFromCutterMachineRow[]      @relation("OperatorReceiveRows")
   helperRows            ReceiveFromCutterMachineRow[]      @relation("HelperReceiveRows")
+  holoIssues            IssueToHoloMachine[]                @relation("IssueToHoloOperator")
+  coningIssues          IssueToConingMachine[]              @relation("IssueToConingOperator")
+  holoReceiveRows       ReceiveFromHoloMachineRow[]        @relation("OperatorHoloReceive")
+  holoHelperRows        ReceiveFromHoloMachineRow[]        @relation("HelperHoloReceive")
+  coningReceiveRows     ReceiveFromConingMachineRow[]      @relation("OperatorConingReceive")
+  coningHelperRows      ReceiveFromConingMachineRow[]      @relation("HelperConingReceive")
 }
 
 model Bobbin {
@@ -72,6 +80,92 @@ model Bobbin {
   name        String
   weight      Float?                          // Weight in kg (BoxWt)
   receiveRows ReceiveFromCutterMachineRow[]
+}
+
+model IssueToHoloMachine {
+  id                  String   @id @default(cuid())
+  date                String
+  itemId              String
+  lotNo               String
+  machineId           String?
+  operatorId          String?
+  barcode             String   @unique
+  note                String?
+  metallicBobbins     Int      @default(0)
+  yarnKg              Float    @default(0)
+  receivedRowRefs     Json     @default("[]")
+  rollsProducedEstimate Int?
+  createdAt           DateTime @default(now())
+  machine             Machine?  @relation(fields: [machineId], references: [id])
+  operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
+  receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
+}
+
+model ReceiveFromHoloMachineRow {
+  id          String   @id @default(cuid())
+  date        String?
+  issueId     String
+  rollCount   Int
+  rollWeight  Float?
+  machineNo   String?
+  operatorId  String?
+  helperId    String?
+  notes       String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
+  operator    Operator?           @relation("OperatorHoloReceive", fields: [operatorId], references: [id])
+  helper      Operator?           @relation("HelperHoloReceive", fields: [helperId], references: [id])
+}
+
+model ReceiveFromHoloMachinePieceTotal {
+  pieceId         String   @id
+  totalRolls      Int      @default(0)
+  totalNetWeight  Float    @default(0)
+  wastageNetWeight Float   @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model IssueToConingMachine {
+  id              String   @id @default(cuid())
+  date            String
+  itemId          String
+  lotNo           String
+  machineId       String?
+  operatorId      String?
+  barcode         String   @unique
+  note            String?
+  rollsIssued     Int      @default(0)
+  receivedRowRefs Json     @default("[]")
+  createdAt       DateTime @default(now())
+  machine         Machine?  @relation(fields: [machineId], references: [id])
+  operator        Operator? @relation("IssueToConingOperator", fields: [operatorId], references: [id])
+  receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
+}
+
+model ReceiveFromConingMachineRow {
+  id          String   @id @default(cuid())
+  date        String?
+  issueId     String
+  coneCount   Int
+  coneWeight  Float?
+  machineNo   String?
+  operatorId  String?
+  helperId    String?
+  notes       String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  issue       IssueToConingMachine @relation("IssueConingRelation", fields: [issueId], references: [id])
+  operator    Operator?            @relation("OperatorConingReceive", fields: [operatorId], references: [id])
+  helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
+}
+
+model ReceiveFromConingMachinePieceTotal {
+  pieceId         String   @id
+  totalCones      Int      @default(0)
+  totalNetWeight  Float    @default(0)
+  wastageNetWeight Float   @default(0)
+  updatedAt       DateTime @updatedAt
 }
 
 model IssueToCutterMachine {

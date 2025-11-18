@@ -1243,6 +1243,136 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
   }
 });
 
+router.post('/api/issue_to_holo_machine', async (req, res) => {
+  try {
+    const { date, itemId, lotNo, machineId, operatorId, metallicBobbins, yarnKg, receivedRowRefs, rollsProducedEstimate, note } = req.body || {};
+    if (!date || !itemId || !lotNo) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const created = await prisma.issueToHoloMachine.create({
+      data: {
+        date,
+        itemId,
+        lotNo,
+        machineId: machineId || null,
+        operatorId: operatorId || null,
+        barcode: `HLO-${lotNo}-${Date.now()}`,
+        note: note || null,
+        metallicBobbins: Number(metallicBobbins || 0),
+        yarnKg: Number(yarnKg || 0),
+        receivedRowRefs: Array.isArray(receivedRowRefs) ? receivedRowRefs : [],
+        rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
+      },
+    });
+    res.json({ ok: true, issueToHoloMachine: created });
+  } catch (err) {
+    console.error('Failed to issue to holo machine', err);
+    res.status(500).json({ error: err.message || 'Failed to issue to holo' });
+  }
+});
+
+router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
+  try {
+    const { issueId, pieceId, rollCount, rollWeight, machineNo, operatorId, helperId, notes, createdBy } = req.body || {};
+    if (!issueId || !pieceId || typeof rollCount !== 'number') {
+      return res.status(400).json({ error: 'Missing required roll data' });
+    }
+    const createdRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId,
+        machineNo: machineNo || null,
+        operatorId: operatorId || null,
+        helperId: helperId || null,
+        rollCount,
+        rollWeight: rollWeight == null ? null : Number(rollWeight),
+        notes: notes || null,
+        createdBy: createdBy || 'manual',
+      },
+    });
+    await prisma.receiveFromHoloMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalRolls: { increment: rollCount },
+        totalNetWeight: { increment: rollWeight || 0 },
+      },
+      create: {
+        pieceId,
+        totalRolls: rollCount,
+        totalNetWeight: rollWeight || 0,
+        wastageNetWeight: 0,
+      },
+    });
+    res.json({ ok: true, row: createdRow });
+  } catch (err) {
+    console.error('Failed to receive from holo machine', err);
+    res.status(500).json({ error: err.message || 'Failed to record holo receive' });
+  }
+});
+
+router.post('/api/issue_to_coning_machine', async (req, res) => {
+  try {
+    const { date, itemId, lotNo, machineId, operatorId, rollsIssued, receivedRowRefs, note } = req.body || {};
+    if (!date || !itemId || !lotNo) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const created = await prisma.issueToConingMachine.create({
+      data: {
+        date,
+        itemId,
+        lotNo,
+        machineId: machineId || null,
+        operatorId: operatorId || null,
+        barcode: `CN-${lotNo}-${Date.now()}`,
+        note: note || null,
+        rollsIssued: Number(rollsIssued || 0),
+        receivedRowRefs: Array.isArray(receivedRowRefs) ? receivedRowRefs : [],
+      },
+    });
+    res.json({ ok: true, issueToConingMachine: created });
+  } catch (err) {
+    console.error('Failed to issue to coning machine', err);
+    res.status(500).json({ error: err.message || 'Failed to issue to coning' });
+  }
+});
+
+router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
+  try {
+    const { issueId, pieceId, coneCount, coneWeight, machineNo, operatorId, helperId, notes, createdBy } = req.body || {};
+    if (!issueId || !pieceId || typeof coneCount !== 'number') {
+      return res.status(400).json({ error: 'Missing required cone data' });
+    }
+    const createdRow = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId,
+        coneCount,
+        coneWeight: coneWeight == null ? null : Number(coneWeight),
+        machineNo: machineNo || null,
+        operatorId: operatorId || null,
+        helperId: helperId || null,
+        notes: notes || null,
+        createdBy: createdBy || 'manual',
+      },
+    });
+    await prisma.receiveFromConingMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalCones: { increment: coneCount },
+        totalNetWeight: { increment: coneWeight || 0 },
+      },
+      create: {
+        pieceId,
+        totalCones: coneCount,
+        totalNetWeight: coneWeight || 0,
+        wastageNetWeight: 0,
+      },
+    });
+    res.json({ ok: true, row: createdRow });
+  } catch (err) {
+    console.error('Failed to receive from coning machine', err);
+    res.status(500).json({ error: err.message || 'Failed to record coning receive' });
+  }
+});
+
 // Simple import endpoint: replaces data for simplicity
 router.post('/api/import', async (req, res) => {
   try {

@@ -98,8 +98,8 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
       }
       return;
     }
-    if (!yarns.some(y => y.id === holoForm.yarnId)) {
-      setHoloForm(prev => ({ ...prev, yarnId: yarns[0].id }));
+    if (holoForm.yarnId && !yarns.some(y => y.id === holoForm.yarnId)) {
+      setHoloForm(prev => ({ ...prev, yarnId: '' }));
     }
   }, [db.yarns, holoForm.yarnId, isHolo]);
 
@@ -547,13 +547,15 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                 </div>
                 <div>
                   <label className={`text-xs ${cls.muted}`}>Yarn wt. (kg)</label>
-                  <div className="flex gap-2">
-                    <Input type="number" min="0" step="0.01" value={holoForm.yarnKg} onChange={(e) => setHoloForm(prev => ({ ...prev, yarnKg: e.target.value }))} placeholder="Total yarn weight" />
-                    <SecondaryButton type="button" onClick={() => setHoloForm(prev => ({ ...prev, yarnKg: holoTotals.totalWeight ? holoTotals.totalWeight.toFixed(3) : '' }))} disabled={holoTotals.totalWeight <= 0}>
-                      Use total
-                    </SecondaryButton>
-                  </div>
-                  <p className={`text-xs ${cls.muted} mt-1`}>Scanned crates total: {formatKg(holoTotals.totalWeight)} kg</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={holoForm.yarnKg}
+                    onChange={(e) => setHoloForm(prev => ({ ...prev, yarnKg: e.target.value }))}
+                    placeholder="Total yarn weight"
+                    className="h-11"
+                  />
                 </div>
                 <div>
                   <label className={`text-xs ${cls.muted}`}>Note</label>
@@ -569,7 +571,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs">
                     <Pill>Crates: {holoCrates.length}</Pill>
-                    <Pill>Rolls: {holoTotals.totalRolls}</Pill>
+                    <Pill>Bobbins: {holoTotals.totalRolls}</Pill>
                     <Pill>Weight: {formatKg(holoTotals.totalWeight)} kg</Pill>
                   </div>
                 </div>
@@ -648,10 +650,6 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                 <div className="text-sm">
                   <div>Lot: {holoDerivedMeta.lotNo || '—'}</div>
                   <div className={`${cls.muted}`}>Item ID: {holoDerivedMeta.itemId || '—'}</div>
-                </div>
-                <div className="flex flex-wrap gap-2 items-center">
-                  <Pill>Rolls: {holoTotals.totalRolls}</Pill>
-                  <Pill>Weight: {formatKg(holoTotals.totalWeight)} kg</Pill>
                 </div>
                 <Button type="submit" disabled={disableIssue}>{holoSubmitting ? 'Issuing…' : 'Record issue'}</Button>
               </div>

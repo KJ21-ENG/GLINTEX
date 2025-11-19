@@ -329,6 +329,8 @@ router.get('/api/health', async (req, res) => {
 router.get('/api/db', async (req, res) => {
   const items = await prisma.item.findMany();
   const yarns = await prisma.yarn.findMany();
+  const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
+  const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
   const firms = await prisma.firm.findMany();
   const suppliers = await prisma.supplier.findMany();
   const machines = await prisma.machine.findMany();
@@ -374,6 +376,12 @@ router.get('/api/db', async (req, res) => {
           name: true,
         },
       },
+      cutMaster: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
     },
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
@@ -400,6 +408,8 @@ router.get('/api/db', async (req, res) => {
   res.json({
     items,
     yarns,
+    cuts,
+    twists,
     firms,
     suppliers,
     machines,
@@ -1103,6 +1113,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       grossWeight,
       receiveDate,
       issueBarcode,
+      cutId,
     } = req.body || {};
 
     if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
@@ -1141,6 +1152,14 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
     const helperRec = helperId ? await prisma.operator.findUnique({ where: { id: helperId } }) : null;
     if (helperId && (!helperRec || normalizeWorkerRole(helperRec.role) !== 'helper')) {
       return res.status(400).json({ error: 'Invalid helper selected' });
+    }
+
+    let cutRecord = null;
+    if (cutId) {
+      cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
+      if (!cutRecord) {
+        return res.status(404).json({ error: 'Selected cut was not found' });
+      }
     }
 
     const bobbinQty = Math.max(0, toInt(bobbinQuantity) || 0);
@@ -1222,6 +1241,8 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
           bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
           shift: helperRec ? helperRec.name : null,
+          cutId: cutRecord ? cutRecord.id : null,
+          cut: cutRecord ? cutRecord.name : null,
           narration: 'Manual entry',
           createdBy: 'manual',
           barcode: receiveBarcode,
@@ -1255,6 +1276,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
         box: { select: { id: true, name: true, weight: true } },
         operator: { select: { id: true, name: true } },
         helper: { select: { id: true, name: true } },
+        cutMaster: { select: { id: true, name: true } },
       },
     });
 
@@ -1324,7 +1346,7 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
 
 router.post('/api/issue_to_holo_machine', async (req, res) => {
   try {
-    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate } = req.body || {};
+    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId } = req.body || {};
     if (!date) {
       return res.status(400).json({ error: 'Missing date' });
     }
@@ -1396,6 +1418,14 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
       }
     }
 
+    if (!twistId) {
+      return res.status(400).json({ error: 'Missing twist selection' });
+    }
+    const twistRecord = await prisma.twist.findUnique({ where: { id: twistId } });
+    if (!twistRecord) {
+      return res.status(404).json({ error: 'Selected twist not found' });
+    }
+
     const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
     if (!Number.isFinite(totalBobbins) || totalBobbins <= 0) {
       return res.status(400).json({ error: 'Enter bobbin quantity for the scanned crates' });
@@ -1410,6 +1440,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           itemId,
           lotNo,
           yarnId: yarnRecord ? yarnRecord.id : null,
+          twistId: twistRecord.id,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: `HLO-${lotNo}-${Date.now()}`,
@@ -1769,6 +1800,144 @@ router.delete('/api/yarns/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to delete yarn', err);
     res.status(500).json({ error: err.message || 'Failed to delete yarn' });
+  }
+});
+
+router.get('/api/cuts', async (req, res) => {
+  const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
+  res.json(cuts);
+});
+
+router.post('/api/cuts', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing cut name' });
+    }
+    const cut = await prisma.cut.create({ data: { name: trimmed } });
+    await logCrud({ entityType: 'cut', entityId: cut.id, action: 'create', payload: cut });
+    res.json(cut);
+  } catch (err) {
+    console.error('Failed to create cut', err);
+    res.status(500).json({ error: err.message || 'Failed to create cut' });
+  }
+});
+
+router.put('/api/cuts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing cut name' });
+    }
+    const existing = await prisma.cut.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Cut not found' });
+    }
+    const updated = await prisma.cut.update({ where: { id }, data: { name: trimmed } });
+    await logCrud({
+      entityType: 'cut',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update cut', err);
+    res.status(500).json({ error: err.message || 'Failed to update cut' });
+  }
+});
+
+router.delete('/api/cuts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.cut.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Cut not found' });
+    }
+    const usage = await prisma.receiveFromCutterMachineRow.count({ where: { cutId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Cut is in use and cannot be deleted' });
+    }
+    await prisma.cut.delete({ where: { id } });
+    await logCrud({ entityType: 'cut', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete cut', err);
+    res.status(500).json({ error: err.message || 'Failed to delete cut' });
+  }
+});
+
+router.get('/api/twists', async (req, res) => {
+  const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
+  res.json(twists);
+});
+
+router.post('/api/twists', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing twist name' });
+    }
+    const twist = await prisma.twist.create({ data: { name: trimmed } });
+    await logCrud({ entityType: 'twist', entityId: twist.id, action: 'create', payload: twist });
+    res.json(twist);
+  } catch (err) {
+    console.error('Failed to create twist', err);
+    res.status(500).json({ error: err.message || 'Failed to create twist' });
+  }
+});
+
+router.put('/api/twists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing twist name' });
+    }
+    const existing = await prisma.twist.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Twist not found' });
+    }
+    const updated = await prisma.twist.update({ where: { id }, data: { name: trimmed } });
+    await logCrud({
+      entityType: 'twist',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update twist', err);
+    res.status(500).json({ error: err.message || 'Failed to update twist' });
+  }
+});
+
+router.delete('/api/twists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.twist.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Twist not found' });
+    }
+    const usage = await prisma.issueToHoloMachine.count({ where: { twistId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Twist is in use and cannot be deleted' });
+    }
+    await prisma.twist.delete({ where: { id } });
+    await logCrud({ entityType: 'twist', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete twist', err);
+    res.status(500).json({ error: err.message || 'Failed to delete twist' });
   }
 });
 

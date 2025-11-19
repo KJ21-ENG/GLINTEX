@@ -698,6 +698,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
             <thead className={`text-left ${cls.muted}`}>
               <tr>
                 <th className="py-2 pr-2">Piece</th>
+                <th className="py-2 pr-2">Cut</th>
                 <th className="py-2 pr-2">Barcode</th>
                 <th className="py-2 pr-2">Machine</th>
                 <th className="py-2 pr-2">Employee</th>
@@ -711,16 +712,18 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
             <tbody>
               {pagedLatestRows.length === 0 ? (
                 <tr>
-                  <td className="py-3 pr-2" colSpan={9}>No rows imported yet.</td>
+                  <td className="py-3 pr-2" colSpan={10}>No rows imported yet.</td>
                 </tr>
               ) : (
                 pagedLatestRows.map((row) => {
                   const upload = uploadLookup.get(row.uploadId);
                   // Use bobbin relation if available, fallback to pcsTypeName for backward compatibility
                   const bobbinName = row.bobbin?.name || row.pcsTypeName || '—';
+                  const cutLabel = row.cutMaster?.name || row.cut || '—';
                   return (
                     <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
                       <td className="py-2 pr-2 font-mono">{row.pieceId}</td>
+                      <td className="py-2 pr-2">{cutLabel}</td>
                       <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
                       <td className="py-2 pr-2">{row.machineNo || '—'}</td>
                       <td className="py-2 pr-2">{row.employee || '—'}</td>
@@ -753,6 +756,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   const [grossWeight, setGrossWeight] = useState('');
   const [operatorId, setOperatorId] = useState('');
   const [helperId, setHelperId] = useState('');
+  const [cutId, setCutId] = useState('');
   const [receiveDate, setReceiveDate] = useState(todayISO());
   const [markRemainingWastage, setMarkRemainingWastage] = useState(false);
   const [cart, setCart] = useState([]);
@@ -859,6 +863,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
 
   const boxes = useMemo(() => (db.boxes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.boxes]);
   const bobbins = useMemo(() => (db.bobbins || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.bobbins]);
+  const cuts = useMemo(() => (db.cuts || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.cuts]);
   const machines = useMemo(() => (db.machines || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.machines]);
   const issuedPieceIds = useMemo(() => {
     const set = new Set();
@@ -966,6 +971,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   const selectedPiece = pieceId ? inboundPieceMap.get(pieceId) : null;
   const selectedBobbin = bobbins.find(b => b.id === bobbinId) || null;
   const selectedBox = boxes.find(b => b.id === boxId) || null;
+  const selectedCut = cuts.find(c => c.id === cutId) || null;
   const quantityNum = bobbinQty === '' ? NaN : Number(bobbinQty);
   const grossNum = grossWeight === '' ? NaN : Number(grossWeight);
   const bobbinWeight = selectedBobbin && selectedBobbin.weight != null ? Number(selectedBobbin.weight) : null;
@@ -1016,23 +1022,20 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
       const statsLoading = stats && stats.status === 'loading';
       const statsCrateCount = statsReady ? (stats.maxCrateIndex ?? stats.totalCrates ?? 0) : null;
       const fallbackCrates = pieceCrateIndexMap.get(entry.pieceId) || 0;
-      const existingCrates = statsReady
-        ? statsCrateCount
-        : fallbackCrates;
-      const shouldHoldForStats = fallbackCrates === 0 && !statsReady && !statsError;
+      const existingCrates = statsReady ? statsCrateCount : fallbackCrates;
       const crateIndex = existingCrates + countForPiece + 1;
       const inbound = inboundPieceMap.get(entry.pieceId);
       const lotForBarcode = inbound?.lotNo || entry.lotNo || '';
-      const receiveBarcode = (!lotForBarcode || shouldHoldForStats)
-        ? null
-        : makeReceiveBarcodePreview({ lotNo: lotForBarcode, seq: inbound?.seq, crateIndex });
-      const cratePreviewStatus = statsError
-        ? 'error'
-        : ((statsLoading || shouldHoldForStats) ? 'loading' : 'ready');
-      const cratePreviewError = statsError
-        ? (stats.error || 'Crate history unavailable')
+      const receiveBarcode = lotForBarcode
+        ? makeReceiveBarcodePreview({ lotNo: lotForBarcode, seq: inbound?.seq, crateIndex })
         : null;
-      return { ...entry, receiveBarcode, cratePreviewStatus, cratePreviewError };
+      const cratePreviewError = statsError ? (stats.error || 'Crate history unavailable') : null;
+      return {
+        ...entry,
+        receiveBarcode,
+        cratePreviewError,
+        cratePreviewStatus: statsError ? 'error' : (statsLoading ? 'loading' : 'ready'),
+      };
     });
   }, [cart, pieceCrateIndexMap, inboundPieceMap, pieceCrateStats]);
 
@@ -1115,6 +1118,8 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
       receiveDate: receiveDate || todayISO(),
       markWastage: markRemainingWastage,
       issueBarcode: currentIssueBarcode || null,
+      cutId: cutId || null,
+      cutName: selectedCut?.name || '',
     };
     setCart(prev => [...prev, entry]);
     setGrossWeight('');
@@ -1240,6 +1245,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
           grossWeight: entry.grossWeight,
           receiveDate: entry.receiveDate,
           issueBarcode: entry.issueBarcode,
+          cutId: entry.cutId,
         });
         setCart(prev => prev.filter(item => item.id !== entry.id));
       }
@@ -1342,7 +1348,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
           <div className={`mt-3 text-sm ${cls.muted}`}>Select a piece to view its pending balance.</div>
         )}
 
-        <div className="grid gap-3 md:grid-cols-3 mt-4">
+        <div className="grid gap-3 md:grid-cols-4 mt-4">
           <div>
             <label className={`text-xs ${cls.muted}`}>Bobbin</label>
             <Select value={bobbinId} onChange={(e) => setBobbinId(e.target.value)} disabled={saving}>
@@ -1371,7 +1377,17 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
               ))}
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Cut (optional)</label>
+            <Select value={cutId} onChange={(e) => setCutId(e.target.value)} disabled={saving}>
+              <option value="">No cut</option>
+              {cuts.length === 0 && <option value="">Add cuts in Masters</option>}
+              {cuts.map(cut => (
+                <option key={cut.id} value={cut.id}>{cut.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2 md:col-span-2">
             <div>
               <label className={`text-xs ${cls.muted}`}>Bobbin qty</label>
               <Input type="number" min="1" step="1" value={bobbinQty} onChange={(e) => setBobbinQty(e.target.value)} disabled={saving} placeholder="e.g. 12" />
@@ -1475,6 +1491,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
               <tr>
                 <th className="py-2 pr-2">Piece</th>
                 <th className="py-2 pr-2">Lot</th>
+                <th className="py-2 pr-2">Cut</th>
                 <th className="py-2 pr-2">Barcode</th>
                 <th className="py-2 pr-2">Bobbin</th>
                 <th className="py-2 pr-2 text-right">Qty</th>
@@ -1489,7 +1506,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
             <tbody>
               {cart.length === 0 ? (
                 <tr>
-                  <td className="py-4 text-center text-sm" colSpan={11}>
+                  <td className="py-4 text-center text-sm" colSpan={12}>
                     No boxes staged yet. Add a box to begin.
                   </td>
                 </tr>
@@ -1497,13 +1514,10 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
                 <tr key={entry.id} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2 font-mono">{entry.pieceId}</td>
                   <td className="py-2 pr-2 font-mono">{entry.lotNo}</td>
+                  <td className="py-2 pr-2">{entry.cutName || '—'}</td>
                   <td className="py-2 pr-2">
                     {entry.receiveBarcode ? (
                       <span className="text-xs font-mono">{entry.receiveBarcode}</span>
-                    ) : entry.cratePreviewStatus === 'loading' ? (
-                      <span className={`text-xs ${cls.muted}`}>Loading crate history…</span>
-                    ) : entry.cratePreviewStatus === 'error' ? (
-                      <span className="text-xs text-amber-300">Crate preview unavailable</span>
                     ) : (
                       <span className={`text-xs ${cls.muted}`}>Pending</span>
                     )}

@@ -20,6 +20,18 @@ model Yarn {
   issues IssueToHoloMachine[]
 }
 
+model Cut {
+  id    String @id @default(cuid())
+  name  String @unique
+  receiveRows ReceiveFromCutterMachineRow[]
+}
+
+model Twist {
+  id    String @id @default(cuid())
+  name  String @unique
+  holoIssues IssueToHoloMachine[]
+}
+
 model Firm {
   id   String @id @default(cuid())
   name String
@@ -94,6 +106,7 @@ model IssueToHoloMachine {
   itemId              String
   lotNo               String
   yarnId              String?
+  twistId             String?
   machineId           String?
   operatorId          String?
   barcode             String   @unique
@@ -107,6 +120,7 @@ model IssueToHoloMachine {
   machine             Machine?  @relation(fields: [machineId], references: [id])
   operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
   yarn                Yarn?      @relation(fields: [yarnId], references: [id])
+  twist               Twist?     @relation(fields: [twistId], references: [id])
   receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
 }
 
@@ -244,6 +258,8 @@ model ReceiveFromCutterMachineRow {
   box           Box?                                 @relation(fields: [boxId], references: [id])
   operator      Operator?                            @relation("OperatorReceiveRows", fields: [operatorId], references: [id])
   helper        Operator?                            @relation("HelperReceiveRows", fields: [helperId], references: [id])
+  cutId         String?
+  cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
 }
 
 model ReceiveFromCutterMachinePieceTotal {

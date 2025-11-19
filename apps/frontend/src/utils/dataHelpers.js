@@ -8,6 +8,8 @@ export function normalizeDb(raw) {
   const ensureArr = (val) => (Array.isArray(val) ? val : []);
   const items = ensureArr(raw?.items);
   const yarns = ensureArr(raw?.yarns);
+  const cuts = ensureArr(raw?.cuts);
+  const twists = ensureArr(raw?.twists);
   const firms = ensureArr(raw?.firms);
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
@@ -48,6 +50,8 @@ export function normalizeDb(raw) {
   return {
     items,
     yarns,
+    cuts,
+    twists,
     firms,
     suppliers,
     machines,

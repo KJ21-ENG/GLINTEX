@@ -31,6 +31,15 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     });
     return map;
   }, [db.yarns]);
+  const twistMap = useMemo(() => {
+    const map = new Map();
+    (db.twists || []).forEach((twist) => {
+      if (twist?.id) map.set(twist.id, twist);
+    });
+    return map;
+  }, [db.twists]);
+  const yarns = Array.isArray(db.yarns) ? db.yarns : [];
+  const twists = Array.isArray(db.twists) ? db.twists : [];
   const totalUnitsIssued = issueList.reduce((sum, issue) => {
     if (process === 'holo') return sum + Number(issue.metallicBobbins || 0);
     if (process === 'coning') return sum + Number(issue.rollsIssued || 0);
@@ -42,6 +51,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     operatorId: '',
     yarnId: '',
     yarnKg: '',
+    twistId: '',
     note: '',
   });
   const [coningForm, setConingForm] = useState({
@@ -91,7 +101,6 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
 
   useEffect(() => {
     if (!isHolo) return;
-    const yarns = Array.isArray(db.yarns) ? db.yarns : [];
     if (yarns.length === 0) {
       if (holoForm.yarnId) {
         setHoloForm(prev => ({ ...prev, yarnId: '' }));
@@ -101,7 +110,20 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     if (holoForm.yarnId && !yarns.some(y => y.id === holoForm.yarnId)) {
       setHoloForm(prev => ({ ...prev, yarnId: '' }));
     }
-  }, [db.yarns, holoForm.yarnId, isHolo]);
+  }, [yarns, holoForm.yarnId, isHolo]);
+
+  useEffect(() => {
+    if (!isHolo) return;
+    if (twists.length === 0) {
+      if (holoForm.twistId) {
+        setHoloForm(prev => ({ ...prev, twistId: '' }));
+      }
+      return;
+    }
+    if (holoForm.twistId && !twists.some(t => t.id === holoForm.twistId)) {
+      setHoloForm(prev => ({ ...prev, twistId: '' }));
+    }
+  }, [twists, holoForm.twistId, isHolo]);
 
   const candidateLots = useMemo(() => {
     const parse = (s) => (s && typeof s === 'string') ? s : '';
@@ -405,6 +427,10 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
       window.alert('Select a yarn quality');
       return;
     }
+    if (!holoForm.twistId) {
+      window.alert('Select a twist');
+      return;
+    }
     if (holoCrates.length === 0) {
       window.alert('Scan at least one crate');
       return;
@@ -434,6 +460,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
         machineId: holoForm.machineId || null,
         operatorId: holoForm.operatorId || null,
         yarnId: holoForm.yarnId || null,
+        twistId: holoForm.twistId || null,
         metallicBobbins: holoTotals.totalRolls,
         metallicBobbinsWeight: holoTotals.totalWeight,
         yarnKg: holoForm.yarnKg ? Number(holoForm.yarnKg) : holoTotals.totalWeight,
@@ -451,6 +478,8 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
         date: todayISO(),
         machineId: '',
         operatorId: '',
+        yarnId: '',
+        twistId: '',
         yarnKg: '',
         note: '',
       }));
@@ -509,8 +538,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
 
   if (!isCutter) {
     if (isHolo) {
-      const yarns = Array.isArray(db.yarns) ? db.yarns : [];
-      const disableIssue = holoSubmitting || refreshing || yarns.length === 0;
+      const disableIssue = holoSubmitting || refreshing || yarns.length === 0 || twists.length === 0;
       return (
         <div className="space-y-6">
           <Section title="Issue to Holo (Rolls)">
@@ -536,7 +564,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div>
                   <label className={`text-xs ${cls.muted}`}>Yarn</label>
                   <Select value={holoForm.yarnId} onChange={(e) => setHoloForm(prev => ({ ...prev, yarnId: e.target.value }))}>
@@ -558,6 +586,14 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                   />
                 </div>
                 <div>
+                  <label className={`text-xs ${cls.muted}`}>Twist</label>
+                  <Select value={holoForm.twistId} onChange={(e) => setHoloForm(prev => ({ ...prev, twistId: e.target.value }))}>
+                    <option value="">Select</option>
+                    {twists.map(twist => <option key={twist.id} value={twist.id}>{twist.name}</option>)}
+                  </Select>
+                  {twists.length === 0 && <p className="text-xs text-red-500 mt-1">Add twists in Masters first.</p>}
+                </div>
+                <div className="md:col-span-1 md:col-start-auto">
                   <label className={`text-xs ${cls.muted}`}>Note</label>
                   <Input value={holoForm.note} onChange={(e) => setHoloForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
                 </div>
@@ -664,6 +700,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                     <th className="py-2 pr-2">Date</th>
                     <th className="py-2 pr-2">Lot</th>
                     <th className="py-2 pr-2">Yarn</th>
+                    <th className="py-2 pr-2">Twist</th>
                     <th className="py-2 pr-2 text-right">Rolls</th>
                     <th className="py-2 pr-2 text-right">Issue wt. (kg)</th>
                     <th className="py-2 pr-2 text-right">Yarn (kg)</th>
@@ -674,7 +711,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                 <tbody>
                   {issueList.length === 0 ? (
                     <tr>
-                      <td className="py-3 pr-2" colSpan={8}>No issue records yet.</td>
+                      <td className="py-3 pr-2" colSpan={9}>No issue records yet.</td>
                     </tr>
                   ) : (
                     issueList.map((issue) => (
@@ -682,6 +719,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                         <td className="py-2 pr-2">{issue.date || '—'}</td>
                         <td className="py-2 pr-2">{issue.lotNo}</td>
                         <td className="py-2 pr-2">{issue.yarnId ? (yarnMap.get(issue.yarnId)?.name || issue.yarnId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.twistId ? (twistMap.get(issue.twistId)?.name || issue.twistId) : '—'}</td>
                         <td className="py-2 pr-2 text-right">{issue.metallicBobbins || 0}</td>
                         <td className="py-2 pr-2 text-right">{issue.metallicBobbinsWeight == null ? '—' : formatKg(issue.metallicBobbinsWeight)}</td>
                         <td className="py-2 pr-2 text-right">{issue.yarnKg == null ? '—' : issue.yarnKg}</td>

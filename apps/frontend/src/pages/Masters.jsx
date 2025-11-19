@@ -15,6 +15,12 @@ export function Masters({
   onAddYarn,
   onDeleteYarn,
   onEditYarn,
+  onAddCut,
+  onDeleteCut,
+  onEditCut,
+  onAddTwist,
+  onDeleteTwist,
+  onEditTwist,
   onAddFirm,
   onDeleteFirm,
   onEditFirm,
@@ -41,7 +47,7 @@ export function Masters({
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | yarns | firms | suppliers | machines | workers | bobbins | boxes
+  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | boxes
 
   async function addItem() {
     const name = itemName.trim();
@@ -236,6 +242,12 @@ export function Masters({
         <button onClick={() => setTab('yarns')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='yarns' ? cls.navActive : 'border-transparent'} ${tab!=='yarns' ? cls.navHover : ''}`}>
           Yarns
         </button>
+        <button onClick={() => setTab('cuts')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='cuts' ? cls.navActive : 'border-transparent'} ${tab!=='cuts' ? cls.navHover : ''}`}>
+          Cuts
+        </button>
+        <button onClick={() => setTab('twists')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='twists' ? cls.navActive : 'border-transparent'} ${tab!=='twists' ? cls.navHover : ''}`}>
+          Twists
+        </button>
         <button onClick={() => setTab('firms')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='firms' ? cls.navActive : 'border-transparent'} ${tab!=='firms' ? cls.navHover : ''}`}>
           Firms
         </button>
@@ -265,6 +277,18 @@ export function Masters({
       {tab === 'yarns' && (
         <Section title="Yarns">
           <SearchableInput items={db.yarns || []} onAdd={onAddYarn} onDelete={onDeleteYarn} onEdit={onEditYarn} placeholder="New yarn name" disabled={disable} />
+        </Section>
+      )}
+
+      {tab === 'cuts' && (
+        <Section title="Cuts">
+          <SearchableInput items={db.cuts || []} onAdd={onAddCut} onDelete={onDeleteCut} onEdit={onEditCut} placeholder="New cut name" disabled={disable} />
+        </Section>
+      )}
+
+      {tab === 'twists' && (
+        <Section title="Twists">
+          <SearchableInput items={db.twists || []} onAdd={onAddTwist} onDelete={onDeleteTwist} onEdit={onEditTwist} placeholder="New twist name" disabled={disable} />
         </Section>
       )}
 

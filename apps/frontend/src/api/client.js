@@ -73,6 +73,14 @@ export async function listYarns() { return await request('/api/yarns'); }
 export async function createYarn(name) { return await request('/api/yarns', { method: 'POST', body: { name } }); }
 export async function deleteYarn(id) { return await request(`/api/yarns/${id}`, { method: 'DELETE' }); }
 export async function updateYarn(id, name) { return await request(`/api/yarns/${id}`, { method: 'PUT', body: { name } }); }
+export async function listCuts() { return await request('/api/cuts'); }
+export async function createCut(name) { return await request('/api/cuts', { method: 'POST', body: { name } }); }
+export async function deleteCut(id) { return await request(`/api/cuts/${id}`, { method: 'DELETE' }); }
+export async function updateCut(id, name) { return await request(`/api/cuts/${id}`, { method: 'PUT', body: { name } }); }
+export async function listTwists() { return await request('/api/twists'); }
+export async function createTwist(name) { return await request('/api/twists', { method: 'POST', body: { name } }); }
+export async function deleteTwist(id) { return await request(`/api/twists/${id}`, { method: 'DELETE' }); }
+export async function updateTwist(id, name) { return await request(`/api/twists/${id}`, { method: 'PUT', body: { name } }); }
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
@@ -150,6 +158,14 @@ export default {
   createYarn,
   deleteYarn,
   updateYarn,
+  listCuts,
+  createCut,
+  deleteCut,
+  updateCut,
+  listTwists,
+  createTwist,
+  deleteTwist,
+  updateTwist,
   listFirms,
   createFirm,
   deleteFirm,

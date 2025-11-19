@@ -263,6 +263,35 @@ export default function InventoryApp() {
     await api.createBox(name, weight);
     await refreshDb();
   }, [refreshDb]);
+  const handleCreateCut = useCallback(async (name) => {
+    await api.createCut(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteCut = useCallback(async (id) => {
+    await api.deleteCut(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateCut = useCallback(async (id, name) => {
+    await api.updateCut(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateTwist = useCallback(async (name) => {
+    await api.createTwist(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteTwist = useCallback(async (id) => {
+    await api.deleteTwist(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateTwist = useCallback(async (id, name) => {
+    await api.updateTwist(id, name);
+    await refreshDb();
+  }, [refreshDb]);
 
   const handleDeleteBox = useCallback(async (id) => {
     await api.deleteBox(id);
@@ -386,6 +415,12 @@ export default function InventoryApp() {
             onAddYarn={handleCreateYarn}
             onDeleteYarn={handleDeleteYarn}
             onEditYarn={handleUpdateYarn}
+            onAddCut={handleCreateCut}
+            onDeleteCut={handleDeleteCut}
+            onEditCut={handleUpdateCut}
+            onAddTwist={handleCreateTwist}
+            onDeleteTwist={handleDeleteTwist}
+            onEditTwist={handleUpdateTwist}
             onAddFirm={handleCreateFirm}
             onDeleteFirm={handleDeleteFirm}
             onEditFirm={handleUpdateFirm}

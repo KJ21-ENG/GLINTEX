@@ -164,6 +164,16 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateYarn = useCallback(async (name) => {
+    await api.createYarn(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteYarn = useCallback(async (id) => {
+    await api.deleteYarn(id);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleCreateFirm = useCallback(async (name) => {
     await api.createFirm(name);
     await refreshDb();
@@ -206,6 +216,11 @@ export default function InventoryApp() {
 
   const handleUpdateItem = useCallback(async (id, name) => {
     await api.updateItem(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateYarn = useCallback(async (id, name) => {
+    await api.updateYarn(id, name);
     await refreshDb();
   }, [refreshDb]);
 
@@ -368,6 +383,9 @@ export default function InventoryApp() {
             onAddItem={handleCreateItem}
             onDeleteItem={handleDeleteItem}
             onEditItem={handleUpdateItem}
+            onAddYarn={handleCreateYarn}
+            onDeleteYarn={handleDeleteYarn}
+            onEditYarn={handleUpdateYarn}
             onAddFirm={handleCreateFirm}
             onDeleteFirm={handleDeleteFirm}
             onEditFirm={handleUpdateFirm}

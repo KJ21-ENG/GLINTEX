@@ -65,6 +65,10 @@ export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
 export async function deleteItem(id) { return await request(`/api/items/${id}`, { method: 'DELETE' }); }
 export async function updateItem(id, name) { return await request(`/api/items/${id}`, { method: 'PUT', body: { name } }); }
+export async function listYarns() { return await request('/api/yarns'); }
+export async function createYarn(name) { return await request('/api/yarns', { method: 'POST', body: { name } }); }
+export async function deleteYarn(id) { return await request(`/api/yarns/${id}`, { method: 'DELETE' }); }
+export async function updateYarn(id, name) { return await request(`/api/yarns/${id}`, { method: 'PUT', body: { name } }); }
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
@@ -137,6 +141,10 @@ export default {
   createItem,
   deleteItem,
   updateItem,
+  listYarns,
+  createYarn,
+  deleteYarn,
+  updateYarn,
   listFirms,
   createFirm,
   deleteFirm,

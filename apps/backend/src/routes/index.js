@@ -328,6 +328,7 @@ router.get('/api/health', async (req, res) => {
 
 router.get('/api/db', async (req, res) => {
   const items = await prisma.item.findMany();
+  const yarns = await prisma.yarn.findMany();
   const firms = await prisma.firm.findMany();
   const suppliers = await prisma.supplier.findMany();
   const machines = await prisma.machine.findMany();
@@ -398,6 +399,7 @@ router.get('/api/db', async (req, res) => {
   const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
   res.json({
     items,
+    yarns,
     firms,
     suppliers,
     machines,
@@ -1273,25 +1275,120 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
 
 router.post('/api/issue_to_holo_machine', async (req, res) => {
   try {
-    const { date, itemId, lotNo, machineId, operatorId, metallicBobbins, yarnKg, receivedRowRefs, rollsProducedEstimate, note } = req.body || {};
-    if (!date || !itemId || !lotNo) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate } = req.body || {};
+    if (!date) {
+      return res.status(400).json({ error: 'Missing date' });
     }
-    const created = await prisma.issueToHoloMachine.create({
-      data: {
-        date,
-        itemId,
-        lotNo,
-        machineId: machineId || null,
-        operatorId: operatorId || null,
-        barcode: `HLO-${lotNo}-${Date.now()}`,
-        note: note || null,
-        metallicBobbins: Number(metallicBobbins || 0),
-        yarnKg: Number(yarnKg || 0),
-        receivedRowRefs: Array.isArray(receivedRowRefs) ? receivedRowRefs : [],
-        rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
-      },
+    const crateRows = Array.isArray(crates) ? crates : [];
+    if (crateRows.length === 0) {
+      return res.status(400).json({ error: 'Scan at least one crate to issue' });
+    }
+
+    const normalizedCrates = crateRows
+      .map((crate) => ({
+        rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
+        issuedBobbins: Number(crate.issuedBobbins || 0),
+        issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
+      }))
+      .filter((crate) => crate.rowId);
+
+    if (normalizedCrates.length === 0) {
+      return res.status(400).json({ error: 'Invalid crate payload' });
+    }
+    if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbins) || crate.issuedBobbins <= 0)) {
+      return res.status(400).json({ error: 'Enter bobbin quantity for each scanned crate' });
+    }
+    if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbinWeight) || crate.issuedBobbinWeight < 0)) {
+      return res.status(400).json({ error: 'Invalid bobbin weight for a crate' });
+    }
+
+    const rowIds = normalizedCrates.map((crate) => crate.rowId);
+    const uniqueRowIds = new Set(rowIds);
+    if (uniqueRowIds.size !== rowIds.length) {
+      return res.status(400).json({ error: 'Duplicate crates were scanned. Remove duplicates and try again.' });
+    }
+    const receiveRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: rowIds } },
+      select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
     });
+    if (receiveRows.length !== normalizedCrates.length) {
+      return res.status(404).json({ error: 'One or more scanned crates were not found' });
+    }
+
+    const rowMap = new Map(receiveRows.map((row) => [row.id, row]));
+    const pieceIds = Array.from(new Set(receiveRows.map((row) => row.pieceId).filter(Boolean)));
+    const pieces = await prisma.inboundItem.findMany({
+      where: { id: { in: pieceIds } },
+      select: { id: true, itemId: true, lotNo: true },
+    });
+    const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
+    if (pieceMap.size !== pieceIds.length) {
+      return res.status(400).json({ error: 'One or more crates are missing linked inbound pieces' });
+    }
+
+    const lotSet = new Set();
+    const itemSet = new Set();
+    for (const row of receiveRows) {
+      const piece = pieceMap.get(row.pieceId);
+      lotSet.add(piece.lotNo);
+      itemSet.add(piece.itemId);
+    }
+    if (lotSet.size !== 1 || itemSet.size !== 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
+    }
+    const lotNo = Array.from(lotSet)[0];
+    const itemId = Array.from(itemSet)[0];
+
+    let yarnRecord = null;
+    if (yarnId) {
+      yarnRecord = await prisma.yarn.findUnique({ where: { id: yarnId } });
+      if (!yarnRecord) {
+        return res.status(404).json({ error: 'Selected yarn not found' });
+      }
+    }
+
+    const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
+    if (!Number.isFinite(totalBobbins) || totalBobbins <= 0) {
+      return res.status(400).json({ error: 'Enter bobbin quantity for the scanned crates' });
+    }
+    const totalWeight = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
+    const normalizedYarnKg = Number(yarnKg || 0);
+
+    const created = await prisma.$transaction(async (tx) => {
+      const issue = await tx.issueToHoloMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          yarnId: yarnRecord ? yarnRecord.id : null,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: `HLO-${lotNo}-${Date.now()}`,
+          note: note || null,
+          metallicBobbins: totalBobbins,
+          metallicBobbinsWeight: totalWeight,
+          yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
+          receivedRowRefs: normalizedCrates,
+          rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
+        },
+      });
+
+      for (const crate of normalizedCrates) {
+        const sourceRow = rowMap.get(crate.rowId);
+        const existingQty = Number(sourceRow?.issuedBobbins || 0);
+        const existingWeight = Number(sourceRow?.issuedBobbinWeight || 0);
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: crate.rowId },
+          data: {
+            issuedBobbins: existingQty + (Number(crate.issuedBobbins) || 0),
+            issuedBobbinWeight: existingWeight + (Number(crate.issuedBobbinWeight) || 0),
+          },
+        });
+      }
+
+      return issue;
+    });
+
     res.json({ ok: true, issueToHoloMachine: created });
   } catch (err) {
     console.error('Failed to issue to holo machine', err);
@@ -1556,6 +1653,73 @@ router.put('/api/items/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to update item', err);
     res.status(500).json({ error: err.message || 'Failed to update item' });
+  }
+});
+
+router.get('/api/yarns', async (req, res) => {
+  const yarns = await prisma.yarn.findMany({ orderBy: { name: 'asc' } });
+  res.json(yarns);
+});
+
+router.post('/api/yarns', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Missing yarn name' });
+    }
+    const yarn = await prisma.yarn.create({ data: { name: String(name).trim() } });
+    await logCrud({ entityType: 'yarn', entityId: yarn.id, action: 'create', payload: yarn });
+    res.json(yarn);
+  } catch (err) {
+    console.error('Failed to create yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to create yarn' });
+  }
+});
+
+router.put('/api/yarns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Missing yarn name' });
+    }
+    const existing = await prisma.yarn.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Yarn not found' });
+    }
+    const updated = await prisma.yarn.update({ where: { id }, data: { name: String(name).trim() } });
+    await logCrud({
+      entityType: 'yarn',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to update yarn' });
+  }
+});
+
+router.delete('/api/yarns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.yarn.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Yarn not found' });
+    }
+    const issueUsage = await prisma.issueToHoloMachine.count({ where: { yarnId: id } });
+    if (issueUsage > 0) {
+      return res.status(400).json({ error: 'Yarn has been used in issues and cannot be deleted' });
+    }
+    await prisma.yarn.delete({ where: { id } });
+    await logCrud({ entityType: 'yarn', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to delete yarn' });
   }
 });
 

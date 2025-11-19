@@ -7,6 +7,7 @@ import { defaultBrand } from './theme.js';
 export function normalizeDb(raw) {
   const ensureArr = (val) => (Array.isArray(val) ? val : []);
   const items = ensureArr(raw?.items);
+  const yarns = ensureArr(raw?.yarns);
   const firms = ensureArr(raw?.firms);
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
@@ -46,6 +47,7 @@ export function normalizeDb(raw) {
   const receivePieceTotals = ensureArr(raw?.receive_from_cutter_machine_piece_totals);
   return {
     items,
+    yarns,
     firms,
     suppliers,
     machines,

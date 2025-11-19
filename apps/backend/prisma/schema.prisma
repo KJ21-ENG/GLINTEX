@@ -14,6 +14,12 @@ model Item {
   lots  Lot[]
 }
 
+model Yarn {
+  id    String @id @default(cuid())
+  name  String @unique
+  issues IssueToHoloMachine[]
+}
+
 model Firm {
   id   String @id @default(cuid())
   name String
@@ -87,17 +93,20 @@ model IssueToHoloMachine {
   date                String
   itemId              String
   lotNo               String
+  yarnId              String?
   machineId           String?
   operatorId          String?
   barcode             String   @unique
   note                String?
   metallicBobbins     Int      @default(0)
+  metallicBobbinsWeight Float  @default(0)
   yarnKg              Float    @default(0)
   receivedRowRefs     Json     @default("[]")
   rollsProducedEstimate Int?
   createdAt           DateTime @default(now())
   machine             Machine?  @relation(fields: [machineId], references: [id])
   operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
+  yarn                Yarn?      @relation(fields: [yarnId], references: [id])
   receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
 }
 
@@ -219,6 +228,7 @@ model ReceiveFromCutterMachineRow {
   helperId      String?
   bobbinQuantity Int? @map("bobbin_quantity")
   issuedBobbins  Int   @default(0)
+  issuedBobbinWeight Float @default(0)
   grossWt       Float?
   tareWt        Float?
   netWt         Float?

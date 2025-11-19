@@ -12,6 +12,9 @@ export function Masters({
   onAddItem,
   onDeleteItem,
   onEditItem,
+  onAddYarn,
+  onDeleteYarn,
+  onEditYarn,
   onAddFirm,
   onDeleteFirm,
   onEditFirm,
@@ -38,7 +41,7 @@ export function Masters({
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | firms | suppliers | machines | workers | bobbins | boxes
+  const [tab, setTab] = useState('items'); // items | yarns | firms | suppliers | machines | workers | bobbins | boxes
 
   async function addItem() {
     const name = itemName.trim();
@@ -230,6 +233,9 @@ export function Masters({
         <button onClick={() => setTab('items')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='items' ? cls.navActive : 'border-transparent'} ${tab!=='items' ? cls.navHover : ''}`}>
           Items
         </button>
+        <button onClick={() => setTab('yarns')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='yarns' ? cls.navActive : 'border-transparent'} ${tab!=='yarns' ? cls.navHover : ''}`}>
+          Yarns
+        </button>
         <button onClick={() => setTab('firms')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='firms' ? cls.navActive : 'border-transparent'} ${tab!=='firms' ? cls.navHover : ''}`}>
           Firms
         </button>
@@ -253,6 +259,12 @@ export function Masters({
       {tab === 'items' && (
         <Section title="Items">
           <SearchableInput items={db.items} onAdd={onAddItem} onDelete={onDeleteItem} onEdit={onEditItem} placeholder="New item name" disabled={disable} />
+        </Section>
+      )}
+
+      {tab === 'yarns' && (
+        <Section title="Yarns">
+          <SearchableInput items={db.yarns || []} onAdd={onAddYarn} onDelete={onDeleteYarn} onEdit={onEditYarn} placeholder="New yarn name" disabled={disable} />
         </Section>
       )}
 

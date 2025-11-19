@@ -52,6 +52,10 @@ export async function createIssueToMachine(payload) { return await createIssueTo
 export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
 export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }
+export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
+export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
+export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
+export async function manualReceiveFromConingMachine(payload) { return await request('/api/receive_from_coning_machine/manual', { method: 'POST', body: payload }); }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
@@ -117,9 +121,13 @@ export default {
   createLot,
   createIssueToMachine,
   createIssueToCutterMachine,
+  createIssueToHoloMachine,
+  createIssueToConingMachine,
   importReceiveFromMachine,
   previewReceiveFromMachine,
   manualReceiveFromMachine,
+  manualReceiveFromHoloMachine,
+  manualReceiveFromConingMachine,
   markPieceWastage,
   updateInboundItem,
   deleteLot,

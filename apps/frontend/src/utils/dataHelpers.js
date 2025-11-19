@@ -39,6 +39,8 @@ export function normalizeDb(raw) {
     })(),
   }));
   const settings = ensureArr(raw?.settings);
+  const issueToHoloMachine = ensureArr(raw?.issue_to_holo_machine);
+  const issueToConingMachine = ensureArr(raw?.issue_to_coning_machine);
   const receiveUploads = ensureArr(raw?.receive_from_cutter_machine_uploads);
   const receiveRows = ensureArr(raw?.receive_from_cutter_machine_rows);
   const receivePieceTotals = ensureArr(raw?.receive_from_cutter_machine_piece_totals);
@@ -55,10 +57,16 @@ export function normalizeDb(raw) {
     lots,
     inbound_items,
     issue_to_cutter_machine: issueToCutterMachine,
+    issue_to_holo_machine: issueToHoloMachine,
+    issue_to_coning_machine: issueToConingMachine,
     settings,
     receive_from_cutter_machine_uploads: receiveUploads,
     receive_from_cutter_machine_rows: receiveRows,
     receive_from_cutter_machine_piece_totals: receivePieceTotals,
+    receive_from_holo_machine_rows: ensureArr(raw?.receive_from_holo_machine_rows),
+    receive_from_coning_machine_rows: ensureArr(raw?.receive_from_coning_machine_rows),
+    receive_from_holo_machine_piece_totals: ensureArr(raw?.receive_from_holo_machine_piece_totals),
+    receive_from_coning_machine_piece_totals: ensureArr(raw?.receive_from_coning_machine_piece_totals),
   };
 }
 

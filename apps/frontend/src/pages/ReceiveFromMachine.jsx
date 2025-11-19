@@ -6,7 +6,10 @@ import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Pill, Pagination, Select, Input } from '../components';
 import { formatKg, uid, todayISO } from '../utils';
+import { getProcessDefinition } from '../constants/processes';
 import * as api from '../api';
+
+const ensureArray = (value) => (Array.isArray(value) ? value : []);
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '';
@@ -134,8 +137,11 @@ function SummaryCard({ title, summary, meta, cls, actions }) {
   );
 }
 
-export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
+export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 'cutter' }) {
   const { cls, brand } = useBrand();
+  const processDef = getProcessDefinition(process);
+  const isCutter = process === 'cutter';
+  const { receiveTotalsKey, receiveUnitField, receiveWeightField, receiveRowsKey, unitLabel, unitLabelPlural, label } = processDef;
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -160,25 +166,27 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     return map;
   }, [db.inbound_items]);
 
-  // Map pieceId -> { received: number, wastage: number, totalBob: number }
+  // Map pieceId -> { received: number, wastage: number, totalUnits: number }
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
-    (db.receive_from_cutter_machine_piece_totals || []).forEach((row) => {
+    const totalsList = ensureArray(db[receiveTotalsKey]);
+    totalsList.forEach((row) => {
       map.set(row.pieceId, {
-        received: Number(row.totalNetWeight || 0),
+        received: Number(row[receiveWeightField] || 0),
         wastage: Number(row.wastageNetWeight || 0),
-        totalBob: Number(row.totalBob || 0),
+        totalUnits: Number(row[receiveUnitField] || 0),
       });
     });
     return map;
-  }, [db.receive_from_cutter_machine_piece_totals]);
+  }, [db, process, receiveTotalsKey, receiveWeightField, receiveUnitField]);
 
   // Map pieceId -> most common bobbin name from receive rows
   const pieceBobbinMap = useMemo(() => {
+    if (!isCutter) return new Map();
     const map = new Map();
     const pieceBobbinCounts = new Map();
     
-    (db.receive_from_cutter_machine_rows || []).forEach((row) => {
+    ensureArray(db[receiveRowsKey]).forEach((row) => {
       if (!row.pieceId) return;
       const bobbinName = row.bobbin?.name || row.pcsTypeName || null;
       if (!bobbinName) return;
@@ -196,7 +204,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     });
     
     return map;
-  }, [db.receive_from_cutter_machine_rows]);
+  }, [db, isCutter, receiveRowsKey]);
 
   const { knownPieces, orphanPieces, totalReceivedWeight } = useMemo(() => {
     const known = [];
@@ -204,7 +212,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     let runningTotal = 0;
     for (const [pieceId, totals] of receiveTotalsMap.entries()) {
       const received = totals.received || 0;
-      const totalBob = totals.totalBob || 0;
+      const totalUnits = totals.totalUnits || 0;
       runningTotal += received;
       const inbound = inboundPieceMap.get(pieceId) || null;
       const inboundWeight = inbound ? Number(inbound.weight || 0) : null;
@@ -214,7 +222,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
         inboundWeight,
         receivedWeight: received,
         pendingWeight: inboundWeight === null ? null : Math.max(0, inboundWeight - received),
-        totalBob,
+        totalUnits,
         bobbinName: pieceBobbinMap.get(pieceId) || '—',
       };
       if (inbound) known.push(summary);
@@ -356,6 +364,101 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
     return latestRows.slice(start, start + pageSize);
   }, [latestRows, rowsPage]);
 
+  const processReceiveRows = useMemo(() => ensureArray(db[receiveRowsKey]), [db, process, receiveRowsKey]);
+  const processReceiveTotals = useMemo(() => ensureArray(db[receiveTotalsKey]), [db, process, receiveTotalsKey]);
+  const totalProcessUnits = useMemo(() => processReceiveTotals.reduce((sum, entry) => sum + Number(entry[receiveUnitField] || 0), 0), [processReceiveTotals, receiveUnitField]);
+
+  if (!isCutter) {
+    const rowUnitField = process === 'holo' ? 'rollCount' : 'coneCount';
+    const rowWeightField = process === 'holo' ? 'rollWeight' : 'coneWeight';
+    return (
+      <div className="space-y-6">
+        <Section title={`Receive from ${label}`}>
+          <div className="text-sm text-slate-400">
+            Manual receive entries for {label} are recorded here.
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            Total {unitLabelPlural}: {totalProcessUnits}
+          </div>
+        </Section>
+
+        <Section title={`Latest ${unitLabelPlural}`}>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className={`text-left ${cls.muted}`}>
+                <tr>
+                  <th className="py-2 pr-2">Date</th>
+                  <th className="py-2 pr-2">Lot</th>
+                  <th className="py-2 pr-2 text-right">{unitLabelPlural}</th>
+                  <th className="py-2 pr-2 text-right">Weight (kg)</th>
+                  <th className="py-2 pr-2">Machine</th>
+                  <th className="py-2 pr-2">Operator</th>
+                  <th className="py-2 pr-2">Helper</th>
+                  <th className="py-2 pr-2">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {processReceiveRows.length === 0 ? (
+                  <tr>
+                    <td className="py-3 pr-2" colSpan={8}>No receive records yet.</td>
+                  </tr>
+                ) : (
+                  processReceiveRows.map((row) => {
+                    const units = Number(row[rowUnitField] || 0);
+                    const weightValue = row[rowWeightField];
+                    return (
+                      <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{row.date || row.createdAt || '—'}</td>
+                        <td className="py-2 pr-2 font-mono">{row.issue?.lotNo || row.issue?.barcode || '—'}</td>
+                        <td className="py-2 pr-2 text-right">{units}</td>
+                        <td className="py-2 pr-2 text-right">{weightValue == null ? '—' : formatKg(weightValue)}</td>
+                        <td className="py-2 pr-2">{row.machineNo || '—'}</td>
+                        <td className="py-2 pr-2">{row.operator?.name || '—'}</td>
+                        <td className="py-2 pr-2">{row.helper?.name || '—'}</td>
+                        <td className="py-2 pr-2">{row.notes || '—'}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title={`${unitLabel} totals by piece`}>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className={`text-left ${cls.muted}`}>
+                <tr>
+                  <th className="py-2 pr-2">Piece</th>
+                  <th className="py-2 pr-2 text-right">Total {unitLabelPlural}</th>
+                  <th className="py-2 pr-2 text-right">Net weight (kg)</th>
+                  <th className="py-2 pr-2 text-right">Wastage (kg)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {processReceiveTotals.length === 0 ? (
+                  <tr>
+                    <td className="py-3 pr-2" colSpan={4}>No piece totals recorded yet.</td>
+                  </tr>
+                ) : (
+                  processReceiveTotals.map((row) => (
+                    <tr key={row.pieceId} className={`border-t ${cls.rowBorder}`}>
+                      <td className="py-2 pr-2 font-mono">{row.pieceId}</td>
+                      <td className="py-2 pr-2 text-right">{row[receiveUnitField] || 0}</td>
+                      <td className="py-2 pr-2 text-right">{formatKg(row.totalNetWeight || 0)}</td>
+                      <td className="py-2 pr-2 text-right">{formatKg(row.wastageNetWeight || 0)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Section
@@ -474,7 +577,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                 <th className="py-2 pr-2 text-right">Inbound (kg)</th>
                 <th className="py-2 pr-2 text-right">Received (kg)</th>
                 <th className="py-2 pr-2 text-right">Pending (kg)</th>
-                <th className="py-2 pr-2 text-right">Total Pcs</th>
+                <th className="py-2 pr-2 text-right">Total {unitLabelPlural}</th>
                 <th className="py-2 pr-2">Bobbin</th>
               </tr>
             </thead>
@@ -491,7 +594,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                   <td className="py-2 pr-2 text-right">{piece.inboundWeight == null ? '—' : formatKg(piece.inboundWeight)}</td>
                   <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
                   <td className="py-2 pr-2 text-right">{piece.pendingWeight == null ? '—' : formatKg(piece.pendingWeight)}</td>
-                      <td className="py-2 pr-2 text-right">{piece.totalBob || 0}</td>
+                      <td className="py-2 pr-2 text-right">{piece.totalUnits || 0}</td>
                   <td className="py-2 pr-2">{piece.bobbinName}</td>
                 </tr>
                 ))
@@ -512,7 +615,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                   <tr>
                     <th className="py-2 pr-2">Piece</th>
                     <th className="py-2 pr-2 text-right">Received (kg)</th>
-                    <th className="py-2 pr-2 text-right">Total Pcs</th>
+                    <th className="py-2 pr-2 text-right">Total {unitLabelPlural}</th>
                   </tr>
               </thead>
               <tbody>
@@ -520,7 +623,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine }) {
                   <tr key={piece.pieceId} className={`border-t ${cls.rowBorder}`}>
                     <td className="py-2 pr-2 font-mono">{piece.pieceId}</td>
                     <td className="py-2 pr-2 text-right">{formatKg(piece.receivedWeight)}</td>
-                    <td className="py-2 pr-2 text-right">{piece.totalBob || 0}</td>
+                    <td className="py-2 pr-2 text-right">{piece.totalUnits || 0}</td>
                   </tr>
                 ))}
               </tbody>

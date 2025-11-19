@@ -9,6 +9,7 @@ import { PieceRow } from '../components/stock';
 import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
+import { getProcessDefinition } from '../constants/processes';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active (pending > 0)' },
@@ -79,8 +80,10 @@ function isFilterActive(selectedValues, totalOptions) {
   return selectedValues.length !== totalOptions;
 }
 
-export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
+export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = 'cutter' }) {
   const { cls, brand, theme } = useBrand();
+  const processDef = getProcessDefinition(process);
+  const { receiveTotalsKey, receiveUnitField, receiveWeightField, unitLabelPlural } = processDef;
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
   const [filters, setFilters] = useState({
@@ -105,15 +108,16 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
 
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
-    (db.receive_from_cutter_machine_piece_totals || []).forEach(row => {
+    const totalsList = Array.isArray(db[receiveTotalsKey]) ? db[receiveTotalsKey] : [];
+    totalsList.forEach((row) => {
       map.set(row.pieceId, {
-        received: Number(row.totalNetWeight || 0),
+        received: Number(row[receiveWeightField] || 0),
         wastage: Number(row.wastageNetWeight || 0),
-        totalBob: Number(row.totalBob || 0),
+        totalUnits: Number(row[receiveUnitField] || 0),
       });
     });
     return map;
-  }, [db.receive_from_cutter_machine_piece_totals]);
+  }, [db, process, receiveTotalsKey, receiveWeightField, receiveUnitField]);
 
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
@@ -128,7 +132,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
         availableCount: 0,
         pendingWeight: 0,
         totalReceivedWeight: 0,
-        totalReceivedPieces: 0,
+        totalReceivedUnits: 0,
         wastageTotal: 0,
         wastageCount: 0,
         avgWastage: 0,
@@ -137,12 +141,12 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
     for (const piece of db.inbound_items) {
       if (!m[piece.lotNo]) continue;
       const inboundWeight = Number(piece.weight || 0);
-      const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalBob: 0 };
+      const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalUnits: 0 };
       const receivedWeight = totals.received || 0;
       const wastageWeight = totals.wastage || 0;
-      const pieceTotalBob = totals.totalBob || 0;
+      const pieceTotalUnits = totals.totalUnits || 0;
       const pendingForPiece = Math.max(0, inboundWeight - receivedWeight - wastageWeight);
-      const pieceEntry = { ...piece, pendingWeight: pendingForPiece, receivedWeight, wastageWeight, totalBob: pieceTotalBob };
+      const pieceEntry = { ...piece, pendingWeight: pendingForPiece, receivedWeight, wastageWeight, totalUnits: pieceTotalUnits };
       m[piece.lotNo].pieces.push(pieceEntry);
       if (wastageWeight > 0) {
         m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
@@ -153,7 +157,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
       }
       m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
       m[piece.lotNo].totalReceivedWeight = (m[piece.lotNo].totalReceivedWeight || 0) + receivedWeight;
-    m[piece.lotNo].totalReceivedPieces = (m[piece.lotNo].totalReceivedPieces || 0) + pieceTotalBob;
+    m[piece.lotNo].totalReceivedUnits = (m[piece.lotNo].totalReceivedUnits || 0) + pieceTotalUnits;
     }
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
@@ -857,10 +861,35 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
                               const initialWeight = Number(l.totalWeight || 0);
                               const pendingWeightVal = Number(l.pendingWeight || 0);
                               return (
-                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Barcode</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th><th className="py-2 pr-2 text-right">Received Pcs</th></tr></thead>
+                                <table className="w-full text-sm">
+                                  <thead className={`text-left ${cls.muted}`}>
+                                    <tr>
+                                      <th className="py-2 pr-2">Select</th>
+                                      <th className="py-2 pr-2">Piece ID</th>
+                                      <th className="py-2 pr-2">Barcode</th>
+                                      <th className="py-2 pr-2">Seq</th>
+                                      <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                                      <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                                      <th className="py-2 pr-2 text-right">Received {unitLabelPlural}</th>
+                                    </tr>
+                                  </thead>
                                   <tbody>
-                                    {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.pendingWeight ?? 0} isIssued={issuedPieceIds.has(p.id)} wastageWeight={p.wastageWeight || 0} totalBob={p.totalBob || 0} onMarkWastage={handleMarkWastage} isMarking={markingPieces.has(p.id)} />
+                                    {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p => (
+                                      <PieceRow
+                                        key={p.id}
+                                        p={p}
+                                        lotNo={l.lotNo}
+                                        selected={(selectedByLot[l.lotNo]||[]).includes(p.id)}
+                                        onToggle={() => togglePiece(l.lotNo, p.id)}
+                                        onSaved={() => { refreshDb().catch(()=>{}); }}
+                                        initialWeight={initialWeight}
+                                        pendingWeight={p.pendingWeight ?? 0}
+                                        isIssued={issuedPieceIds.has(p.id)}
+                                        wastageWeight={p.wastageWeight || 0}
+                                        totalUnits={p.totalUnits || 0}
+                                        onMarkWastage={handleMarkWastage}
+                                        isMarking={markingPieces.has(p.id)}
+                                      />
                                     ))}
                                   </tbody>
                                 </table>

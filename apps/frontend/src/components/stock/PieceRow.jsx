@@ -9,7 +9,7 @@ import { ContextMenu } from '../common';
 import { formatKg } from '../../utils';
 import * as api from '../../api';
 
-export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0, isIssued = false, wastageWeight = 0, totalBob = 0, onMarkWastage, isMarking = false }) {
+export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0, isIssued = false, wastageWeight = 0, totalUnits = 0, onMarkWastage, isMarking = false }) {
   const { cls, theme } = useBrand();
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -102,7 +102,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
           ) : null}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right">{totalBob || 0}</td>
+      <td className="py-2 pr-2 text-right">{totalUnits || 0}</td>
     </tr>
     <ContextMenu open={ctxOpen} x={ctxPos.x} y={ctxPos.y} onClose={closeContextMenu}>
       <div className="text-xs">

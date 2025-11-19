@@ -7,10 +7,44 @@ import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, Select, Pill, Pagination } from '../components';
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
+import { getProcessDefinition } from '../constants/processes';
 import * as api from '../api';
 
-export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) {
+const ensureArray = (value) => (Array.isArray(value) ? value : []);
+
+export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, process = 'cutter' }) {
   const { cls } = useBrand();
+  const processDef = getProcessDefinition(process);
+  const isCutter = process === 'cutter';
+  const issueList = ensureArray(db[processDef.issueKey]);
+  const totalUnitsIssued = issueList.reduce((sum, issue) => {
+    if (process === 'holo') return sum + Number(issue.metallicBobbins || 0);
+    if (process === 'coning') return sum + Number(issue.rollsIssued || 0);
+    return sum;
+  }, 0);
+  const [holoForm, setHoloForm] = useState({
+    date: todayISO(),
+    itemId: '',
+    lotNo: '',
+    machineId: '',
+    operatorId: '',
+    metallicBobbins: '',
+    yarnKg: '',
+    note: '',
+    receivedRowRefs: '',
+  });
+  const [coningForm, setConingForm] = useState({
+    date: todayISO(),
+    itemId: '',
+    lotNo: '',
+    machineId: '',
+    operatorId: '',
+    rollsIssued: '',
+    note: '',
+    receivedRowRefs: '',
+  });
+  const [holoSubmitting, setHoloSubmitting] = useState(false);
+  const [coningSubmitting, setConingSubmitting] = useState(false);
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
   const [machineId, setMachineId] = useState("");
@@ -136,6 +170,240 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     } finally {
       setIssuing(false);
     }
+  }
+
+  useEffect(() => {
+    setHoloForm(f => ({
+      ...f,
+      date: todayISO(),
+      itemId: f.itemId || db.items[0]?.id || '',
+      lotNo: '',
+      machineId: '',
+      operatorId: '',
+      metallicBobbins: '',
+      yarnKg: '',
+      note: '',
+      receivedRowRefs: '',
+    }));
+    setConingForm(f => ({
+      ...f,
+      date: todayISO(),
+      itemId: f.itemId || db.items[0]?.id || '',
+      lotNo: '',
+      machineId: '',
+      operatorId: '',
+      rollsIssued: '',
+      note: '',
+      receivedRowRefs: '',
+    }));
+  }, [process, db.items]);
+
+  async function handleHoloSubmit(e) {
+    e.preventDefault();
+    if (!holoForm.date || !holoForm.itemId || !holoForm.lotNo) {
+      window.alert('Date, item, and lot are required');
+      return;
+    }
+    if (!holoForm.metallicBobbins) {
+      window.alert('Metallic bobbins count is required');
+      return;
+    }
+    setHoloSubmitting(true);
+    try {
+      await api.createIssueToHoloMachine({
+        date: holoForm.date,
+        itemId: holoForm.itemId,
+        lotNo: holoForm.lotNo,
+        machineId: holoForm.machineId || null,
+        operatorId: holoForm.operatorId || null,
+        metallicBobbins: Number(holoForm.metallicBobbins),
+        yarnKg: holoForm.yarnKg ? Number(holoForm.yarnKg) : 0,
+        note: holoForm.note || null,
+        receivedRowRefs: holoForm.receivedRowRefs.split(',').map(s => s.trim()).filter(Boolean),
+      });
+      window.alert('Issued to Holo machine');
+      await refreshDb();
+      setHoloForm(f => ({
+        ...f,
+        date: todayISO(),
+        lotNo: '',
+        machineId: '',
+        operatorId: '',
+        metallicBobbins: '',
+        yarnKg: '',
+        note: '',
+        receivedRowRefs: '',
+      }));
+    } catch (err) {
+      console.error('Failed to issue to holo', err);
+      window.alert(err.message || 'Failed to issue to Holo machine');
+    } finally {
+      setHoloSubmitting(false);
+    }
+  }
+
+  async function handleConingSubmit(e) {
+    e.preventDefault();
+    if (!coningForm.date || !coningForm.itemId || !coningForm.lotNo) {
+      window.alert('Date, item, and lot are required');
+      return;
+    }
+    if (!coningForm.rollsIssued) {
+      window.alert('Rolls issued count is required');
+      return;
+    }
+    setConingSubmitting(true);
+    try {
+      await api.createIssueToConingMachine({
+        date: coningForm.date,
+        itemId: coningForm.itemId,
+        lotNo: coningForm.lotNo,
+        machineId: coningForm.machineId || null,
+        operatorId: coningForm.operatorId || null,
+        rollsIssued: Number(coningForm.rollsIssued),
+        note: coningForm.note || null,
+        receivedRowRefs: coningForm.receivedRowRefs.split(',').map(s => s.trim()).filter(Boolean),
+      });
+      window.alert('Issued to Coning machine');
+      await refreshDb();
+      setConingForm(f => ({
+        ...f,
+        date: todayISO(),
+        lotNo: '',
+        machineId: '',
+        operatorId: '',
+        rollsIssued: '',
+        note: '',
+        receivedRowRefs: '',
+      }));
+    } catch (err) {
+      console.error('Failed to issue to coning', err);
+      window.alert(err.message || 'Failed to issue to Coning machine');
+    } finally {
+      setConingSubmitting(false);
+    }
+  }
+
+  if (!isCutter) {
+    const formState = process === 'holo' ? holoForm : coningForm;
+    const setFormState = process === 'holo' ? setHoloForm : setConingForm;
+    const submitting = process === 'holo' ? holoSubmitting : coningSubmitting;
+    const handleFormSubmit = process === 'holo' ? handleHoloSubmit : handleConingSubmit;
+    const unitLabel = process === 'holo' ? 'Metallic bobbins' : 'Rolls issued';
+    const unitValueLabel = process === 'holo' ? 'metallicBobbins' : 'rollsIssued';
+
+    return (
+      <div className="space-y-6">
+        <Section title={`Issue to ${processDef.label}`}>
+          <form className="space-y-4" onSubmit={handleFormSubmit}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Date</label>
+                <Input type="date" value={formState.date} onChange={(e) => setFormState(prev => ({ ...prev, date: e.target.value }))} />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Item</label>
+                <Select value={formState.itemId} onChange={(e) => setFormState(prev => ({ ...prev, itemId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {db.items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Lot</label>
+                <Input value={formState.lotNo} onChange={(e) => setFormState(prev => ({ ...prev, lotNo: e.target.value }))} placeholder="Lot number" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Machine</label>
+                <Select value={formState.machineId} onChange={(e) => setFormState(prev => ({ ...prev, machineId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {db.machines.map(machine => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Operator</label>
+                <Select value={formState.operatorId} onChange={(e) => setFormState(prev => ({ ...prev, operatorId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {db.operators.map(operator => <option key={operator.id} value={operator.id}>{operator.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>{unitLabel}</label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formState[unitValueLabel] ?? ''}
+                  onChange={(e) => setFormState(prev => ({ ...prev, [unitValueLabel]: e.target.value }))}
+                  placeholder={`Enter ${unitLabel.toLowerCase()}`}
+                />
+              </div>
+            </div>
+
+            {process === 'holo' && (
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Yarn (kg)</label>
+                <Input type="number" step="0.1" min="0" value={formState.yarnKg} onChange={(e) => setFormState(prev => ({ ...prev, yarnKg: e.target.value }))} />
+              </div>
+            )}
+
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Received row refs (optional)</label>
+              <Input value={formState.receivedRowRefs} onChange={(e) => setFormState(prev => ({ ...prev, receivedRowRefs: e.target.value }))} placeholder="comma separated receive row IDs" />
+            </div>
+
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Note</label>
+              <Input value={formState.note} onChange={(e) => setFormState(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button type="submit" disabled={submitting}>{submitting ? 'Issuing…' : 'Record issue'}</Button>
+              <Pill>{unitLabel}: {totalUnitsIssued}</Pill>
+            </div>
+          </form>
+        </Section>
+
+        <Section title={`Issue history (${processDef.label})`}>
+          <div className="overflow-x-auto mt-4">
+            <table className="min-w-full text-sm">
+              <thead className={`text-left ${cls.muted}`}>
+                <tr>
+                  <th className="py-2 pr-2">Date</th>
+                  <th className="py-2 pr-2">Lot</th>
+                  <th className="py-2 pr-2 text-right">{unitLabel}</th>
+                  {process === 'holo' && <th className="py-2 pr-2 text-right">Yarn (kg)</th>}
+                  <th className="py-2 pr-2">Barcode</th>
+                  <th className="py-2 pr-2">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {issueList.length === 0 ? (
+                  <tr>
+                    <td className="py-3 pr-2" colSpan={process === 'holo' ? 6 : 5}>No issue records yet.</td>
+                  </tr>
+                ) : (
+                  issueList.map((issue) => (
+                    <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                      <td className="py-2 pr-2">{issue.date || '—'}</td>
+                      <td className="py-2 pr-2">{issue.lotNo}</td>
+                      <td className="py-2 pr-2 text-right">{process === 'holo' ? issue.metallicBobbins || 0 : issue.rollsIssued || 0}</td>
+                      {process === 'holo' && (
+                        <td className="py-2 pr-2 text-right">{issue.yarnKg == null ? '—' : issue.yarnKg}</td>
+                      )}
+                      <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                      <td className="py-2 pr-2">{issue.note || '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      </div>
+    );
   }
 
   return (

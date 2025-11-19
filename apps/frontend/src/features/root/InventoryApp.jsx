@@ -8,6 +8,7 @@ import { BrandCtx } from "../../context";
 import { Button, SecondaryButton, Select } from "../../components";
 import { Inbound, Stock, IssueToMachine, Masters, Reports, Settings, ReceiveFromMachine } from "../../pages";
 import { THEME_KEY, defaultBrand, themeClasses, normalizeDb, extractBrandFromDb } from "../../utils";
+import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
 import * as api from "../../api";
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
 ];
 
 const DEFAULT_TAB = "inbound";
+const PROCESS_KEY = "glintex_active_process";
 
 function isValidTab(value) {
   return TABS.some((tab) => tab.key === value);
@@ -51,12 +53,20 @@ export default function InventoryApp() {
     if (pathTab) return pathTab;
     return localStorage.getItem(LAST_TAB_KEY) || DEFAULT_TAB;
   });
+  const [process, setProcess] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem(PROCESS_KEY) || "cutter";
+    }
+    return "cutter";
+  });
   const [brandPreview, setBrandPreview] = useState(defaultBrand);
   const [savingBrand, setSavingBrand] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
   const cls = useMemo(() => themeClasses(theme), [theme]);
+  const processDef = getProcessDefinition(process);
+  const processOptions = Object.values(PROCESS_DEFINITIONS);
 
   const loadDb = useCallback(async () => {
     const raw = await api.getDB();
@@ -119,6 +129,10 @@ export default function InventoryApp() {
     document.documentElement.style.setProperty('--brand-primary', brandPreview.primary);
     document.documentElement.style.setProperty('--brand-gold', brandPreview.gold);
   }, [brandPreview.primary, brandPreview.gold]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PROCESS_KEY, process);
+  }, [process]);
 
   const brandCtxValue = useMemo(() => ({ theme, setTheme, brand: brandPreview, setBrand: setBrandPreview, cls }), [theme, setTheme, brandPreview, cls]);
   const handleSelectTab = useCallback((nextTab) => {
@@ -326,6 +340,18 @@ export default function InventoryApp() {
           </div>
         </header>
 
+        <div className={`max-w-6xl mx-auto px-4 py-3 border-b ${cls.cardBorder} ${cls.cardBg} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}>
+          <div className="text-sm font-semibold">Active process: {processDef.label}</div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`${cls.muted}`}>Units:</span>
+            <Select value={process} onChange={(e) => setProcess(e.target.value)}>
+              {processOptions.map((proc) => (
+                <option key={proc.id} value={proc.id}>{proc.label}</option>
+              ))}
+            </Select>
+          </div>
+        </div>
+
         {error && (
           <div className="bg-orange-500/10 border border-orange-400/30 text-orange-200 px-4 py-2 text-sm text-center">
             {error} <button className="underline ml-2" onClick={() => refreshDb().catch(() => {})}>Retry</button>
@@ -334,9 +360,9 @@ export default function InventoryApp() {
 
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
-          {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} onIssueToMachine={handleIssueToMachine} />}
+          {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} process={process} />}
+          {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} process={process} />}
+          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} onIssueToMachine={handleIssueToMachine} process={process} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}

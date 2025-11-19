@@ -339,6 +339,8 @@ router.get('/api/db', async (req, res) => {
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany();
+  const issue_to_holo_machine = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
+  const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const settings = await prisma.settings.findMany();
   const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
   const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
@@ -374,6 +376,26 @@ router.get('/api/db', async (req, res) => {
     },
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
+  const receive_from_holo_machine_rows = await prisma.receiveFromHoloMachineRow.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+    include: {
+      operator: { select: { id: true, name: true } },
+      helper: { select: { id: true, name: true } },
+      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+    },
+  });
+  const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
+  const receive_from_coning_machine_rows = await prisma.receiveFromConingMachineRow.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+    include: {
+      operator: { select: { id: true, name: true } },
+      helper: { select: { id: true, name: true } },
+      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+    },
+  });
+  const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
   res.json({
     items,
     firms,
@@ -387,10 +409,16 @@ router.get('/api/db', async (req, res) => {
     lots,
     inbound_items,
     issue_to_cutter_machine,
+    issue_to_holo_machine,
+    issue_to_coning_machine,
     settings,
     receive_from_cutter_machine_uploads,
     receive_from_cutter_machine_rows,
     receive_from_cutter_machine_piece_totals,
+    receive_from_holo_machine_rows,
+    receive_from_holo_machine_piece_totals,
+    receive_from_coning_machine_rows,
+    receive_from_coning_machine_piece_totals,
   });
 });
 

@@ -52,6 +52,10 @@ export async function createIssueToMachine(payload) { return await createIssueTo
 export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
 export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }
+export async function getReceiveCrateStats(pieceId) {
+  if (!pieceId) throw new Error('pieceId is required');
+  return await request(`/api/receive_from_cutter_machine/piece/${encodeURIComponent(pieceId)}/crate_stats`);
+}
 export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
 export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
 export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
@@ -132,6 +136,7 @@ export default {
   manualReceiveFromMachine,
   manualReceiveFromHoloMachine,
   manualReceiveFromConingMachine,
+  getReceiveCrateStats,
   markPieceWastage,
   updateInboundItem,
   deleteLot,

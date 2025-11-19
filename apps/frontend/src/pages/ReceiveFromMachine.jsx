@@ -25,6 +25,31 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+function padBarcodeSegment(value) {
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return String(Math.max(0, Math.trunc(num))).padStart(3, '0');
+  }
+  return String(value || '').padStart(3, '0');
+}
+
+function makeReceiveBarcodePreview({ lotNo, seq, crateIndex = 1 }) {
+  if (!lotNo) return null;
+  const safeLot = String(lotNo).trim();
+  if (!safeLot) return null;
+  const seqPart = padBarcodeSegment(seq);
+  const cratePart = padBarcodeSegment(crateIndex);
+  return `REC-${safeLot}-${seqPart}-C${cratePart}`;
+}
+
+function parseReceiveCrateIndex(barcode) {
+  if (typeof barcode !== 'string') return null;
+  const match = barcode.trim().match(/-C(\d+)$/i);
+  if (!match) return null;
+  const num = Number(match[1]);
+  return Number.isFinite(num) ? num : null;
+}
+
 function renderIssues(issues) {
   if (!Array.isArray(issues) || issues.length === 0) return null;
   return (
@@ -672,8 +697,8 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
           <table className="min-w-full text-sm">
             <thead className={`text-left ${cls.muted}`}>
               <tr>
-                <th className="py-2 pr-2">VchNo</th>
                 <th className="py-2 pr-2">Piece</th>
+                <th className="py-2 pr-2">Barcode</th>
                 <th className="py-2 pr-2">Machine</th>
                 <th className="py-2 pr-2">Employee</th>
                 <th className="py-2 pr-2 text-right">Net Wt (kg)</th>
@@ -695,8 +720,8 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
                   const bobbinName = row.bobbin?.name || row.pcsTypeName || '—';
                   return (
                     <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
-                      <td className="py-2 pr-2 font-mono">{row.vchNo}</td>
                       <td className="py-2 pr-2 font-mono">{row.pieceId}</td>
+                      <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
                       <td className="py-2 pr-2">{row.machineNo || '—'}</td>
                       <td className="py-2 pr-2">{row.employee || '—'}</td>
                       <td className="py-2 pr-2 text-right">{row.netWt == null ? '—' : formatKg(row.netWt)}</td>
@@ -749,6 +774,64 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   });
   const [issuingPiece, setIssuingPiece] = useState(null);
   const [issuingFromModal, setIssuingFromModal] = useState(false);
+  const [pieceCrateStats, setPieceCrateStats] = useState({});
+  const [crateStatsVersion, setCrateStatsVersion] = useState(0);
+  const receiveRows = useMemo(() => ensureArray(db.receive_from_cutter_machine_rows), [db.receive_from_cutter_machine_rows]);
+  const pieceCrateIndexMap = useMemo(() => {
+    const map = new Map();
+    receiveRows.forEach((row) => {
+      if (!row || !row.pieceId) return;
+      const crateIndex = parseReceiveCrateIndex(row.barcode);
+      if (!crateIndex) return;
+      const currentMax = map.get(row.pieceId) || 0;
+      if (crateIndex > currentMax) {
+        map.set(row.pieceId, crateIndex);
+      }
+    });
+    return map;
+  }, [receiveRows]);
+
+  useEffect(() => {
+    setCrateStatsVersion((prev) => prev + 1);
+  }, [db.receive_from_cutter_machine_rows]);
+
+  const currentPieceCrateStats = pieceId ? pieceCrateStats[pieceId] : null;
+
+  useEffect(() => {
+    if (!pieceId) return;
+    if (currentPieceCrateStats && currentPieceCrateStats.status === 'loading') return;
+    if (currentPieceCrateStats && currentPieceCrateStats.version === crateStatsVersion && (currentPieceCrateStats.status === 'loaded' || currentPieceCrateStats.status === 'error')) {
+      return;
+    }
+    let cancelled = false;
+    setPieceCrateStats(prev => ({
+      ...prev,
+      [pieceId]: { ...(prev[pieceId] || {}), status: 'loading' },
+    }));
+    (async () => {
+      try {
+        const stats = await api.getReceiveCrateStats(pieceId);
+        if (cancelled) return;
+        setPieceCrateStats(prev => ({
+          ...prev,
+          [pieceId]: { ...stats, status: 'loaded', version: crateStatsVersion },
+        }));
+      } catch (err) {
+        console.error('Failed to load crate stats', pieceId, err);
+        if (cancelled) return;
+        setPieceCrateStats(prev => ({
+          ...prev,
+          [pieceId]: {
+            ...(prev[pieceId] || {}),
+            status: 'error',
+            version: crateStatsVersion,
+            error: err.message || 'Failed to load crate history',
+          },
+        }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pieceId, crateStatsVersion, currentPieceCrateStats]);
 
   const workers = useMemo(() => {
     if (Array.isArray(db.workers) && db.workers.length > 0) {
@@ -922,6 +1005,36 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
     acc.totalNet += entry.netWeight;
     return acc;
   }, { totalGross: 0, totalTare: 0, totalNet: 0 }), [cart]);
+  const cartDisplayEntries = useMemo(() => {
+    const stagedCount = new Map();
+    return cart.map((entry) => {
+      const countForPiece = stagedCount.get(entry.pieceId) || 0;
+      stagedCount.set(entry.pieceId, countForPiece + 1);
+      const stats = pieceCrateStats[entry.pieceId];
+      const statsReady = stats && stats.status === 'loaded';
+      const statsError = stats && stats.status === 'error';
+      const statsLoading = stats && stats.status === 'loading';
+      const statsCrateCount = statsReady ? (stats.maxCrateIndex ?? stats.totalCrates ?? 0) : null;
+      const fallbackCrates = pieceCrateIndexMap.get(entry.pieceId) || 0;
+      const existingCrates = statsReady
+        ? statsCrateCount
+        : fallbackCrates;
+      const shouldHoldForStats = fallbackCrates === 0 && !statsReady && !statsError;
+      const crateIndex = existingCrates + countForPiece + 1;
+      const inbound = inboundPieceMap.get(entry.pieceId);
+      const lotForBarcode = inbound?.lotNo || entry.lotNo || '';
+      const receiveBarcode = (!lotForBarcode || shouldHoldForStats)
+        ? null
+        : makeReceiveBarcodePreview({ lotNo: lotForBarcode, seq: inbound?.seq, crateIndex });
+      const cratePreviewStatus = statsError
+        ? 'error'
+        : ((statsLoading || shouldHoldForStats) ? 'loading' : 'ready');
+      const cratePreviewError = statsError
+        ? (stats.error || 'Crate history unavailable')
+        : null;
+      return { ...entry, receiveBarcode, cratePreviewStatus, cratePreviewError };
+    });
+  }, [cart, pieceCrateIndexMap, inboundPieceMap, pieceCrateStats]);
 
   const disableAdd = (
     saving ||
@@ -1362,7 +1475,7 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
               <tr>
                 <th className="py-2 pr-2">Piece</th>
                 <th className="py-2 pr-2">Lot</th>
-                <th className="py-2 pr-2">Issue barcode</th>
+                <th className="py-2 pr-2">Barcode</th>
                 <th className="py-2 pr-2">Bobbin</th>
                 <th className="py-2 pr-2 text-right">Qty</th>
                 <th className="py-2 pr-2">Box</th>
@@ -1380,14 +1493,23 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
                     No boxes staged yet. Add a box to begin.
                   </td>
                 </tr>
-              ) : cart.map(entry => (
+              ) : cartDisplayEntries.map(entry => (
                 <tr key={entry.id} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2 font-mono">{entry.pieceId}</td>
                   <td className="py-2 pr-2 font-mono">{entry.lotNo}</td>
                   <td className="py-2 pr-2">
-                    {entry.issueBarcode ? (
-                      <span className="text-xs">{entry.issueBarcode}</span>
-                    ) : <span className={`text-xs ${cls.muted}`}>Manual</span>}
+                    {entry.receiveBarcode ? (
+                      <span className="text-xs font-mono">{entry.receiveBarcode}</span>
+                    ) : entry.cratePreviewStatus === 'loading' ? (
+                      <span className={`text-xs ${cls.muted}`}>Loading crate history…</span>
+                    ) : entry.cratePreviewStatus === 'error' ? (
+                      <span className="text-xs text-amber-300">Crate preview unavailable</span>
+                    ) : (
+                      <span className={`text-xs ${cls.muted}`}>Pending</span>
+                    )}
+                    {entry.cratePreviewError && (
+                      <div className="text-xs text-amber-300 mt-1">{entry.cratePreviewError}</div>
+                    )}
                   </td>
                   <td className="py-2 pr-2">
                     {entry.bobbinName}

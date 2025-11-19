@@ -6,7 +6,7 @@ import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { logCrud } from '../utils/auditLogger.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex } from '../utils/barcodeHelpers.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -422,6 +422,44 @@ router.get('/api/db', async (req, res) => {
     receive_from_coning_machine_rows,
     receive_from_coning_machine_piece_totals,
   });
+});
+
+router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', async (req, res) => {
+  try {
+    const rawPieceId = req.params.pieceId;
+    const pieceId = normalizePieceId(rawPieceId);
+    if (!pieceId) {
+      return res.status(400).json({ error: 'Invalid piece id' });
+    }
+
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { pieceId },
+      select: { id: true, barcode: true },
+    });
+
+    let maxCrateIndex = 0;
+    let missingCrateBarcodes = 0;
+    for (const row of rows) {
+      const crateIndex = parseReceiveCrateIndex(row.barcode);
+      if (crateIndex == null) {
+        missingCrateBarcodes += 1;
+        continue;
+      }
+      if (crateIndex > maxCrateIndex) {
+        maxCrateIndex = crateIndex;
+      }
+    }
+
+    res.json({
+      pieceId,
+      totalCrates: rows.length,
+      maxCrateIndex,
+      missingCrateBarcodes,
+    });
+  } catch (err) {
+    console.error('Failed to fetch crate stats', err);
+    res.status(500).json({ error: 'Failed to fetch crate stats' });
+  }
 });
 
 router.get('/api/issue_to_cutter_machine', async (req, res) => {
@@ -1152,7 +1190,18 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
         },
       });
 
-      const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: 1 });
+      const previousCrates = await tx.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: resolvedPieceId },
+        select: { barcode: true },
+      });
+      let maxCrateIndex = 0;
+      for (const row of previousCrates) {
+        const idx = parseReceiveCrateIndex(row.barcode);
+        if (idx != null && idx > maxCrateIndex) {
+          maxCrateIndex = idx;
+        }
+      }
+      const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: maxCrateIndex + 1 });
 
       const createdRow = await tx.receiveFromCutterMachineRow.create({
         data: {

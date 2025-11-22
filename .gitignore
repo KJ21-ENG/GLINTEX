@@ -62,6 +62,10 @@ jspm_packages/
 *.sublime-project
 *.sublime-workspace
 
+# Development tools
+.codex/
+.cursor/
+
 # macOS
 .DS_Store
 .AppleDouble

@@ -65,6 +65,9 @@ jspm_packages/
 # Development tools
 .codex/
 .cursor/
+# BMAD rules and docs
+.bmad/
+docs/
 
 # macOS
 .DS_Store

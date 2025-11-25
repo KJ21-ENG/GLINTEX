@@ -1285,46 +1285,46 @@ function ManualReceiveForm({ db, inboundPieceMap, receiveTotalsMap, refreshDb, o
   return (
     <div className="space-y-4">
       <div className={`rounded-xl border ${cls.cardBorder} ${cls.cardBg} p-4`}>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div>
-            <label className={`text-xs ${cls.muted}`}>Lot</label>
-            <Select value={lotNo} onChange={(e) => { setLotNo(e.target.value); setPieceId(''); }} disabled={saving}>
-              <option value="">Select lot</option>
-              {lotOptions.length === 0 ? (
-                <option value="">No lots available</option>
-              ) : lotOptions.map(lot => (
-                <option key={lot.id || lot.lotNo} value={lot.lotNo}>
-                  {lot.lotNo}{lot.itemName ? ` · ${lot.itemName}` : ''}
-                </option>
-              ))}
-            </Select>
+        <form onSubmit={handleIssueBarcodeSubmit} className="grid gap-3 md:grid-cols-3">
+          <div className="md:col-span-2">
+            <label className={`text-xs ${cls.muted}`}>Scan issue barcode</label>
+            <Input value={issueBarcodeInput} onChange={(e)=>setIssueBarcodeInput(e.target.value)} placeholder="Scan ISM-MET-001" disabled={issueLookupLoading} />
           </div>
-          <div>
-            <label className={`text-xs ${cls.muted}`}>Piece</label>
-            <Select value={pieceId} onChange={(e) => setPieceId(e.target.value)} disabled={!lotNo || saving}>
-              <option value="">{lotNo ? 'Select piece' : 'Choose lot first'}</option>
-              {pieceOptions.map(piece => (
-                <option key={piece.id} value={piece.id}>
-                  {piece.id} · {formatKg(piece.weight)} kg · Pending {formatKg(piece.pendingWeight || 0)} kg
-                </option>
-              ))}
-            </Select>
+          <div className="flex items-end">
+            <Button type="submit" disabled={issueLookupLoading || !issueBarcodeInput.trim()}>{issueLookupLoading ? 'Scanning…' : 'Load issue'}</Button>
           </div>
-          <div>
-            <label className={`text-xs ${cls.muted}`}>Receive date</label>
-            <Input type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} disabled={saving} />
+        </form>
+
+      <div className="grid gap-3 md:grid-cols-3 mt-3">
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Lot</label>
+          <Select value={lotNo} onChange={(e) => { setLotNo(e.target.value); setPieceId(''); }} disabled={saving}>
+            <option value="">Select lot</option>
+            {lotOptions.length === 0 ? (
+              <option value="">No lots available</option>
+            ) : lotOptions.map(lot => (
+              <option key={lot.id || lot.lotNo} value={lot.lotNo}>
+                {lot.lotNo}{lot.itemName ? ` · ${lot.itemName}` : ''}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Piece</label>
+          <Select value={pieceId} onChange={(e) => setPieceId(e.target.value)} disabled={!lotNo || saving}>
+            <option value="">{lotNo ? 'Select piece' : 'Choose lot first'}</option>
+            {pieceOptions.map(piece => (
+              <option key={piece.id} value={piece.id}>
+                {piece.id} · {formatKg(piece.weight)} kg · Pending {formatKg(piece.pendingWeight || 0)} kg
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Receive date</label>
+          <Input type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} disabled={saving} />
         </div>
       </div>
-
-      <form onSubmit={handleIssueBarcodeSubmit} className="grid gap-3 md:grid-cols-3 mt-3">
-        <div className="md:col-span-2">
-          <label className={`text-xs ${cls.muted}`}>Scan issue barcode</label>
-          <Input value={issueBarcodeInput} onChange={(e)=>setIssueBarcodeInput(e.target.value)} placeholder="Scan ISM-MET-001" disabled={issueLookupLoading} />
-        </div>
-        <div className="flex items-end">
-          <Button type="submit" disabled={issueLookupLoading || !issueBarcodeInput.trim()}>{issueLookupLoading ? 'Scanning…' : 'Load issue'}</Button>
-        </div>
-      </form>
       {currentIssueBarcode && (
         <div className={`text-xs mt-1 ${cls.muted}`}>
           Linked issue barcode: {currentIssueBarcode}

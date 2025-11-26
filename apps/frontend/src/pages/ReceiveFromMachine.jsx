@@ -166,6 +166,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
   const { cls, brand } = useBrand();
   const processDef = getProcessDefinition(process);
   const isCutter = process === 'cutter';
+  const isHolo = process === 'holo';
   const { receiveTotalsKey, receiveUnitField, receiveWeightField, receiveRowsKey, unitLabel, unitLabelPlural, label } = processDef;
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -394,6 +395,19 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
   const totalProcessUnits = useMemo(() => processReceiveTotals.reduce((sum, entry) => sum + Number(entry[receiveUnitField] || 0), 0), [processReceiveTotals, receiveUnitField]);
 
   if (!isCutter) {
+    if (isHolo) {
+      return (
+        <HoloReceiveView
+          db={db}
+          cls={cls}
+          refreshDb={refreshDb}
+          processReceiveRows={processReceiveRows}
+          processReceiveTotals={processReceiveTotals}
+          totalProcessUnits={totalProcessUnits}
+          unitLabelPlural={unitLabelPlural}
+        />
+      );
+    }
     const rowUnitField = process === 'holo' ? 'rollCount' : 'coneCount';
     const rowWeightField = process === 'holo' ? 'rollWeight' : 'coneWeight';
     return (
@@ -415,14 +429,13 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
                   <th className="py-2 pr-2">Date</th>
                   <th className="py-2 pr-2">Lot</th>
                   <th className="py-2 pr-2 text-right">{unitLabelPlural}</th>
-                  <th className="py-2 pr-2 text-right">Weight (kg)</th>
-                  <th className="py-2 pr-2">Machine</th>
-                  <th className="py-2 pr-2">Operator</th>
-                  <th className="py-2 pr-2">Helper</th>
-                  <th className="py-2 pr-2">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
+                <th className="py-2 pr-2 text-right">Weight (kg)</th>
+                <th className="py-2 pr-2">Machine</th>
+                <th className="py-2 pr-2">Operator</th>
+                <th className="py-2 pr-2">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
                 {processReceiveRows.length === 0 ? (
                   <tr>
                     <td className="py-3 pr-2" colSpan={8}>No receive records yet.</td>
@@ -439,7 +452,6 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
                         <td className="py-2 pr-2 text-right">{weightValue == null ? '—' : formatKg(weightValue)}</td>
                         <td className="py-2 pr-2">{row.machineNo || '—'}</td>
                         <td className="py-2 pr-2">{row.operator?.name || '—'}</td>
-                        <td className="py-2 pr-2">{row.helper?.name || '—'}</td>
                         <td className="py-2 pr-2">{row.notes || '—'}</td>
                       </tr>
                     );
@@ -743,6 +755,367 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
           <Pagination total={latestRows.length} page={rowsPage} setPage={setRowsPage} pageSize={pageSize} />
         </div>
       </Section>
+    </div>
+  );
+}
+
+function HoloReceiveView({ db, cls, refreshDb, processReceiveRows, processReceiveTotals, totalProcessUnits, unitLabelPlural }) {
+  return (
+    <div className="space-y-6">
+      <Section title="Receive from Holo (Rolls)">
+        <HoloReceiveForm db={db} cls={cls} refreshDb={refreshDb} />
+      </Section>
+
+      <Section title={`Latest ${unitLabelPlural}`}>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">Date</th>
+                <th className="py-2 pr-2">Lot</th>
+                <th className="py-2 pr-2">Barcode</th>
+                <th className="py-2 pr-2 text-right">Rolls</th>
+                <th className="py-2 pr-2 text-right">Net (kg)</th>
+                <th className="py-2 pr-2 text-right">Gross (kg)</th>
+                <th className="py-2 pr-2 text-right">Tare (kg)</th>
+                <th className="py-2 pr-2">Roll type</th>
+                <th className="py-2 pr-2">Machine</th>
+                <th className="py-2 pr-2">Operator</th>
+                <th className="py-2 pr-2">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processReceiveRows.length === 0 ? (
+                <tr>
+                  <td className="py-3 pr-2" colSpan={10}>No receive records yet.</td>
+                </tr>
+              ) : (
+                processReceiveRows.map((row) => {
+                  const units = Number(row.rollCount || 0);
+                  const netVal = row.rollWeight;
+                  const grossVal = row.grossWeight;
+                  const tareVal = row.tareWeight;
+                  return (
+                    <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                      <td className="py-2 pr-2">{row.date || row.createdAt || '—'}</td>
+                      <td className="py-2 pr-2 font-mono">{row.issue?.lotNo || '—'}</td>
+                      <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
+                      <td className="py-2 pr-2 text-right">{units}</td>
+                      <td className="py-2 pr-2 text-right">{netVal == null ? '—' : formatKg(netVal)}</td>
+                      <td className="py-2 pr-2 text-right">{grossVal == null ? '—' : formatKg(grossVal)}</td>
+                      <td className="py-2 pr-2 text-right">{tareVal == null ? '—' : formatKg(tareVal)}</td>
+                      <td className="py-2 pr-2">{row.rollType?.name || '—'}</td>
+                      <td className="py-2 pr-2">{row.machineNo || '—'}</td>
+                      <td className="py-2 pr-2">{row.operator?.name || '—'}</td>
+                      <td className="py-2 pr-2">{row.notes || '—'}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Piece totals">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">Piece</th>
+                <th className="py-2 pr-2 text-right">Total {unitLabelPlural}</th>
+                <th className="py-2 pr-2 text-right">Net weight (kg)</th>
+                <th className="py-2 pr-2 text-right">Wastage (kg)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processReceiveTotals.length === 0 ? (
+                <tr>
+                  <td className="py-3 pr-2" colSpan={4}>No piece totals recorded yet.</td>
+                </tr>
+              ) : (
+                processReceiveTotals.map((row) => (
+                  <tr key={row.pieceId} className={`border-t ${cls.rowBorder}`}>
+                    <td className="py-2 pr-2 font-mono">{row.pieceId}</td>
+                    <td className="py-2 pr-2 text-right">{row.totalRolls || 0}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(row.totalNetWeight || 0)}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(row.wastageNetWeight || 0)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">Total {unitLabelPlural.toLowerCase()}: {totalProcessUnits}</div>
+      </Section>
+    </div>
+  );
+}
+
+function HoloReceiveForm({ db, cls, refreshDb }) {
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const [scanLoading, setScanLoading] = useState(false);
+  const [issue, setIssue] = useState(null);
+  const [selectedCrateId, setSelectedCrateId] = useState('');
+  const [selectedPieceId, setSelectedPieceId] = useState('');
+  const [rollTypeId, setRollTypeId] = useState('');
+  const [rollCount, setRollCount] = useState('');
+  const [grossWeight, setGrossWeight] = useState('');
+  const [date, setDate] = useState(todayISO());
+  const [machineId, setMachineId] = useState('');
+  const [boxId, setBoxId] = useState('');
+  const [operatorId, setOperatorId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const rollTypes = useMemo(() => (db.rollTypes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.rollTypes]);
+  const crateOptions = issue?.crates || [];
+  const selectedCrate = crateOptions.find((c) => c.rowId === selectedCrateId) || null;
+  const pieceOptions = useMemo(() => {
+    const ids = issue?.pieceIds || [];
+    return ids.map((id) => ({
+      id,
+      lotNo: issue?.lotNo || issue?.lotno || issue?.lot_no || null,
+    }));
+  }, [issue]);
+  const workers = useMemo(() => {
+    if (Array.isArray(db.workers) && db.workers.length > 0) return db.workers;
+    const merged = [];
+    (db.operators || []).forEach((op) => merged.push({ ...op, role: 'operator' }));
+    (db.helpers || []).forEach((helper) => {
+      if (!merged.some((w) => w.id === helper.id)) merged.push({ ...helper, role: 'helper' });
+    });
+    return merged;
+  }, [db.workers, db.operators, db.helpers]);
+  const operatorOptions = useMemo(() => workers.filter((w) => (w.role || 'operator') === 'operator'), [workers]);
+  const machineOptions = useMemo(() => (db.machines || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.machines]);
+  const boxes = useMemo(() => (db.boxes || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })), [db.boxes]);
+  const rollType = rollTypes.find((r) => r.id === rollTypeId) || null;
+  const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
+  const rollCountNum = rollCount === '' ? NaN : Number(rollCount);
+  const grossNum = grossWeight === '' ? NaN : Number(grossWeight);
+  const selectedBox = boxes.find((b) => b.id === boxId) || null;
+  const boxWeight = selectedBox && Number.isFinite(selectedBox.weight) ? Number(selectedBox.weight) : null;
+  const crateTare = selectedCrate ? Number(selectedCrate.crateTare || 0) : 0;
+  const tareWeight = Number.isFinite(rollCountNum) && rollCountNum > 0 && rollTypeWeight != null
+    ? (rollCountNum * rollTypeWeight) + (boxWeight || 0)
+    : null;
+  const netWeight = tareWeight != null && Number.isFinite(grossNum) ? grossNum - tareWeight : null;
+  const disableSave = saving
+    || !issue
+    || !selectedPieceId
+    || !selectedCrateId
+    || !rollTypeId
+    || !boxId
+    || !Number.isInteger(rollCountNum) || rollCountNum <= 0
+    || !Number.isFinite(grossNum) || grossNum <= 0
+    || !machineId
+    || tareWeight == null
+    || netWeight == null
+    || netWeight <= 0;
+
+  useEffect(() => {
+    if (!selectedCrate) return;
+    if (selectedCrate.pieceId && selectedCrate.pieceId !== selectedPieceId) {
+      setSelectedPieceId(selectedCrate.pieceId);
+    }
+  }, [selectedCrate, selectedPieceId]);
+
+  async function handleScanIssue(e) {
+    e.preventDefault();
+    if (!barcodeInput.trim()) return;
+    setScanLoading(true);
+    setFormError('');
+    try {
+      const result = await api.getIssueByHoloBarcode(barcodeInput.trim());
+      setIssue(result);
+      setSelectedCrateId(result.crates?.[0]?.rowId || '');
+      setSelectedPieceId(result.crates?.[0]?.pieceId || (result.pieceIds?.[0] || ''));
+      setDate(result.date || todayISO());
+      setMachineId(result.machineId || '');
+      setOperatorId(result.operatorId || '');
+    } catch (err) {
+      setIssue(null);
+      setSelectedCrateId('');
+      setSelectedPieceId('');
+      setMachineId('');
+      setOperatorId('');
+      setFormError(err.message || 'Failed to load issue');
+    } finally {
+      setScanLoading(false);
+      setBarcodeInput('');
+    }
+  }
+
+  async function handleSave() {
+    if (disableSave) return;
+    setSaving(true);
+    setFormError('');
+    try {
+      await api.manualReceiveFromHoloMachine({
+        issueId: issue.id,
+        pieceId: selectedPieceId,
+        rollCount: rollCountNum,
+        rollTypeId,
+        boxId,
+        grossWeight: grossNum,
+        crateTareWeight: 0,
+        rollWeight: netWeight,
+        date,
+        machineNo: machineOptions.find((m) => m.id === machineId)?.name || null,
+        operatorId: operatorId || null,
+        notes: notes || null,
+      });
+      alert('Receive entry saved');
+      setRollCount('');
+      setGrossWeight('');
+      setNotes('');
+      setMachineId('');
+      setBoxId('');
+      setOperatorId('');
+      await refreshDb();
+    } catch (err) {
+      setFormError(err.message || 'Failed to save entry');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <form onSubmit={handleScanIssue} className="grid gap-3 md:grid-cols-3">
+        <div className="md:col-span-2">
+          <label className={`text-xs ${cls.muted}`}>Scan issue barcode</label>
+          <Input value={barcodeInput} onChange={(e) => setBarcodeInput(e.target.value)} placeholder="Scan HLO- barcode" disabled={scanLoading} />
+        </div>
+        <div className="flex items-end">
+          <Button type="submit" disabled={scanLoading || !barcodeInput.trim()}>{scanLoading ? 'Loading…' : 'Load issue'}</Button>
+        </div>
+      </form>
+
+      {issue ? (
+        <div className={`rounded-xl border ${cls.cardBorder} ${cls.cardBg} p-4`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Pill>Lot: {issue.lotNo}</Pill>
+            <Pill>Item: {issue.itemId}</Pill>
+            <Pill>Bobbins issued: {issue.metallicBobbins || 0}</Pill>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Crate / piece</label>
+              <Select value={selectedCrateId} onChange={(e) => setSelectedCrateId(e.target.value)}>
+                <option value="">Select crate</option>
+                {crateOptions.map((crate) => (
+                  <option key={crate.rowId} value={crate.rowId}>
+                    {crate.barcode || crate.rowId} · Piece {crate.pieceId || '—'}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Piece</label>
+              <Select value={selectedPieceId} onChange={(e) => setSelectedPieceId(e.target.value)}>
+                <option value="">{issue.pieceIds?.length ? 'Select piece' : 'No linked pieces'}</option>
+                {pieceOptions.map((piece) => (
+                  <option key={piece.id} value={piece.id}>{piece.id} {piece.lotNo ? `· Lot ${piece.lotNo}` : ''}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Roll type</label>
+              <Select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)}>
+                <option value="">Select</option>
+                {rollTypes.map((rt) => (
+                  <option key={rt.id} value={rt.id}>{rt.name} {rt.weight != null ? `(${formatKg(rt.weight)} kg each)` : ''}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Single roll weight</label>
+              <div className="h-11 flex items-center px-3 rounded-lg border border-slate-600/40 bg-slate-900/40 text-sm">
+                {rollTypeWeight != null ? `${formatKg(rollTypeWeight)} kg` : <span className={cls.muted}>Set on roll type</span>}
+              </div>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Rolls produced</label>
+              <Input type="number" min="1" step="1" value={rollCount} onChange={(e) => setRollCount(e.target.value)} placeholder="e.g. 12" />
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Gross weight (kg)</label>
+              <Input type="number" min="0" step="0.001" value={grossWeight} onChange={(e) => setGrossWeight(e.target.value)} placeholder="Weighed gross" />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Date</label>
+              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Machine</label>
+              <Select value={machineId} onChange={(e) => setMachineId(e.target.value)}>
+                <option value="">Select machine</option>
+                {machineOptions.map((machine) => (
+                  <option key={machine.id} value={machine.id}>{machine.name}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Operator</label>
+              <Select value={operatorId} onChange={(e) => setOperatorId(e.target.value)}>
+                <option value="">Select</option>
+                {operatorOptions.map((op) => <option key={op.id} value={op.id}>{op.name}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Box</label>
+              <Select value={boxId} onChange={(e) => setBoxId(e.target.value)}>
+                <option value="">Select box</option>
+                {boxes.map((box) => (
+                  <option key={box.id} value={box.id}>{box.name} {box.weight != null ? `(${formatKg(box.weight)} kg)` : ''}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className={`text-xs ${cls.muted}`}>Notes</label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional remarks" />
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+              <div className="text-xs uppercase font-semibold">Tare weight</div>
+              <div className="text-2xl font-semibold">{tareWeight != null ? `${formatKg(tareWeight)} kg` : '—'}</div>
+              <div className={`text-xs ${cls.muted}`}>= Rolls × single roll + box {formatKg(boxWeight || 0)} kg</div>
+            </div>
+            <div className={`rounded-xl border ${cls.rowBorder} p-3`}>
+              <div className="text-xs uppercase font-semibold">Net weight</div>
+              <div className={`text-2xl font-semibold ${netWeight != null && netWeight <= 0 ? 'text-red-400' : ''}`}>{netWeight != null ? `${formatKg(netWeight)} kg` : '—'}</div>
+              <div className={`text-xs ${cls.muted}`}>Gross minus tare</div>
+            </div>
+          </div>
+
+          {formError && (
+            <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+              {formError}
+            </div>
+          )}
+
+          <div className="mt-4">
+            <Button type="button" onClick={handleSave} disabled={disableSave}>
+              {saving ? 'Saving…' : 'Save receive'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className={`text-sm ${cls.muted}`}>Scan an issue barcode to start a Holo receive entry.</div>
+      )}
     </div>
   );
 }

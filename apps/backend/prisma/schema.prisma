@@ -130,6 +130,11 @@ model ReceiveFromHoloMachineRow {
   issueId     String
   rollCount   Int
   rollWeight  Float?
+  rollTypeId  String?
+  grossWeight Float?
+  tareWeight  Float?
+  barcode     String?  @unique
+  boxId       String?
   machineNo   String?
   operatorId  String?
   helperId    String?
@@ -137,6 +142,8 @@ model ReceiveFromHoloMachineRow {
   createdBy   String?
   createdAt   DateTime @default(now())
   issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
+  rollType    RollType?          @relation(fields: [rollTypeId], references: [id])
+  box         Box?               @relation(fields: [boxId], references: [id])
   operator    Operator?           @relation("OperatorHoloReceive", fields: [operatorId], references: [id])
   helper      Operator?           @relation("HelperHoloReceive", fields: [helperId], references: [id])
 }
@@ -147,6 +154,14 @@ model ReceiveFromHoloMachinePieceTotal {
   totalNetWeight  Float    @default(0)
   wastageNetWeight Float   @default(0)
   updatedAt       DateTime @updatedAt
+}
+
+model RollType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  weight    Float?
+  createdAt DateTime @default(now())
+  receiveRows ReceiveFromHoloMachineRow[]
 }
 
 model IssueToConingMachine {
@@ -298,6 +313,7 @@ model Box {
   name        String
   weight      Float
   receiveRows ReceiveFromCutterMachineRow[]
+  holoReceiveRows ReceiveFromHoloMachineRow[]
 }
 
 

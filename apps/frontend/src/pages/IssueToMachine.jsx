@@ -701,7 +701,7 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                     <th className="py-2 pr-2">Lot</th>
                     <th className="py-2 pr-2">Yarn</th>
                     <th className="py-2 pr-2">Twist</th>
-                    <th className="py-2 pr-2 text-right">Rolls</th>
+                    <th className="py-2 pr-2 text-right">Bobbins</th>
                     <th className="py-2 pr-2 text-right">Issue wt. (kg)</th>
                     <th className="py-2 pr-2 text-right">Yarn (kg)</th>
                     <th className="py-2 pr-2">Barcode</th>

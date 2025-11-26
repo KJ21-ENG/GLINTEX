@@ -101,6 +101,10 @@ export async function listBobbins() { return await request('/api/bobbins'); }
 export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
 export async function updateBobbin(id, name, weight) { return await request(`/api/bobbins/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listRollTypes() { return await request('/api/roll_types'); }
+export async function createRollType(name, weight) { return await request('/api/roll_types', { method: 'POST', body: { name, weight } }); }
+export async function deleteRollType(id) { return await request(`/api/roll_types/${id}`, { method: 'DELETE' }); }
+export async function updateRollType(id, name, weight) { return await request(`/api/roll_types/${id}`, { method: 'PUT', body: { name, weight } }); }
 export async function listBoxes() { return await request('/api/boxes'); }
 export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
@@ -113,6 +117,7 @@ export async function deleteInboundItem(id) { return await request(`/api/inbound
 export async function getInboundByBarcode(code) { return await request(`/api/inbound_items/barcode/${encodeURIComponent(code)}`); }
 export async function getIssueByCutterBarcode(code) { return await request(`/api/issue_to_cutter_machine/lookup?barcode=${encodeURIComponent(code)}`); }
 export async function getIssueByBarcode(code) { return await getIssueByCutterBarcode(code); }
+export async function getIssueByHoloBarcode(code) { return await request(`/api/issue_to_holo_machine/lookup?barcode=${encodeURIComponent(code)}`); }
 
 export function barcodeImageUrl(code, options = {}) {
   if (!code) return '';
@@ -182,6 +187,10 @@ export default {
   createOperator,
   deleteOperator,
   updateOperator,
+  listRollTypes,
+  createRollType,
+  deleteRollType,
+  updateRollType,
   listBoxes,
   createBox,
   deleteBox,
@@ -190,5 +199,6 @@ export default {
   getInboundByBarcode,
   getIssueByBarcode,
   getIssueByCutterBarcode,
+  getIssueByHoloBarcode,
   barcodeImageUrl,
 };

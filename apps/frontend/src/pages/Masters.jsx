@@ -36,6 +36,9 @@ export function Masters({
   onAddBobbin,
   onDeleteBobbin,
   onEditBobbin,
+  onAddRollType,
+  onDeleteRollType,
+  onEditRollType,
   onAddBox,
   onDeleteBox,
   onEditBox,
@@ -47,7 +50,7 @@ export function Masters({
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | boxes
+  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | rollTypes | boxes
 
   async function addItem() {
     const name = itemName.trim();
@@ -263,6 +266,9 @@ export function Masters({
         <button onClick={() => setTab('bobbins')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='bobbins' ? cls.navActive : 'border-transparent'} ${tab!=='bobbins' ? cls.navHover : ''}`}>
           Bobbins
         </button>
+        <button onClick={() => setTab('rollTypes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='rollTypes' ? cls.navActive : 'border-transparent'} ${tab!=='rollTypes' ? cls.navHover : ''}`}>
+          Roll types
+        </button>
         <button onClick={() => setTab('boxes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='boxes' ? cls.navActive : 'border-transparent'} ${tab!=='boxes' ? cls.navHover : ''}`}>
           Boxes
         </button>
@@ -326,6 +332,19 @@ export function Masters({
       {tab === 'bobbins' && (
         <Section title="Bobbins">
           <BobbinEditor items={db.bobbins} onAdd={addBobbin} onDelete={deleteBobbin} onEdit={onEditBobbin} disabled={disable} />
+        </Section>
+      )}
+
+      {tab === 'rollTypes' && (
+        <Section title="Roll types">
+          <RollTypePanel
+            rollTypes={db.rollTypes || []}
+            onAdd={onAddRollType}
+            onDelete={onDeleteRollType}
+            onEdit={onEditRollType}
+            disabled={disable}
+            cls={cls}
+          />
         </Section>
       )}
 
@@ -471,6 +490,124 @@ function WorkerRow({ worker, onEdit, onDelete, disabled, cls }) {
         <button className="text-sm text-red-500 underline" onClick={remove} disabled={disabled}>Delete</button>
       </td>
     </tr>
+  );
+}
+
+function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
+  const [name, setName] = useState('');
+  const [weight, setWeight] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editWeight, setEditWeight] = useState('');
+
+  async function addRollType() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      await onAdd(trimmed, weight);
+      setName('');
+      setWeight('');
+    } catch (err) {
+      alert(err.message || 'Failed to add roll type');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveEdit(id) {
+    const trimmed = editName.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      await onEdit(id, trimmed, editWeight);
+      setEditingId(null);
+      setEditName('');
+      setEditWeight('');
+    } catch (err) {
+      alert(err.message || 'Failed to update roll type');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(id) {
+    if (!confirm('Delete roll type? You cannot remove it if referenced by receive rows.')) return;
+    setSaving(true);
+    try {
+      await onDelete(id);
+    } catch (err) {
+      alert(err.message || 'Failed to delete roll type');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid md:grid-cols-4 gap-3">
+        <div className="md:col-span-2">
+          <label className={`text-xs ${cls.muted}`}>Roll type name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} placeholder="e.g. Std 25g" />
+        </div>
+        <div>
+          <label className={`text-xs ${cls.muted}`}>Weight (kg per roll)</label>
+          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} placeholder="0.025" />
+        </div>
+        <div className="flex items-end">
+          <Button onClick={addRollType} disabled={disabled || saving || !name.trim()}>
+            Add roll type
+          </Button>
+        </div>
+      </div>
+
+      <div className="overflow-auto">
+        <table className="min-w-full text-sm">
+          <thead className={`text-left ${cls.muted}`}>
+            <tr>
+              <th className="py-2 pr-2">Name</th>
+              <th className="py-2 pr-2 text-right">Weight (kg)</th>
+              <th className="py-2 pr-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rollTypes.length === 0 ? (
+              <tr><td className="py-4 text-center text-sm" colSpan={3}>No roll types yet.</td></tr>
+            ) : rollTypes.map((rt) => {
+              const isEditing = editingId === rt.id;
+              return (
+                <tr key={rt.id} className={`border-t ${cls.rowBorder}`}>
+                  <td className="py-2 pr-2">
+                    {isEditing ? (
+                      <Input value={editName} onChange={(e) => setEditName(e.target.value)} disabled={disabled || saving} />
+                    ) : rt.name}
+                  </td>
+                  <td className="py-2 pr-2 text-right">
+                    {isEditing ? (
+                      <Input type="number" min="0" step="0.001" value={editWeight} onChange={(e) => setEditWeight(e.target.value)} disabled={disabled || saving} />
+                    ) : (rt.weight != null ? formatKg(rt.weight) : '—')}
+                  </td>
+                  <td className="py-2 pr-2 text-right space-x-2">
+                    {isEditing ? (
+                      <>
+                        <button className="text-xs underline" disabled={disabled || saving} onClick={() => saveEdit(rt.id)}>Save</button>
+                        <button className="text-xs underline text-red-400" disabled={disabled || saving} onClick={() => { setEditingId(null); }}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="text-xs underline" disabled={disabled || saving} onClick={() => { setEditingId(rt.id); setEditName(rt.name); setEditWeight(rt.weight ?? ''); }}>Edit</button>
+                        <button className="text-xs underline text-red-400" disabled={disabled || saving} onClick={() => handleDelete(rt.id)}>Delete</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

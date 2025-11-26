@@ -392,6 +392,8 @@ router.get('/api/db', async (req, res) => {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
       issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+      rollType: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
     },
   });
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
@@ -405,6 +407,7 @@ router.get('/api/db', async (req, res) => {
     },
   });
   const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
+  const roll_types = await prisma.rollType.findMany();
   res.json({
     items,
     yarns,
@@ -431,6 +434,7 @@ router.get('/api/db', async (req, res) => {
     receive_from_holo_machine_piece_totals,
     receive_from_coning_machine_rows,
     receive_from_coning_machine_piece_totals,
+    roll_types,
   });
 });
 
@@ -509,6 +513,62 @@ router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
     res.json({ ...issue, pieceIds });
   } catch (err) {
     console.error('Failed to lookup issue barcode', err);
+    res.status(500).json({ error: 'Failed to lookup barcode' });
+  }
+});
+
+router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
+    const issue = await prisma.issueToHoloMachine.findUnique({ where: { barcode } });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    const receivedRefs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
+    const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
+    const rows = rowIds.length > 0
+      ? await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: rowIds } },
+          select: {
+            id: true,
+            pieceId: true,
+            barcode: true,
+            netWt: true,
+            tareWt: true,
+            pktBoxWt: true,
+            pcsBoxWt: true,
+            grossWt: true,
+            bobbinQuantity: true,
+          },
+        })
+      : [];
+    const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
+    const pieces = pieceIds.length
+      ? await prisma.inboundItem.findMany({
+          where: { id: { in: pieceIds } },
+          select: { id: true, lotNo: true, itemId: true, seq: true },
+        })
+      : [];
+    const pieceMap = new Map(pieces.map((p) => [p.id, p]));
+    const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
+    const crates = rows.map((row) => {
+      const meta = refMap.get(row.id) || {};
+      const piece = pieceMap.get(row.pieceId);
+      const crateTare = row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0;
+      return {
+        rowId: row.id,
+        pieceId: row.pieceId,
+        lotNo: piece?.lotNo || meta.lotNo || null,
+        itemId: piece?.itemId || meta.itemId || null,
+        barcode: row.barcode || meta.barcode || null,
+        netWeight: row.netWt ?? null,
+        grossWeight: row.grossWt ?? null,
+        crateTare,
+        issuedBobbins: meta.issuedBobbins ?? row.bobbinQuantity ?? null,
+      };
+    });
+    res.json({ ...issue, pieceIds, crates });
+  } catch (err) {
+    console.error('Failed to lookup holo issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
   }
 });
@@ -1478,32 +1538,78 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
 
 router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
   try {
-    const { issueId, pieceId, rollCount, rollWeight, machineNo, operatorId, helperId, notes, createdBy } = req.body || {};
-    if (!issueId || !pieceId || typeof rollCount !== 'number') {
+    const {
+      issueId,
+      pieceId,
+      rollCount,
+      rollWeight,
+      rollTypeId,
+      grossWeight,
+      crateTareWeight,
+      boxId,
+      date,
+      machineNo,
+      operatorId,
+      helperId,
+      notes,
+      createdBy,
+    } = req.body || {};
+    const rollCountNum = Number(rollCount);
+    if (!issueId || !pieceId || !Number.isFinite(rollCountNum) || rollCountNum <= 0) {
       return res.status(400).json({ error: 'Missing required roll data' });
     }
+    const grossNum = grossWeight == null ? null : Number(grossWeight);
+    const providedNet = rollWeight == null ? null : Number(rollWeight);
+    const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
+    const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
+    const issue = await prisma.issueToHoloMachine.findUnique({ where: { id: issueId }, select: { lotNo: true } });
+    const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
+    const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : null;
+    const crateTare = crateTareWeight == null ? null : Number(crateTareWeight);
+    const tareWeight = (() => {
+      const base = rollTypeWeight != null ? rollCountNum * rollTypeWeight : null;
+      if (base == null && crateTare == null && boxWeight == null) return null;
+      return (base || 0) + (crateTare || 0) + (boxWeight || 0);
+    })();
+    const netFromGross = grossNum != null && tareWeight != null ? grossNum - tareWeight : null;
+    const finalNet = netFromGross != null ? netFromGross : providedNet;
+    if (finalNet != null && finalNet <= 0) {
+      return res.status(400).json({ error: 'Net weight must be positive' });
+    }
+    const tsPart = Date.now().toString().slice(-6);
+    const randPart = Math.random().toString(36).slice(-4).toUpperCase();
+    const lotPart = (issue?.lotNo || 'HLO').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'HLO';
+    const barcode = `RHO-${lotPart}-${tsPart}${randPart}`;
+
     const createdRow = await prisma.receiveFromHoloMachineRow.create({
       data: {
         issueId,
+        date: date || null,
         machineNo: machineNo || null,
         operatorId: operatorId || null,
         helperId: helperId || null,
-        rollCount,
-        rollWeight: rollWeight == null ? null : Number(rollWeight),
+        rollTypeId: rollTypeId || null,
+        rollCount: rollCountNum,
+        rollWeight: finalNet == null ? null : Number(finalNet),
+        grossWeight: grossNum,
+        tareWeight,
+        barcode,
+        boxId: boxId || null,
         notes: notes || null,
         createdBy: createdBy || 'manual',
       },
     });
+    const netIncrement = finalNet == null ? 0 : Number(finalNet);
     await prisma.receiveFromHoloMachinePieceTotal.upsert({
       where: { pieceId },
       update: {
-        totalRolls: { increment: rollCount },
-        totalNetWeight: { increment: rollWeight || 0 },
+        totalRolls: { increment: rollCountNum },
+        totalNetWeight: { increment: netIncrement },
       },
       create: {
         pieceId,
-        totalRolls: rollCount,
-        totalNetWeight: rollWeight || 0,
+        totalRolls: rollCountNum,
+        totalNetWeight: netIncrement,
         wastageNetWeight: 0,
       },
     });
@@ -2198,6 +2304,71 @@ router.put('/api/bobbins/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to update bobbin', err);
     res.status(500).json({ error: err.message || 'Failed to update bobbin' });
+  }
+});
+
+// Roll types (Holo) master
+router.get('/api/roll_types', async (req, res) => { res.json(await prisma.rollType.findMany()); });
+router.post('/api/roll_types', async (req, res) => {
+  try {
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const created = await prisma.rollType.create({
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({ entityType: 'roll_type', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to create roll type' });
+  }
+});
+router.put('/api/roll_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.rollType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Roll type not found' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const updated = await prisma.rollType.update({
+      where: { id },
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({
+      entityType: 'roll_type',
+      entityId: id,
+      action: 'update',
+      payload: { before: existing, after: updated },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to update roll type' });
+  }
+});
+router.delete('/api/roll_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.rollType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Roll type not found' });
+    const usage = await prisma.receiveFromHoloMachineRow.count({ where: { rollTypeId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Roll type is referenced and cannot be deleted' });
+    }
+    await prisma.rollType.delete({ where: { id } });
+    await logCrud({ entityType: 'roll_type', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to delete roll type' });
   }
 });
 

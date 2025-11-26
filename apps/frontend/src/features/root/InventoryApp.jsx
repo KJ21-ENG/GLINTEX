@@ -249,13 +249,28 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateRollType = useCallback(async (name, weight) => {
+    await api.createRollType(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleDeleteBobbin = useCallback(async (id) => {
     await api.deleteBobbin(id);
     await refreshDb();
   }, [refreshDb]);
 
+  const handleDeleteRollType = useCallback(async (id) => {
+    await api.deleteRollType(id);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleUpdateBobbin = useCallback(async (id, name, weight) => {
     await api.updateBobbin(id, name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateRollType = useCallback(async (id, name, weight) => {
+    await api.updateRollType(id, name, weight);
     await refreshDb();
   }, [refreshDb]);
 
@@ -436,6 +451,9 @@ export default function InventoryApp() {
             onAddBobbin={handleCreateBobbin}
             onDeleteBobbin={handleDeleteBobbin}
             onEditBobbin={handleUpdateBobbin}
+            onAddRollType={handleCreateRollType}
+            onDeleteRollType={handleDeleteRollType}
+            onEditRollType={handleUpdateRollType}
             onAddBox={handleCreateBox}
             onDeleteBox={handleDeleteBox}
             onEditBox={handleUpdateBox}

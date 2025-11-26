@@ -93,6 +93,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
   const processDef = getProcessDefinition(process);
   const { receiveTotalsKey, receiveUnitField, receiveWeightField, unitLabelPlural } = processDef;
   const isCutter = process === 'cutter';
+  const isHolo = process === 'holo';
   const [cutterView, setCutterView] = useState('jumbo');
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
@@ -218,11 +219,28 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
     return map;
   }, [db.firms]);
 
+  const yarnMap = useMemo(() => {
+    const map = new Map();
+    (db.yarns || []).forEach((y) => { if (y?.id) map.set(y.id, y); });
+    return map;
+  }, [db.yarns]);
+
+  const twistMap = useMemo(() => {
+    const map = new Map();
+    (db.twists || []).forEach((t) => { if (t?.id) map.set(t.id, t); });
+    return map;
+  }, [db.twists]);
+
   const supplierOptions = useMemo(() => {
     return [...db.suppliers]
       .map(s => ({ value: s.id, label: s.name || '—', key: s.id }))
       .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
   }, [db.suppliers]);
+  const twistOptions = useMemo(() => {
+    return [...(db.twists || [])]
+      .map(t => ({ value: t.id, label: t.name || '—', key: t.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.twists]);
   const supplierMap = useMemo(() => {
     const map = new Map();
     db.suppliers.forEach(s => { if (s?.id) map.set(s.id, s); });
@@ -257,6 +275,25 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
     });
     return map;
   }, [db.issue_to_holo_machine]);
+
+  const holoIssueMap = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_holo_machine || []).forEach((issue) => { if (issue?.id) map.set(issue.id, issue); });
+    return map;
+  }, [db.issue_to_holo_machine]);
+
+  const coningIssueRefs = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_coning_machine || []).forEach((issue) => {
+      const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+      refs.forEach((ref) => {
+        const rowId = ref?.rowId || ref?.id;
+        if (!rowId) return;
+        map.set(rowId, (map.get(rowId) || 0) + 1);
+      });
+    });
+    return map;
+  }, [db.issue_to_coning_machine]);
 
   const bobbinCrates = useMemo(() => {
     return (db.receive_from_cutter_machine_rows || []).map((row) => {
@@ -335,6 +372,75 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
     }));
     return list;
   }, [bobbinCrates]);
+
+  const holoRollRows = useMemo(() => {
+    return (db.receive_from_holo_machine_rows || []).map((row) => {
+      const issue = row?.issueId ? holoIssueMap.get(row.issueId) : null;
+      const lotNo = issue?.lotNo || '';
+      const itemId = issue?.itemId || '';
+      const yarnId = issue?.yarnId || '';
+      const yarnName = yarnId ? (yarnMap.get(yarnId)?.name || '—') : '—';
+      const twistId = issue?.twistId || '';
+      const twistName = twistId ? (twistMap.get(twistId)?.name || '—') : '—';
+      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+      const itemName = itemId ? (itemMap.get(itemId)?.name || lotMeta?.itemName || '—') : (lotMeta?.itemName || '—');
+      const firmName = lotMeta?.firmName || '—';
+      const supplierName = lotMeta?.supplierName || '—';
+      const rollCount = Number(row?.rollCount || 0);
+      const rollWeight = Number(row?.rollWeight ?? 0);
+      return {
+        ...row,
+        lotNo,
+        itemId,
+        yarnId,
+        twistId,
+        firmId: lotMeta?.firmId || '',
+        supplierId: lotMeta?.supplierId || '',
+        itemName,
+        yarnName,
+        twistName,
+        firmName,
+        supplierName,
+        rollCount,
+        rollWeight: Number.isFinite(rollWeight) ? rollWeight : 0,
+        statusType: 'active',
+        issueRefCount: coningIssueRefs.get(row?.id) || 0,
+        issueBarcode: issue?.barcode || '',
+        issueDate: issue?.date || '',
+      };
+    });
+  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, itemMap, coningIssueRefs]);
+
+  const holoRollLots = useMemo(() => {
+    const map = new Map();
+    holoRollRows.forEach((row) => {
+      const lotNo = row.lotNo || '(No Lot)';
+      const existing = map.get(lotNo) || {
+        lotNo,
+        date: row.date || row.issueDate || '',
+        itemId: row.itemId || '',
+        yarnId: row.yarnId || '',
+        twistId: row.twistId || '',
+        firmId: row.firmId || '',
+        supplierId: row.supplierId || '',
+        itemName: row.itemName || '—',
+        yarnName: row.yarnName || '—',
+        twistName: row.twistName || '—',
+        firmName: row.firmName || '—',
+        supplierName: row.supplierName || '—',
+        totalRolls: 0,
+        totalWeight: 0,
+        receiptCount: 0,
+        rows: [],
+      };
+      existing.rows.push(row);
+      existing.totalRolls += Number.isFinite(row.rollCount) ? row.rollCount : 0;
+      existing.totalWeight += Number.isFinite(row.rollWeight) ? row.rollWeight : 0;
+      existing.receiptCount += 1;
+      map.set(lotNo, existing);
+    });
+    return Array.from(map.values()).map((lot) => ({ ...lot, statusType: 'active' }));
+  }, [holoRollRows]);
   async function handleMarkWastage(pieceId) {
     if (!pieceId) return;
     const ok = window.confirm(`Mark remaining pending weight for ${pieceId} as wastage? This cannot be undone.`);
@@ -599,6 +705,75 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
     const start = (bobbinsPage - 1) * pageSize;
     return bobbinSummaryLots.slice(start, start + pageSize);
   }, [bobbinSummaryLots, bobbinsPage, pageSize]);
+  const [rollsPage, setRollsPage] = useState(1);
+  useEffect(() => { setRollsPage(1); }, [filters, sortConfig]);
+  const filteredHoloLots = useMemo(() => {
+    const next = holoRollLots.filter((l) => {
+      if (Array.isArray(filters.itemIds)) {
+        if (filters.itemIds.length === 0) return false;
+        if (!filters.itemIds.includes(l.itemId)) return false;
+      }
+      if (Array.isArray(filters.firmIds)) {
+        if (filters.firmIds.length === 0) return false;
+        if (!filters.firmIds.includes(l.firmId)) return false;
+      }
+      if (Array.isArray(filters.supplierIds)) {
+        if (filters.supplierIds.length === 0) return false;
+        if (!filters.supplierIds.includes(l.supplierId)) return false;
+      }
+      if (Array.isArray(filters.twistIds)) {
+        if (filters.twistIds.length === 0) return false;
+        if (!filters.twistIds.includes(l.twistId)) return false;
+      }
+      if (Array.isArray(filters.lotNos)) {
+        if (filters.lotNos.length === 0) return false;
+        if (!filters.lotNos.includes(l.lotNo)) return false;
+      }
+      if (filters.from && l.date && l.date < filters.from) return false;
+      if (filters.to && l.date && l.date > filters.to) return false;
+      if (Array.isArray(filters.statuses)) {
+        if (filters.statuses.length === 0) return false;
+        const status = l.statusType || 'active';
+        if (!filters.statuses.includes(status)) return false;
+      }
+      return true;
+    });
+    return sortLots(next, sortConfig);
+  }, [holoRollLots, filters, sortConfig]);
+
+  const holoGroupSummaries = useMemo(() => {
+    const map = new Map();
+    filteredHoloLots.forEach((lot) => {
+      const key = `${lot.itemId || 'unknown'}::${lot.yarnId || 'none'}::${lot.twistId || 'none'}`;
+      const existing = map.get(key) || {
+        key,
+        itemId: lot.itemId || '',
+        itemName: lot.itemName || '—',
+        yarnId: lot.yarnId || '',
+        yarnName: lot.yarnName || '—',
+        twistId: lot.twistId || '',
+        twistName: lot.twistName || '—',
+        totalRolls: 0,
+        totalWeight: 0,
+        lots: [],
+      };
+      existing.totalRolls += Number.isFinite(lot.totalRolls) ? lot.totalRolls : 0;
+      existing.totalWeight += Number.isFinite(lot.totalWeight) ? lot.totalWeight : 0;
+      existing.lots.push(lot);
+      map.set(key, existing);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const itemCmp = compareValues(a.itemName || '', b.itemName || '');
+      if (itemCmp !== 0) return itemCmp;
+      const yarnCmp = compareValues(a.yarnName || '', b.yarnName || '');
+      if (yarnCmp !== 0) return yarnCmp;
+      return compareValues(a.twistName || '', b.twistName || '');
+    });
+  }, [filteredHoloLots]);
+  const pagedHoloGroups = useMemo(() => {
+    const start = (rollsPage - 1) * pageSize;
+    return holoGroupSummaries.slice(start, start + pageSize);
+  }, [holoGroupSummaries, rollsPage, pageSize]);
   function InfoTooltip({ label }) {
     return (
       <div className="relative group inline-block">
@@ -1617,6 +1792,247 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
     </>
   );
 
+  const holoRollsView = (
+    <>
+      <Section title={null}>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Item</span>
+                    <ColumnFilter
+                      title="Filter by item"
+                      active={isFilterActive(filters.itemIds, itemOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Items"
+                          options={itemOptions}
+                          selectedValues={filters.itemIds}
+                          onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Yarn</span>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Twist</span>
+                    <ColumnFilter
+                      title="Filter by twist"
+                      active={isFilterActive(filters.twistIds, twistOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Twists"
+                          options={twistOptions}
+                          selectedValues={filters.twistIds}
+                          onApply={(next) => setFilters(f => ({ ...f, twistIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'twistName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'twistName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Firm</span>
+                    <ColumnFilter
+                      title="Filter by firm"
+                      active={isFilterActive(filters.firmIds, firmOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Firms"
+                          options={firmOptions}
+                          selectedValues={filters.firmIds}
+                          onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Supplier</span>
+                    <ColumnFilter
+                      title="Filter by supplier"
+                      active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Suppliers"
+                          options={supplierOptions}
+                          selectedValues={filters.supplierIds}
+                          onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2 text-right">Rolls</th>
+                <th className="py-2 pr-2 text-right">Net Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              {holoGroupSummaries.length === 0 ? (
+                <tr><td colSpan={7} className="py-4">No lots match filters.</td></tr>
+              ) : pagedHoloGroups.map((group) => (
+                <React.Fragment key={group.key}>
+                  <tr className={`border-t ${cls.rowBorder} align-top row-hover`} onClick={() => toggleExpand(group.key)} style={{ cursor: 'pointer' }}>
+                    <td className="py-2 pr-2 font-medium">{group.itemName}</td>
+                    <td className="py-2 pr-2">{group.yarnName}</td>
+                    <td className="py-2 pr-2">{group.twistName}</td>
+                    <td className="py-2 pr-2">{group.lots[0]?.firmName || '—'}</td>
+                    <td className="py-2 pr-2">{group.lots[0]?.supplierName || '—'}</td>
+                    <td className="py-2 pr-2 text-right">{group.totalRolls}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(group.totalWeight)}</td>
+                  </tr>
+                  {expandedLot === group.key && (
+                    <tr className={`border-t ${cls.rowBorder}`}>
+                      <td colSpan={7} className="p-3">
+                        <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
+                          <div className="mb-2 flex items-center gap-2">
+                            <Pill>Lots: {group.lots.length}</Pill>
+                            <Pill>Rolls: {group.totalRolls}</Pill>
+                            <Pill>Weight: {formatKg(group.totalWeight)}</Pill>
+                          </div>
+                          <div className="overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead className={`text-left ${cls.muted}`}>
+                                <tr>
+                                  <th className="py-2 pr-2">Lot</th>
+                                  <th className="py-2 pr-2 text-right">Rolls</th>
+                                  <th className="py-2 pr-2 text-right">Net Weight</th>
+                                  <th className="py-2 pr-2 text-right">Receipts</th>
+                                  <th className="py-2 pr-2">Last Issue</th>
+                                  <th className="py-2 pr-2">Last Receive</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.lots.length === 0 ? (
+                                  <tr><td colSpan={6} className="py-3 pr-2">No holo receipts for this group.</td></tr>
+                                ) : group.lots.map((lot) => (
+                                  <tr key={lot.lotNo} className={`border-t ${cls.rowBorder}`}>
+                                    <td className="py-2 pr-2 font-mono">{lot.lotNo}</td>
+                                    <td className="py-2 pr-2 text-right">{lot.totalRolls}</td>
+                                    <td className="py-2 pr-2 text-right">{formatKg(lot.totalWeight)}</td>
+                                    <td className="py-2 pr-2 text-right">{lot.receiptCount}</td>
+                                    <td className="py-2 pr-2 font-mono">{lot.rows?.[0]?.issueBarcode || '—'}</td>
+                                    <td className="py-2 pr-2">{lot.rows?.[0]?.date || lot.date || '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="mt-4 overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead className={`text-left ${cls.muted}`}>
+                                <tr>
+                                  <th className="py-2 pr-2">Barcode</th>
+                                  <th className="py-2 pr-2">Date</th>
+                                  <th className="py-2 pr-2">Roll Type / Box</th>
+                                  <th className="py-2 pr-2 text-right">Rolls</th>
+                                  <th className="py-2 pr-2 text-right">Net / Gross</th>
+                                  <th className="py-2 pr-2">Machine / Operators</th>
+                                  <th className="py-2 pr-2">Issued to Coning</th>
+                                  <th className="py-2 pr-2">Issue Ref</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.lots.flatMap(l => l.rows || []).length === 0 ? (
+                                  <tr><td colSpan={8} className="py-3 pr-2">No holo receipts for this group.</td></tr>
+                                ) : group.lots.flatMap(l => l.rows || []).map((row) => {
+                                  const rollType = row.rollType?.name || '—';
+                                  const boxLabel = row.box?.name ? `${row.box.name}${row.box.weight ? ` (${formatKg(row.box.weight)})` : ''}` : '—';
+                                  const operatorName = row.operator?.name || '—';
+                                  const helperName = row.helper?.name || null;
+                                  return (
+                                    <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                                      <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
+                                      <td className="py-2 pr-2">{row.date || '—'}</td>
+                                      <td className="py-2 pr-2">
+                                        <div className="flex flex-col">
+                                          <span>{rollType}</span>
+                                          <span className={`text-xs ${cls.muted}`}>Box: {boxLabel}</span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">{row.rollCount ?? 0}</td>
+                                      <td className="py-2 pr-2 text-right">
+                                        <div className="flex flex-col items-end">
+                                          <span>{formatKg(row.rollWeight)}</span>
+                                          {row.grossWeight != null ? <span className={`text-xs ${cls.muted}`}>Gross: {formatKg(row.grossWeight)}{row.tareWeight != null ? ` · Tare: ${formatKg(row.tareWeight)}` : ''}</span> : null}
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-2">
+                                        <div>{row.machineNo || '—'}</div>
+                                        <div className={`text-xs ${cls.muted}`}>{operatorName}{helperName ? ` · Helper: ${helperName}` : ''}</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">{row.issueRefCount ? `${row.issueRefCount} time(s)` : '—'}</td>
+                                      <td className="py-2 pr-2">
+                                        {row.issueBarcode ? (
+                                          <div className="flex flex-col">
+                                            <span className="font-mono">{row.issueBarcode}</span>
+                                            <span className={`text-xs ${cls.muted}`}>{row.issueDate || ''}</span>
+                                          </div>
+                                        ) : '—'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      <div className="mt-2">
+        <Pagination total={holoGroupSummaries.length} page={rollsPage} setPage={setRollsPage} pageSize={pageSize} />
+      </div>
+    </>
+  );
+
   const tabSwitcher = !isCutter ? null : (
     <div className="flex flex-wrap items-center gap-2">
       <button
@@ -1639,7 +2055,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = '
   return (
     <div className="space-y-6">
       {tabSwitcher}
-      {showBobbins ? bobbinView : jumboView}
+      {isHolo ? holoRollsView : (showBobbins ? bobbinView : jumboView)}
     </div>
   );
 }

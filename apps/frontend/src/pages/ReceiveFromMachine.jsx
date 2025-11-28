@@ -1250,7 +1250,12 @@ function HoloReceiveForm({ db, cls, refreshDb }) {
   const tareWeight = Number.isFinite(rollCountNum) && rollCountNum > 0 && rollTypeWeight != null
     ? (rollCountNum * rollTypeWeight) + (boxWeight || 0)
     : null;
-  const netWeight = tareWeight != null && Number.isFinite(grossNum) ? grossNum - tareWeight : null;
+  
+  // Net weight is strictly derived from Gross - Tare
+  const netWeight = Number.isFinite(grossNum) && tareWeight != null
+    ? grossNum - tareWeight
+    : null;
+
   const disableSave = saving
     || !issue
     || !selectedPieceId
@@ -1310,7 +1315,7 @@ function HoloReceiveForm({ db, cls, refreshDb }) {
         boxId,
         grossWeight: grossNum,
         crateTareWeight: 0,
-        rollWeight: netWeight,
+        // rollWeight is removed; backend derives it from gross - tare
         date,
         machineNo: machineOptions.find((m) => m.id === machineId)?.name || null,
         operatorId: operatorId || null,

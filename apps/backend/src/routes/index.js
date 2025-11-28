@@ -1547,7 +1547,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       issueId,
       pieceId,
       rollCount,
-      rollWeight,
+      // rollWeight, // No longer accepted for calculation
       rollTypeId,
       grossWeight,
       crateTareWeight,
@@ -1560,27 +1560,35 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       createdBy,
     } = req.body || {};
     const rollCountNum = Number(rollCount);
-    if (!issueId || !pieceId || !Number.isFinite(rollCountNum) || rollCountNum <= 0) {
-      return res.status(400).json({ error: 'Missing required roll data' });
+    const grossNum = Number(grossWeight);
+
+    if (!issueId || !pieceId || !Number.isFinite(rollCountNum) || rollCountNum <= 0 || !Number.isFinite(grossNum) || grossNum <= 0) {
+      return res.status(400).json({ error: 'Missing required roll count or gross weight data' });
     }
-    const grossNum = grossWeight == null ? null : Number(grossWeight);
-    const providedNet = rollWeight == null ? null : Number(rollWeight);
+
     const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
     const issue = await prisma.issueToHoloMachine.findUnique({ where: { id: issueId }, select: { lotNo: true } });
+
     const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
     const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : null;
     const crateTare = crateTareWeight == null ? null : Number(crateTareWeight);
+
     const tareWeight = (() => {
       const base = rollTypeWeight != null ? rollCountNum * rollTypeWeight : null;
       if (base == null && crateTare == null && boxWeight == null) return null;
       return (base || 0) + (crateTare || 0) + (boxWeight || 0);
     })();
-    const netFromGross = grossNum != null && tareWeight != null ? grossNum - tareWeight : null;
-    const finalNet = netFromGross != null ? netFromGross : providedNet;
-    if (finalNet != null && finalNet <= 0) {
-      return res.status(400).json({ error: 'Net weight must be positive' });
+
+    if (tareWeight == null) {
+       return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
     }
+
+    const netWeight = grossNum - tareWeight;
+    if (!Number.isFinite(netWeight) || netWeight <= 0) {
+      return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
+    }
+
     const tsPart = Date.now().toString().slice(-6);
     const randPart = Math.random().toString(36).slice(-4).toUpperCase();
     const lotPart = (issue?.lotNo || 'HLO').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'HLO';
@@ -1595,7 +1603,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
         helperId: helperId || null,
         rollTypeId: rollTypeId || null,
         rollCount: rollCountNum,
-        rollWeight: finalNet == null ? null : Number(finalNet),
+        rollWeight: Number(netWeight), // Derived net weight
         grossWeight: grossNum,
         tareWeight,
         barcode,
@@ -1604,7 +1612,8 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
         createdBy: createdBy || 'manual',
       },
     });
-    const netIncrement = finalNet == null ? 0 : Number(finalNet);
+    
+    const netIncrement = Number(netWeight);
     await prisma.receiveFromHoloMachinePieceTotal.upsert({
       where: { pieceId },
       update: {

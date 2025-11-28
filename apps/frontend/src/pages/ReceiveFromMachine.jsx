@@ -872,6 +872,24 @@ function ConingReceiveView({ db, cls, refreshDb, processReceiveRows, processRece
     return found?.name || selectedIssue.operatorId;
   }, [operators, selectedIssue]);
 
+  const actualPerConeGram = useMemo(() => {
+    if (cart.length === 0) return null;
+    let totalNetKg = 0;
+    let totalCones = 0;
+    for (const row of cart) {
+      const cones = Number(row.coneCount || 0);
+      const gross = Number(row.grossWeight || 0);
+      if (!Number.isFinite(cones) || cones <= 0) continue;
+      if (!Number.isFinite(gross) || gross <= 0) continue;
+      const { netKg } = calcMetrics(row);
+      if (!Number.isFinite(netKg) || netKg <= 0) continue;
+      totalNetKg += netKg;
+      totalCones += cones;
+    }
+    if (totalNetKg <= 0 || totalCones <= 0) return null;
+    return (totalNetKg / totalCones) * 1000; // convert kg → grams
+  }, [cart, coneTypeWeightKg, boxMap]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!selectedIssue) {
@@ -954,6 +972,7 @@ function ConingReceiveView({ db, cls, refreshDb, processReceiveRows, processRece
               <div className="flex flex-wrap gap-2 text-xs">
                 <Pill>Lot: {selectedIssue.lotNo}</Pill>
                 <Pill>Required per cone: {perConeNetGram} g</Pill>
+                <Pill>Actual per cone: {actualPerConeGram == null ? '—' : `${actualPerConeGram.toFixed(1)} g`}</Pill>
                 <Pill>Cone type: {coneTypeLabel}</Pill>
                 <Pill>Operator: {operatorLabel}</Pill>
               </div>

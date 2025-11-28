@@ -40,7 +40,7 @@ Environment knobs:
 - `VITE_API_BASE` – optional build arg that forces a specific API URL in the frontend bundle (defaults to `http://localhost:4001` to match `BACKEND_PORT`).
 - `POSTGRES_PORT` – change the host port that Postgres binds to (container still listens on 5432).
 - `BACKEND_PORT` – change the backend’s host port (container stays on 4000); set `VITE_API_BASE` accordingly if you override it.
-- When running the `frontend-dev` service from `docker-compose.override.yml`, the Vite dev server binds to `http://localhost:6173`.
+- When running the `frontend-dev` service from `docker-compose.override.yml`, the Vite dev server binds to `http://localhost:6173`. Set `HOST_IP` to your LAN IP before `docker compose up` (e.g., `HOST_IP=192.168.0.50 docker compose up -d db backend frontend-dev`) so other devices can hit `http://<HOST_IP>:6173` and `http://<HOST_IP>:4001`.
 
 Persistent data:
 

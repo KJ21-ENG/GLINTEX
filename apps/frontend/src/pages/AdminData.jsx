@@ -11,10 +11,22 @@ export function AdminData({ db, onSaveBrand, savingBrand }) {
   const { brand, setBrand, cls } = useBrand();
   const [localBrand, setLocalBrand] = useState(brand);
   const [saving, setSaving] = useState(false);
+  const [accessUrl, setAccessUrl] = useState('');
+  const [apiBase, setApiBase] = useState('');
 
   useEffect(() => {
     setLocalBrand(brand);
   }, [brand.primary, brand.gold, brand.logoDataUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const protocol = window.location?.protocol || 'http:';
+    const host = window.location?.host || window.location?.hostname || 'localhost';
+    const hostname = window.location?.hostname || 'localhost';
+    setAccessUrl(`${protocol}//${host}`);
+    const envBase = import.meta.env.VITE_API_BASE;
+    setApiBase(envBase || `${protocol}//${hostname}:4000`);
+  }, []);
 
   function updateBrandField(field, value) {
     const next = { ...localBrand, [field]: value };
@@ -43,8 +55,35 @@ export function AdminData({ db, onSaveBrand, savingBrand }) {
     }
   }
 
+  function copyToClipboard(text) {
+    if (!text) return;
+    navigator.clipboard?.writeText(text).then(() => {
+      alert('Copied link');
+    }).catch(() => {});
+  }
+
   return (
     <div className="space-y-6">
+      <Section title="Access URLs (share on LAN)">
+        <div className="space-y-3">
+          <div className="flex flex-col md:flex-row md:items-center gap-2">
+            <div className="text-sm font-medium">Frontend</div>
+            <div className="flex-1 flex gap-2">
+              <Input readOnly value={accessUrl || 'Loading…'} />
+              <SecondaryButton disabled={!accessUrl} onClick={() => copyToClipboard(accessUrl)}>Copy</SecondaryButton>
+            </div>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center gap-2">
+            <div className="text-sm font-medium">API</div>
+            <div className="flex-1 flex gap-2">
+              <Input readOnly value={apiBase || 'Loading…'} />
+              <SecondaryButton disabled={!apiBase} onClick={() => copyToClipboard(apiBase)}>Copy</SecondaryButton>
+            </div>
+          </div>
+          <p className={`text-xs ${cls.muted}`}>Share these URLs with other devices on the same Wi-Fi. They use your current IP and ports (6173 for dev UI, 4001 for API by default).</p>
+        </div>
+      </Section>
+
       <Section title="Branding (GLINTEX)">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>

@@ -1872,10 +1872,10 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
       notes,
       createdBy,
     } = req.body || {};
-    if (!issueId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
+    const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
+    if (!issueId || !pieceId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
       return res.status(400).json({ error: 'Missing required cone or gross weight data' });
     }
-    const pieceId = rawPieceId || issueId;
     const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
 

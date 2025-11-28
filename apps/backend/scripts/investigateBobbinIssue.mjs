@@ -23,7 +23,7 @@ async function main() {
     console.log(`Found "Bobbin" record: ID=${defaultBobbin.id}\n`);
 
     // Find all receive rows linked to "Bobbin"
-    const rowsWithDefaultBobbin = await prisma.receiveRow.findMany({
+    const rowsWithDefaultBobbin = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         bobbinId: defaultBobbin.id,
       },
@@ -84,7 +84,7 @@ async function main() {
     console.table(analysis.samples);
 
     // Check total count
-    const totalCount = await prisma.receiveRow.count({
+    const totalCount = await prisma.receiveFromCutterMachineRow.count({
       where: {
         bobbinId: defaultBobbin.id,
       },
@@ -111,7 +111,7 @@ async function main() {
     console.log('\nReceive row counts per bobbin:');
     const bobbinCounts = await Promise.all(
       allBobbins.map(async (bobbin) => {
-        const count = await prisma.receiveRow.count({
+        const count = await prisma.receiveFromCutterMachineRow.count({
           where: { bobbinId: bobbin.id },
         });
         return { name: bobbin.name, count };

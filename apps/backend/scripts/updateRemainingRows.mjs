@@ -87,7 +87,7 @@ async function main() {
       const pieceIds = inboundItems.map(i => i.id);
 
       // Update receive rows for these pieces that are still linked to default bobbin
-      const result = await prisma.receiveRow.updateMany({
+      const result = await prisma.receiveFromCutterMachineRow.updateMany({
         where: {
           AND: [
             { pieceId: { in: pieceIds } },
@@ -109,7 +109,7 @@ async function main() {
     console.log(`  Errors: ${errors}`);
 
     // Verify
-    const remainingCount = await prisma.receiveRow.count({
+    const remainingCount = await prisma.receiveFromCutterMachineRow.count({
       where: {
         bobbinId: defaultBobbin.id,
       },

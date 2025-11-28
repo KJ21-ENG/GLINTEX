@@ -9,6 +9,7 @@ import { PieceRow } from '../components/stock';
 import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
+import { getProcessDefinition } from '../constants/processes';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active (pending > 0)' },
@@ -48,6 +49,14 @@ function getSortValue(lot, key) {
       return lot.supplierName || lot.supplier || '';
     case 'availableCount':
       return lot.availableCount ?? ((lot.pieces || []).filter(p => p.status === 'available').length);
+    case 'availableBobbins':
+      return Number(lot.availableBobbins || 0);
+    case 'availableWeight':
+      return Number(lot.availableWeight || 0);
+    case 'issuedBobbins':
+      return Number(lot.issuedBobbins || 0);
+    case 'crateCount':
+      return Array.isArray(lot.crates) ? lot.crates.length : 0;
     case 'totalWeight':
       return Number(lot.totalWeight || 0);
     case 'pendingWeight':
@@ -79,8 +88,13 @@ function isFilterActive(selectedValues, totalOptions) {
   return selectedValues.length !== totalOptions;
 }
 
-export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
+export function Stock({ db, onIssueToMachine, refreshing, refreshDb, process = 'cutter' }) {
   const { cls, brand, theme } = useBrand();
+  const processDef = getProcessDefinition(process);
+  const { receiveTotalsKey, receiveUnitField, receiveWeightField, unitLabelPlural } = processDef;
+  const isCutter = process === 'cutter';
+  const isHolo = process === 'holo';
+  const [cutterView, setCutterView] = useState('jumbo');
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
   const [filters, setFilters] = useState({
@@ -101,19 +115,21 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
   const [isSummaryView, setIsSummaryView] = useState(false);
   const [page, setPage] = useState(1);
+  const [bobbinsPage, setBobbinsPage] = useState(1);
   const pageSize = 50;
 
   const receiveTotalsMap = useMemo(() => {
     const map = new Map();
-    (db.receive_piece_totals || []).forEach(row => {
+    const totalsList = Array.isArray(db[receiveTotalsKey]) ? db[receiveTotalsKey] : [];
+    totalsList.forEach((row) => {
       map.set(row.pieceId, {
-        received: Number(row.totalNetWeight || 0),
+        received: Number(row[receiveWeightField] || 0),
         wastage: Number(row.wastageNetWeight || 0),
-        totalPieces: Number(row.totalPieces || 0),
+        totalUnits: Number(row[receiveUnitField] || 0),
       });
     });
     return map;
-  }, [db.receive_piece_totals]);
+  }, [db, process, receiveTotalsKey, receiveWeightField, receiveUnitField]);
 
   // Prepare lots with all pieces (include non-available ones too) and compute available/pending totals
   const lotsMap = useMemo(() => {
@@ -128,7 +144,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
         availableCount: 0,
         pendingWeight: 0,
         totalReceivedWeight: 0,
-        totalReceivedPieces: 0,
+        totalReceivedUnits: 0,
         wastageTotal: 0,
         wastageCount: 0,
         avgWastage: 0,
@@ -137,12 +153,12 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
     for (const piece of db.inbound_items) {
       if (!m[piece.lotNo]) continue;
       const inboundWeight = Number(piece.weight || 0);
-      const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalPieces: 0 };
+      const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalUnits: 0 };
       const receivedWeight = totals.received || 0;
       const wastageWeight = totals.wastage || 0;
-      const totalPieces = totals.totalPieces || 0;
+      const pieceTotalUnits = totals.totalUnits || 0;
       const pendingForPiece = Math.max(0, inboundWeight - receivedWeight - wastageWeight);
-      const pieceEntry = { ...piece, pendingWeight: pendingForPiece, receivedWeight, wastageWeight, totalPieces };
+      const pieceEntry = { ...piece, pendingWeight: pendingForPiece, receivedWeight, wastageWeight, totalUnits: pieceTotalUnits };
       m[piece.lotNo].pieces.push(pieceEntry);
       if (wastageWeight > 0) {
         m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
@@ -153,7 +169,7 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
       }
       m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
       m[piece.lotNo].totalReceivedWeight = (m[piece.lotNo].totalReceivedWeight || 0) + receivedWeight;
-      m[piece.lotNo].totalReceivedPieces = (m[piece.lotNo].totalReceivedPieces || 0) + totalPieces;
+    m[piece.lotNo].totalReceivedUnits = (m[piece.lotNo].totalReceivedUnits || 0) + pieceTotalUnits;
     }
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
@@ -165,16 +181,266 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
   // Build set of issued piece IDs from issue_to_machine records
   const issuedPieceIds = useMemo(() => {
     const set = new Set();
-    (db.issue_to_machine || []).forEach((rec) => {
+    (db.issue_to_cutter_machine || []).forEach((rec) => {
       if (rec && rec.pieceIds) {
         (String(rec.pieceIds) || '').split(',').map(s => s.trim()).filter(Boolean).forEach(pid => set.add(pid));
       }
     });
     return set;
-  }, [db.issue_to_machine]);
+  }, [db.issue_to_cutter_machine]);
 
   const [markingPieces, setMarkingPieces] = useState(() => new Set());
 
+  const inboundPieceMap = useMemo(() => {
+    const map = new Map();
+    (db.inbound_items || []).forEach((p) => { if (p?.id) map.set(p.id, p); });
+    return map;
+  }, [db.inbound_items]);
+
+  const itemOptions = useMemo(() => {
+    return [...db.items]
+      .map(i => ({ value: i.id, label: i.name || '—', key: i.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.items]);
+  const itemMap = useMemo(() => {
+    const map = new Map();
+    db.items.forEach(i => { if (i?.id) map.set(i.id, i); });
+    return map;
+  }, [db.items]);
+
+  const firmOptions = useMemo(() => {
+    return [...db.firms]
+      .map(fm => ({ value: fm.id, label: fm.name || '—', key: fm.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.firms]);
+  const firmMap = useMemo(() => {
+    const map = new Map();
+    db.firms.forEach(f => { if (f?.id) map.set(f.id, f); });
+    return map;
+  }, [db.firms]);
+
+  const yarnMap = useMemo(() => {
+    const map = new Map();
+    (db.yarns || []).forEach((y) => { if (y?.id) map.set(y.id, y); });
+    return map;
+  }, [db.yarns]);
+
+  const twistMap = useMemo(() => {
+    const map = new Map();
+    (db.twists || []).forEach((t) => { if (t?.id) map.set(t.id, t); });
+    return map;
+  }, [db.twists]);
+
+  const supplierOptions = useMemo(() => {
+    return [...db.suppliers]
+      .map(s => ({ value: s.id, label: s.name || '—', key: s.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.suppliers]);
+  const twistOptions = useMemo(() => {
+    return [...(db.twists || [])]
+      .map(t => ({ value: t.id, label: t.name || '—', key: t.id }))
+      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
+  }, [db.twists]);
+  const supplierMap = useMemo(() => {
+    const map = new Map();
+    db.suppliers.forEach(s => { if (s?.id) map.set(s.id, s); });
+    return map;
+  }, [db.suppliers]);
+
+  const lotMetaMap = useMemo(() => {
+    const map = new Map();
+    (db.lots || []).forEach((lot) => {
+      const item = lot?.itemId ? itemMap.get(lot.itemId) : null;
+      const firm = lot?.firmId ? firmMap.get(lot.firmId) : null;
+      const supplier = lot?.supplierId ? supplierMap.get(lot.supplierId) : null;
+      map.set(lot.lotNo, {
+        ...lot,
+        itemName: item?.name || lot.itemName || '—',
+        firmName: firm?.name || lot.firmName || '—',
+        supplierName: supplier?.name || lot.supplierName || '—',
+      });
+    });
+    return map;
+  }, [db.lots, itemMap, firmMap, supplierMap]);
+
+  const bobbinIssueRefs = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_holo_machine || []).forEach((issue) => {
+      const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+      refs.forEach((ref) => {
+        const rowId = ref?.rowId || ref?.id;
+        if (!rowId) return;
+        map.set(rowId, (map.get(rowId) || 0) + 1);
+      });
+    });
+    return map;
+  }, [db.issue_to_holo_machine]);
+
+  const holoIssueMap = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_holo_machine || []).forEach((issue) => { if (issue?.id) map.set(issue.id, issue); });
+    return map;
+  }, [db.issue_to_holo_machine]);
+
+  const coningIssueRefs = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_coning_machine || []).forEach((issue) => {
+      const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+      refs.forEach((ref) => {
+        const rowId = ref?.rowId || ref?.id;
+        if (!rowId) return;
+        map.set(rowId, (map.get(rowId) || 0) + 1);
+      });
+    });
+    return map;
+  }, [db.issue_to_coning_machine]);
+
+  const bobbinCrates = useMemo(() => {
+    return (db.receive_from_cutter_machine_rows || []).map((row) => {
+      const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
+      const lotNo = row?.lotNo || piece?.lotNo || '';
+      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+      const itemId = piece?.itemId || lotMeta?.itemId || '';
+      const itemName = itemId ? (itemMap.get(itemId)?.name || lotMeta?.itemName || '—') : '—';
+      const firmName = lotMeta?.firmName || '—';
+      const supplierName = lotMeta?.supplierName || '—';
+      const bobbinQty = Number(row?.bobbinQuantity || 0);
+      const issuedBobbins = Number(row?.issuedBobbins || 0);
+      const availableBobbins = Math.max(0, bobbinQty - issuedBobbins);
+      const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
+      const issuedWeight = Number(row?.issuedBobbinWeight || 0);
+      const availableWeight = Number.isFinite(netWeight) ? Math.max(0, netWeight - issuedWeight) : 0;
+      const statusType = availableBobbins > EPSILON ? 'active' : 'inactive';
+      return {
+        ...row,
+        lotNo,
+        itemId,
+        firmId: lotMeta?.firmId || '',
+        supplierId: lotMeta?.supplierId || '',
+        itemName,
+        firmName,
+        supplierName,
+        bobbinQty,
+        issuedBobbins,
+        availableBobbins,
+        netWeight,
+        issuedWeight,
+        availableWeight,
+        statusType,
+        issueRefCount: bobbinIssueRefs.get(row?.id) || 0,
+      };
+    });
+  }, [db.receive_from_cutter_machine_rows, inboundPieceMap, lotMetaMap, itemMap, bobbinIssueRefs]);
+
+  const bobbinLots = useMemo(() => {
+    const map = new Map();
+    bobbinCrates.forEach((crate) => {
+      const lotNo = crate.lotNo || '(No Lot)';
+      const existing = map.get(lotNo) || {
+        lotNo,
+        date: crate.date || '',
+        itemId: crate.itemId || '',
+        firmId: crate.firmId || '',
+        supplierId: crate.supplierId || '',
+        itemName: crate.itemName || '—',
+        firmName: crate.firmName || '—',
+        supplierName: crate.supplierName || '—',
+        totalBobbins: 0,
+        issuedBobbins: 0,
+        availableBobbins: 0,
+        totalWeight: 0,
+        issuedWeight: 0,
+        availableWeight: 0,
+        crateCount: 0,
+        crates: [],
+      };
+      existing.crates.push(crate);
+      existing.totalBobbins += Number.isFinite(crate.bobbinQty) ? crate.bobbinQty : 0;
+      existing.issuedBobbins += Number.isFinite(crate.issuedBobbins) ? crate.issuedBobbins : 0;
+      existing.availableBobbins += Number.isFinite(crate.availableBobbins) ? crate.availableBobbins : 0;
+      existing.totalWeight += Number.isFinite(crate.netWeight) ? crate.netWeight : 0;
+      existing.issuedWeight += Number.isFinite(crate.issuedWeight) ? crate.issuedWeight : 0;
+      existing.availableWeight += Number.isFinite(crate.availableWeight) ? crate.availableWeight : 0;
+      existing.crateCount = (existing.crateCount || 0) + 1;
+      map.set(lotNo, existing);
+    });
+    const list = Array.from(map.values()).map((lot) => ({
+      ...lot,
+      statusType: lot.availableBobbins > EPSILON ? 'active' : 'inactive',
+      totalPieces: lot.totalBobbins,
+      availableCount: lot.availableBobbins,
+    }));
+    return list;
+  }, [bobbinCrates]);
+
+  const holoRollRows = useMemo(() => {
+    return (db.receive_from_holo_machine_rows || []).map((row) => {
+      const issue = row?.issueId ? holoIssueMap.get(row.issueId) : null;
+      const lotNo = issue?.lotNo || '';
+      const itemId = issue?.itemId || '';
+      const yarnId = issue?.yarnId || '';
+      const yarnName = yarnId ? (yarnMap.get(yarnId)?.name || '—') : '—';
+      const twistId = issue?.twistId || '';
+      const twistName = twistId ? (twistMap.get(twistId)?.name || '—') : '—';
+      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+      const itemName = itemId ? (itemMap.get(itemId)?.name || lotMeta?.itemName || '—') : (lotMeta?.itemName || '—');
+      const firmName = lotMeta?.firmName || '—';
+      const supplierName = lotMeta?.supplierName || '—';
+      const rollCount = Number(row?.rollCount || 0);
+      const rollWeight = Number(row?.rollWeight ?? 0);
+      return {
+        ...row,
+        lotNo,
+        itemId,
+        yarnId,
+        twistId,
+        firmId: lotMeta?.firmId || '',
+        supplierId: lotMeta?.supplierId || '',
+        itemName,
+        yarnName,
+        twistName,
+        firmName,
+        supplierName,
+        rollCount,
+        rollWeight: Number.isFinite(rollWeight) ? rollWeight : 0,
+        statusType: 'active',
+        issueRefCount: coningIssueRefs.get(row?.id) || 0,
+        issueBarcode: issue?.barcode || '',
+        issueDate: issue?.date || '',
+      };
+    });
+  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, itemMap, coningIssueRefs]);
+
+  const holoRollLots = useMemo(() => {
+    const map = new Map();
+    holoRollRows.forEach((row) => {
+      const lotNo = row.lotNo || '(No Lot)';
+      const existing = map.get(lotNo) || {
+        lotNo,
+        date: row.date || row.issueDate || '',
+        itemId: row.itemId || '',
+        yarnId: row.yarnId || '',
+        twistId: row.twistId || '',
+        firmId: row.firmId || '',
+        supplierId: row.supplierId || '',
+        itemName: row.itemName || '—',
+        yarnName: row.yarnName || '—',
+        twistName: row.twistName || '—',
+        firmName: row.firmName || '—',
+        supplierName: row.supplierName || '—',
+        totalRolls: 0,
+        totalWeight: 0,
+        receiptCount: 0,
+        rows: [],
+      };
+      existing.rows.push(row);
+      existing.totalRolls += Number.isFinite(row.rollCount) ? row.rollCount : 0;
+      existing.totalWeight += Number.isFinite(row.rollWeight) ? row.rollWeight : 0;
+      existing.receiptCount += 1;
+      map.set(lotNo, existing);
+    });
+    return Array.from(map.values()).map((lot) => ({ ...lot, statusType: 'active' }));
+  }, [holoRollRows]);
   async function handleMarkWastage(pieceId) {
     if (!pieceId) return;
     const ok = window.confirm(`Mark remaining pending weight for ${pieceId} as wastage? This cannot be undone.`);
@@ -197,24 +463,6 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
 
   // Include all lots (even those with zero available pieces) so filters like "inactive" work
   const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
-
-  const itemOptions = useMemo(() => {
-    return [...db.items]
-      .map(i => ({ value: i.id, label: i.name || '—', key: i.id }))
-      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
-  }, [db.items]);
-
-  const firmOptions = useMemo(() => {
-    return [...db.firms]
-      .map(fm => ({ value: fm.id, label: fm.name || '—', key: fm.id }))
-      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
-  }, [db.firms]);
-
-  const supplierOptions = useMemo(() => {
-    return [...db.suppliers]
-      .map(s => ({ value: s.id, label: s.name || '—', key: s.id }))
-      .sort((a, b) => compareValues((a.label || '').toLowerCase(), (b.label || '').toLowerCase()));
-  }, [db.suppliers]);
 
   const statusOptions = useMemo(() => STATUS_OPTIONS.map(opt => ({ ...opt, key: opt.value })), []);
 
@@ -260,6 +508,44 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
     });
     return sortLots(next, sortConfig);
   }, [allLots, filters, sortConfig]);
+
+  const filteredBobbinLots = useMemo(() => {
+    const next = bobbinLots.filter((l) => {
+      if (Array.isArray(filters.itemIds)) {
+        if (filters.itemIds.length === 0) return false;
+        if (!filters.itemIds.includes(l.itemId)) return false;
+      }
+      if (Array.isArray(filters.firmIds)) {
+        if (filters.firmIds.length === 0) return false;
+        if (!filters.firmIds.includes(l.firmId)) return false;
+      }
+      if (Array.isArray(filters.supplierIds)) {
+        if (filters.supplierIds.length === 0) return false;
+        if (!filters.supplierIds.includes(l.supplierId)) return false;
+      }
+      if (Array.isArray(filters.lotNos)) {
+        if (filters.lotNos.length === 0) return false;
+        if (!filters.lotNos.includes(l.lotNo)) return false;
+      }
+      if (filters.from && l.date && l.date < filters.from) return false;
+      if (filters.to && l.date && l.date > filters.to) return false;
+      if (Array.isArray(filters.statuses)) {
+        if (filters.statuses.length === 0) return false;
+        const status = l.statusType || 'active';
+        if (!filters.statuses.includes(status)) return false;
+      }
+      return true;
+    });
+    return sortLots(next, sortConfig);
+  }, [bobbinLots, filters, sortConfig]);
+  const bobbinSummaryLots = useMemo(() => {
+    try {
+      return aggregateLots(filteredBobbinLots);
+    } catch (err) {
+      console.error('aggregateLots failed for bobbin summary', err);
+      return filteredBobbinLots;
+    }
+  }, [filteredBobbinLots]);
 
   function toggleExpand(lotNo) { setExpandedLot(prev => (prev === lotNo ? null : lotNo)); }
 
@@ -410,9 +696,528 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
     const start = (page - 1) * pageSize;
     return displayedLots.slice(start, start + pageSize);
   }, [displayedLots, page, pageSize]);
+  useEffect(() => { setBobbinsPage(1); }, [filters, sortConfig, isSummaryView]);
+  const pagedBobbinLots = useMemo(() => {
+    const start = (bobbinsPage - 1) * pageSize;
+    return filteredBobbinLots.slice(start, start + pageSize);
+  }, [filteredBobbinLots, bobbinsPage, pageSize]);
+  const pagedBobbinSummaryLots = useMemo(() => {
+    const start = (bobbinsPage - 1) * pageSize;
+    return bobbinSummaryLots.slice(start, start + pageSize);
+  }, [bobbinSummaryLots, bobbinsPage, pageSize]);
+  const [rollsPage, setRollsPage] = useState(1);
+  useEffect(() => { setRollsPage(1); }, [filters, sortConfig]);
+  const filteredHoloLots = useMemo(() => {
+    const next = holoRollLots.filter((l) => {
+      if (Array.isArray(filters.itemIds)) {
+        if (filters.itemIds.length === 0) return false;
+        if (!filters.itemIds.includes(l.itemId)) return false;
+      }
+      if (Array.isArray(filters.firmIds)) {
+        if (filters.firmIds.length === 0) return false;
+        if (!filters.firmIds.includes(l.firmId)) return false;
+      }
+      if (Array.isArray(filters.supplierIds)) {
+        if (filters.supplierIds.length === 0) return false;
+        if (!filters.supplierIds.includes(l.supplierId)) return false;
+      }
+      if (Array.isArray(filters.twistIds)) {
+        if (filters.twistIds.length === 0) return false;
+        if (!filters.twistIds.includes(l.twistId)) return false;
+      }
+      if (Array.isArray(filters.lotNos)) {
+        if (filters.lotNos.length === 0) return false;
+        if (!filters.lotNos.includes(l.lotNo)) return false;
+      }
+      if (filters.from && l.date && l.date < filters.from) return false;
+      if (filters.to && l.date && l.date > filters.to) return false;
+      if (Array.isArray(filters.statuses)) {
+        if (filters.statuses.length === 0) return false;
+        const status = l.statusType || 'active';
+        if (!filters.statuses.includes(status)) return false;
+      }
+      return true;
+    });
+    return sortLots(next, sortConfig);
+  }, [holoRollLots, filters, sortConfig]);
 
-  return (
-    <div className="space-y-6">
+  const holoGroupSummaries = useMemo(() => {
+    const map = new Map();
+    filteredHoloLots.forEach((lot) => {
+      const key = `${lot.itemId || 'unknown'}::${lot.yarnId || 'none'}::${lot.twistId || 'none'}`;
+      const existing = map.get(key) || {
+        key,
+        itemId: lot.itemId || '',
+        itemName: lot.itemName || '—',
+        yarnId: lot.yarnId || '',
+        yarnName: lot.yarnName || '—',
+        twistId: lot.twistId || '',
+        twistName: lot.twistName || '—',
+        totalRolls: 0,
+        totalWeight: 0,
+        lots: [],
+      };
+      existing.totalRolls += Number.isFinite(lot.totalRolls) ? lot.totalRolls : 0;
+      existing.totalWeight += Number.isFinite(lot.totalWeight) ? lot.totalWeight : 0;
+      existing.lots.push(lot);
+      map.set(key, existing);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const itemCmp = compareValues(a.itemName || '', b.itemName || '');
+      if (itemCmp !== 0) return itemCmp;
+      const yarnCmp = compareValues(a.yarnName || '', b.yarnName || '');
+      if (yarnCmp !== 0) return yarnCmp;
+      return compareValues(a.twistName || '', b.twistName || '');
+    });
+  }, [filteredHoloLots]);
+  const pagedHoloGroups = useMemo(() => {
+    const start = (rollsPage - 1) * pageSize;
+    return holoGroupSummaries.slice(start, start + pageSize);
+  }, [holoGroupSummaries, rollsPage, pageSize]);
+  function InfoTooltip({ label }) {
+    return (
+      <div className="relative group inline-block">
+        <button
+          type="button"
+          className={`w-5 h-5 rounded-full border ${cls.cardBorder} ${cls.cardBg} text-xs btn-hover`}
+          aria-label="Info"
+        >
+          i
+        </button>
+        <div className="hidden group-hover:block absolute right-0 top-full mt-1 z-50">
+          <div className={`text-[11px] whitespace-nowrap px-2 py-1 rounded-md border ${cls.cardBorder} ${cls.cardBg} shadow-lg`} style={{ backgroundColor: 'rgba(17,24,39,0.95)' }}>
+            {label}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const showBobbins = isCutter && cutterView === 'bobbins';
+  useEffect(() => { setExpandedLot(null); }, [showBobbins]);
+
+  const bobbinView = (
+    <>
+      <Section title={null}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isSummaryView}
+              onClick={() => setIsSummaryView(v => !v)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsSummaryView(v => !v);
+                }
+              }}
+              className={`relative inline-flex h-8 w-16 items-center rounded-full border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)] ${
+                isSummaryView ? 'border-[var(--brand-primary)] bg-[var(--brand-primary)]/80' : `${cls.cardBorder} ${cls.cardBg}`
+              }`}
+            >
+              <span
+                className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                  isSummaryView ? 'translate-x-8' : 'translate-x-1'
+                }`}
+              />
+            </button>
+            <span className={`${cls.muted}`}>Summary view</span>
+          </div>
+        </div>
+
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                {isSummaryView ? (
+                  <>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Item</span>
+                        <ColumnFilter
+                          title="Filter by item"
+                          align="left"
+                          active={isFilterActive(filters.itemIds, itemOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Items"
+                              options={itemOptions}
+                              selectedValues={filters.itemIds}
+                              onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Firm</span>
+                        <ColumnFilter
+                          title="Filter by firm"
+                          active={isFilterActive(filters.firmIds, firmOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Firms"
+                              options={firmOptions}
+                              selectedValues={filters.firmIds}
+                              onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2">
+                      <div className="flex items-center gap-1">
+                        <span>Supplier</span>
+                        <ColumnFilter
+                          title="Filter by supplier"
+                          active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                        >
+                          {({ close }) => (
+                            <ValueFilterMenu
+                              title="Suppliers"
+                              options={supplierOptions}
+                              selectedValues={filters.supplierIds}
+                              onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                              close={close}
+                              currentSort={sortConfig}
+                              sortOptions={[
+                                { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                                { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                              ]}
+                            />
+                          )}
+                        </ColumnFilter>
+                      </div>
+                    </th>
+                    <th className="py-2 pr-2 text-right">Bobbins</th>
+                    <th className="py-2 pr-2 text-right">Weight</th>
+                    <th className="py-2 pr-2 text-right">Crates</th>
+                  </>
+                ) : (
+                  <>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Lot No</span>
+                    <ColumnFilter
+                      title="Filter by lot number"
+                      align="left"
+                      active={isFilterActive(filters.lotNos, lotOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Lot numbers"
+                          options={lotOptions}
+                          selectedValues={filters.lotNos}
+                          onApply={(next) => setFilters(f => ({ ...f, lotNos: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'lotNo', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'lotNo', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Item</span>
+                    <ColumnFilter
+                      title="Filter by item"
+                      active={isFilterActive(filters.itemIds, itemOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Items"
+                          options={itemOptions}
+                          selectedValues={filters.itemIds}
+                          onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Firm</span>
+                    <ColumnFilter
+                      title="Filter by firm"
+                      active={isFilterActive(filters.firmIds, firmOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Firms"
+                          options={firmOptions}
+                          selectedValues={filters.firmIds}
+                          onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Supplier</span>
+                    <ColumnFilter
+                      title="Filter by supplier"
+                      active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Suppliers"
+                          options={supplierOptions}
+                          selectedValues={filters.supplierIds}
+                          onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort (Newest first)', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2 text-right">
+                  <div className="flex items-center gap-1 justify-end">
+                    <span>Bobbins</span>
+                  </div>
+                </th>
+                <th className="py-2 pr-2 text-right">
+                  <div className="flex items-center gap-1 justify-end">
+                    <span>Weight</span>
+                  </div>
+                </th>
+                <th className="py-2 pr-2 text-right">
+                  <div className="flex items-center gap-1 justify-end">
+                    <span>Crates</span>
+                  </div>
+                </th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {(isSummaryView ? bobbinSummaryLots : filteredBobbinLots).length === 0 ? (
+                <tr><td colSpan={7} className="py-4">No lots match filters.</td></tr>
+              ) : (isSummaryView ? pagedBobbinSummaryLots : pagedBobbinLots).map((l, idx) => {
+                const rowKey = l.lotNo || `${l.itemName || ''}-${idx}`;
+                const lotsForPopover = l._sourceLots || [];
+                return (
+                  <React.Fragment key={rowKey}>
+                    <tr className={`border-t ${cls.rowBorder} align-top row-hover`} onClick={isSummaryView ? undefined : () => toggleExpand(l.lotNo)} style={{ cursor: isSummaryView ? 'default' : 'pointer' }}>
+                      {isSummaryView ? (
+                        <>
+                          <td className="py-2 pr-2 relative">
+                            <div className="flex items-center gap-2">
+                              <span>{l.itemName || l.name}</span>
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  title="Show lots"
+                                  onMouseEnter={() => {
+                                    if (hidePopoverTimeout.current) { clearTimeout(hidePopoverTimeout.current); hidePopoverTimeout.current = null; }
+                                    setHoveredSummaryKey(rowKey);
+                                  }}
+                                  onMouseLeave={() => {
+                                    hidePopoverTimeout.current = setTimeout(() => {
+                                      if (persistentOpenKey !== rowKey) setHoveredSummaryKey(null);
+                                    }, 160);
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (persistentOpenKey === rowKey) {
+                                      setPersistentOpenKey(null);
+                                      setHoveredSummaryKey(null);
+                                    } else {
+                                      setPersistentOpenKey(rowKey);
+                                      setHoveredSummaryKey(rowKey);
+                                    }
+                                  }}
+                                  className={`w-6 h-6 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover`}
+                                >
+                                  <span className="text-xs font-semibold">i</span>
+                                </button>
+                                {( (hoveredSummaryKey === rowKey) || (persistentOpenKey === rowKey) ) && lotsForPopover.length > 0 && (
+                                  <div className={`absolute right-0 top-full mt-1 z-50`} ref={popoverRef} onMouseEnter={() => {
+                                    if (hidePopoverTimeout.current) { clearTimeout(hidePopoverTimeout.current); hidePopoverTimeout.current = null; }
+                                    setHoveredSummaryKey(rowKey);
+                                  }} onMouseLeave={() => {
+                                    hidePopoverTimeout.current = setTimeout(() => {
+                                      if (persistentOpenKey !== rowKey) setHoveredSummaryKey(null);
+                                    }, 160);
+                                  }}>
+                                    <div className={`popover-panel ${theme === 'dark' ? 'text-white' : 'text-slate-900'} relative`}>
+                                      <button title="Apply lots" className={`apply-arrow border ${cls.cardBorder} ${cls.cardBg} btn-hover`} onClick={(e)=>{
+                                          e.stopPropagation();
+                                          const lotsToApply = Array.from(new Set(lotsForPopover || []));
+                                          setFilters(f => ({ ...f, lotNos: lotsToApply.length ? lotsToApply : [] }));
+                                          setIsSummaryView(false);
+                                          setPersistentOpenKey(null);
+                                        }}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+                                      </button>
+                                      <div className="text-xs font-medium mb-1">Lots</div>
+                                      <div className="lots-grid text-xs">
+                                        {(lotsForPopover || []).map((lotNoStr) => (
+                                          <div key={lotNoStr} className="lot-chip">{lotNoStr}</div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-2 pr-2">{(l._firms || []).join(', ') || l.firmName || '—'}</td>
+                          <td className="py-2 pr-2">{l.supplierName || l.supplier}</td>
+                          <td className="py-2 pr-2 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span>{l.availableBobbins ?? 0}</span>
+                              <InfoTooltip label={`Available: ${l.availableBobbins ?? 0} | Issued: ${l.issuedBobbins ?? 0} | Total: ${l.totalBobbins ?? 0}`} />
+                            </div>
+                          </td>
+                          <td className="py-2 pr-2 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span>{formatKg(l.availableWeight || 0)}</span>
+                              <InfoTooltip label={`Available: ${formatKg(l.availableWeight || 0)} | Issued: ${formatKg(l.issuedWeight || 0)} | Total: ${formatKg(l.totalWeight || 0)}`} />
+                            </div>
+                          </td>
+                          <td className="py-2 pr-2 text-right">{l.crateCount ?? 0}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="py-2 pr-2 font-medium">{l.lotNo}</td>
+                          <td className="py-2 pr-2">{l.itemName}</td>
+                          <td className="py-2 pr-2">{l.firmName}</td>
+                          <td className="py-2 pr-2">{l.supplierName}</td>
+                          <td className="py-2 pr-2 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span>{l.availableBobbins}</span>
+                              <InfoTooltip label={`Available: ${l.availableBobbins ?? 0} | Issued: ${l.issuedBobbins ?? 0} | Total: ${l.totalBobbins ?? 0}`} />
+                            </div>
+                          </td>
+                          <td className="py-2 pr-2 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span>{formatKg(l.availableWeight)}</span>
+                              <InfoTooltip label={`Available: ${formatKg(l.availableWeight || 0)} | Issued: ${formatKg(l.issuedWeight || 0)} | Total: ${formatKg(l.totalWeight || 0)}`} />
+                            </div>
+                          </td>
+                          <td className="py-2 pr-2 text-right">{l.crateCount ?? l.crates.length}</td>
+                        </>
+                      )}
+                    </tr>
+                    {!isSummaryView && expandedLot === l.lotNo && (
+                      <tr className={`border-t ${cls.rowBorder}`}>
+                        <td colSpan={7} className="p-3">
+                          <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
+                            <div className="mb-2 flex items-center gap-2">
+                              <Pill>Crates: {l.crateCount ?? l.crates.length}</Pill>
+                              <Pill>Available: {l.availableBobbins} bobbins</Pill>
+                              <Pill>Available weight: {formatKg(l.availableWeight)}</Pill>
+                            </div>
+                            <div className="overflow-auto">
+                              <table className="w-full text-sm">
+                                <thead className={`text-left ${cls.muted}`}>
+                                  <tr>
+                                    <th className="py-2 pr-2">Barcode</th>
+                                    <th className="py-2 pr-2">VchNo</th>
+                                    <th className="py-2 pr-2">Date</th>
+                                    <th className="py-2 pr-2">Bobbin</th>
+                                    <th className="py-2 pr-2 text-right">Bobbins (avail / issued / total)</th>
+                                    <th className="py-2 pr-2 text-right">Weight (avail / total)</th>
+                                    <th className="py-2 pr-2">Operator / Helper</th>
+                                    <th className="py-2 pr-2 text-right">Issued to Holo</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {l.crates.length === 0 ? (
+                                    <tr><td colSpan={8} className="py-3 pr-2">No crates for this lot.</td></tr>
+                                  ) : l.crates.map((crate) => {
+                                    const bobbinLabel = crate.bobbin?.name || crate.pcsTypeName || '—';
+                                    const bobbinWeight = crate.bobbin?.weight != null ? formatKg(crate.bobbin.weight) : null;
+                                    const boxWeight = crate.box?.weight != null ? formatKg(crate.box.weight) : null;
+                                    const operatorName = crate.operator?.name || crate.employee || '—';
+                                    const helperName = crate.helper?.name || null;
+                                    return (
+                                      <tr key={crate.id} className={`border-t ${cls.rowBorder}`}>
+                                        <td className="py-2 pr-2 font-mono">{crate.barcode || '—'}</td>
+                                        <td className="py-2 pr-2 font-mono">{crate.vchNo || '—'}</td>
+                                        <td className="py-2 pr-2">{crate.date || '—'}</td>
+                                        <td className="py-2 pr-2">
+                                          <div className="flex flex-col">
+                                            <span>{bobbinLabel}</span>
+                                            <span className={`text-xs ${cls.muted}`}>Bobbin wt: {bobbinWeight || '—'} {boxWeight ? `· Box: ${boxWeight}` : ''}</span>
+                                          </div>
+                                        </td>
+                                        <td className="py-2 pr-2 text-right">{`${crate.availableBobbins} / ${crate.issuedBobbins} / ${crate.bobbinQty || 0}`}</td>
+                                        <td className="py-2 pr-2 text-right">{`${formatKg(crate.availableWeight)} / ${formatKg(crate.netWeight)}`}</td>
+                                        <td className="py-2 pr-2">
+                                          <div>{operatorName}</div>
+                                          {helperName ? <div className={`text-xs ${cls.muted}`}>Helper: {helperName}</div> : null}
+                                        </td>
+                                        <td className="py-2 pr-2 text-right">{crate.issueRefCount ? `${crate.issueRefCount} time(s)` : '—'}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      <div className="mt-2">
+        <Pagination total={filteredBobbinLots.length} page={bobbinsPage} setPage={setBobbinsPage} pageSize={pageSize} />
+      </div>
+    </>
+  );
+
+  const jumboView = (
+    <>
       <Section title={null}>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2 text-sm">
@@ -857,10 +1662,35 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
                               const initialWeight = Number(l.totalWeight || 0);
                               const pendingWeightVal = Number(l.pendingWeight || 0);
                               return (
-                                <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Select</th><th className="py-2 pr-2">Piece ID</th><th className="py-2 pr-2">Barcode</th><th className="py-2 pr-2">Seq</th><th className="py-2 pr-2 text-right">Initial Weight (kg)</th><th className="py-2 pr-2 text-right">Pending Weight (kg)</th><th className="py-2 pr-2 text-right">Received Pcs</th></tr></thead>
+                                <table className="w-full text-sm">
+                                  <thead className={`text-left ${cls.muted}`}>
+                                    <tr>
+                                      <th className="py-2 pr-2">Select</th>
+                                      <th className="py-2 pr-2">Piece ID</th>
+                                      <th className="py-2 pr-2">Barcode</th>
+                                      <th className="py-2 pr-2">Seq</th>
+                                      <th className="py-2 pr-2 text-right">Initial Weight (kg)</th>
+                                      <th className="py-2 pr-2 text-right">Pending Weight (kg)</th>
+                                      <th className="py-2 pr-2 text-right">Received {unitLabelPlural}</th>
+                                    </tr>
+                                  </thead>
                                   <tbody>
-                                    {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p=> (
-                                      <PieceRow key={p.id} p={p} lotNo={l.lotNo} selected={(selectedByLot[l.lotNo]||[]).includes(p.id)} onToggle={() => togglePiece(l.lotNo, p.id)} onSaved={() => { refreshDb().catch(()=>{}); }} initialWeight={initialWeight} pendingWeight={p.pendingWeight ?? 0} isIssued={issuedPieceIds.has(p.id)} wastageWeight={p.wastageWeight || 0} totalPieces={p.totalPieces || 0} onMarkWastage={handleMarkWastage} isMarking={markingPieces.has(p.id)} />
+                                    {(l.pieces||[]).sort((a,b)=> a.seq - b.seq).map(p => (
+                                      <PieceRow
+                                        key={p.id}
+                                        p={p}
+                                        lotNo={l.lotNo}
+                                        selected={(selectedByLot[l.lotNo]||[]).includes(p.id)}
+                                        onToggle={() => togglePiece(l.lotNo, p.id)}
+                                        onSaved={() => { refreshDb().catch(()=>{}); }}
+                                        initialWeight={initialWeight}
+                                        pendingWeight={p.pendingWeight ?? 0}
+                                        isIssued={issuedPieceIds.has(p.id)}
+                                        wastageWeight={p.wastageWeight || 0}
+                                        totalUnits={p.totalUnits || 0}
+                                        onMarkWastage={handleMarkWastage}
+                                        isMarking={markingPieces.has(p.id)}
+                                      />
                                     ))}
                                   </tbody>
                                 </table>
@@ -959,6 +1789,273 @@ export function Stock({ db, onIssueToMachine, refreshing, refreshDb }) {
           </div>
         </div>
       )}
+    </>
+  );
+
+  const holoRollsView = (
+    <>
+      <Section title={null}>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Item</span>
+                    <ColumnFilter
+                      title="Filter by item"
+                      active={isFilterActive(filters.itemIds, itemOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Items"
+                          options={itemOptions}
+                          selectedValues={filters.itemIds}
+                          onApply={(next) => setFilters(f => ({ ...f, itemIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'itemName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'itemName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Yarn</span>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Twist</span>
+                    <ColumnFilter
+                      title="Filter by twist"
+                      active={isFilterActive(filters.twistIds, twistOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Twists"
+                          options={twistOptions}
+                          selectedValues={filters.twistIds}
+                          onApply={(next) => setFilters(f => ({ ...f, twistIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'twistName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'twistName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Firm</span>
+                    <ColumnFilter
+                      title="Filter by firm"
+                      active={isFilterActive(filters.firmIds, firmOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Firms"
+                          options={firmOptions}
+                          selectedValues={filters.firmIds}
+                          onApply={(next) => setFilters(f => ({ ...f, firmIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'firmName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'firmName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2">
+                  <div className="flex items-center gap-1">
+                    <span>Supplier</span>
+                    <ColumnFilter
+                      title="Filter by supplier"
+                      active={isFilterActive(filters.supplierIds, supplierOptions.length)}
+                    >
+                      {({ close }) => (
+                        <ValueFilterMenu
+                          title="Suppliers"
+                          options={supplierOptions}
+                          selectedValues={filters.supplierIds}
+                          onApply={(next) => setFilters(f => ({ ...f, supplierIds: next === null ? null : next }))}
+                          close={close}
+                          currentSort={sortConfig}
+                          sortOptions={[
+                            { key: 'supplierName', direction: 'asc', label: 'Sort A to Z', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: 'supplierName', direction: 'desc', label: 'Sort Z to A', onChange: ({ key, direction }) => setSortConfig({ key, direction }) },
+                            { key: DEFAULT_SORT.key, direction: DEFAULT_SORT.direction, label: 'Reset sort', onChange: () => setSortConfig({ ...DEFAULT_SORT }) },
+                          ]}
+                        />
+                      )}
+                    </ColumnFilter>
+                  </div>
+                </th>
+                <th className="py-2 pr-2 text-right">Rolls</th>
+                <th className="py-2 pr-2 text-right">Net Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              {holoGroupSummaries.length === 0 ? (
+                <tr><td colSpan={7} className="py-4">No lots match filters.</td></tr>
+              ) : pagedHoloGroups.map((group) => (
+                <React.Fragment key={group.key}>
+                  <tr className={`border-t ${cls.rowBorder} align-top row-hover`} onClick={() => toggleExpand(group.key)} style={{ cursor: 'pointer' }}>
+                    <td className="py-2 pr-2 font-medium">{group.itemName}</td>
+                    <td className="py-2 pr-2">{group.yarnName}</td>
+                    <td className="py-2 pr-2">{group.twistName}</td>
+                    <td className="py-2 pr-2">{group.lots[0]?.firmName || '—'}</td>
+                    <td className="py-2 pr-2">{group.lots[0]?.supplierName || '—'}</td>
+                    <td className="py-2 pr-2 text-right">{group.totalRolls}</td>
+                    <td className="py-2 pr-2 text-right">{formatKg(group.totalWeight)}</td>
+                  </tr>
+                  {expandedLot === group.key && (
+                    <tr className={`border-t ${cls.rowBorder}`}>
+                      <td colSpan={7} className="p-3">
+                        <div className={`p-3 rounded-xl border ${cls.cardBorder} ${cls.cardBg}`}>
+                          <div className="mb-2 flex items-center gap-2">
+                            <Pill>Lots: {group.lots.length}</Pill>
+                            <Pill>Rolls: {group.totalRolls}</Pill>
+                            <Pill>Weight: {formatKg(group.totalWeight)}</Pill>
+                          </div>
+                          <div className="overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead className={`text-left ${cls.muted}`}>
+                                <tr>
+                                  <th className="py-2 pr-2">Lot</th>
+                                  <th className="py-2 pr-2 text-right">Rolls</th>
+                                  <th className="py-2 pr-2 text-right">Net Weight</th>
+                                  <th className="py-2 pr-2 text-right">Receipts</th>
+                                  <th className="py-2 pr-2">Last Issue</th>
+                                  <th className="py-2 pr-2">Last Receive</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.lots.length === 0 ? (
+                                  <tr><td colSpan={6} className="py-3 pr-2">No holo receipts for this group.</td></tr>
+                                ) : group.lots.map((lot) => (
+                                  <tr key={lot.lotNo} className={`border-t ${cls.rowBorder}`}>
+                                    <td className="py-2 pr-2 font-mono">{lot.lotNo}</td>
+                                    <td className="py-2 pr-2 text-right">{lot.totalRolls}</td>
+                                    <td className="py-2 pr-2 text-right">{formatKg(lot.totalWeight)}</td>
+                                    <td className="py-2 pr-2 text-right">{lot.receiptCount}</td>
+                                    <td className="py-2 pr-2 font-mono">{lot.rows?.[0]?.issueBarcode || '—'}</td>
+                                    <td className="py-2 pr-2">{lot.rows?.[0]?.date || lot.date || '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="mt-4 overflow-auto">
+                            <table className="w-full text-sm">
+                              <thead className={`text-left ${cls.muted}`}>
+                                <tr>
+                                  <th className="py-2 pr-2">Barcode</th>
+                                  <th className="py-2 pr-2">Date</th>
+                                  <th className="py-2 pr-2">Roll Type / Box</th>
+                                  <th className="py-2 pr-2 text-right">Rolls</th>
+                                  <th className="py-2 pr-2 text-right">Net / Gross</th>
+                                  <th className="py-2 pr-2">Machine / Operators</th>
+                                  <th className="py-2 pr-2">Issued to Coning</th>
+                                  <th className="py-2 pr-2">Issue Ref</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.lots.flatMap(l => l.rows || []).length === 0 ? (
+                                  <tr><td colSpan={8} className="py-3 pr-2">No holo receipts for this group.</td></tr>
+                                ) : group.lots.flatMap(l => l.rows || []).map((row) => {
+                                  const rollType = row.rollType?.name || '—';
+                                  const boxLabel = row.box?.name ? `${row.box.name}${row.box.weight ? ` (${formatKg(row.box.weight)})` : ''}` : '—';
+                                  const operatorName = row.operator?.name || '—';
+                                  const helperName = row.helper?.name || null;
+                                  return (
+                                    <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                                      <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
+                                      <td className="py-2 pr-2">{row.date || '—'}</td>
+                                      <td className="py-2 pr-2">
+                                        <div className="flex flex-col">
+                                          <span>{rollType}</span>
+                                          <span className={`text-xs ${cls.muted}`}>Box: {boxLabel}</span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">{row.rollCount ?? 0}</td>
+                                      <td className="py-2 pr-2 text-right">
+                                        <div className="flex flex-col items-end">
+                                          <span>{formatKg(row.rollWeight)}</span>
+                                          {row.grossWeight != null ? <span className={`text-xs ${cls.muted}`}>Gross: {formatKg(row.grossWeight)}{row.tareWeight != null ? ` · Tare: ${formatKg(row.tareWeight)}` : ''}</span> : null}
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-2">
+                                        <div>{row.machineNo || '—'}</div>
+                                        <div className={`text-xs ${cls.muted}`}>{operatorName}{helperName ? ` · Helper: ${helperName}` : ''}</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">{row.issueRefCount ? `${row.issueRefCount} time(s)` : '—'}</td>
+                                      <td className="py-2 pr-2">
+                                        {row.issueBarcode ? (
+                                          <div className="flex flex-col">
+                                            <span className="font-mono">{row.issueBarcode}</span>
+                                            <span className={`text-xs ${cls.muted}`}>{row.issueDate || ''}</span>
+                                          </div>
+                                        ) : '—'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      <div className="mt-2">
+        <Pagination total={holoGroupSummaries.length} page={rollsPage} setPage={setRollsPage} pageSize={pageSize} />
+      </div>
+    </>
+  );
+
+  const tabSwitcher = !isCutter ? null : (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setCutterView('jumbo')}
+        className={`px-3 py-2 rounded-lg border ${cls.cardBorder} ${cutterView === 'jumbo' ? 'bg-[var(--brand-primary)]/20' : cls.cardBg} btn-hover`}
+      >
+        Jumbo Rolls
+      </button>
+      <button
+        type="button"
+        onClick={() => setCutterView('bobbins')}
+        className={`px-3 py-2 rounded-lg border ${cls.cardBorder} ${cutterView === 'bobbins' ? 'bg-[var(--brand-primary)]/20' : cls.cardBg} btn-hover`}
+      >
+        Bobbins
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      {tabSwitcher}
+      {isHolo ? holoRollsView : (showBobbins ? bobbinView : jumboView)}
     </div>
   );
 }

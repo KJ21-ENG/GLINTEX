@@ -7,10 +7,94 @@ import { useBrand } from '../context';
 import { Section, Button, SecondaryButton, Input, Select, Pill, Pagination } from '../components';
 import { IssueHistory } from './IssueHistory';
 import { formatKg, todayISO } from '../utils';
+import { getProcessDefinition } from '../constants/processes';
 import * as api from '../api';
 
-export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) {
+const ensureArray = (value) => (Array.isArray(value) ? value : []);
+const normalizeBarcode = (value = '') => String(value || '').trim().toUpperCase();
+const safeNumber = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
+const parseNum = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, process = 'cutter' }) {
   const { cls } = useBrand();
+  const processDef = getProcessDefinition(process);
+  const isCutter = process === 'cutter';
+  const isHolo = process === 'holo';
+  const isConing = process === 'coning';
+  const issueList = ensureArray(db[processDef.issueKey]);
+  const yarnMap = useMemo(() => {
+    const map = new Map();
+    (db.yarns || []).forEach((yarn) => {
+      if (yarn?.id) map.set(yarn.id, yarn);
+    });
+    return map;
+  }, [db.yarns]);
+  const twistMap = useMemo(() => {
+    const map = new Map();
+    (db.twists || []).forEach((twist) => {
+      if (twist?.id) map.set(twist.id, twist);
+    });
+    return map;
+  }, [db.twists]);
+  const machineMap = useMemo(() => {
+    const map = new Map();
+    (db.machines || []).forEach((m) => { if (m?.id) map.set(m.id, m); });
+    return map;
+  }, [db.machines]);
+  const operatorMap = useMemo(() => {
+    const map = new Map();
+    (db.operators || []).forEach((op) => { if (op?.id) map.set(op.id, op); });
+    return map;
+  }, [db.operators]);
+  const coneTypeMap = useMemo(() => {
+    const map = new Map();
+    (db.cone_types || []).forEach((ct) => { if (ct?.id) map.set(ct.id, ct); });
+    return map;
+  }, [db.cone_types]);
+  const wrapperMap = useMemo(() => {
+    const map = new Map();
+    (db.wrappers || []).forEach((w) => { if (w?.id) map.set(w.id, w); });
+    return map;
+  }, [db.wrappers]);
+  const boxMap = useMemo(() => {
+    const map = new Map();
+    (db.boxes || []).forEach((b) => { if (b?.id) map.set(b.id, b); });
+    return map;
+  }, [db.boxes]);
+  const yarns = Array.isArray(db.yarns) ? db.yarns : [];
+  const twists = Array.isArray(db.twists) ? db.twists : [];
+  const totalUnitsIssued = issueList.reduce((sum, issue) => {
+    if (process === 'holo') return sum + Number(issue.metallicBobbins || 0);
+    if (process === 'coning') return sum + Number(issue.rollsIssued || 0);
+    return sum;
+  }, 0);
+  const [holoForm, setHoloForm] = useState({
+    date: todayISO(),
+    machineId: '',
+    operatorId: '',
+    yarnId: '',
+    yarnKg: '',
+    twistId: '',
+    note: '',
+  });
+  const [coningForm, setConingForm] = useState({
+    date: todayISO(),
+    machineId: '',
+    operatorId: '',
+    coneTypeId: '',
+    wrapperId: '',
+    boxId: '',
+    requiredPerConeNetWeight: '',
+    note: '',
+  });
+  const [holoSubmitting, setHoloSubmitting] = useState(false);
+  const [coningSubmitting, setConingSubmitting] = useState(false);
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
   const [machineId, setMachineId] = useState("");
@@ -22,6 +106,12 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
   const [barcodeScan, setBarcodeScan] = useState('');
   const [scanLoading, setScanLoading] = useState(false);
   const piecePageSize = 50;
+  const [holoCrates, setHoloCrates] = useState([]);
+  const [holoScanInput, setHoloScanInput] = useState('');
+  const [holoScanError, setHoloScanError] = useState('');
+  const [coningCrates, setConingCrates] = useState([]);
+  const [coningScanInput, setConingScanInput] = useState('');
+  const [coningScanError, setConingScanError] = useState('');
 
   useEffect(() => {
     if (db.items.length && !db.items.some(i => i.id === itemId)) {
@@ -40,6 +130,32 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
       setOperatorId("");
     }
   }, [db.operators, operatorId]);
+
+  useEffect(() => {
+    if (!isHolo) return;
+    if (yarns.length === 0) {
+      if (holoForm.yarnId) {
+        setHoloForm(prev => ({ ...prev, yarnId: '' }));
+      }
+      return;
+    }
+    if (holoForm.yarnId && !yarns.some(y => y.id === holoForm.yarnId)) {
+      setHoloForm(prev => ({ ...prev, yarnId: '' }));
+    }
+  }, [yarns, holoForm.yarnId, isHolo]);
+
+  useEffect(() => {
+    if (!isHolo) return;
+    if (twists.length === 0) {
+      if (holoForm.twistId) {
+        setHoloForm(prev => ({ ...prev, twistId: '' }));
+      }
+      return;
+    }
+    if (holoForm.twistId && !twists.some(t => t.id === holoForm.twistId)) {
+      setHoloForm(prev => ({ ...prev, twistId: '' }));
+    }
+  }, [twists, holoForm.twistId, isHolo]);
 
   const candidateLots = useMemo(() => {
     const parse = (s) => (s && typeof s === 'string') ? s : '';
@@ -84,9 +200,113 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     .sort((a,b)=> a.seq - b.seq), [db.inbound_items, lotNo, itemId]);
 
   const lastIssueForLot = useMemo(() => {
-    const rows = db.issue_to_machine.filter(record => record.lotNo === lotNo).sort((a,b)=> b.date.localeCompare(a.date));
+    const rows = db.issue_to_cutter_machine.filter(record => record.lotNo === lotNo).sort((a,b)=> b.date.localeCompare(a.date));
     return rows[0] || null;
-  }, [db.issue_to_machine, lotNo]);
+  }, [db.issue_to_cutter_machine, lotNo]);
+
+  const inboundPieceMap = useMemo(() => {
+    const map = new Map();
+    db.inbound_items.forEach(piece => {
+      if (piece?.id) map.set(piece.id, piece);
+    });
+    return map;
+  }, [db.inbound_items]);
+
+  const itemMap = useMemo(() => {
+    const map = new Map();
+    db.items.forEach(item => {
+      if (item?.id) map.set(item.id, item);
+    });
+    return map;
+  }, [db.items]);
+
+  const receiveRowById = useMemo(() => {
+    const map = new Map();
+    db.receive_from_cutter_machine_rows.forEach(row => {
+      if (row?.id) map.set(row.id, row);
+    });
+    return map;
+  }, [db.receive_from_cutter_machine_rows]);
+
+  const receiveRowByBarcode = useMemo(() => {
+    const map = new Map();
+    db.receive_from_cutter_machine_rows.forEach(row => {
+      if (row?.barcode) {
+        map.set(normalizeBarcode(row.barcode), row);
+      }
+    });
+    return map;
+  }, [db.receive_from_cutter_machine_rows]);
+  const holoReceiveRowByBarcode = useMemo(() => {
+    const map = new Map();
+    db.receive_from_holo_machine_rows.forEach(row => {
+      if (row?.barcode) {
+        map.set(normalizeBarcode(row.barcode), row);
+      }
+    });
+    return map;
+  }, [db.receive_from_holo_machine_rows]);
+  const coningIssuedMap = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_coning_machine || []).forEach((issue) => {
+      const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+      refs.forEach((ref) => {
+        const id = ref?.rowId || ref?.id;
+        const rolls = Number(ref?.issueRolls ?? ref?.rollsIssued ?? 0);
+        if (!id || !Number.isFinite(rolls)) return;
+        map.set(id, (map.get(id) || 0) + rolls);
+      });
+    });
+    return map;
+  }, [db.issue_to_coning_machine]);
+  const holoDerivedMeta = useMemo(() => {
+    const lotSet = new Set();
+    const itemSet = new Set();
+    holoCrates.forEach(crate => {
+      if (crate.lotNo) lotSet.add(crate.lotNo);
+      if (crate.itemId) itemSet.add(crate.itemId);
+    });
+    return {
+      lotNo: lotSet.size === 1 ? Array.from(lotSet)[0] : '',
+      itemId: itemSet.size === 1 ? Array.from(itemSet)[0] : '',
+      lotConflict: lotSet.size > 1,
+      itemConflict: itemSet.size > 1,
+    };
+  }, [holoCrates]);
+
+  const holoTotals = useMemo(() => {
+    return holoCrates.reduce((acc, crate) => {
+      acc.totalRolls += Number(crate.issuedBobbins || 0);
+      acc.totalWeight += Number(crate.issuedBobbinWeight || 0);
+      return acc;
+    }, { totalRolls: 0, totalWeight: 0 });
+  }, [holoCrates]);
+
+  const coningMeta = useMemo(() => {
+    const lotSet = new Set();
+    const itemSet = new Set();
+    coningCrates.forEach((crate) => {
+      if (crate.lotNo) lotSet.add(crate.lotNo);
+      if (crate.itemId) itemSet.add(crate.itemId);
+    });
+    const totalRolls = coningCrates.reduce((sum, c) => sum + (Number(c.rollCount) || 0), 0);
+    const totalNet = coningCrates.reduce((sum, c) => sum + (Number(c.issueWeight) || 0), 0);
+    return {
+      lotNo: lotSet.size === 1 ? Array.from(lotSet)[0] : '',
+      itemId: itemSet.size === 1 ? Array.from(itemSet)[0] : '',
+      lotConflict: lotSet.size > 1,
+      itemConflict: itemSet.size > 1,
+      totalRolls,
+      totalNet,
+    };
+  }, [coningCrates]);
+  const coningExpectedCones = useMemo(() => {
+    const perConeGram = parseNum(coningForm.requiredPerConeNetWeight);
+    if (!perConeGram || perConeGram <= 0) return '';
+    if (!Number.isFinite(coningMeta.totalNet) || coningMeta.totalNet <= 0) return '';
+    const expected = (coningMeta.totalNet * 1000) / perConeGram; // total net (kg) -> grams
+    return Math.floor(expected);
+  }, [coningForm.requiredPerConeNetWeight, coningMeta.totalNet]);
 
   function toggle(id) {
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -115,6 +335,180 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     }
   }
 
+  function addHoloCrateFromScan() {
+    if (!isHolo) return;
+    const normalized = normalizeBarcode(holoScanInput);
+    if (!normalized) {
+      setHoloScanError('Enter or scan a receive barcode');
+      return;
+    }
+    const row = receiveRowByBarcode.get(normalized);
+    if (!row) {
+      setHoloScanError('Barcode not found in the latest receive rows. Refresh data and try again.');
+      return;
+    }
+    if (holoCrates.some(crate => crate.rowId === row.id)) {
+      setHoloScanError('Crate already added');
+      return;
+    }
+    const piece = row.pieceId ? inboundPieceMap.get(row.pieceId) : null;
+    if (!piece) {
+      setHoloScanError('Crate is missing the linked inbound piece. Refresh and try again.');
+      return;
+    }
+    const lotNo = piece.lotNo || row.lotNo || '';
+    const itemIdForRow = piece.itemId || '';
+    if (holoCrates.length > 0) {
+      const referenceLot = holoDerivedMeta.lotNo || holoCrates[0].lotNo;
+      const referenceItem = holoDerivedMeta.itemId || holoCrates[0].itemId;
+      if (referenceLot && lotNo && referenceLot !== lotNo) {
+        setHoloScanError('This crate belongs to a different lot. Issue lot-by-lot.');
+        return;
+      }
+      if (referenceItem && itemIdForRow && referenceItem !== itemIdForRow) {
+        setHoloScanError('This crate belongs to a different item.');
+        return;
+      }
+    }
+    const baseBobbins = Number(row.bobbinQuantity || 0);
+    const previouslyIssued = Number(row.issuedBobbins || 0);
+    const remainingBobbins = Number.isFinite(baseBobbins) ? Math.max(0, baseBobbins - previouslyIssued) : 0;
+    const defaultBobbins = remainingBobbins > 0 ? remainingBobbins : (baseBobbins > 0 ? baseBobbins : '');
+    const netWeightRaw = safeNumber(row.netWt ?? row.totalKg ?? row.yarnWt);
+    const previouslyIssuedWeight = safeNumber(row.issuedBobbinWeight);
+    const remainingWeight = Number.isFinite(netWeightRaw) ? Math.max(0, netWeightRaw - previouslyIssuedWeight) : 0;
+    const perBobbinWeight = (() => {
+      const referenceBobbins = remainingBobbins > 0 ? remainingBobbins : (Number.isFinite(baseBobbins) ? baseBobbins : 0);
+      if (referenceBobbins <= 0) return 0;
+      const referenceWeight = remainingWeight > 0 ? remainingWeight : (netWeightRaw > 0 ? netWeightRaw : 0);
+      if (!Number.isFinite(referenceWeight) || referenceWeight <= 0) return 0;
+      return referenceWeight / referenceBobbins;
+    })();
+    const defaultWeight = Number.isFinite(perBobbinWeight) && perBobbinWeight > 0
+      ? Number((perBobbinWeight * (Number(defaultBobbins) || 0)).toFixed(3))
+      : (remainingWeight > 0 ? remainingWeight : (netWeightRaw > 0 ? netWeightRaw : ''));
+    const crate = {
+      rowId: row.id,
+      barcode: row.barcode || normalized,
+      vchNo: row.vchNo || '',
+      pieceId: row.pieceId,
+      lotNo,
+      itemId: itemIdForRow,
+      bobbinQuantity: Number.isFinite(baseBobbins) ? baseBobbins : null,
+      rowIssuedBobbins: Number.isFinite(previouslyIssued) ? previouslyIssued : 0,
+      rowIssuedWeight: Number.isFinite(previouslyIssuedWeight) ? previouslyIssuedWeight : 0,
+      availableBobbins: remainingBobbins,
+      availableWeight: remainingWeight,
+      perBobbinWeight,
+      issuedBobbins: defaultBobbins,
+      issuedBobbinWeight: defaultWeight,
+      netWeight: netWeightRaw,
+    };
+    setHoloCrates(prev => [...prev, crate]);
+    setHoloScanInput('');
+    setHoloScanError('');
+  }
+
+  function addConingCrateFromScan() {
+    if (!isConing) return;
+    const normalized = normalizeBarcode(coningScanInput);
+    if (!normalized) {
+      setConingScanError('Enter or scan a holo receive barcode');
+      return;
+    }
+    const row = holoReceiveRowByBarcode.get(normalized);
+    if (!row) {
+      setConingScanError('Barcode not found in recent holo receipts. Refresh data and try again.');
+      return;
+    }
+    if (coningCrates.some(crate => crate.rowId === row.id)) {
+      setConingScanError('Crate already added');
+      return;
+    }
+    const issueMeta = row.issue || {};
+    const lotNo = issueMeta.lotNo || '';
+    const itemIdForRow = issueMeta.itemId || '';
+    if (coningCrates.length > 0) {
+      const referenceLot = coningMeta.lotNo || coningCrates[0].lotNo;
+      const referenceItem = coningMeta.itemId || coningCrates[0].itemId;
+      if (referenceLot && lotNo && referenceLot !== lotNo) {
+        setConingScanError('This crate belongs to a different lot. Issue lot-by-lot.');
+        return;
+      }
+      if (referenceItem && itemIdForRow && referenceItem !== itemIdForRow) {
+        setConingScanError('This crate belongs to a different item.');
+        return;
+      }
+    }
+
+    const alreadyIssued = coningIssuedMap.get(row.id) || 0;
+    const baseRolls = Number(row.rollCount || 0);
+    const baseWeight = Number(row.rollWeight || 0);
+    const remainingRolls = Math.max(0, baseRolls - alreadyIssued);
+    if (remainingRolls <= 0) {
+      setConingScanError('No rolls remaining in this crate');
+      return;
+    }
+    const perRoll = baseRolls > 0 && Number.isFinite(baseWeight) ? baseWeight / baseRolls : 0;
+    const defaultIssueRolls = remainingRolls;
+    const crate = {
+      rowId: row.id,
+      barcode: row.barcode || normalized,
+      lotNo,
+      itemId: itemIdForRow,
+      rollCount: baseRolls,
+      issueRolls: defaultIssueRolls,
+      issueWeight: Number((perRoll * defaultIssueRolls).toFixed(3)),
+      baseRolls,
+      baseWeight,
+      issuedSoFar: alreadyIssued,
+      remainingRolls,
+    };
+    setConingCrates(prev => [...prev, crate]);
+    setConingScanInput('');
+    setConingScanError('');
+  }
+
+  function updateConingCrate(rowId, field, value) {
+    setConingCrates(prev => prev.map(c => {
+      if (c.rowId !== rowId) return c;
+      const next = { ...c, [field]: value };
+      if (field === 'issueRolls') {
+        const rolls = parseNum(value) || 0;
+        const perRoll = (Number(c.baseWeight) || 0) / Math.max(1, Number(c.baseRolls) || 1);
+        next.issueWeight = Number((perRoll * rolls).toFixed(3));
+      }
+      return next;
+    }));
+  }
+
+  function removeHoloCrate(rowId) {
+    setHoloCrates(prev => prev.filter(crate => crate.rowId !== rowId));
+  }
+
+  function updateHoloCrate(rowId, field, rawValue) {
+    if (field !== 'issuedBobbins') return;
+    setHoloCrates(prev => prev.map(crate => {
+      if (crate.rowId !== rowId) return crate;
+      if (rawValue === '') {
+        return { ...crate, issuedBobbins: '', issuedBobbinWeight: '' };
+      }
+      const num = Number(rawValue);
+      if (!Number.isFinite(num)) return crate;
+      const maxValue = Number.isFinite(crate.availableBobbins) && crate.availableBobbins > 0
+        ? crate.availableBobbins
+        : num;
+      const clamped = Math.max(0, Math.min(num, maxValue));
+      const perBobbin = Number.isFinite(crate.perBobbinWeight) ? crate.perBobbinWeight : 0;
+      const computedWeight = perBobbin > 0 ? Number((perBobbin * clamped).toFixed(3)) : (clamped && crate.netWeight && crate.bobbinQuantity ? Number(((crate.netWeight / crate.bobbinQuantity) * clamped).toFixed(3)) : 0);
+      return {
+        ...crate,
+        issuedBobbins: clamped,
+        issuedBobbinWeight: computedWeight,
+      };
+    }));
+  }
+
   async function issue() {
     if (!date || !itemId || !lotNo || !machineId || !operatorId || selected.length===0) return;
     const availSet = new Set(availablePieces.map(p=>p.id));
@@ -136,6 +530,603 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb }) 
     } finally {
       setIssuing(false);
     }
+  }
+
+  useEffect(() => {
+    if (!isHolo) return;
+    setHoloForm(f => ({
+      ...f,
+      date: todayISO(),
+      machineId: '',
+      operatorId: '',
+      yarnKg: '',
+      note: '',
+    }));
+    setHoloCrates([]);
+    setHoloScanInput('');
+    setHoloScanError('');
+  }, [isHolo]);
+
+  useEffect(() => {
+    if (!isConing) return;
+    setConingForm({
+      date: todayISO(),
+      machineId: '',
+      operatorId: '',
+      coneTypeId: '',
+      wrapperId: '',
+      boxId: '',
+      requiredPerConeNetWeight: '',
+      note: '',
+    });
+    setConingCrates([]);
+    setConingScanInput('');
+    setConingScanError('');
+  }, [isConing]);
+
+  async function handleHoloSubmit(e) {
+    e.preventDefault();
+    if (!holoForm.date) {
+      window.alert('Select a date');
+      return;
+    }
+    if (!holoForm.operatorId) {
+      window.alert('Select an operator');
+      return;
+    }
+    if (!holoForm.machineId) {
+      window.alert('Select a machine');
+      return;
+    }
+    if (!holoForm.yarnId) {
+      window.alert('Select a yarn quality');
+      return;
+    }
+    if (!holoForm.twistId) {
+      window.alert('Select a twist');
+      return;
+    }
+    if (holoCrates.length === 0) {
+      window.alert('Scan at least one crate');
+      return;
+    }
+    if (holoDerivedMeta.lotConflict || holoDerivedMeta.itemConflict) {
+      window.alert('Remove crates from other lots/items before issuing.');
+      return;
+    }
+    if (!holoDerivedMeta.lotNo || !holoDerivedMeta.itemId) {
+      window.alert('Crate metadata missing lot or item information. Refresh data and retry.');
+      return;
+    }
+    if (holoCrates.some(crate => Number(crate.issuedBobbins || 0) <= 0)) {
+      window.alert('Enter bobbin quantity for every scanned crate');
+      return;
+    }
+    if (holoTotals.totalRolls <= 0) {
+      window.alert('Total bobbins must be greater than zero');
+      return;
+    }
+    setHoloSubmitting(true);
+    try {
+      await api.createIssueToHoloMachine({
+        date: holoForm.date,
+        itemId: holoDerivedMeta.itemId,
+        lotNo: holoDerivedMeta.lotNo,
+        machineId: holoForm.machineId || null,
+        operatorId: holoForm.operatorId || null,
+        yarnId: holoForm.yarnId || null,
+        twistId: holoForm.twistId || null,
+        metallicBobbins: holoTotals.totalRolls,
+        metallicBobbinsWeight: holoTotals.totalWeight,
+        yarnKg: holoForm.yarnKg ? Number(holoForm.yarnKg) : holoTotals.totalWeight,
+        note: holoForm.note || null,
+        crates: holoCrates.map(crate => ({
+          rowId: crate.rowId,
+          issuedBobbins: Number(crate.issuedBobbins || 0),
+          issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
+        })),
+      });
+      window.alert('Issued to Holo machine');
+      await refreshDb();
+      setHoloForm(f => ({
+        ...f,
+        date: todayISO(),
+        machineId: '',
+        operatorId: '',
+        yarnId: '',
+        twistId: '',
+        yarnKg: '',
+        note: '',
+      }));
+      setHoloCrates([]);
+      setHoloScanInput('');
+      setHoloScanError('');
+    } catch (err) {
+      console.error('Failed to issue to holo', err);
+      window.alert(err.message || 'Failed to issue to Holo machine');
+    } finally {
+      setHoloSubmitting(false);
+    }
+  }
+
+  async function handleConingSubmit(e) {
+    e.preventDefault();
+    if (!coningForm.date) return window.alert('Date is required');
+    if (!coningForm.operatorId) return window.alert('Select an operator');
+    if (!coningForm.machineId) return window.alert('Select a machine');
+    if (!coningForm.coneTypeId) return window.alert('Select a cone type');
+    if (!coningForm.wrapperId) return window.alert('Select a wrapper');
+    if (!coningForm.boxId) return window.alert('Select a box');
+    const perConeNetGram = parseNum(coningForm.requiredPerConeNetWeight);
+    if (!perConeNetGram || perConeNetGram <= 0) return window.alert('Enter required per-cone net weight (grams)');
+    if (coningCrates.length === 0) return window.alert('Scan at least one holo crate');
+    if (coningMeta.lotConflict || coningMeta.itemConflict) {
+      return window.alert('Remove crates from other lots/items before issuing.');
+    }
+    if (!coningMeta.lotNo || !coningMeta.itemId) {
+      return window.alert('Crates are missing lot/item data.');
+    }
+    if (coningCrates.some(c => parseNum(c.issueRolls) == null || parseNum(c.issueRolls) <= 0)) {
+      return window.alert('Enter issue rolls for each crate.');
+    }
+    const expectedCones = perConeNetGram > 0 && coningMeta.totalNet > 0
+      ? Math.floor((coningMeta.totalNet * 1000) / perConeNetGram)
+      : 0;
+    setConingSubmitting(true);
+    try {
+      await api.createIssueToConingMachine({
+        date: coningForm.date,
+        machineId: coningForm.machineId || null,
+        operatorId: coningForm.operatorId || null,
+        note: coningForm.note || null,
+        requiredPerConeNetWeight: perConeNetGram,
+        expectedCones,
+        crates: coningCrates.map(c => ({
+          rowId: c.rowId,
+          barcode: c.barcode,
+          coneTypeId: coningForm.coneTypeId || null,
+          wrapperId: coningForm.wrapperId || null,
+          boxId: coningForm.boxId || null,
+          issueRolls: parseNum(c.issueRolls),
+          issueWeight: parseNum(c.issueWeight),
+        })),
+      });
+      window.alert('Issued to Coning machine');
+      await refreshDb();
+      setConingForm({
+        date: todayISO(),
+        machineId: '',
+        operatorId: '',
+        coneTypeId: '',
+        wrapperId: '',
+        boxId: '',
+        requiredPerConeNetWeight: '',
+        note: '',
+      });
+      setConingCrates([]);
+      setConingScanInput('');
+      setConingScanError('');
+    } catch (err) {
+      console.error('Failed to issue to coning', err);
+      window.alert(err.message || 'Failed to issue to Coning machine');
+    } finally {
+      setConingSubmitting(false);
+    }
+  }
+
+  if (!isCutter) {
+    if (isHolo) {
+      const disableIssue = holoSubmitting || refreshing || yarns.length === 0 || twists.length === 0;
+      return (
+        <div className="space-y-6">
+          <Section title="Issue to Holo (Rolls)">
+            <form className="space-y-6" onSubmit={handleHoloSubmit}>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Date</label>
+                  <Input type="date" value={holoForm.date} onChange={(e) => setHoloForm(prev => ({ ...prev, date: e.target.value }))} />
+                </div>
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Operator</label>
+                  <Select value={holoForm.operatorId} onChange={(e) => setHoloForm(prev => ({ ...prev, operatorId: e.target.value }))}>
+                    <option value="">Select</option>
+                    {db.operators.map(operator => <option key={operator.id} value={operator.id}>{operator.name}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Machine</label>
+                  <Select value={holoForm.machineId} onChange={(e) => setHoloForm(prev => ({ ...prev, machineId: e.target.value }))}>
+                    <option value="">Select</option>
+                    {db.machines.map(machine => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Yarn</label>
+                  <Select value={holoForm.yarnId} onChange={(e) => setHoloForm(prev => ({ ...prev, yarnId: e.target.value }))}>
+                    <option value="">Select</option>
+                    {yarns.map(yarn => <option key={yarn.id} value={yarn.id}>{yarn.name}</option>)}
+                  </Select>
+                  {yarns.length === 0 && <p className="text-xs text-red-500 mt-1">Add yarns in Masters first.</p>}
+                </div>
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Yarn wt. (kg)</label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={holoForm.yarnKg}
+                    onChange={(e) => setHoloForm(prev => ({ ...prev, yarnKg: e.target.value }))}
+                    placeholder="Total yarn weight"
+                    className="h-11"
+                  />
+                </div>
+                <div>
+                  <label className={`text-xs ${cls.muted}`}>Twist</label>
+                  <Select value={holoForm.twistId} onChange={(e) => setHoloForm(prev => ({ ...prev, twistId: e.target.value }))}>
+                    <option value="">Select</option>
+                    {twists.map(twist => <option key={twist.id} value={twist.id}>{twist.name}</option>)}
+                  </Select>
+                  {twists.length === 0 && <p className="text-xs text-red-500 mt-1">Add twists in Masters first.</p>}
+                </div>
+                <div className="md:col-span-1 md:col-start-auto">
+                  <label className={`text-xs ${cls.muted}`}>Note</label>
+                  <Input value={holoForm.note} onChange={(e) => setHoloForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
+                </div>
+              </div>
+
+              <div className={`p-4 rounded-2xl border ${cls.cardBorder} ${cls.cardBg}`}>
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="font-medium">Scan receive crates</div>
+                    <p className={`text-xs ${cls.muted}`}>Scan the barcode from Receive-from-cutter rows, then adjust bobbin quantity per crate.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <Pill>Crates: {holoCrates.length}</Pill>
+                    <Pill>Bobbins: {holoTotals.totalRolls}</Pill>
+                    <Pill>Weight: {formatKg(holoTotals.totalWeight)} kg</Pill>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+                  <div className="md:col-span-2">
+                    <label className={`text-xs ${cls.muted}`}>Receive barcode</label>
+                    <Input
+                      value={holoScanInput}
+                      onChange={(e) => { setHoloScanInput(e.target.value); if (holoScanError) setHoloScanError(''); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addHoloCrateFromScan(); } }}
+                      placeholder="Scan or type REC barcode"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button type="button" onClick={addHoloCrateFromScan} disabled={!holoScanInput.trim()}>Add crate</Button>
+                  </div>
+                </div>
+                {holoScanError && <div className="text-xs text-red-500 mt-2">{holoScanError}</div>}
+
+                <div className="mt-4 overflow-x-auto">
+                  {holoCrates.length === 0 ? (
+                    <div className={`text-sm ${cls.muted}`}>No crates linked yet. Scan a barcode to begin.</div>
+                  ) : (
+                    <table className="min-w-full text-sm">
+                      <thead className={`text-left ${cls.muted}`}>
+                        <tr>
+                          <th className="py-2 pr-2">Crate</th>
+                          <th className="py-2 pr-2">Piece / Lot</th>
+                          <th className="py-2 pr-2">Available</th>
+                          <th className="py-2 pr-2">Issue bobbins</th>
+                          <th className="py-2 pr-2">Issue wt. (kg)</th>
+                          <th className="py-2 pr-2 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {holoCrates.map((crate) => (
+                          <tr key={crate.rowId} className={`border-t ${cls.rowBorder}`}>
+                            <td className="py-2 pr-2">
+                              <div className="font-mono text-xs">{crate.vchNo || crate.rowId}</div>
+                              <div className={`text-xs ${cls.muted}`}>{crate.barcode || '—'}</div>
+                            </td>
+                            <td className="py-2 pr-2 text-xs">
+                              <div>Piece: <span className="font-mono">{crate.pieceId || '—'}</span></div>
+                              <div>Lot: {crate.lotNo || '—'}</div>
+                            </td>
+                            <td className="py-2 pr-2 text-xs">
+                              <div>Bobbins: {crate.availableBobbins ?? '—'} / {crate.bobbinQuantity ?? '—'}</div>
+                              <div className={`${cls.muted}`}>Issued so far: {crate.rowIssuedBobbins || 0}</div>
+                              <div className={`${cls.muted}`}>Issued wt: {formatKg(crate.rowIssuedWeight)} kg</div>
+                              <div className={`${cls.muted}`}>Remaining wt: {formatKg(crate.availableWeight)} kg</div>
+                            </td>
+                            <td className="py-2 pr-2">
+                              <Input type="number" min="0" step="1" value={crate.issuedBobbins} onChange={(e) => updateHoloCrate(crate.rowId, 'issuedBobbins', e.target.value)} />
+                            </td>
+                            <td className="py-2 pr-2 align-top">
+                              <div className="font-mono text-sm">{formatKg(crate.issuedBobbinWeight)} kg</div>
+                              <div className={`text-xs ${cls.muted}`}>Auto = avg × bobbins</div>
+                              <div className={`text-xs ${cls.muted}`}>Net: {formatKg(crate.netWeight)} kg</div>
+                            </td>
+                            <td className="py-2 pr-2 text-right">
+                              <button type="button" className="text-xs text-red-500 underline" onClick={() => removeHoloCrate(crate.rowId)}>Remove</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {(holoDerivedMeta.lotConflict || holoDerivedMeta.itemConflict) && (
+                <div className="text-xs text-red-500">Crates must belong to a single lot and item.</div>
+              )}
+
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="text-sm">
+                  <div>Lot: {holoDerivedMeta.lotNo || '—'}</div>
+                  <div className={`${cls.muted}`}>Item ID: {holoDerivedMeta.itemId || '—'}</div>
+                </div>
+                <Button type="submit" disabled={disableIssue}>{holoSubmitting ? 'Issuing…' : 'Record issue'}</Button>
+              </div>
+            </form>
+          </Section>
+
+          <Section title="Issue history (Holo)">
+            <div className="overflow-x-auto mt-4">
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2">Yarn</th>
+                    <th className="py-2 pr-2">Twist</th>
+                    <th className="py-2 pr-2 text-right">Bobbins</th>
+                    <th className="py-2 pr-2 text-right">Issue wt. (kg)</th>
+                    <th className="py-2 pr-2 text-right">Yarn (kg)</th>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {issueList.length === 0 ? (
+                    <tr>
+                      <td className="py-3 pr-2" colSpan={9}>No issue records yet.</td>
+                    </tr>
+                  ) : (
+                    issueList.map((issue) => (
+                      <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{issue.date || '—'}</td>
+                        <td className="py-2 pr-2">{issue.lotNo}</td>
+                        <td className="py-2 pr-2">{issue.yarnId ? (yarnMap.get(issue.yarnId)?.name || issue.yarnId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.twistId ? (twistMap.get(issue.twistId)?.name || issue.twistId) : '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.metallicBobbins || 0}</td>
+                        <td className="py-2 pr-2 text-right">{issue.metallicBobbinsWeight == null ? '—' : formatKg(issue.metallicBobbinsWeight)}</td>
+                        <td className="py-2 pr-2 text-right">{issue.yarnKg == null ? '—' : issue.yarnKg}</td>
+                        <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                        <td className="py-2 pr-2">{issue.note || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        </div>
+      );
+    }
+
+    const unitLabel = 'Rolls';
+    return (
+      <div className="space-y-6">
+        <Section title="Issue to Coning (Cones)">
+          <form className="space-y-4" onSubmit={handleConingSubmit}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Date</label>
+                <Input type="date" value={coningForm.date} onChange={(e) => setConingForm(prev => ({ ...prev, date: e.target.value }))} />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Machine</label>
+                <Select value={coningForm.machineId} onChange={(e) => setConingForm(prev => ({ ...prev, machineId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {db.machines.map(machine => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Operator</label>
+                <Select value={coningForm.operatorId} onChange={(e) => setConingForm(prev => ({ ...prev, operatorId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {db.operators.map(operator => <option key={operator.id} value={operator.id}>{operator.name}</option>)}
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Cone type</label>
+                <Select value={coningForm.coneTypeId} onChange={(e) => setConingForm(prev => ({ ...prev, coneTypeId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.cone_types || []).map(ct => <option key={ct.id} value={ct.id}>{ct.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Wrapper</label>
+                <Select value={coningForm.wrapperId} onChange={(e) => setConingForm(prev => ({ ...prev, wrapperId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.wrappers || []).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Box</label>
+                <Select value={coningForm.boxId} onChange={(e) => setConingForm(prev => ({ ...prev, boxId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.boxes || []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Required per cone net wt. (grams)</label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={coningForm.requiredPerConeNetWeight}
+                  onChange={(e) => setConingForm(prev => ({ ...prev, requiredPerConeNetWeight: e.target.value }))}
+                  placeholder="Enter target net weight per cone (g)"
+                />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Expected cones (calculated)</label>
+                <Input value={coningExpectedCones === '' ? '' : coningExpectedCones} readOnly placeholder="Auto-calculated" />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Note</label>
+                <Input value={coningForm.note} onChange={(e) => setConingForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className={`text-xs ${cls.muted}`}>Scan holo crate barcode</label>
+              <div className="flex gap-2 items-center">
+                <Input
+                  value={coningScanInput}
+                  onChange={(e) => { setConingScanInput(e.target.value); if (coningScanError) setConingScanError(''); }}
+                  placeholder="REC-HLO crate barcode"
+                />
+                <Button type="button" onClick={addConingCrateFromScan} disabled={!coningScanInput.trim()}>Add crate</Button>
+              </div>
+              {coningScanError && <div className="text-xs text-red-500">{coningScanError}</div>}
+            </div>
+
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2 text-right">Rolls (issue)</th>
+                    <th className="py-2 pr-2 text-right">Issue wt. (kg)</th>
+                    <th className="py-2 pr-2 text-right">Remove</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coningCrates.length === 0 ? (
+                    <tr><td className="py-3 pr-2" colSpan={6}>No crates scanned yet.</td></tr>
+                  ) : coningCrates.map((crate) => (
+                    <tr key={crate.rowId} className={`border-t ${cls.rowBorder}`}>
+                      <td className="py-2 pr-2 font-mono">{crate.barcode}</td>
+                      <td className="py-2 pr-2">{crate.lotNo || '—'}</td>
+                      <td className="py-2 pr-2 text-right">
+                        <Input type="number" min="0" step="1" value={crate.issueRolls ?? ''} onChange={(e) => updateConingCrate(crate.rowId, 'issueRolls', e.target.value)} />
+                        <div className={`text-xs ${cls.muted}`}>Avail: {crate.baseRolls} · Issued: {crate.issuedSoFar || 0} · Remaining: {crate.remainingRolls}</div>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <div className="font-mono">{formatKg(crate.issueWeight || 0)}</div>
+                        <div className={`text-xs ${cls.muted}`}>Base: {formatKg(crate.baseWeight || 0)}</div>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <button className="text-sm text-red-500 underline" type="button" onClick={() => setConingCrates(prev => prev.filter(c => c.rowId !== crate.rowId))}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Pill>Lot: {coningMeta.lotNo || '—'}</Pill>
+              <Pill>Rolls: {coningMeta.totalRolls}</Pill>
+              <Pill>Net: {formatKg(coningMeta.totalNet)}</Pill>
+              <Pill>Expected cones: {coningExpectedCones === '' ? '—' : coningExpectedCones}</Pill>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button type="submit" disabled={coningSubmitting || refreshing}>{coningSubmitting ? 'Issuing…' : 'Record issue'}</Button>
+              <Pill>{unitLabel}: {totalUnitsIssued}</Pill>
+            </div>
+          </form>
+        </Section>
+
+        <Section title={`Issue history (${processDef.label})`}>
+          <div className="overflow-x-auto mt-4">
+            {isConing ? (
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2">Machine</th>
+                    <th className="py-2 pr-2">Operator</th>
+                    <th className="py-2 pr-2">Cone type</th>
+                    <th className="py-2 pr-2">Wrapper</th>
+                    <th className="py-2 pr-2">Box</th>
+                    <th className="py-2 pr-2 text-right">Req. wt (g)</th>
+                    <th className="py-2 pr-2 text-right">Expected cones</th>
+                    <th className="py-2 pr-2 text-right">Rolls issued</th>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {issueList.length === 0 ? (
+                    <tr>
+                      <td className="py-3 pr-2" colSpan={12}>No issue records yet.</td>
+                    </tr>
+                  ) : (
+                    issueList.map((issue) => (
+                      <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{issue.date || '—'}</td>
+                        <td className="py-2 pr-2">{issue.lotNo}</td>
+                        <td className="py-2 pr-2">{issue.machineId ? (machineMap.get(issue.machineId)?.name || issue.machineId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.operatorId ? (operatorMap.get(issue.operatorId)?.name || issue.operatorId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.coneTypeId ? (coneTypeMap.get(issue.receivedRowRefs[0].coneTypeId)?.name || issue.receivedRowRefs[0].coneTypeId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.wrapperId ? (wrapperMap.get(issue.receivedRowRefs[0].wrapperId)?.name || issue.receivedRowRefs[0].wrapperId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.boxId ? (boxMap.get(issue.receivedRowRefs[0].boxId)?.name || issue.receivedRowRefs[0].boxId) : '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.requiredPerConeNetWeight ?? '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.expectedCones ?? '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.rollsIssued || 0}</td>
+                        <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                        <td className="py-2 pr-2">{issue.note || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2 text-right">{unitLabel}</th>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {issueList.length === 0 ? (
+                    <tr>
+                      <td className="py-3 pr-2" colSpan={5}>No issue records yet.</td>
+                    </tr>
+                  ) : (
+                    issueList.map((issue) => (
+                      <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{issue.date || '—'}</td>
+                        <td className="py-2 pr-2">{issue.lotNo}</td>
+                        <td className="py-2 pr-2 text-right">{issue.rollsIssued || 0}</td>
+                        <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                        <td className="py-2 pr-2">{issue.note || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </Section>
+      </div>
+    );
   }
 
   return (

@@ -8,6 +8,7 @@ import { BrandCtx } from "../../context";
 import { Button, SecondaryButton, Select } from "../../components";
 import { Inbound, Stock, IssueToMachine, Masters, Reports, Settings, ReceiveFromMachine } from "../../pages";
 import { THEME_KEY, defaultBrand, themeClasses, normalizeDb, extractBrandFromDb } from "../../utils";
+import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
 import * as api from "../../api";
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
 ];
 
 const DEFAULT_TAB = "inbound";
+const PROCESS_KEY = "glintex_active_process";
 
 function isValidTab(value) {
   return TABS.some((tab) => tab.key === value);
@@ -51,12 +53,20 @@ export default function InventoryApp() {
     if (pathTab) return pathTab;
     return localStorage.getItem(LAST_TAB_KEY) || DEFAULT_TAB;
   });
+  const [process, setProcess] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem(PROCESS_KEY) || "cutter";
+    }
+    return "cutter";
+  });
   const [brandPreview, setBrandPreview] = useState(defaultBrand);
   const [savingBrand, setSavingBrand] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
   const cls = useMemo(() => themeClasses(theme), [theme]);
+  const processDef = getProcessDefinition(process);
+  const processOptions = Object.values(PROCESS_DEFINITIONS);
 
   const loadDb = useCallback(async () => {
     const raw = await api.getDB();
@@ -119,6 +129,10 @@ export default function InventoryApp() {
     document.documentElement.style.setProperty('--brand-primary', brandPreview.primary);
     document.documentElement.style.setProperty('--brand-gold', brandPreview.gold);
   }, [brandPreview.primary, brandPreview.gold]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PROCESS_KEY, process);
+  }, [process]);
 
   const brandCtxValue = useMemo(() => ({ theme, setTheme, brand: brandPreview, setBrand: setBrandPreview, cls }), [theme, setTheme, brandPreview, cls]);
   const handleSelectTab = useCallback((nextTab) => {
@@ -147,6 +161,16 @@ export default function InventoryApp() {
 
   const handleDeleteItem = useCallback(async (id) => {
     await api.deleteItem(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateYarn = useCallback(async (name) => {
+    await api.createYarn(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteYarn = useCallback(async (id) => {
+    await api.deleteYarn(id);
     await refreshDb();
   }, [refreshDb]);
 
@@ -195,6 +219,11 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleUpdateYarn = useCallback(async (id, name) => {
+    await api.updateYarn(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleUpdateFirm = useCallback(async (id, name) => {
     await api.updateFirm(id, name);
     await refreshDb();
@@ -220,8 +249,18 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateRollType = useCallback(async (name, weight) => {
+    await api.createRollType(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleDeleteBobbin = useCallback(async (id) => {
     await api.deleteBobbin(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteRollType = useCallback(async (id) => {
+    await api.deleteRollType(id);
     await refreshDb();
   }, [refreshDb]);
 
@@ -230,8 +269,72 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleUpdateRollType = useCallback(async (id, name, weight) => {
+    await api.updateRollType(id, name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateConeType = useCallback(async (name, weight) => {
+    await api.createConeType(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteConeType = useCallback(async (id) => {
+    await api.deleteConeType(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateConeType = useCallback(async (id, name, weight) => {
+    await api.updateConeType(id, name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateWrapper = useCallback(async (name) => {
+    await api.createWrapper(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteWrapper = useCallback(async (id) => {
+    await api.deleteWrapper(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateWrapper = useCallback(async (id, name) => {
+    await api.updateWrapper(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleCreateBox = useCallback(async (name, weight) => {
     await api.createBox(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+  const handleCreateCut = useCallback(async (name) => {
+    await api.createCut(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteCut = useCallback(async (id) => {
+    await api.deleteCut(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateCut = useCallback(async (id, name) => {
+    await api.updateCut(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateTwist = useCallback(async (name) => {
+    await api.createTwist(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteTwist = useCallback(async (id) => {
+    await api.deleteTwist(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateTwist = useCallback(async (id, name) => {
+    await api.updateTwist(id, name);
     await refreshDb();
   }, [refreshDb]);
 
@@ -326,6 +429,18 @@ export default function InventoryApp() {
           </div>
         </header>
 
+        <div className={`max-w-6xl mx-auto px-4 py-3 border-b ${cls.cardBorder} ${cls.cardBg} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}>
+          <div className="text-sm font-semibold">Active process: {processDef.label}</div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`${cls.muted}`}>Units:</span>
+            <Select value={process} onChange={(e) => setProcess(e.target.value)}>
+              {processOptions.map((proc) => (
+                <option key={proc.id} value={proc.id}>{proc.label}</option>
+              ))}
+            </Select>
+          </div>
+        </div>
+
         {error && (
           <div className="bg-orange-500/10 border border-orange-400/30 text-orange-200 px-4 py-2 text-sm text-center">
             {error} <button className="underline ml-2" onClick={() => refreshDb().catch(() => {})}>Retry</button>
@@ -334,14 +449,23 @@ export default function InventoryApp() {
 
         <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
           {tab === "inbound" && <Inbound db={db} onCreateLot={handleCreateLot} refreshing={refreshing} />}
-          {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} />}
-          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} onIssueToMachine={handleIssueToMachine} />}
+          {tab === "stock" && <Stock db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} process={process} />}
+          {tab === "issue" && <IssueToMachine db={db} onIssueToMachine={handleIssueToMachine} refreshing={refreshing} refreshDb={refreshDb} process={process} />}
+          {tab === "receive" && <ReceiveFromMachine db={db} refreshDb={refreshDb} onIssueToMachine={handleIssueToMachine} process={process} />}
           {tab === "masters" && <Masters
             db={db}
             onAddItem={handleCreateItem}
             onDeleteItem={handleDeleteItem}
             onEditItem={handleUpdateItem}
+            onAddYarn={handleCreateYarn}
+            onDeleteYarn={handleDeleteYarn}
+            onEditYarn={handleUpdateYarn}
+            onAddCut={handleCreateCut}
+            onDeleteCut={handleDeleteCut}
+            onEditCut={handleUpdateCut}
+            onAddTwist={handleCreateTwist}
+            onDeleteTwist={handleDeleteTwist}
+            onEditTwist={handleUpdateTwist}
             onAddFirm={handleCreateFirm}
             onDeleteFirm={handleDeleteFirm}
             onEditFirm={handleUpdateFirm}
@@ -357,6 +481,15 @@ export default function InventoryApp() {
             onAddBobbin={handleCreateBobbin}
             onDeleteBobbin={handleDeleteBobbin}
             onEditBobbin={handleUpdateBobbin}
+            onAddRollType={handleCreateRollType}
+            onDeleteRollType={handleDeleteRollType}
+            onEditRollType={handleUpdateRollType}
+            onAddConeType={handleCreateConeType}
+            onDeleteConeType={handleDeleteConeType}
+            onEditConeType={handleUpdateConeType}
+            onAddWrapper={handleCreateWrapper}
+            onDeleteWrapper={handleDeleteWrapper}
+            onEditWrapper={handleUpdateWrapper}
             onAddBox={handleCreateBox}
             onDeleteBox={handleDeleteBox}
             onEditBox={handleUpdateBox}

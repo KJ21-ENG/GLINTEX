@@ -47,16 +47,40 @@ async function request(path, { method = 'GET', body } = {}) {
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
-export async function createIssueToMachine(payload) { return await request('/api/issue_to_machine', { method: 'POST', body: payload }); }
-export async function importReceiveFromMachine(payload) { return await request('/api/receive_from_machine/import', { method: 'POST', body: payload }); }
-export async function previewReceiveFromMachine(payload) { return await request('/api/receive_from_machine/preview', { method: 'POST', body: payload }); }
-export async function manualReceiveFromMachine(payload) { return await request('/api/receive_from_machine/manual', { method: 'POST', body: payload }); }
-export async function markPieceWastage(payload) { return await request('/api/receive_from_machine/mark_wastage', { method: 'POST', body: payload }); }
+export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
+export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
+export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
+export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }
+export async function getReceiveCrateStats(pieceId) {
+  if (!pieceId) throw new Error('pieceId is required');
+  return await request(`/api/receive_from_cutter_machine/piece/${encodeURIComponent(pieceId)}/crate_stats`);
+}
+export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
+export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
+export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
+export async function manualReceiveFromConingMachine(payload) { return await request('/api/receive_from_coning_machine/manual', { method: 'POST', body: payload }); }
+export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
+export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
+export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
+export async function manualReceiveFromMachine(payload) { return await manualReceiveFromCutterMachine(payload); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
 export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
 export async function deleteItem(id) { return await request(`/api/items/${id}`, { method: 'DELETE' }); }
 export async function updateItem(id, name) { return await request(`/api/items/${id}`, { method: 'PUT', body: { name } }); }
+export async function listYarns() { return await request('/api/yarns'); }
+export async function createYarn(name) { return await request('/api/yarns', { method: 'POST', body: { name } }); }
+export async function deleteYarn(id) { return await request(`/api/yarns/${id}`, { method: 'DELETE' }); }
+export async function updateYarn(id, name) { return await request(`/api/yarns/${id}`, { method: 'PUT', body: { name } }); }
+export async function listCuts() { return await request('/api/cuts'); }
+export async function createCut(name) { return await request('/api/cuts', { method: 'POST', body: { name } }); }
+export async function deleteCut(id) { return await request(`/api/cuts/${id}`, { method: 'DELETE' }); }
+export async function updateCut(id, name) { return await request(`/api/cuts/${id}`, { method: 'PUT', body: { name } }); }
+export async function listTwists() { return await request('/api/twists'); }
+export async function createTwist(name) { return await request('/api/twists', { method: 'POST', body: { name } }); }
+export async function deleteTwist(id) { return await request(`/api/twists/${id}`, { method: 'DELETE' }); }
+export async function updateTwist(id, name) { return await request(`/api/twists/${id}`, { method: 'PUT', body: { name } }); }
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
@@ -77,16 +101,31 @@ export async function listBobbins() { return await request('/api/bobbins'); }
 export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
 export async function updateBobbin(id, name, weight) { return await request(`/api/bobbins/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listRollTypes() { return await request('/api/roll_types'); }
+export async function createRollType(name, weight) { return await request('/api/roll_types', { method: 'POST', body: { name, weight } }); }
+export async function deleteRollType(id) { return await request(`/api/roll_types/${id}`, { method: 'DELETE' }); }
+export async function updateRollType(id, name, weight) { return await request(`/api/roll_types/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listConeTypes() { return await request('/api/cone_types'); }
+export async function createConeType(name, weight) { return await request('/api/cone_types', { method: 'POST', body: { name, weight } }); }
+export async function deleteConeType(id) { return await request(`/api/cone_types/${id}`, { method: 'DELETE' }); }
+export async function updateConeType(id, name, weight) { return await request(`/api/cone_types/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listWrappers() { return await request('/api/wrappers'); }
+export async function createWrapper(name) { return await request('/api/wrappers', { method: 'POST', body: { name } }); }
+export async function deleteWrapper(id) { return await request(`/api/wrappers/${id}`, { method: 'DELETE' }); }
+export async function updateWrapper(id, name) { return await request(`/api/wrappers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listBoxes() { return await request('/api/boxes'); }
 export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
 export async function updateBox(id, name, weight) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
-export async function deleteIssueToMachine(id) { return await request(`/api/issue_to_machine/${id}`, { method: 'DELETE' }); }
+export async function deleteIssueToCutterMachine(id) { return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'DELETE' }); }
+export async function deleteIssueToMachine(id) { return await deleteIssueToCutterMachine(id); }
 export async function deleteInboundItem(id) { return await request(`/api/inbound_items/${id}`, { method: 'DELETE' }); }
 export async function getInboundByBarcode(code) { return await request(`/api/inbound_items/barcode/${encodeURIComponent(code)}`); }
-export async function getIssueByBarcode(code) { return await request(`/api/issue_to_machine/lookup?barcode=${encodeURIComponent(code)}`); }
+export async function getIssueByCutterBarcode(code) { return await request(`/api/issue_to_cutter_machine/lookup?barcode=${encodeURIComponent(code)}`); }
+export async function getIssueByBarcode(code) { return await getIssueByCutterBarcode(code); }
+export async function getIssueByHoloBarcode(code) { return await request(`/api/issue_to_holo_machine/lookup?barcode=${encodeURIComponent(code)}`); }
 
 export function barcodeImageUrl(code, options = {}) {
   if (!code) return '';
@@ -110,13 +149,36 @@ export default {
   getDB,
   createLot,
   createIssueToMachine,
+  createIssueToCutterMachine,
+  createIssueToHoloMachine,
+  createIssueToConingMachine,
+  importReceiveFromMachine,
+  previewReceiveFromMachine,
+  manualReceiveFromMachine,
+  manualReceiveFromHoloMachine,
+  manualReceiveFromConingMachine,
+  getReceiveCrateStats,
+  markPieceWastage,
   updateInboundItem,
   deleteLot,
   deleteIssueToMachine,
+  deleteIssueToCutterMachine,
   listItems,
   createItem,
   deleteItem,
   updateItem,
+  listYarns,
+  createYarn,
+  deleteYarn,
+  updateYarn,
+  listCuts,
+  createCut,
+  deleteCut,
+  updateCut,
+  listTwists,
+  createTwist,
+  deleteTwist,
+  updateTwist,
   listFirms,
   createFirm,
   deleteFirm,
@@ -133,12 +195,26 @@ export default {
   createOperator,
   deleteOperator,
   updateOperator,
+  listRollTypes,
+  createRollType,
+  deleteRollType,
+  updateRollType,
   listBoxes,
   createBox,
   deleteBox,
   updateBox,
+  listConeTypes,
+  createConeType,
+  deleteConeType,
+  updateConeType,
+  listWrappers,
+  createWrapper,
+  deleteWrapper,
+  updateWrapper,
   updateSettings,
   getInboundByBarcode,
   getIssueByBarcode,
+  getIssueByCutterBarcode,
+  getIssueByHoloBarcode,
   barcodeImageUrl,
 };

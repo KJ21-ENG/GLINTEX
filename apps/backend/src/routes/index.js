@@ -6,7 +6,7 @@ import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { logCrud } from '../utils/auditLogger.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex } from '../utils/barcodeHelpers.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -161,7 +161,7 @@ function parseReceiveCsvContent(content) {
       employee: toOptionalString(rec['Employee']),
       pktTypeName: toOptionalString(rec['PktTypeName']),
       pcsTypeName: toOptionalString(rec['PcsTypeName']),
-      pcs: toInt(rec['Pcs']),
+      bobbinQuantity: toInt(rec['Pcs']),
       grossWt: toNumber(rec['Grs Wt']),
       tareWt: toNumber(rec['Tare Wt']),
       netWt: toNumber(rec['Net Wt']),
@@ -194,9 +194,9 @@ function aggregateNetByPiece(rows) {
 function aggregatePieceCounts(rows) {
   const counts = new Map();
   for (const row of rows) {
-    const pcs = Number(row.pcs || 0);
-    if (!Number.isFinite(pcs) || pcs <= 0) continue;
-    counts.set(row.pieceId, (counts.get(row.pieceId) || 0) + pcs);
+    const qty = Number(row.bobbinQuantity || 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    counts.set(row.pieceId, (counts.get(row.pieceId) || 0) + qty);
   }
   return counts;
 }
@@ -207,7 +207,7 @@ async function fetchInboundAndTotals(pieceIds) {
   }
   const [inboundPieces, pieceTotals] = await Promise.all([
     prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } }),
-    prisma.receivePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } }),
+    prisma.receiveFromCutterMachinePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } }),
   ]);
   const inboundMap = new Map(inboundPieces.map(p => [p.id, p]));
   const totalsMap = new Map(pieceTotals.map(t => [t.pieceId, Number(t.totalNetWeight || 0)]));
@@ -328,6 +328,9 @@ router.get('/api/health', async (req, res) => {
 
 router.get('/api/db', async (req, res) => {
   const items = await prisma.item.findMany();
+  const yarns = await prisma.yarn.findMany();
+  const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
+  const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
   const firms = await prisma.firm.findMany();
   const suppliers = await prisma.supplier.findMany();
   const machines = await prisma.machine.findMany();
@@ -338,10 +341,12 @@ router.get('/api/db', async (req, res) => {
   const boxes = await prisma.box.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
-  const issue_to_machine = await prisma.issueToMachine.findMany();
+  const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany();
+  const issue_to_holo_machine = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
+  const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const settings = await prisma.settings.findMany();
-  const receive_uploads = await prisma.receiveUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
-  const receive_rows = await prisma.receiveRow.findMany({
+  const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
+  const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
     include: {
@@ -371,11 +376,46 @@ router.get('/api/db', async (req, res) => {
           name: true,
         },
       },
+      cutMaster: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
     },
   });
-  const receive_piece_totals = await prisma.receivePieceTotal.findMany();
+  const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
+  const receive_from_holo_machine_rows = await prisma.receiveFromHoloMachineRow.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+    include: {
+      operator: { select: { id: true, name: true } },
+      helper: { select: { id: true, name: true } },
+      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true } },
+      rollType: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+    },
+  });
+  const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
+  const receive_from_coning_machine_rows = await prisma.receiveFromConingMachineRow.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+    include: {
+      operator: { select: { id: true, name: true } },
+      helper: { select: { id: true, name: true } },
+      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+      box: { select: { id: true, name: true, weight: true } },
+    },
+  });
+  const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
+  const roll_types = await prisma.rollType.findMany();
+  const cone_types = await prisma.coneType.findMany();
+  const wrappers = await prisma.wrapper.findMany();
   res.json({
     items,
+    yarns,
+    cuts,
+    twists,
     firms,
     suppliers,
     machines,
@@ -386,19 +426,66 @@ router.get('/api/db', async (req, res) => {
     boxes,
     lots,
     inbound_items,
-    issue_to_machine,
+    issue_to_cutter_machine,
+    issue_to_holo_machine,
+    issue_to_coning_machine,
     settings,
-    receive_uploads,
-    receive_rows,
-    receive_piece_totals,
+    receive_from_cutter_machine_uploads,
+    receive_from_cutter_machine_rows,
+    receive_from_cutter_machine_piece_totals,
+    receive_from_holo_machine_rows,
+    receive_from_holo_machine_piece_totals,
+    receive_from_coning_machine_rows,
+    receive_from_coning_machine_piece_totals,
+    roll_types,
+    cone_types,
+    wrappers,
   });
 });
 
-router.get('/api/issue_to_machine', async (req, res) => {
+router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', async (req, res) => {
+  try {
+    const rawPieceId = req.params.pieceId;
+    const pieceId = normalizePieceId(rawPieceId);
+    if (!pieceId) {
+      return res.status(400).json({ error: 'Invalid piece id' });
+    }
+
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { pieceId },
+      select: { id: true, barcode: true },
+    });
+
+    let maxCrateIndex = 0;
+    let missingCrateBarcodes = 0;
+    for (const row of rows) {
+      const crateIndex = parseReceiveCrateIndex(row.barcode);
+      if (crateIndex == null) {
+        missingCrateBarcodes += 1;
+        continue;
+      }
+      if (crateIndex > maxCrateIndex) {
+        maxCrateIndex = crateIndex;
+      }
+    }
+
+    res.json({
+      pieceId,
+      totalCrates: rows.length,
+      maxCrateIndex,
+      missingCrateBarcodes,
+    });
+  } catch (err) {
+    console.error('Failed to fetch crate stats', err);
+    res.status(500).json({ error: 'Failed to fetch crate stats' });
+  }
+});
+
+router.get('/api/issue_to_cutter_machine', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode query param' });
-    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
@@ -421,16 +508,72 @@ router.get('/api/inbound_items/barcode/:code', async (req, res) => {
   }
 });
 
-router.get('/api/issue_to_machine/lookup', async (req, res) => {
+router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
   } catch (err) {
     console.error('Failed to lookup issue barcode', err);
+    res.status(500).json({ error: 'Failed to lookup barcode' });
+  }
+});
+
+router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
+    const issue = await prisma.issueToHoloMachine.findUnique({ where: { barcode } });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    const receivedRefs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
+    const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
+    const rows = rowIds.length > 0
+      ? await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: rowIds } },
+          select: {
+            id: true,
+            pieceId: true,
+            barcode: true,
+            netWt: true,
+            tareWt: true,
+            pktBoxWt: true,
+            pcsBoxWt: true,
+            grossWt: true,
+            bobbinQuantity: true,
+          },
+        })
+      : [];
+    const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
+    const pieces = pieceIds.length
+      ? await prisma.inboundItem.findMany({
+          where: { id: { in: pieceIds } },
+          select: { id: true, lotNo: true, itemId: true, seq: true },
+        })
+      : [];
+    const pieceMap = new Map(pieces.map((p) => [p.id, p]));
+    const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
+    const crates = rows.map((row) => {
+      const meta = refMap.get(row.id) || {};
+      const piece = pieceMap.get(row.pieceId);
+      const crateTare = row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0;
+      return {
+        rowId: row.id,
+        pieceId: row.pieceId,
+        lotNo: piece?.lotNo || meta.lotNo || null,
+        itemId: piece?.itemId || meta.itemId || null,
+        barcode: row.barcode || meta.barcode || null,
+        netWeight: row.netWt ?? null,
+        grossWeight: row.grossWt ?? null,
+        crateTare,
+        issuedBobbins: meta.issuedBobbins ?? row.bobbinQuantity ?? null,
+      };
+    });
+    res.json({ ...issue, pieceIds, crates });
+  } catch (err) {
+    console.error('Failed to lookup holo issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
   }
 });
@@ -709,11 +852,11 @@ router.post('/api/lots', async (req, res) => {
   }
 });
 
-router.post('/api/issue_to_machine', async (req, res) => {
+router.post('/api/issue_to_cutter_machine', async (req, res) => {
   try {
     const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
     if (!date || !itemId || !lotNo) {
-      return res.status(400).json({ error: 'Missing required issue_to_machine fields' });
+      return res.status(400).json({ error: 'Missing required issue_to_cutter_machine fields' });
     }
     if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
@@ -754,7 +897,7 @@ router.post('/api/issue_to_machine', async (req, res) => {
       });
 
       const firstSeq = pieces[0]?.seq ?? 0;
-      const issueRow = await tx.issueToMachine.create({
+      const issueRow = await tx.issueToCutterMachine.create({
         data: {
           id: randomUUID(),
           date,
@@ -775,7 +918,7 @@ router.post('/api/issue_to_machine', async (req, res) => {
       });
 
     await logCrud({
-      entityType: 'issue_to_machine',
+      entityType: 'issue_to_cutter_machine',
       entityId: issueRecord.id,
       action: 'create',
       payload: {
@@ -790,8 +933,8 @@ router.post('/api/issue_to_machine', async (req, res) => {
       },
     });
 
-    res.json({ ok: true, issueToMachine: issueRecord });
-    // Notify issue_to_machine created
+    res.json({ ok: true, issueToCutterMachine: issueRecord, issueToMachine: issueRecord });
+    // Notify issue_to_cutter_machine created
     try {
       const itemName = (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name || '';
       const machineName = issueRecord.machineId ? (await prisma.machine.findUnique({ where: { id: issueRecord.machineId } })).name : '';
@@ -799,10 +942,10 @@ router.post('/api/issue_to_machine', async (req, res) => {
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
       sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
-      // If this issue_to_machine made available pieces for this item drop to zero, notify
+      // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
-        console.log(`Available pieces after issue_to_machine for ${itemName}: ${availableAfter}`);
+        console.log(`Available pieces after issue_to_cutter_machine for ${itemName}: ${availableAfter}`);
         if (availableAfter === 0) {
           console.log(`Triggering out_of_stock notification for ${itemName}`);
           // Add small delay to ensure first message is queued before second
@@ -810,15 +953,15 @@ router.post('/api/issue_to_machine', async (req, res) => {
             sendNotification('item_out_of_stock', { itemName, available: 0 });
           }, 1000);
         }
-      } catch (e) { console.error('failed to check/send out_of_stock after issue_to_machine', e); }
-    } catch (e) { console.error('notify issue_to_machine error', e); }
+      } catch (e) { console.error('failed to check/send out_of_stock after issue_to_cutter_machine', e); }
+    } catch (e) { console.error('notify issue_to_cutter_machine error', e); }
   } catch (err) {
-    console.error('Failed to record issue_to_machine', err);
-    res.status(400).json({ error: err.message || 'Failed to record issue_to_machine' });
+    console.error('Failed to record issue_to_cutter_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to record issue_to_cutter_machine' });
   }
 });
 
-router.post('/api/receive_from_machine/import', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
@@ -837,7 +980,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
     }
 
     const vchNos = rows.map(r => r.vchNo);
-    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    const existing = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
     if (existing.length > 0) {
       const duplicates = existing.map(r => r.vchNo);
       return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
@@ -898,7 +1041,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
         bobbinIdMap.set('', defaultBobbin.id);
       }
 
-      const createdUpload = await tx.receiveUpload.create({
+      const createdUpload = await tx.receiveFromCutterMachineUpload.create({
         data: {
           originalFilename: filename,
           rowCount: rows.length,
@@ -908,11 +1051,12 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
       const createPayload = rows.map(row => ({
         ...row,
         uploadId: createdUpload.id,
+        bobbinQuantity: row.bobbinQuantity,
         bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
       }));
       
       if (createPayload.length > 0) {
-        await tx.receiveRow.createMany({ data: createPayload });
+        await tx.receiveFromCutterMachineRow.createMany({ data: createPayload });
       }
 
       for (const [pieceId, incrementBy] of pieceIncrements.entries()) {
@@ -922,12 +1066,12 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
           totalNetWeight: { increment: incrementBy },
         };
         if (pcsIncrement > 0) {
-          updateData.totalPieces = { increment: pcsIncrement };
+          updateData.totalBob = { increment: pcsIncrement };
         }
-        await tx.receivePieceTotal.upsert({
+        await tx.receiveFromCutterMachinePieceTotal.upsert({
           where: { pieceId },
           update: updateData,
-          create: { pieceId, totalNetWeight: incrementBy, totalPieces: pcsIncrement > 0 ? pcsIncrement : 0 },
+          create: { pieceId, totalNetWeight: incrementBy, totalBob: pcsIncrement > 0 ? pcsIncrement : 0 },
         });
       }
 
@@ -962,7 +1106,7 @@ router.post('/api/receive_from_machine/import', async (req, res) => {
 });
 
 // Mark remaining pending weight for a piece as wastage (only if piece was issued to machine)
-router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) => {
   try {
     const { pieceId } = req.body || {};
     if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
@@ -972,11 +1116,11 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
     if (!inbound) return res.status(404).json({ error: 'Piece not found' });
 
     // Verify piece was issued to machine at least once
-    const issuedCount = await prisma.issueToMachine.count({ where: { pieceIds: { contains: pieceId } } });
+    const issuedCount = await prisma.issueToCutterMachine.count({ where: { pieceIds: { contains: pieceId } } });
     if (issuedCount === 0) return res.status(400).json({ error: 'Piece was not issued to machine' });
 
     // Fetch current received and wastage totals
-    const currentTotal = await prisma.receivePieceTotal.findUnique({ where: { pieceId } });
+    const currentTotal = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
     const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
 
@@ -986,12 +1130,12 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
 
     // Upsert wastage increment inside transaction
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.receivePieceTotal.upsert({
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId },
         update: { wastageNetWeight: { increment: remaining } },
         create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining },
       });
-      return tx.receivePieceTotal.findUnique({ where: { pieceId } });
+      return tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     });
 
     // Send notification
@@ -1021,7 +1165,7 @@ router.post('/api/receive_from_machine/mark_wastage', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_machine/manual', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
   try {
     const {
       pieceId,
@@ -1034,6 +1178,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       grossWeight,
       receiveDate,
       issueBarcode,
+      cutId,
     } = req.body || {};
 
     if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
@@ -1044,7 +1189,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     let resolvedPieceId = pieceId;
     let resolvedLotNo = lotNo;
     if (normalizedIssueCode) {
-      const issue = await prisma.issueToMachine.findUnique({ where: { barcode: normalizedIssueCode } });
+      const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode: normalizedIssueCode } });
       if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
       const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
       if (pieceIds.length !== 1) {
@@ -1074,6 +1219,14 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       return res.status(400).json({ error: 'Invalid helper selected' });
     }
 
+    let cutRecord = null;
+    if (cutId) {
+      cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
+      if (!cutRecord) {
+        return res.status(404).json({ error: 'Selected cut was not found' });
+      }
+    }
+
     const bobbinQty = Math.max(0, toInt(bobbinQuantity) || 0);
     if (bobbinQty <= 0) {
       return res.status(400).json({ error: 'Bobbin quantity must be greater than zero' });
@@ -1099,7 +1252,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     }
 
     const inboundWeight = Number(piece.weight || 0);
-    const currentTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+    const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
     const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
     const pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
@@ -1114,16 +1267,27 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     const vchNo = `MAN-${randomUUID().slice(0, 8)}`;
 
     const txResult = await prisma.$transaction(async (tx) => {
-      const upload = await tx.receiveUpload.create({
+      const upload = await tx.receiveFromCutterMachineUpload.create({
         data: {
           originalFilename: 'manual-entry',
           rowCount: 1,
         },
       });
 
-      const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: 1 });
+      const previousCrates = await tx.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: resolvedPieceId },
+        select: { barcode: true },
+      });
+      let maxCrateIndex = 0;
+      for (const row of previousCrates) {
+        const idx = parseReceiveCrateIndex(row.barcode);
+        if (idx != null && idx > maxCrateIndex) {
+          maxCrateIndex = idx;
+        }
+      }
+      const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: maxCrateIndex + 1 });
 
-      const createdRow = await tx.receiveRow.create({
+      const createdRow = await tx.receiveFromCutterMachineRow.create({
         data: {
           uploadId: upload.id,
           pieceId: resolvedPieceId,
@@ -1139,25 +1303,27 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
           boxId: box.id,
           operatorId: operatorRec.id,
           helperId: helperRec ? helperRec.id : null,
-          pcs: bobbinQty,
+          bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
           shift: helperRec ? helperRec.name : null,
+          cutId: cutRecord ? cutRecord.id : null,
+          cut: cutRecord ? cutRecord.name : null,
           narration: 'Manual entry',
           createdBy: 'manual',
           barcode: receiveBarcode,
         },
       });
 
-      await tx.receivePieceTotal.upsert({
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId: resolvedPieceId },
         update: {
           totalNetWeight: { increment: net },
-          totalPieces: { increment: bobbinQty },
+          totalBob: { increment: bobbinQty },
         },
         create: {
           pieceId: resolvedPieceId,
           totalNetWeight: net,
-          totalPieces: bobbinQty,
+          totalBob: bobbinQty,
         },
       });
 
@@ -1168,13 +1334,14 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       };
     });
 
-    const rowWithRelations = await prisma.receiveRow.findUnique({
+    const rowWithRelations = await prisma.receiveFromCutterMachineRow.findUnique({
       where: { id: txResult.rowId },
       include: {
         bobbin: { select: { id: true, name: true, weight: true } },
         box: { select: { id: true, name: true, weight: true } },
         operator: { select: { id: true, name: true } },
         helper: { select: { id: true, name: true } },
+        cutMaster: { select: { id: true, name: true } },
       },
     });
 
@@ -1182,7 +1349,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
       return res.status(500).json({ error: 'Failed to load manual entry' });
     }
 
-    const updatedTotals = await prisma.receivePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+    const updatedTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
     const pendingAfter = Math.max(
       0,
       inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
@@ -1201,7 +1368,7 @@ router.post('/api/receive_from_machine/manual', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to record manual receive' });
   }
 });
-router.post('/api/receive_from_machine/preview', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
@@ -1220,7 +1387,7 @@ router.post('/api/receive_from_machine/preview', async (req, res) => {
     }
 
     const vchNos = rows.map(r => r.vchNo);
-    const existing = await prisma.receiveRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
+    const existing = await prisma.receiveFromCutterMachineRow.findMany({ where: { vchNo: { in: vchNos } }, select: { vchNo: true } });
     if (existing.length > 0) {
       const duplicates = existing.map(r => r.vchNo);
       return res.status(409).json({ error: 'Duplicate VchNo detected in database', duplicates });
@@ -1242,6 +1409,540 @@ router.post('/api/receive_from_machine/preview', async (req, res) => {
   }
 });
 
+router.post('/api/issue_to_holo_machine', async (req, res) => {
+  try {
+    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId } = req.body || {};
+    if (!date) {
+      return res.status(400).json({ error: 'Missing date' });
+    }
+    const crateRows = Array.isArray(crates) ? crates : [];
+    if (crateRows.length === 0) {
+      return res.status(400).json({ error: 'Scan at least one crate to issue' });
+    }
+
+    const normalizedCrates = crateRows
+      .map((crate) => ({
+        rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
+        issuedBobbins: Number(crate.issuedBobbins || 0),
+        issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
+      }))
+      .filter((crate) => crate.rowId);
+
+    if (normalizedCrates.length === 0) {
+      return res.status(400).json({ error: 'Invalid crate payload' });
+    }
+    if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbins) || crate.issuedBobbins <= 0)) {
+      return res.status(400).json({ error: 'Enter bobbin quantity for each scanned crate' });
+    }
+    if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbinWeight) || crate.issuedBobbinWeight < 0)) {
+      return res.status(400).json({ error: 'Invalid bobbin weight for a crate' });
+    }
+
+    const rowIds = normalizedCrates.map((crate) => crate.rowId);
+    const uniqueRowIds = new Set(rowIds);
+    if (uniqueRowIds.size !== rowIds.length) {
+      return res.status(400).json({ error: 'Duplicate crates were scanned. Remove duplicates and try again.' });
+    }
+    const receiveRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: rowIds } },
+      select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
+    });
+    if (receiveRows.length !== normalizedCrates.length) {
+      return res.status(404).json({ error: 'One or more scanned crates were not found' });
+    }
+
+    const rowMap = new Map(receiveRows.map((row) => [row.id, row]));
+    const pieceIds = Array.from(new Set(receiveRows.map((row) => row.pieceId).filter(Boolean)));
+    const pieces = await prisma.inboundItem.findMany({
+      where: { id: { in: pieceIds } },
+      select: { id: true, itemId: true, lotNo: true },
+    });
+    const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
+    if (pieceMap.size !== pieceIds.length) {
+      return res.status(400).json({ error: 'One or more crates are missing linked inbound pieces' });
+    }
+
+    const lotSet = new Set();
+    const itemSet = new Set();
+    for (const row of receiveRows) {
+      const piece = pieceMap.get(row.pieceId);
+      lotSet.add(piece.lotNo);
+      itemSet.add(piece.itemId);
+    }
+    if (lotSet.size !== 1 || itemSet.size !== 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
+    }
+    const lotNo = Array.from(lotSet)[0];
+    const itemId = Array.from(itemSet)[0];
+
+    let yarnRecord = null;
+    if (yarnId) {
+      yarnRecord = await prisma.yarn.findUnique({ where: { id: yarnId } });
+      if (!yarnRecord) {
+        return res.status(404).json({ error: 'Selected yarn not found' });
+      }
+    }
+
+    if (!twistId) {
+      return res.status(400).json({ error: 'Missing twist selection' });
+    }
+    const twistRecord = await prisma.twist.findUnique({ where: { id: twistId } });
+    if (!twistRecord) {
+      return res.status(404).json({ error: 'Selected twist not found' });
+    }
+
+    const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
+    if (!Number.isFinite(totalBobbins) || totalBobbins <= 0) {
+      return res.status(400).json({ error: 'Enter bobbin quantity for the scanned crates' });
+    }
+    const totalWeight = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
+    const normalizedYarnKg = Number(yarnKg || 0);
+
+    const created = await prisma.$transaction(async (tx) => {
+      const issue = await tx.issueToHoloMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          yarnId: yarnRecord ? yarnRecord.id : null,
+          twistId: twistRecord.id,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: `HLO-${lotNo}-${Date.now()}`,
+          note: note || null,
+          metallicBobbins: totalBobbins,
+          metallicBobbinsWeight: totalWeight,
+          yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
+          receivedRowRefs: normalizedCrates,
+          rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
+        },
+      });
+
+      for (const crate of normalizedCrates) {
+        const sourceRow = rowMap.get(crate.rowId);
+        const existingQty = Number(sourceRow?.issuedBobbins || 0);
+        const existingWeight = Number(sourceRow?.issuedBobbinWeight || 0);
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: crate.rowId },
+          data: {
+            issuedBobbins: existingQty + (Number(crate.issuedBobbins) || 0),
+            issuedBobbinWeight: existingWeight + (Number(crate.issuedBobbinWeight) || 0),
+          },
+        });
+      }
+
+      return issue;
+    });
+
+    res.json({ ok: true, issueToHoloMachine: created });
+  } catch (err) {
+    console.error('Failed to issue to holo machine', err);
+    res.status(500).json({ error: err.message || 'Failed to issue to holo' });
+  }
+});
+
+router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
+  try {
+    const {
+      issueId,
+      pieceId,
+      rollCount,
+      // rollWeight, // No longer accepted for calculation
+      rollTypeId,
+      grossWeight,
+      crateTareWeight,
+      boxId,
+      date,
+      machineNo,
+      operatorId,
+      helperId,
+      notes,
+      createdBy,
+    } = req.body || {};
+    const rollCountNum = Number(rollCount);
+    const grossNum = Number(grossWeight);
+
+    if (!issueId || !pieceId || !Number.isFinite(rollCountNum) || rollCountNum <= 0 || !Number.isFinite(grossNum) || grossNum <= 0) {
+      return res.status(400).json({ error: 'Missing required roll count or gross weight data' });
+    }
+
+    const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
+    const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
+    const issue = await prisma.issueToHoloMachine.findUnique({ where: { id: issueId }, select: { lotNo: true } });
+
+    const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
+    const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : null;
+    const crateTare = crateTareWeight == null ? null : Number(crateTareWeight);
+
+    const tareWeight = (() => {
+      const base = rollTypeWeight != null ? rollCountNum * rollTypeWeight : null;
+      if (base == null && crateTare == null && boxWeight == null) return null;
+      return (base || 0) + (crateTare || 0) + (boxWeight || 0);
+    })();
+
+    if (tareWeight == null) {
+       return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
+    }
+
+    const netWeight = grossNum - tareWeight;
+    if (!Number.isFinite(netWeight) || netWeight <= 0) {
+      return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
+    }
+
+    const tsPart = Date.now().toString().slice(-6);
+    const randPart = Math.random().toString(36).slice(-4).toUpperCase();
+    const lotPart = (issue?.lotNo || 'HLO').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'HLO';
+    const barcode = `RHO-${lotPart}-${tsPart}${randPart}`;
+
+    const createdRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId,
+        date: date || null,
+        machineNo: machineNo || null,
+        operatorId: operatorId || null,
+        helperId: helperId || null,
+        rollTypeId: rollTypeId || null,
+        rollCount: rollCountNum,
+        rollWeight: Number(netWeight), // Derived net weight
+        grossWeight: grossNum,
+        tareWeight,
+        barcode,
+        boxId: boxId || null,
+        notes: notes || null,
+        createdBy: createdBy || 'manual',
+      },
+    });
+    
+    const netIncrement = Number(netWeight);
+    await prisma.receiveFromHoloMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalRolls: { increment: rollCountNum },
+        totalNetWeight: { increment: netIncrement },
+      },
+      create: {
+        pieceId,
+        totalRolls: rollCountNum,
+        totalNetWeight: netIncrement,
+        wastageNetWeight: 0,
+      },
+    });
+    res.json({ ok: true, row: createdRow });
+  } catch (err) {
+    console.error('Failed to receive from holo machine', err);
+    res.status(500).json({ error: err.message || 'Failed to record holo receive' });
+  }
+});
+
+router.post('/api/issue_to_coning_machine', async (req, res) => {
+  try {
+    const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt } = req.body || {};
+    if (!date) return res.status(400).json({ error: 'Missing date' });
+    const crateRows = Array.isArray(crates) ? crates : [];
+    if (crateRows.length === 0) return res.status(400).json({ error: 'Scan at least one crate to issue' });
+    const requiredPerConeNetWeight = toNumber(reqPerConeWt); // grams
+    if (!Number.isFinite(requiredPerConeNetWeight) || requiredPerConeNetWeight <= 0) {
+      return res.status(400).json({ error: 'Enter required per-cone net weight (grams)' });
+    }
+
+    const normalizedCrates = crateRows
+      .map((crate) => ({
+        rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
+        barcode: typeof crate.barcode === 'string' ? normalizeBarcodeInput(crate.barcode) : '',
+        coneTypeId: typeof crate.coneTypeId === 'string' ? crate.coneTypeId : null,
+        wrapperId: typeof crate.wrapperId === 'string' ? crate.wrapperId : null,
+        boxId: typeof crate.boxId === 'string' ? crate.boxId : null,
+        issueRolls: toNumber(crate.issueRolls),
+        issueWeight: toNumber(crate.issueWeight),
+      }))
+      .filter((c) => c.rowId || c.barcode);
+
+    if (normalizedCrates.length === 0) return res.status(400).json({ error: 'Invalid crate payload' });
+
+    const rowIds = normalizedCrates.map((c) => c.rowId).filter(Boolean);
+    const barcodes = normalizedCrates.map((c) => c.barcode).filter(Boolean);
+
+    const coningRows = rowIds.length
+      ? await prisma.receiveFromConingMachineRow.findMany({
+          where: { id: { in: rowIds } },
+          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+        })
+      : [];
+
+    const matchedConingRowIds = new Set(coningRows.map((row) => row.id));
+    const pendingRowIds = rowIds.filter((id) => !matchedConingRowIds.has(id));
+
+    const holoWhere = [];
+    if (pendingRowIds.length) {
+      holoWhere.push({ id: { in: pendingRowIds } });
+    }
+    if (barcodes.length) {
+      holoWhere.push({ barcode: { in: barcodes } });
+    }
+
+    const holoRows = holoWhere.length
+      ? await prisma.receiveFromHoloMachineRow.findMany({
+          where: { OR: holoWhere },
+          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+        })
+      : [];
+
+    const rows = [...coningRows, ...holoRows];
+    if (rows.length !== normalizedCrates.length) return res.status(404).json({ error: 'One or more scanned crates were not found' });
+
+    const rowMapById = new Map(rows.map((r) => [r.id, r]));
+    const rowMapByBarcode = new Map(
+      rows
+        .filter((r) => r?.barcode)
+        .map((r) => [normalizeBarcodeInput(r.barcode), r]),
+    );
+
+    const resolvedCrates = normalizedCrates.map((crate) => {
+      const found = crate.rowId ? rowMapById.get(crate.rowId) : rowMapByBarcode.get(crate.barcode);
+      return {
+        ...crate,
+        rowId: found?.id || crate.rowId,
+        lotNo: found?.issue?.lotNo || null,
+        itemId: found?.issue?.itemId || null,
+        baseRolls: typeof found?.coneCount === 'number'
+          ? found.coneCount
+          : (typeof found?.rollCount === 'number' ? found.rollCount : 0),
+        baseWeight: typeof found?.coneWeight === 'number'
+          ? found.coneWeight
+          : (typeof found?.rollWeight === 'number' ? found.rollWeight : 0),
+      };
+    });
+
+    const lotSet = new Set(resolvedCrates.map((c) => c.lotNo).filter(Boolean));
+    const itemSet = new Set(resolvedCrates.map((c) => c.itemId).filter(Boolean));
+    if (lotSet.size !== 1 || itemSet.size !== 1) return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
+    const lotNo = Array.from(lotSet)[0];
+    const itemId = Array.from(itemSet)[0];
+
+    // Validate masters if provided
+    const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
+    const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
+    const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
+    if (coneTypeIds.length) {
+      const ctCount = await prisma.coneType.count({ where: { id: { in: coneTypeIds } } });
+      if (ctCount !== coneTypeIds.length) return res.status(400).json({ error: 'One or more cone types not found' });
+    }
+    if (coneTypeIds.length > 1) {
+      return res.status(400).json({ error: 'Crates must use a single cone type for coning issues' });
+    }
+    if (wrapperIds.length) {
+      const wCount = await prisma.wrapper.count({ where: { id: { in: wrapperIds } } });
+      if (wCount !== wrapperIds.length) return res.status(400).json({ error: 'One or more wrappers not found' });
+    }
+    if (boxIds.length) {
+      const bCount = await prisma.box.count({ where: { id: { in: boxIds } } });
+      if (bCount !== boxIds.length) return res.status(400).json({ error: 'One or more boxes not found' });
+    }
+
+    if (resolvedCrates.some((c) => !Number.isFinite(c.issueRolls) || c.issueRolls <= 0)) {
+      return res.status(400).json({ error: 'Enter issue rolls for each crate' });
+    }
+
+    const preparedCrates = resolvedCrates.map((c) => {
+      const baseRolls = Number(c.baseRolls) || 0;
+      const baseWeight = Number(c.baseWeight) || 0;
+      const perRoll = baseRolls > 0 && Number.isFinite(baseWeight) ? baseWeight / baseRolls : 0;
+      const rolls = Number(c.issueRolls) || 0;
+      const providedWeight = Number(c.issueWeight);
+      const issueWeight = Number.isFinite(providedWeight) && providedWeight > 0
+        ? providedWeight
+        : Number((perRoll * rolls).toFixed(3));
+      return {
+        rowId: c.rowId,
+        barcode: c.barcode,
+        lotNo: c.lotNo,
+        itemId: c.itemId,
+        coneTypeId: c.coneTypeId,
+        wrapperId: c.wrapperId,
+        boxId: c.boxId,
+        issueRolls: rolls,
+        issueWeight,
+        baseRolls,
+        baseWeight,
+      };
+    });
+
+    if (preparedCrates.some((c) => !Number.isFinite(c.issueWeight) || c.issueWeight <= 0)) {
+      return res.status(400).json({ error: 'Issue weight missing for one or more crates' });
+    }
+
+    // Guard against re-issuing the same crate beyond its available rolls
+    const rowIdsToCheck = preparedCrates.map((c) => c.rowId).filter(Boolean);
+    const barcodesToCheck = preparedCrates.map((c) => c.barcode).filter(Boolean);
+    let existingRowRefs = [];
+
+    if (rowIdsToCheck.length || barcodesToCheck.length) {
+      const rowIdArray = rowIdsToCheck.length ? rowIdsToCheck : ['__none__'];
+      const barcodeArray = barcodesToCheck.length ? barcodesToCheck : ['__none__'];
+      existingRowRefs = await prisma.$queryRaw`
+        SELECT id, "receivedRowRefs"
+        FROM "IssueToConingMachine"
+        WHERE EXISTS (
+          SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+          WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+             OR elem->>'barcode' = ANY (${barcodeArray}::text[])
+        )
+      `;
+    }
+
+    const previouslyIssuedByRowId = new Map();
+    for (const issue of existingRowRefs) {
+      const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
+      for (const ref of refs) {
+        const rid = ref?.rowId || (ref?.barcode ? normalizeBarcodeInput(ref.barcode) : null);
+        if (!rid) continue;
+        const already = previouslyIssuedByRowId.get(rid) || 0;
+        previouslyIssuedByRowId.set(rid, already + (Number(ref.issueRolls) || 0));
+      }
+    }
+
+    const issueTracker = new Map();
+    const overIssuedCrates = [];
+    for (const crate of preparedCrates) {
+      const rid = crate.rowId || (crate.barcode ? normalizeBarcodeInput(crate.barcode) : null);
+      if (!rid) continue;
+      const baseRolls = Number(crate.baseRolls) || 0;
+      const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
+      const alreadyPlanned = issueTracker.get(rid) || 0;
+      const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
+
+      if (baseRolls > 0 && totalAfterRequest > baseRolls) {
+        overIssuedCrates.push({
+          rowId: rid,
+          barcode: crate.barcode,
+          requestedRolls: crate.issueRolls,
+          availableRolls: Math.max(baseRolls - existingIssued - alreadyPlanned, 0),
+        });
+      }
+
+      issueTracker.set(rid, alreadyPlanned + (Number(crate.issueRolls) || 0));
+    }
+
+    if (overIssuedCrates.length) {
+      return res.status(400).json({
+        error: 'One or more crates have already been fully issued',
+        crates: overIssuedCrates,
+      });
+    }
+
+    const totalRolls = preparedCrates.reduce((sum, c) => sum + (Number(c.issueRolls) || 0), 0);
+    const totalIssueWeightKg = preparedCrates.reduce((sum, c) => sum + (Number(c.issueWeight) || 0), 0);
+    const expectedCones = requiredPerConeNetWeight > 0
+      ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
+      : 0;
+    const created = await prisma.issueToConingMachine.create({
+      data: {
+        date,
+        itemId,
+        lotNo,
+        machineId: machineId || null,
+        operatorId: operatorId || null,
+        barcode: `CN-${lotNo}-${Date.now()}`,
+        note: note || null,
+        rollsIssued: Number(totalRolls || 0),
+        requiredPerConeNetWeight,
+        expectedCones,
+        receivedRowRefs: preparedCrates,
+      },
+    });
+    res.json({ ok: true, issueToConingMachine: created });
+  } catch (err) {
+    console.error('Failed to issue to coning machine', err);
+    res.status(500).json({ error: err.message || 'Failed to issue to coning' });
+  }
+});
+
+router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
+  try {
+    const {
+      issueId,
+      pieceId: rawPieceId,
+      coneCount,
+      boxId,
+      date,
+      grossWeight: providedGross,
+      machineNo,
+      operatorId,
+      helperId,
+      notes,
+      createdBy,
+    } = req.body || {};
+    const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
+    if (!issueId || !pieceId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
+      return res.status(400).json({ error: 'Missing required cone or gross weight data' });
+    }
+    const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    let boxWeight = null;
+    if (boxId) {
+      const box = await prisma.box.findUnique({ where: { id: boxId }, select: { weight: true } });
+      boxWeight = box?.weight ?? null;
+    }
+    const coneTypeId = Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length
+      ? issue.receivedRowRefs[0].coneTypeId
+      : null;
+    let coneWeightPerPiece = null;
+    if (coneTypeId) {
+      const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
+      coneWeightPerPiece = coneType?.weight ?? null;
+    }
+    const tareWeight = (boxWeight || 0) + (coneWeightPerPiece || 0) * coneCount;
+    const grossWeight = Number(providedGross);
+    const netWeight = grossWeight - tareWeight;
+    if (!Number.isFinite(netWeight) || netWeight < 0) {
+      return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
+    }
+
+    const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
+    const crateIndex = existingCount + 1;
+    const paddedIndex = String(crateIndex).padStart(3, '0');
+    const baseCode = issue.barcode || issue.lotNo || issue.id;
+    const barcode = `RCN-${baseCode}-${paddedIndex}`;
+
+    const createdRow = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId,
+        coneCount,
+        barcode,
+        coneWeight: Number(netWeight),
+        netWeight: Number(netWeight),
+        tareWeight: Number(tareWeight),
+        grossWeight: Number(grossWeight),
+        boxId: boxId || null,
+        machineNo: machineNo || null,
+        operatorId: operatorId || issue.operatorId || null,
+        helperId: helperId || null,
+        notes: notes || null,
+        date: date || issue.date,
+        createdBy: createdBy || 'manual',
+      },
+    });
+    await prisma.receiveFromConingMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalCones: { increment: coneCount },
+        totalNetWeight: { increment: netWeight || 0 },
+      },
+      create: {
+        pieceId,
+        totalCones: coneCount,
+        totalNetWeight: netWeight || 0,
+        wastageNetWeight: 0,
+      },
+    });
+    res.json({ ok: true, row: createdRow });
+  } catch (err) {
+    console.error('Failed to receive from coning machine', err);
+    res.status(500).json({ error: err.message || 'Failed to record coning receive' });
+  }
+});
+
 // Simple import endpoint: replaces data for simplicity
 router.post('/api/import', async (req, res) => {
   try {
@@ -1249,10 +1950,13 @@ router.post('/api/import', async (req, res) => {
     if (!data) return res.status(400).json({ error: 'Missing body' });
 
     // Clear existing tables (simple approach for import)
-    await prisma.issueToMachine.deleteMany();
-    await prisma.receiveRow.deleteMany();
-    await prisma.receiveUpload.deleteMany();
-    await prisma.receivePieceTotal.deleteMany();
+    await prisma.receiveFromConingMachineRow.deleteMany();
+    await prisma.receiveFromConingMachinePieceTotal.deleteMany();
+    await prisma.issueToConingMachine.deleteMany();
+    await prisma.issueToCutterMachine.deleteMany();
+    await prisma.receiveFromCutterMachineRow.deleteMany();
+    await prisma.receiveFromCutterMachineUpload.deleteMany();
+    await prisma.receiveFromCutterMachinePieceTotal.deleteMany();
     await prisma.inboundItem.deleteMany();
     await prisma.lot.deleteMany();
     await prisma.item.deleteMany();
@@ -1261,6 +1965,8 @@ router.post('/api/import', async (req, res) => {
     await prisma.operator.deleteMany();
     await prisma.bobbin.deleteMany();
     await prisma.box.deleteMany();
+    await prisma.coneType.deleteMany();
+    await prisma.wrapper.deleteMany();
 
     // Bulk create
     if (Array.isArray(data.items)) {
@@ -1288,9 +1994,9 @@ router.post('/api/import', async (req, res) => {
         await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0 } });
       }
     }
-    if (Array.isArray(data.issue_to_machine)) {
-      for (const c of data.issue_to_machine) {
-        await prisma.issueToMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
+    if (Array.isArray(data.issue_to_cutter_machine)) {
+      for (const c of data.issue_to_cutter_machine) {
+        await prisma.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
       }
     }
     if (Array.isArray(data.workers)) {
@@ -1306,6 +2012,71 @@ router.post('/api/import', async (req, res) => {
     if (Array.isArray(data.boxes)) {
       for (const box of data.boxes) {
         await prisma.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0) } });
+      }
+    }
+    if (Array.isArray(data.cone_types)) {
+      for (const ct of data.cone_types) {
+        await prisma.coneType.create({ data: { id: ct.id || undefined, name: ct.name, weight: ct.weight != null ? Number(ct.weight) : null } });
+      }
+    }
+    if (Array.isArray(data.wrappers)) {
+      for (const w of data.wrappers) {
+        await prisma.wrapper.create({ data: { id: w.id || undefined, name: w.name } });
+      }
+    }
+    if (Array.isArray(data.issue_to_coning_machine)) {
+      for (const c of data.issue_to_coning_machine) {
+        await prisma.issueToConingMachine.create({
+          data: {
+            id: c.id || undefined,
+            date: c.date,
+            itemId: c.itemId,
+            lotNo: c.lotNo,
+            machineId: c.machineId || null,
+            operatorId: c.operatorId || null,
+            barcode: c.barcode,
+            note: c.note || null,
+            rollsIssued: Number(c.rollsIssued || 0),
+            requiredPerConeNetWeight: Number(c.requiredPerConeNetWeight || 0),
+            expectedCones: Number(c.expectedCones || 0),
+            receivedRowRefs: Array.isArray(c.receivedRowRefs) ? c.receivedRowRefs : [],
+          },
+        });
+      }
+    }
+    if (Array.isArray(data.receive_from_coning_machine_rows)) {
+      for (const row of data.receive_from_coning_machine_rows) {
+        await prisma.receiveFromConingMachineRow.create({
+          data: {
+            id: row.id || undefined,
+            issueId: row.issueId,
+            coneCount: Number(row.coneCount || 0),
+            coneWeight: row.coneWeight != null ? Number(row.coneWeight) : null,
+            netWeight: row.netWeight != null ? Number(row.netWeight) : null,
+            tareWeight: row.tareWeight != null ? Number(row.tareWeight) : null,
+            grossWeight: row.grossWeight != null ? Number(row.grossWeight) : null,
+            barcode: row.barcode || null,
+            date: row.date || null,
+            boxId: row.boxId || null,
+            machineNo: row.machineNo || null,
+            operatorId: row.operatorId || null,
+            helperId: row.helperId || null,
+            notes: row.notes || null,
+            createdBy: row.createdBy || null,
+          },
+        });
+      }
+    }
+    if (Array.isArray(data.receive_from_coning_machine_piece_totals)) {
+      for (const total of data.receive_from_coning_machine_piece_totals) {
+        await prisma.receiveFromConingMachinePieceTotal.create({
+          data: {
+            pieceId: total.pieceId,
+            totalCones: Number(total.totalCones || 0),
+            totalNetWeight: Number(total.totalNetWeight || 0),
+            wastageNetWeight: Number(total.wastageNetWeight || 0),
+          },
+        });
       }
     }
 
@@ -1326,7 +2097,12 @@ router.post('/api/import', async (req, res) => {
           suppliers: Array.isArray(data.suppliers) ? data.suppliers.length : 0,
           lots: Array.isArray(data.lots) ? data.lots.length : 0,
           inboundItems: Array.isArray(data.inbound_items) ? data.inbound_items.length : 0,
-          issues: Array.isArray(data.issue_to_machine) ? data.issue_to_machine.length : 0,
+          issues: Array.isArray(data.issue_to_cutter_machine) ? data.issue_to_cutter_machine.length : 0,
+          coningIssues: Array.isArray(data.issue_to_coning_machine) ? data.issue_to_coning_machine.length : 0,
+          coningReceives: Array.isArray(data.receive_from_coning_machine_rows) ? data.receive_from_coning_machine_rows.length : 0,
+          coningTotals: Array.isArray(data.receive_from_coning_machine_piece_totals) ? data.receive_from_coning_machine_piece_totals.length : 0,
+          coneTypes: Array.isArray(data.cone_types) ? data.cone_types.length : 0,
+          wrappers: Array.isArray(data.wrappers) ? data.wrappers.length : 0,
           workers: Array.isArray(data.workers) ? data.workers.length : 0,
           bobbins: Array.isArray(data.bobbins) ? data.bobbins.length : 0,
           boxes: Array.isArray(data.boxes) ? data.boxes.length : 0,
@@ -1360,7 +2136,7 @@ router.delete('/api/items/:id', async (req, res) => {
   if (!existingItem) {
     return res.status(404).json({ error: 'Item not found' });
   }
-  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToMachine.count({ where: { itemId: id } });
+  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToCutterMachine.count({ where: { itemId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
@@ -1397,6 +2173,211 @@ router.put('/api/items/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to update item', err);
     res.status(500).json({ error: err.message || 'Failed to update item' });
+  }
+});
+
+router.get('/api/yarns', async (req, res) => {
+  const yarns = await prisma.yarn.findMany({ orderBy: { name: 'asc' } });
+  res.json(yarns);
+});
+
+router.post('/api/yarns', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Missing yarn name' });
+    }
+    const yarn = await prisma.yarn.create({ data: { name: String(name).trim() } });
+    await logCrud({ entityType: 'yarn', entityId: yarn.id, action: 'create', payload: yarn });
+    res.json(yarn);
+  } catch (err) {
+    console.error('Failed to create yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to create yarn' });
+  }
+});
+
+router.put('/api/yarns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Missing yarn name' });
+    }
+    const existing = await prisma.yarn.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Yarn not found' });
+    }
+    const updated = await prisma.yarn.update({ where: { id }, data: { name: String(name).trim() } });
+    await logCrud({
+      entityType: 'yarn',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to update yarn' });
+  }
+});
+
+router.delete('/api/yarns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.yarn.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Yarn not found' });
+    }
+    const issueUsage = await prisma.issueToHoloMachine.count({ where: { yarnId: id } });
+    if (issueUsage > 0) {
+      return res.status(400).json({ error: 'Yarn has been used in issues and cannot be deleted' });
+    }
+    await prisma.yarn.delete({ where: { id } });
+    await logCrud({ entityType: 'yarn', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete yarn', err);
+    res.status(500).json({ error: err.message || 'Failed to delete yarn' });
+  }
+});
+
+router.get('/api/cuts', async (req, res) => {
+  const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
+  res.json(cuts);
+});
+
+router.post('/api/cuts', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing cut name' });
+    }
+    const cut = await prisma.cut.create({ data: { name: trimmed } });
+    await logCrud({ entityType: 'cut', entityId: cut.id, action: 'create', payload: cut });
+    res.json(cut);
+  } catch (err) {
+    console.error('Failed to create cut', err);
+    res.status(500).json({ error: err.message || 'Failed to create cut' });
+  }
+});
+
+router.put('/api/cuts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing cut name' });
+    }
+    const existing = await prisma.cut.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Cut not found' });
+    }
+    const updated = await prisma.cut.update({ where: { id }, data: { name: trimmed } });
+    await logCrud({
+      entityType: 'cut',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update cut', err);
+    res.status(500).json({ error: err.message || 'Failed to update cut' });
+  }
+});
+
+router.delete('/api/cuts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.cut.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Cut not found' });
+    }
+    const usage = await prisma.receiveFromCutterMachineRow.count({ where: { cutId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Cut is in use and cannot be deleted' });
+    }
+    await prisma.cut.delete({ where: { id } });
+    await logCrud({ entityType: 'cut', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete cut', err);
+    res.status(500).json({ error: err.message || 'Failed to delete cut' });
+  }
+});
+
+router.get('/api/twists', async (req, res) => {
+  const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
+  res.json(twists);
+});
+
+router.post('/api/twists', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing twist name' });
+    }
+    const twist = await prisma.twist.create({ data: { name: trimmed } });
+    await logCrud({ entityType: 'twist', entityId: twist.id, action: 'create', payload: twist });
+    res.json(twist);
+  } catch (err) {
+    console.error('Failed to create twist', err);
+    res.status(500).json({ error: err.message || 'Failed to create twist' });
+  }
+});
+
+router.put('/api/twists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) {
+      return res.status(400).json({ error: 'Missing twist name' });
+    }
+    const existing = await prisma.twist.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Twist not found' });
+    }
+    const updated = await prisma.twist.update({ where: { id }, data: { name: trimmed } });
+    await logCrud({
+      entityType: 'twist',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update twist', err);
+    res.status(500).json({ error: err.message || 'Failed to update twist' });
+  }
+});
+
+router.delete('/api/twists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.twist.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Twist not found' });
+    }
+    const usage = await prisma.issueToHoloMachine.count({ where: { twistId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Twist is in use and cannot be deleted' });
+    }
+    await prisma.twist.delete({ where: { id } });
+    await logCrud({ entityType: 'twist', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete twist', err);
+    res.status(500).json({ error: err.message || 'Failed to delete twist' });
   }
 });
 
@@ -1503,7 +2484,7 @@ router.delete('/api/machines/:id', async (req, res) => {
   const { id } = req.params;
   const existingMachine = await prisma.machine.findUnique({ where: { id } });
   if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
-  const usage = await prisma.issueToMachine.count({ where: { machineId: id } });
+  const usage = await prisma.issueToCutterMachine.count({ where: { machineId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
@@ -1552,8 +2533,8 @@ router.delete('/api/operators/:id', async (req, res) => {
   const existingOperator = await prisma.operator.findUnique({ where: { id } });
   if (!existingOperator) return res.status(404).json({ error: 'Operator not found' });
   const usage =
-    (await prisma.issueToMachine.count({ where: { operatorId: id } })) +
-    (await prisma.receiveRow.count({
+    (await prisma.issueToCutterMachine.count({ where: { operatorId: id } })) +
+    (await prisma.receiveFromCutterMachineRow.count({
       where: {
         OR: [
           { operatorId: id },
@@ -1616,7 +2597,7 @@ router.delete('/api/bobbins/:id', async (req, res) => {
   const { id } = req.params;
   const existingBobbin = await prisma.bobbin.findUnique({ where: { id } });
   if (!existingBobbin) return res.status(404).json({ error: 'Bobbin not found' });
-  const usage = await prisma.receiveRow.count({ where: { bobbinId: id } });
+  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { bobbinId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
   }
@@ -1660,6 +2641,71 @@ router.put('/api/bobbins/:id', async (req, res) => {
   }
 });
 
+// Roll types (Holo) master
+router.get('/api/roll_types', async (req, res) => { res.json(await prisma.rollType.findMany()); });
+router.post('/api/roll_types', async (req, res) => {
+  try {
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const created = await prisma.rollType.create({
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({ entityType: 'roll_type', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to create roll type' });
+  }
+});
+router.put('/api/roll_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.rollType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Roll type not found' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const updated = await prisma.rollType.update({
+      where: { id },
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({
+      entityType: 'roll_type',
+      entityId: id,
+      action: 'update',
+      payload: { before: existing, after: updated },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to update roll type' });
+  }
+});
+router.delete('/api/roll_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.rollType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Roll type not found' });
+    const usage = await prisma.receiveFromHoloMachineRow.count({ where: { rollTypeId: id } });
+    if (usage > 0) {
+      return res.status(400).json({ error: 'Roll type is referenced and cannot be deleted' });
+    }
+    await prisma.rollType.delete({ where: { id } });
+    await logCrud({ entityType: 'roll_type', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete roll type', err);
+    res.status(500).json({ error: err.message || 'Failed to delete roll type' });
+  }
+});
+
 router.get('/api/boxes', async (req, res) => { res.json(await prisma.box.findMany()); });
 router.post('/api/boxes', async (req, res) => {
   const { name, weight } = req.body;
@@ -1679,13 +2725,129 @@ router.delete('/api/boxes/:id', async (req, res) => {
   const { id } = req.params;
   const existingBox = await prisma.box.findUnique({ where: { id } });
   if (!existingBox) return res.status(404).json({ error: 'Box not found' });
-  const usage = await prisma.receiveRow.count({ where: { boxId: id } });
+  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Box is referenced and cannot be deleted' });
   }
   await prisma.box.delete({ where: { id } });
   await logCrud({ entityType: 'box', entityId: id, action: 'delete', payload: existingBox });
   res.json({ ok: true });
+});
+
+router.get('/api/cone_types', async (req, res) => { res.json(await prisma.coneType.findMany()); });
+router.post('/api/cone_types', async (req, res) => {
+  try {
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const created = await prisma.coneType.create({
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({ entityType: 'cone_type', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create cone type', err);
+    res.status(500).json({ error: err.message || 'Failed to create cone type' });
+  }
+});
+router.put('/api/cone_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, weight } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.coneType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Cone type not found' });
+    const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
+    const updated = await prisma.coneType.update({
+      where: { id },
+      data: {
+        name,
+        weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      },
+    });
+    await logCrud({
+      entityType: 'cone_type',
+      entityId: id,
+      action: 'update',
+      payload: { before: existing, after: updated },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update cone type', err);
+    res.status(500).json({ error: err.message || 'Failed to update cone type' });
+  }
+});
+router.delete('/api/cone_types/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.coneType.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Cone type not found' });
+    await prisma.coneType.delete({ where: { id } });
+    await logCrud({ entityType: 'cone_type', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete cone type', err);
+    res.status(500).json({ error: err.message || 'Failed to delete cone type' });
+  }
+});
+
+router.get('/api/wrappers', async (req, res) => { res.json(await prisma.wrapper.findMany()); });
+router.post('/api/wrappers', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const created = await prisma.wrapper.create({
+      data: {
+        name,
+      },
+    });
+    await logCrud({ entityType: 'wrapper', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create wrapper', err);
+    res.status(500).json({ error: err.message || 'Failed to create wrapper' });
+  }
+});
+router.put('/api/wrappers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const existing = await prisma.wrapper.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Wrapper not found' });
+    const updated = await prisma.wrapper.update({
+      where: { id },
+      data: {
+        name,
+      },
+    });
+    await logCrud({
+      entityType: 'wrapper',
+      entityId: id,
+      action: 'update',
+      payload: { before: existing, after: updated },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update wrapper', err);
+    res.status(500).json({ error: err.message || 'Failed to update wrapper' });
+  }
+});
+router.delete('/api/wrappers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.wrapper.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Wrapper not found' });
+    await prisma.wrapper.delete({ where: { id } });
+    await logCrud({ entityType: 'wrapper', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete wrapper', err);
+    res.status(500).json({ error: err.message || 'Failed to delete wrapper' });
+  }
 });
 router.put('/api/boxes/:id', async (req, res) => {
   try {
@@ -1723,21 +2885,21 @@ router.put('/api/boxes/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/issue_to_machine/:id', async (req, res) => {
+router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Find the issue_to_machine record
-    const issueRecord = await prisma.issueToMachine.findUnique({ where: { id } });
+    // Find the issue_to_cutter_machine record
+    const issueRecord = await prisma.issueToCutterMachine.findUnique({ where: { id } });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    // Get the piece IDs from the issue_to_machine record
+    // Get the piece IDs from the issue_to_cutter_machine record
     const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
     const cleanPieceIds = pieceIds.map(p => String(p).trim()).filter(Boolean);
     if (cleanPieceIds.length > 0) {
-      const receiveCount = await prisma.receiveRow.count({ where: { pieceId: { in: cleanPieceIds } } });
+      const receiveCount = await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: { in: cleanPieceIds } } });
       if (receiveCount > 0) {
         return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
       }
@@ -1745,8 +2907,8 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
     
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      // Delete the issue_to_machine record
-      await tx.issueToMachine.delete({ where: { id } });
+      // Delete the issue_to_cutter_machine record
+      await tx.issueToCutterMachine.delete({ where: { id } });
       
       // Mark pieces as available again
       if (cleanPieceIds.length > 0) {
@@ -1758,7 +2920,7 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
     });
 
     res.json({ ok: true });
-    // Notify issue_to_machine deleted
+    // Notify issue_to_cutter_machine deleted
     try {
       const itemName = issueRecord.itemId ? (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name : '';
       // include machine/operator info if available
@@ -1768,10 +2930,10 @@ router.delete('/api/issue_to_machine/:id', async (req, res) => {
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
       sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
-    } catch (e) { console.error('notify issue_to_machine deleted error', e); }
+    } catch (e) { console.error('notify issue_to_cutter_machine deleted error', e); }
   } catch (err) {
-    console.error('Failed to delete issue_to_machine record', err);
-    res.status(500).json({ error: err.message || 'Failed to delete issue_to_machine record' });
+    console.error('Failed to delete issue_to_cutter_machine record', err);
+    res.status(500).json({ error: err.message || 'Failed to delete issue_to_cutter_machine record' });
   }
 });
 
@@ -1957,8 +3119,8 @@ router.put('/api/inbound_items/:id', async (req, res) => {
 router.delete('/api/lots/:lotNo', async (req, res) => {
   try {
     const { lotNo } = req.params;
-    // Do not allow delete if any issue_to_machine record exists for this lot
-    const consCount = await prisma.issueToMachine.count({ where: { lotNo } });
+    // Do not allow delete if any issue_to_cutter_machine record exists for this lot
+    const consCount = await prisma.issueToCutterMachine.count({ where: { lotNo } });
     if (consCount > 0) {
       return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
     }

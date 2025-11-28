@@ -15,7 +15,7 @@ async function main() {
     });
 
     // Get rows without bobbin
-    const rowsWithoutBobbin = await prisma.receiveRow.findMany({
+    const rowsWithoutBobbin = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         OR: [
           { pcsTypeName: null },
@@ -32,7 +32,7 @@ async function main() {
     });
 
     // Get rows with bobbin
-    const rowsWithBobbin = await prisma.receiveRow.findMany({
+    const rowsWithBobbin = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         AND: [
           { pcsTypeName: { not: null } },

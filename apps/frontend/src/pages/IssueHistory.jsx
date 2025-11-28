@@ -98,8 +98,8 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
   };
 
   const rows = useMemo(() => {
-    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.issue_to_machine || []).slice();
-  }, [db.issue_to_machine, rowsProp]);
+    return Array.isArray(rowsProp) ? rowsProp.slice() : (db.issue_to_cutter_machine || []).slice();
+  }, [db.issue_to_cutter_machine, rowsProp]);
 
   const items = db.items || [];
   const machines = db.machines || [];
@@ -339,12 +339,13 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
               <th className="py-2 pr-2 text-right">Qty</th>
               <th className="py-2 pr-2 text-right">Weight (kg)</th>
               <th className="py-2 pr-2">Pieces</th>
+              <th className="py-2 pr-2">Barcode</th>
               <th className="py-2 pr-2">Note</th>
               <th className="py-2 pr-2">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length===0? <tr><td colSpan={10} className="py-4">No issues match filters.</td></tr> : paged.map((r, idx) => (
+            {filtered.length===0? <tr><td colSpan={11} className="py-4">No issues match filters.</td></tr> : paged.map((r, idx) => (
               <tr key={r.id || idx} className={`border-t ${cls.rowBorder} align-top row-hover`}>
                 <td className="py-2 pr-2">{r.date}</td>
                 <td className="py-2 pr-2">{db.items.find(i=>i.id===r.itemId)?.name || "—"}</td>
@@ -354,6 +355,7 @@ export function IssueHistory({ db, rows: rowsProp, refreshDb }) {
                 <td className="py-2 pr-2 text-right">{r.count}</td>
                 <td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td>
                 <td className="py-2 pr-2 font-mono whitespace-pre-wrap">{r.pieceIds.join(", ")}</td>
+                <td className="py-2 pr-2 font-mono break-words">{r.barcode || "—"}</td>
                 <td className="py-2 pr-2">{r.note || "—"}</td>
                 <td className="py-2 pr-2 flex items-center justify-center">
                   <button

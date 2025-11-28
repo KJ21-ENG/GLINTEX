@@ -14,6 +14,24 @@ model Item {
   lots  Lot[]
 }
 
+model Yarn {
+  id    String @id @default(cuid())
+  name  String @unique
+  issues IssueToHoloMachine[]
+}
+
+model Cut {
+  id    String @id @default(cuid())
+  name  String @unique
+  receiveRows ReceiveFromCutterMachineRow[]
+}
+
+model Twist {
+  id    String @id @default(cuid())
+  name  String @unique
+  holoIssues IssueToHoloMachine[]
+}
+
 model Firm {
   id   String @id @default(cuid())
   name String
@@ -53,28 +71,163 @@ model InboundItem {
 }
 
 model Machine {
-  id               String           @id @default(cuid())
-  name             String
-  issueToMachines  IssueToMachine[]
+  id                    String                  @id @default(cuid())
+  name                  String
+  issueToCutterMachines IssueToCutterMachine[]
+  issueToHoloMachines   IssueToHoloMachine[]
+  issueToConingMachines IssueToConingMachine[]
 }
 
 model Operator {
-  id               String           @id @default(cuid())
-  name             String
-  role             String           @default("operator")
-  issueToMachines  IssueToMachine[]
-  receiveRows      ReceiveRow[]     @relation("OperatorReceiveRows")
-  helperRows       ReceiveRow[]     @relation("HelperReceiveRows")
+  id                    String                              @id @default(cuid())
+  name                  String
+  role                  String                              @default("operator")
+  issueToCutterMachines IssueToCutterMachine[]
+  receiveRows           ReceiveFromCutterMachineRow[]      @relation("OperatorReceiveRows")
+  helperRows            ReceiveFromCutterMachineRow[]      @relation("HelperReceiveRows")
+  holoIssues            IssueToHoloMachine[]                @relation("IssueToHoloOperator")
+  coningIssues          IssueToConingMachine[]              @relation("IssueToConingOperator")
+  holoReceiveRows       ReceiveFromHoloMachineRow[]        @relation("OperatorHoloReceive")
+  holoHelperRows        ReceiveFromHoloMachineRow[]        @relation("HelperHoloReceive")
+  coningReceiveRows     ReceiveFromConingMachineRow[]      @relation("OperatorConingReceive")
+  coningHelperRows      ReceiveFromConingMachineRow[]      @relation("HelperConingReceive")
 }
 
 model Bobbin {
-  id          String       @id @default(cuid())
+  id          String                          @id @default(cuid())
   name        String
-  weight      Float?       // Weight in kg (BoxWt)
-  receiveRows ReceiveRow[]
+  weight      Float?                          // Weight in kg (BoxWt)
+  receiveRows ReceiveFromCutterMachineRow[]
 }
 
-model IssueToMachine {
+model IssueToHoloMachine {
+  id                  String   @id @default(cuid())
+  date                String
+  itemId              String
+  lotNo               String
+  yarnId              String?
+  twistId             String?
+  machineId           String?
+  operatorId          String?
+  barcode             String   @unique
+  note                String?
+  metallicBobbins     Int      @default(0)
+  metallicBobbinsWeight Float  @default(0)
+  yarnKg              Float    @default(0)
+  receivedRowRefs     Json     @default("[]")
+  rollsProducedEstimate Int?
+  createdAt           DateTime @default(now())
+  machine             Machine?  @relation(fields: [machineId], references: [id])
+  operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
+  yarn                Yarn?      @relation(fields: [yarnId], references: [id])
+  twist               Twist?     @relation(fields: [twistId], references: [id])
+  receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
+}
+
+model ReceiveFromHoloMachineRow {
+  id          String   @id @default(cuid())
+  date        String?
+  issueId     String
+  rollCount   Int
+  rollWeight  Float?
+  rollTypeId  String?
+  grossWeight Float?
+  tareWeight  Float?
+  barcode     String?  @unique
+  boxId       String?
+  machineNo   String?
+  operatorId  String?
+  helperId    String?
+  notes       String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
+  rollType    RollType?          @relation(fields: [rollTypeId], references: [id])
+  box         Box?               @relation(fields: [boxId], references: [id])
+  operator    Operator?           @relation("OperatorHoloReceive", fields: [operatorId], references: [id])
+  helper      Operator?           @relation("HelperHoloReceive", fields: [helperId], references: [id])
+}
+
+model ReceiveFromHoloMachinePieceTotal {
+  pieceId         String   @id
+  totalRolls      Int      @default(0)
+  totalNetWeight  Float    @default(0)
+  wastageNetWeight Float   @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model RollType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  weight    Float?
+  createdAt DateTime @default(now())
+  receiveRows ReceiveFromHoloMachineRow[]
+}
+
+model ConeType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  weight    Float?
+  createdAt DateTime @default(now())
+}
+
+model Wrapper {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+model IssueToConingMachine {
+  id              String   @id @default(cuid())
+  date            String
+  itemId          String
+  lotNo           String
+  machineId       String?
+  operatorId      String?
+  barcode         String   @unique
+  note            String?
+  rollsIssued     Int      @default(0)
+  requiredPerConeNetWeight Float   @default(0)
+  expectedCones  Float     @default(0)
+  receivedRowRefs Json     @default("[]")
+  createdAt       DateTime @default(now())
+  machine         Machine?  @relation(fields: [machineId], references: [id])
+  operator        Operator? @relation("IssueToConingOperator", fields: [operatorId], references: [id])
+  receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
+}
+
+model ReceiveFromConingMachineRow {
+  id          String   @id @default(cuid())
+  barcode     String?  @unique
+  date        String?
+  issueId     String
+  coneCount   Int
+  coneWeight  Float?
+  netWeight   Float?
+  tareWeight  Float?
+  grossWeight Float?
+  boxId       String?
+  machineNo   String?
+  operatorId  String?
+  helperId    String?
+  notes       String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  issue       IssueToConingMachine @relation("IssueConingRelation", fields: [issueId], references: [id])
+  operator    Operator?            @relation("OperatorConingReceive", fields: [operatorId], references: [id])
+  helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
+  box         Box?                 @relation(fields: [boxId], references: [id])
+}
+
+model ReceiveFromConingMachinePieceTotal {
+  pieceId         String   @id
+  totalCones      Int      @default(0)
+  totalNetWeight  Float    @default(0)
+  wastageNetWeight Float   @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model IssueToCutterMachine {
   id          String  @id
   date        String
   itemId      String
@@ -91,19 +244,19 @@ model IssueToMachine {
   operator    Operator? @relation(fields: [operatorId], references: [id])
 }
 
-model ReceiveUpload {
-  id               String       @id @default(cuid())
+model ReceiveFromCutterMachineUpload {
+  id               String                              @id @default(cuid())
   originalFilename String
-  uploadedAt       DateTime     @default(now())
-  rowCount         Int          @default(0)
-  rows             ReceiveRow[]
+  uploadedAt       DateTime                            @default(now())
+  rowCount         Int                                 @default(0)
+  rows             ReceiveFromCutterMachineRow[]
 }
 
-model ReceiveRow {
-  id            String         @id @default(cuid())
+model ReceiveFromCutterMachineRow {
+  id            String                              @id @default(cuid())
   uploadId      String
   pieceId       String
-  vchNo         String         @unique
+  vchNo         String                              @unique
   narration     String?
   date          String?
   vchBook       String?
@@ -123,7 +276,9 @@ model ReceiveRow {
   boxId         String?
   operatorId    String?
   helperId      String?
-  pcs           Int?
+  bobbinQuantity Int? @map("bobbin_quantity")
+  issuedBobbins  Int   @default(0)
+  issuedBobbinWeight Float @default(0)
   grossWt       Float?
   tareWt        Float?
   netWt         Float?
@@ -133,18 +288,20 @@ model ReceiveRow {
   totalKg       Float?
   createdBy     String?
   modifiedBy    String?
-  createdAt     DateTime       @default(now())
-  upload        ReceiveUpload  @relation(fields: [uploadId], references: [id], onDelete: Cascade)
-  bobbin        Bobbin?        @relation(fields: [bobbinId], references: [id])
-  box           Box?           @relation(fields: [boxId], references: [id])
-  operator      Operator?      @relation("OperatorReceiveRows", fields: [operatorId], references: [id])
-  helper        Operator?      @relation("HelperReceiveRows", fields: [helperId], references: [id])
+  createdAt     DateTime                            @default(now())
+  upload        ReceiveFromCutterMachineUpload      @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  bobbin        Bobbin?                              @relation(fields: [bobbinId], references: [id])
+  box           Box?                                 @relation(fields: [boxId], references: [id])
+  operator      Operator?                            @relation("OperatorReceiveRows", fields: [operatorId], references: [id])
+  helper        Operator?                            @relation("HelperReceiveRows", fields: [helperId], references: [id])
+  cutId         String?
+  cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
 }
 
-model ReceivePieceTotal {
+model ReceiveFromCutterMachinePieceTotal {
   pieceId        String   @id
   totalNetWeight Float    @default(0)
-  totalPieces    Int      @default(0)
+  totalBob       Int      @default(0)
   wastageNetWeight Float  @default(0)
   updatedAt      DateTime @updatedAt
 }
@@ -173,10 +330,12 @@ model WhatsappTemplate {
 }
 
 model Box {
-  id          String       @id @default(cuid())
+  id          String                          @id @default(cuid())
   name        String
   weight      Float
-  receiveRows ReceiveRow[]
+  receiveRows ReceiveFromCutterMachineRow[]
+  holoReceiveRows ReceiveFromHoloMachineRow[]
+  coningReceiveRows ReceiveFromConingMachineRow[]
 }
 
 

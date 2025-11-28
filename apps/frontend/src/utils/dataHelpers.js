@@ -7,6 +7,9 @@ import { defaultBrand } from './theme.js';
 export function normalizeDb(raw) {
   const ensureArr = (val) => (Array.isArray(val) ? val : []);
   const items = ensureArr(raw?.items);
+  const yarns = ensureArr(raw?.yarns);
+  const cuts = ensureArr(raw?.cuts);
+  const twists = ensureArr(raw?.twists);
   const firms = ensureArr(raw?.firms);
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
@@ -21,7 +24,10 @@ export function normalizeDb(raw) {
   const boxes = ensureArr(raw?.boxes);
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
-  const issueToMachine = ensureArr(raw?.issue_to_machine).map((record) => ({
+  const rollTypes = ensureArr(raw?.roll_types);
+  const coneTypes = ensureArr(raw?.cone_types);
+  const wrappers = ensureArr(raw?.wrappers);
+  const issueToCutterMachine = ensureArr(raw?.issue_to_cutter_machine).map((record) => ({
     ...record,
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
     // Normalize date to canonical ISO (YYYY-MM-DD) for sorting, keep original for display if needed
@@ -39,11 +45,16 @@ export function normalizeDb(raw) {
     })(),
   }));
   const settings = ensureArr(raw?.settings);
-  const receiveUploads = ensureArr(raw?.receive_uploads);
-  const receiveRows = ensureArr(raw?.receive_rows);
-  const receivePieceTotals = ensureArr(raw?.receive_piece_totals);
+  const issueToHoloMachine = ensureArr(raw?.issue_to_holo_machine);
+  const issueToConingMachine = ensureArr(raw?.issue_to_coning_machine);
+  const receiveUploads = ensureArr(raw?.receive_from_cutter_machine_uploads);
+  const receiveRows = ensureArr(raw?.receive_from_cutter_machine_rows);
+  const receivePieceTotals = ensureArr(raw?.receive_from_cutter_machine_piece_totals);
   return {
     items,
+    yarns,
+    cuts,
+    twists,
     firms,
     suppliers,
     machines,
@@ -54,11 +65,20 @@ export function normalizeDb(raw) {
     boxes,
     lots,
     inbound_items,
-    issue_to_machine: issueToMachine,
+    rollTypes,
+    cone_types: coneTypes,
+    wrappers,
+    issue_to_cutter_machine: issueToCutterMachine,
+    issue_to_holo_machine: issueToHoloMachine,
+    issue_to_coning_machine: issueToConingMachine,
     settings,
-    receive_uploads: receiveUploads,
-    receive_rows: receiveRows,
-    receive_piece_totals: receivePieceTotals,
+    receive_from_cutter_machine_uploads: receiveUploads,
+    receive_from_cutter_machine_rows: receiveRows,
+    receive_from_cutter_machine_piece_totals: receivePieceTotals,
+    receive_from_holo_machine_rows: ensureArr(raw?.receive_from_holo_machine_rows),
+    receive_from_coning_machine_rows: ensureArr(raw?.receive_from_coning_machine_rows),
+    receive_from_holo_machine_piece_totals: ensureArr(raw?.receive_from_holo_machine_piece_totals),
+    receive_from_coning_machine_piece_totals: ensureArr(raw?.receive_from_coning_machine_piece_totals),
   };
 }
 

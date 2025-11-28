@@ -62,6 +62,13 @@ jspm_packages/
 *.sublime-project
 *.sublime-workspace
 
+# Development tools
+.codex/
+.cursor/
+# BMAD rules and docs
+.bmad/
+docs/
+
 # macOS
 .DS_Store
 .AppleDouble
@@ -78,3 +85,6 @@ desktop.ini
 
 # Ignore project brand images (optional)
 /public/brand-logo.jpg
+
+#gemini
+.gemini-clipboard/

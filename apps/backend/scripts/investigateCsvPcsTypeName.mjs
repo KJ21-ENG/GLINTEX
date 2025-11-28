@@ -79,7 +79,7 @@ async function main() {
     })));
 
     // Overall statistics
-    const allRows = await prisma.receiveRow.findMany({
+    const allRows = await prisma.receiveFromCutterMachineRow.findMany({
       select: {
         pcsTypeName: true,
         bobbinId: true,
@@ -160,7 +160,7 @@ async function main() {
 
     // Sample rows with null PcsTypeName
     console.log('\n=== Sample Rows with Null PcsTypeName ===');
-    const sampleNullRows = await prisma.receiveRow.findMany({
+    const sampleNullRows = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
         pcsTypeName: null,
       },

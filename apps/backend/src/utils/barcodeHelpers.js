@@ -29,3 +29,11 @@ export function makeIssueBarcode({ materialCode = DEFAULT_MATERIAL_CODE, lotNo, 
 export function makeReceiveBarcode({ lotNo, seq, crateIndex = 1 }) {
   return `REC-${lotNo}-${padSeq(seq)}-C${padSeq(crateIndex)}`;
 }
+
+export function parseReceiveCrateIndex(barcode) {
+  if (typeof barcode !== 'string') return null;
+  const match = barcode.trim().match(/-C(\d+)$/i);
+  if (!match) return null;
+  const num = Number(match[1]);
+  return Number.isFinite(num) ? num : null;
+}

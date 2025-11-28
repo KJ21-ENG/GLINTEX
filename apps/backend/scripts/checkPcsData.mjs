@@ -10,17 +10,17 @@ async function main() {
 
     console.log('Checking ReceiveRow records for these pieces:');
     for (const pieceId of checkPieces) {
-      const rows = await prisma.receiveRow.findMany({
+      const rows = await prisma.receiveFromCutterMachineRow.findMany({
         where: { pieceId },
-        select: { pieceId: true, pcs: true, vchNo: true },
+        select: { pieceId: true, bobbinQuantity: true, vchNo: true },
       });
       
       if (rows.length > 0) {
-        const totalPcs = rows.reduce((sum, r) => sum + (r.pcs || 0), 0);
-        const rowsWithPcs = rows.filter(r => r.pcs && r.pcs > 0);
-        console.log(`  ${pieceId}: ${rows.length} rows, ${rowsWithPcs.length} with pcs data, total pcs = ${totalPcs}`);
-        if (rowsWithPcs.length > 0) {
-          rowsWithPcs.slice(0, 3).forEach(r => console.log(`    - VchNo ${r.vchNo}: ${r.pcs} pcs`));
+        const totalQty = rows.reduce((sum, r) => sum + (r.bobbinQuantity || 0), 0);
+        const rowsWithQty = rows.filter(r => r.bobbinQuantity && r.bobbinQuantity > 0);
+        console.log(`  ${pieceId}: ${rows.length} rows, ${rowsWithQty.length} with bobbin quantity data, total bobbin qty = ${totalQty}`);
+        if (rowsWithQty.length > 0) {
+          rowsWithQty.slice(0, 3).forEach(r => console.log(`    - VchNo ${r.vchNo}: ${r.bobbinQuantity} bobbin qty`));
         }
       } else {
         console.log(`  ${pieceId}: No ReceiveRow records found`);
@@ -29,25 +29,25 @@ async function main() {
 
     console.log('\nChecking ReceivePieceTotal records:');
     for (const pieceId of checkPieces) {
-      const total = await prisma.receivePieceTotal.findUnique({
+      const total = await prisma.receiveFromCutterMachinePieceTotal.findUnique({
         where: { pieceId },
       });
       
       if (total) {
-        console.log(`  ${pieceId}: totalPieces = ${total.totalPieces || 0}, totalNetWeight = ${total.totalNetWeight || 0}`);
+        console.log(`  ${pieceId}: totalBob = ${total.totalBob || 0}, totalNetWeight = ${total.totalNetWeight || 0}`);
       } else {
         console.log(`  ${pieceId}: No ReceivePieceTotal record found`);
       }
     }
 
-    console.log('\nSample of all ReceivePieceTotal with totalPieces > 0:');
-    const totalsWithPcs = await prisma.receivePieceTotal.findMany({
+    console.log('\nSample of all ReceivePieceTotal with totalBob > 0:');
+    const totalsWithPcs = await prisma.receiveFromCutterMachinePieceTotal.findMany({
       where: {
-        totalPieces: { gt: 0 },
+        totalBob: { gt: 0 },
       },
       select: {
         pieceId: true,
-        totalPieces: true,
+        totalBob: true,
         totalNetWeight: true,
       },
       take: 20,
@@ -55,12 +55,12 @@ async function main() {
     console.table(totalsWithPcs);
 
     // Count how many pieces have pcs data
-    const allTotals = await prisma.receivePieceTotal.findMany({
-      select: { pieceId: true, totalPieces: true },
+    const allTotals = await prisma.receiveFromCutterMachinePieceTotal.findMany({
+      select: { pieceId: true, totalBob: true },
     });
-    const withPcs = allTotals.filter(t => (t.totalPieces || 0) > 0);
+    const withPcs = allTotals.filter(t => (t.totalBob || 0) > 0);
     console.log(`\nTotal ReceivePieceTotal records: ${allTotals.length}`);
-    console.log(`Records with totalPieces > 0: ${withPcs.length}`);
+    console.log(`Records with totalBob > 0: ${withPcs.length}`);
 
   } catch (err) {
     console.error('Check failed', err);
@@ -71,4 +71,3 @@ async function main() {
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) main();
-

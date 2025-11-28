@@ -34,7 +34,7 @@ function buildImportFromCsv(records) {
   const suppliersMap = new Map();
   const lots = [];
   const inbound_items = [];
-  const issue_to_machine = [];
+  const issue_to_cutter_machine = [];
 
   let lotCounter = 0;
 
@@ -109,7 +109,7 @@ function buildImportFromCsv(records) {
       const count = donePieces.length;
       const totalDoneWeight = donePieces.reduce((s, p) => s + (Number(p.weight) || 0), 0);
       const latestDate = donePieces.map(p => p.doneDate).filter(Boolean).sort().slice(-1)[0] || (date || '');
-      issue_to_machine.push({ id, date: latestDate, itemId, lotNo, count, totalWeight: totalDoneWeight, pieceIds: donePieces.map(p => p.id), reason: 'import_legacy', note: 'Imported from old software' });
+      issue_to_cutter_machine.push({ id, date: latestDate, itemId, lotNo, count, totalWeight: totalDoneWeight, pieceIds: donePieces.map(p => p.id), reason: 'import_legacy', note: 'Imported from old software' });
     }
   }
 
@@ -117,7 +117,7 @@ function buildImportFromCsv(records) {
   const firms = Array.from(firmsMap.entries()).map(([name, id]) => ({ id, name }));
   const suppliers = Array.from(suppliersMap.entries()).map(([name, id]) => ({ id, name }));
 
-  return { items, firms, suppliers, lots, inbound_items, issue_to_machine, lotCount: lotCounter };
+  return { items, firms, suppliers, lots, inbound_items, issue_to_cutter_machine, lotCount: lotCounter };
 }
 
 function readCsv(filepath) {

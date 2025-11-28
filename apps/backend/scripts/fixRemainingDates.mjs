@@ -22,8 +22,8 @@ function parseDateToISO(s) {
 
 async function main() {
   try {
-    console.log('Scanning issueToMachine for non-ISO dates...');
-    const all = await prisma.issueToMachine.findMany({ select: { id: true, date: true } });
+    console.log('Scanning issueToCutterMachine for non-ISO dates...');
+    const all = await prisma.issueToCutterMachine.findMany({ select: { id: true, date: true } });
     const isoRe = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
     let fixes = 0;
     for (const r of all) {
@@ -31,7 +31,7 @@ async function main() {
         const iso = parseDateToISO(r.date);
         console.log(`Record ${r.id}: '${r.date}' => parsed '${iso}'`);
         if (iso) {
-          await prisma.issueToMachine.update({ where: { id: r.id }, data: { date: iso } });
+          await prisma.issueToCutterMachine.update({ where: { id: r.id }, data: { date: iso } });
           console.log(`Updated ${r.id} -> ${iso}`);
           fixes++;
         } else {
@@ -48,5 +48,4 @@ async function main() {
 }
 
 main();
-
 

@@ -34,20 +34,20 @@ async function main() {
       });
       
       if (total) {
-        console.log(`  ${pieceId}: totalPieces = ${total.totalPieces || 0}, totalNetWeight = ${total.totalNetWeight || 0}`);
+        console.log(`  ${pieceId}: totalBob = ${total.totalBob || 0}, totalNetWeight = ${total.totalNetWeight || 0}`);
       } else {
         console.log(`  ${pieceId}: No ReceivePieceTotal record found`);
       }
     }
 
-    console.log('\nSample of all ReceivePieceTotal with totalPieces > 0:');
+    console.log('\nSample of all ReceivePieceTotal with totalBob > 0:');
     const totalsWithPcs = await prisma.receiveFromCutterMachinePieceTotal.findMany({
       where: {
-        totalPieces: { gt: 0 },
+        totalBob: { gt: 0 },
       },
       select: {
         pieceId: true,
-        totalPieces: true,
+        totalBob: true,
         totalNetWeight: true,
       },
       take: 20,
@@ -56,11 +56,11 @@ async function main() {
 
     // Count how many pieces have pcs data
     const allTotals = await prisma.receiveFromCutterMachinePieceTotal.findMany({
-      select: { pieceId: true, totalPieces: true },
+      select: { pieceId: true, totalBob: true },
     });
-    const withPcs = allTotals.filter(t => (t.totalPieces || 0) > 0);
+    const withPcs = allTotals.filter(t => (t.totalBob || 0) > 0);
     console.log(`\nTotal ReceivePieceTotal records: ${allTotals.length}`);
-    console.log(`Records with totalPieces > 0: ${withPcs.length}`);
+    console.log(`Records with totalBob > 0: ${withPcs.length}`);
 
   } catch (err) {
     console.error('Check failed', err);

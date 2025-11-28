@@ -391,10 +391,9 @@ router.get('/api/db', async (req, res) => {
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true } },
       rollType: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
-      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true } },
     },
   });
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();

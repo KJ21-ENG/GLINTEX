@@ -25,6 +25,8 @@ export function normalizeDb(raw) {
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const rollTypes = ensureArr(raw?.roll_types);
+  const coneTypes = ensureArr(raw?.cone_types);
+  const wrappers = ensureArr(raw?.wrappers);
   const issueToCutterMachine = ensureArr(raw?.issue_to_cutter_machine).map((record) => ({
     ...record,
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
@@ -64,6 +66,8 @@ export function normalizeDb(raw) {
     lots,
     inbound_items,
     rollTypes,
+    cone_types: coneTypes,
+    wrappers,
     issue_to_cutter_machine: issueToCutterMachine,
     issue_to_holo_machine: issueToHoloMachine,
     issue_to_coning_machine: issueToConingMachine,

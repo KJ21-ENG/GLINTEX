@@ -167,6 +167,7 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
   const processDef = getProcessDefinition(process);
   const isCutter = process === 'cutter';
   const isHolo = process === 'holo';
+  const isConing = process === 'coning';
   const { receiveTotalsKey, receiveUnitField, receiveWeightField, receiveRowsKey, unitLabel, unitLabelPlural, label } = processDef;
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -408,8 +409,21 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
         />
       );
     }
-    const rowUnitField = process === 'holo' ? 'rollCount' : 'coneCount';
-    const rowWeightField = process === 'holo' ? 'rollWeight' : 'coneWeight';
+    if (isConing) {
+      return (
+        <ConingReceiveView
+          db={db}
+          cls={cls}
+          refreshDb={refreshDb}
+          processReceiveRows={processReceiveRows}
+          processReceiveTotals={processReceiveTotals}
+          totalProcessUnits={totalProcessUnits}
+          unitLabelPlural={unitLabelPlural}
+        />
+      );
+    }
+    const rowUnitField = 'coneCount';
+    const rowWeightField = 'coneWeight';
     return (
       <div className="space-y-6">
         <Section title={`Receive from ${label}`}>
@@ -753,6 +767,341 @@ export function ReceiveFromMachine({ db, refreshDb, onIssueToMachine, process = 
         </div>
         <div className="mt-2">
           <Pagination total={latestRows.length} page={rowsPage} setPage={setRowsPage} pageSize={pageSize} />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function ConingReceiveView({ db, cls, refreshDb, processReceiveRows, processReceiveTotals, totalProcessUnits, unitLabelPlural }) {
+  const [issueBarcode, setIssueBarcode] = useState('');
+  const [selectedIssue, setSelectedIssue] = useState(null);
+  const [receiveDate, setReceiveDate] = useState(todayISO());
+  const [cart, setCart] = useState([]);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const issueByBarcode = useMemo(() => {
+    const map = new Map();
+    ensureArray(db.issue_to_coning_machine).forEach((issue) => {
+      if (issue?.barcode) map.set(issue.barcode.toUpperCase(), issue);
+    });
+    return map;
+  }, [db.issue_to_coning_machine]);
+  const coneTypeMap = useMemo(() => {
+    const map = new Map();
+    ensureArray(db.cone_types).forEach((ct) => { if (ct?.id) map.set(ct.id, ct); });
+    return map;
+  }, [db.cone_types]);
+  const boxMap = useMemo(() => {
+    const map = new Map();
+    ensureArray(db.boxes).forEach((box) => { if (box?.id) map.set(box.id, box); });
+    return map;
+  }, [db.boxes]);
+  const operators = ensureArray(db.operators);
+  const helpers = ensureArray(db.helpers); // kept for other views; not used in coning
+
+  const perConeNetGram = selectedIssue ? Number(selectedIssue.requiredPerConeNetWeight || 0) : 0;
+  const coneTypeWeightKg = useMemo(() => {
+    if (!selectedIssue) return 0;
+    const coneTypeId = Array.isArray(selectedIssue.receivedRowRefs) && selectedIssue.receivedRowRefs.length
+      ? selectedIssue.receivedRowRefs[0].coneTypeId
+      : null;
+    if (!coneTypeId) return 0;
+    const ct = coneTypeMap.get(coneTypeId);
+    return Number(ct?.weight || 0);
+  }, [selectedIssue, coneTypeMap]);
+  const coneTypeLabel = useMemo(() => {
+    if (!selectedIssue) return 'n/a';
+    const coneTypeId = Array.isArray(selectedIssue.receivedRowRefs) && selectedIssue.receivedRowRefs.length
+      ? selectedIssue.receivedRowRefs[0].coneTypeId
+      : null;
+    if (!coneTypeId) return 'n/a';
+    const ct = coneTypeMap.get(coneTypeId);
+    if (!ct) return coneTypeId;
+    const wt = Number(ct.weight || 0);
+    return wt > 0 ? `${ct.name} (${formatKg(wt)} kg/pc)` : ct.name;
+  }, [selectedIssue, coneTypeMap]);
+
+  const addCartRow = () => {
+    const defaultOperatorId = selectedIssue?.operatorId || '';
+    setCart((prev) => [...prev, { id: uid(), coneCount: '', boxId: '', grossWeight: '', operatorId: defaultOperatorId, notes: '' }]);
+  };
+
+  const resetForm = () => {
+    setSelectedIssue(null);
+    setCart([]);
+    setIssueBarcode('');
+    setReceiveDate(todayISO());
+  };
+
+  const lookupIssue = () => {
+    const normalized = (issueBarcode || '').trim().toUpperCase();
+    const issue = issueByBarcode.get(normalized);
+    if (!issue) {
+      setError('Issue barcode not found. Check and try again.');
+      setSelectedIssue(null);
+      setCart([]);
+      return;
+    }
+    setError('');
+    setSelectedIssue(issue);
+    const defaultOperatorId = issue.operatorId || '';
+    setCart([{ id: uid(), coneCount: '', boxId: '', grossWeight: '', operatorId: defaultOperatorId, notes: '' }]);
+  };
+
+  const updateCartRow = (id, field, value) => {
+    setCart((prev) => prev.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+  };
+
+  const removeCartRow = (id) => {
+    setCart((prev) => prev.filter((row) => row.id !== id));
+  };
+
+  const calcMetrics = (row) => {
+    const cones = Number(row.coneCount || 0);
+    const boxWeightKg = row.boxId ? Number(boxMap.get(row.boxId)?.weight || 0) : 0;
+    const coneTare = coneTypeWeightKg > 0 && cones > 0 ? coneTypeWeightKg * cones : 0;
+    const tare = boxWeightKg + coneTare;
+    const gross = Number(row.grossWeight || 0);
+    const net = gross - tare;
+    return { netKg: net, tareKg: tare, grossKg: gross, boxWeightKg, coneTareKg: coneTare };
+  };
+  const operatorLabel = useMemo(() => {
+    if (!selectedIssue?.operatorId) return '—';
+    const found = operators.find((op) => op.id === selectedIssue.operatorId);
+    return found?.name || selectedIssue.operatorId;
+  }, [operators, selectedIssue]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedIssue) {
+      setError('Scan an issue barcode first.');
+      return;
+    }
+    if (cart.length === 0) {
+      setError('Add at least one receive crate.');
+      return;
+    }
+    if (perConeNetGram <= 0) {
+      setError('Required per-cone weight missing on issue. Edit issue or re-issue.');
+      return;
+    }
+    const invalidRow = cart.find((row) => !row.boxId || Number(row.coneCount) <= 0 || Number(row.grossWeight) <= 0);
+    if (invalidRow) {
+      setError('Enter cone quantity, gross weight, and select box for each crate.');
+      return;
+    }
+    setError('');
+    setSaving(true);
+    try {
+      for (const row of cart) {
+        const { netKg, tareKg, grossKg } = calcMetrics(row);
+        if (!Number.isFinite(netKg) || netKg < 0) {
+          setError('Gross weight must exceed tare weight for each crate.');
+          setSaving(false);
+          return;
+        }
+        await api.manualReceiveFromConingMachine({
+          issueId: selectedIssue.id,
+          pieceId: selectedIssue.id,
+          coneCount: Number(row.coneCount),
+          boxId: row.boxId,
+          grossWeight: grossKg,
+          date: receiveDate,
+          operatorId: selectedIssue.operatorId || null,
+          notes: row.notes || null,
+        });
+      }
+      alert('Receive entries saved');
+      await refreshDb();
+      resetForm();
+    } catch (err) {
+      console.error('Failed to save coning receive', err);
+      setError(err.message || 'Failed to save receive');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Section title="Receive from Coning (Cones)">
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Issue barcode</label>
+              <Input
+                value={issueBarcode}
+                onChange={(e) => setIssueBarcode(e.target.value)}
+                placeholder="Scan issue barcode (CN-...)"
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupIssue(); } }}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button type="button" onClick={lookupIssue} disabled={!issueBarcode.trim()}>Load issue</Button>
+            </div>
+            <div>
+              <label className={`text-xs ${cls.muted}`}>Receive date</label>
+              <Input type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} />
+            </div>
+            <div className="flex items-end text-xs text-slate-500">
+              {selectedIssue ? `Lot ${selectedIssue.lotNo} · Expected cones ${selectedIssue.expectedCones || 0}` : 'Awaiting barcode scan'}
+            </div>
+          </div>
+
+          {selectedIssue && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Pill>Lot: {selectedIssue.lotNo}</Pill>
+                <Pill>Required per cone: {perConeNetGram} g</Pill>
+                <Pill>Cone type: {coneTypeLabel}</Pill>
+                <Pill>Operator: {operatorLabel}</Pill>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className={`text-left ${cls.muted}`}>
+                    <tr>
+                      <th className="py-2 pr-2">Crate</th>
+                      <th className="py-2 pr-2">Box</th>
+                      <th className="py-2 pr-2 text-right">Cones</th>
+                      <th className="py-2 pr-2 text-right">Gross (kg)</th>
+                      <th className="py-2 pr-2 text-right">Tare (kg)</th>
+                      <th className="py-2 pr-2 text-right">Net (kg)</th>
+                      <th className="py-2 pr-2">Notes</th>
+                      <th className="py-2 pr-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cart.length === 0 ? (
+                      <tr><td className="py-3 pr-2" colSpan={8}>Add a crate to start.</td></tr>
+                    ) : (
+                      cart.map((row, idx) => {
+                        const metrics = calcMetrics(row);
+                        return (
+                          <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                            <td className="py-2 pr-2">#{idx + 1}</td>
+                            <td className="py-2 pr-2">
+                              <Select value={row.boxId} onChange={(e) => updateCartRow(row.id, 'boxId', e.target.value)}>
+                                <option value="">Select</option>
+                                {ensureArray(db.boxes).map((box) => (
+                                  <option key={box.id} value={box.id}>{box.name}</option>
+                                ))}
+                              </Select>
+                              <div className={`text-xs ${cls.muted}`}>Box wt: {formatKg(metrics.boxWeightKg || 0)}</div>
+                            </td>
+                            <td className="py-2 pr-2 text-right">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={row.coneCount}
+                                onChange={(e) => updateCartRow(row.id, 'coneCount', e.target.value)}
+                              />
+                            </td>
+                            <td className="py-2 pr-2 text-right">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={row.grossWeight}
+                                onChange={(e) => updateCartRow(row.id, 'grossWeight', e.target.value)}
+                              />
+                            </td>
+                            <td className="py-2 pr-2 text-right font-mono">{formatKg(metrics.tareKg || 0)}</td>
+                            <td className="py-2 pr-2 text-right font-mono">{formatKg(metrics.netKg || 0)}</td>
+                            <td className="py-2 pr-2">
+                              <Input value={row.notes} onChange={(e) => updateCartRow(row.id, 'notes', e.target.value)} placeholder="Optional" />
+                            </td>
+                            <td className="py-2 pr-2 text-right">
+                              <button type="button" className="text-sm text-red-500 underline" onClick={() => removeCartRow(row.id)}>Remove</button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button type="button" onClick={addCartRow} disabled={!selectedIssue}>Add crate</Button>
+                <Button type="submit" disabled={saving || cart.length === 0}>{saving ? 'Saving…' : 'Save receive'}</Button>
+                <Pill>Total expected: {selectedIssue.expectedCones || 0} cones</Pill>
+              </div>
+            </div>
+          )}
+          {error && <div className="text-xs text-red-500">{error}</div>}
+        </form>
+      </Section>
+
+      <Section title="Recent receives (Coning)">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">Date</th>
+                <th className="py-2 pr-2">Receive barcode</th>
+                <th className="py-2 pr-2">Issue barcode</th>
+                <th className="py-2 pr-2">Lot</th>
+                <th className="py-2 pr-2 text-right">Cones</th>
+                <th className="py-2 pr-2 text-right">Gross (kg)</th>
+                <th className="py-2 pr-2 text-right">Tare (kg)</th>
+                <th className="py-2 pr-2 text-right">Net (kg)</th>
+                <th className="py-2 pr-2">Box</th>
+                <th className="py-2 pr-2">Operator</th>
+                <th className="py-2 pr-2">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processReceiveRows.length === 0 ? (
+                <tr><td className="py-3 pr-2" colSpan={11}>No receive records yet.</td></tr>
+              ) : (
+                processReceiveRows.map((row) => (
+                  <tr key={row.id} className={`border-t ${cls.rowBorder}`}>
+                    <td className="py-2 pr-2">{row.date || row.createdAt || '—'}</td>
+                    <td className="py-2 pr-2 font-mono">{row.barcode || '—'}</td>
+                    <td className="py-2 pr-2 font-mono">{row.issue?.barcode || '—'}</td>
+                    <td className="py-2 pr-2">{row.issue?.lotNo || '—'}</td>
+                    <td className="py-2 pr-2 text-right">{row.coneCount || 0}</td>
+                    <td className="py-2 pr-2 text-right">{row.grossWeight == null ? '—' : formatKg(row.grossWeight)}</td>
+                    <td className="py-2 pr-2 text-right">{row.tareWeight == null ? '—' : formatKg(row.tareWeight)}</td>
+                    <td className="py-2 pr-2 text-right">{row.netWeight == null ? '—' : formatKg(row.netWeight)}</td>
+                    <td className="py-2 pr-2">{row.box?.name || '—'}</td>
+                    <td className="py-2 pr-2">{row.operator?.name || '—'}</td>
+                    <td className="py-2 pr-2">{row.notes || '—'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Totals">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className={`text-left ${cls.muted}`}>
+              <tr>
+                <th className="py-2 pr-2">Piece/Issue</th>
+                <th className="py-2 pr-2 text-right">Total cones</th>
+                <th className="py-2 pr-2 text-right">Net (kg)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processReceiveTotals.length === 0 ? (
+                <tr><td className="py-3 pr-2" colSpan={3}>No totals yet.</td></tr>
+              ) : (
+                processReceiveTotals.map((row) => (
+                  <tr key={row.pieceId} className={`border-t ${cls.rowBorder}`}>
+                    <td className="py-2 pr-2 font-mono">{row.pieceId}</td>
+                    <td className="py-2 pr-2 text-right">{row.totalCones || 0}</td>
+                    <td className="py-2 pr-2 text-right">{row.totalNetWeight == null ? '—' : formatKg(row.totalNetWeight)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </Section>
     </div>

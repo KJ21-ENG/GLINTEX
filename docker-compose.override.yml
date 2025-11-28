@@ -1,0 +1,21 @@
+services:
+  frontend-dev:
+    image: node:20-bullseye
+    working_dir: /app
+    command: >
+      sh -c "npm install &&
+             npm run dev -- --host 0.0.0.0 --port 6173"
+    environment:
+      VITE_API_BASE: http://localhost:${BACKEND_PORT:-4001}
+      CHOKIDAR_USEPOLLING: "1"
+    volumes:
+      - ./apps/frontend:/app
+      - frontend-dev-node_modules:/app/node_modules
+    ports:
+      - "6173:6173"
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  frontend-dev-node_modules:

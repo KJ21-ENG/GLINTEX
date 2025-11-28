@@ -274,6 +274,36 @@ export default function InventoryApp() {
     await refreshDb();
   }, [refreshDb]);
 
+  const handleCreateConeType = useCallback(async (name, weight) => {
+    await api.createConeType(name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteConeType = useCallback(async (id) => {
+    await api.deleteConeType(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateConeType = useCallback(async (id, name, weight) => {
+    await api.updateConeType(id, name, weight);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleCreateWrapper = useCallback(async (name) => {
+    await api.createWrapper(name);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleDeleteWrapper = useCallback(async (id) => {
+    await api.deleteWrapper(id);
+    await refreshDb();
+  }, [refreshDb]);
+
+  const handleUpdateWrapper = useCallback(async (id, name) => {
+    await api.updateWrapper(id, name);
+    await refreshDb();
+  }, [refreshDb]);
+
   const handleCreateBox = useCallback(async (name, weight) => {
     await api.createBox(name, weight);
     await refreshDb();
@@ -454,6 +484,12 @@ export default function InventoryApp() {
             onAddRollType={handleCreateRollType}
             onDeleteRollType={handleDeleteRollType}
             onEditRollType={handleUpdateRollType}
+            onAddConeType={handleCreateConeType}
+            onDeleteConeType={handleDeleteConeType}
+            onEditConeType={handleUpdateConeType}
+            onAddWrapper={handleCreateWrapper}
+            onDeleteWrapper={handleDeleteWrapper}
+            onEditWrapper={handleUpdateWrapper}
             onAddBox={handleCreateBox}
             onDeleteBox={handleDeleteBox}
             onEditBox={handleUpdateBox}

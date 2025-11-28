@@ -105,6 +105,14 @@ export async function listRollTypes() { return await request('/api/roll_types');
 export async function createRollType(name, weight) { return await request('/api/roll_types', { method: 'POST', body: { name, weight } }); }
 export async function deleteRollType(id) { return await request(`/api/roll_types/${id}`, { method: 'DELETE' }); }
 export async function updateRollType(id, name, weight) { return await request(`/api/roll_types/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listConeTypes() { return await request('/api/cone_types'); }
+export async function createConeType(name, weight) { return await request('/api/cone_types', { method: 'POST', body: { name, weight } }); }
+export async function deleteConeType(id) { return await request(`/api/cone_types/${id}`, { method: 'DELETE' }); }
+export async function updateConeType(id, name, weight) { return await request(`/api/cone_types/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listWrappers() { return await request('/api/wrappers'); }
+export async function createWrapper(name) { return await request('/api/wrappers', { method: 'POST', body: { name } }); }
+export async function deleteWrapper(id) { return await request(`/api/wrappers/${id}`, { method: 'DELETE' }); }
+export async function updateWrapper(id, name) { return await request(`/api/wrappers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listBoxes() { return await request('/api/boxes'); }
 export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
@@ -195,6 +203,14 @@ export default {
   createBox,
   deleteBox,
   updateBox,
+  listConeTypes,
+  createConeType,
+  deleteConeType,
+  updateConeType,
+  listWrappers,
+  createWrapper,
+  deleteWrapper,
+  updateWrapper,
   updateSettings,
   getInboundByBarcode,
   getIssueByBarcode,

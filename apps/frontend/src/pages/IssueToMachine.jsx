@@ -16,6 +16,10 @@ const safeNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
+const parseNum = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
 
 export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, process = 'cutter' }) {
   const { cls } = useBrand();
@@ -38,6 +42,31 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     });
     return map;
   }, [db.twists]);
+  const machineMap = useMemo(() => {
+    const map = new Map();
+    (db.machines || []).forEach((m) => { if (m?.id) map.set(m.id, m); });
+    return map;
+  }, [db.machines]);
+  const operatorMap = useMemo(() => {
+    const map = new Map();
+    (db.operators || []).forEach((op) => { if (op?.id) map.set(op.id, op); });
+    return map;
+  }, [db.operators]);
+  const coneTypeMap = useMemo(() => {
+    const map = new Map();
+    (db.cone_types || []).forEach((ct) => { if (ct?.id) map.set(ct.id, ct); });
+    return map;
+  }, [db.cone_types]);
+  const wrapperMap = useMemo(() => {
+    const map = new Map();
+    (db.wrappers || []).forEach((w) => { if (w?.id) map.set(w.id, w); });
+    return map;
+  }, [db.wrappers]);
+  const boxMap = useMemo(() => {
+    const map = new Map();
+    (db.boxes || []).forEach((b) => { if (b?.id) map.set(b.id, b); });
+    return map;
+  }, [db.boxes]);
   const yarns = Array.isArray(db.yarns) ? db.yarns : [];
   const twists = Array.isArray(db.twists) ? db.twists : [];
   const totalUnitsIssued = issueList.reduce((sum, issue) => {
@@ -56,13 +85,13 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
   });
   const [coningForm, setConingForm] = useState({
     date: todayISO(),
-    itemId: '',
-    lotNo: '',
     machineId: '',
     operatorId: '',
-    rollsIssued: '',
+    coneTypeId: '',
+    wrapperId: '',
+    boxId: '',
+    requiredPerConeNetWeight: '',
     note: '',
-    receivedRowRefs: '',
   });
   const [holoSubmitting, setHoloSubmitting] = useState(false);
   const [coningSubmitting, setConingSubmitting] = useState(false);
@@ -80,6 +109,9 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
   const [holoCrates, setHoloCrates] = useState([]);
   const [holoScanInput, setHoloScanInput] = useState('');
   const [holoScanError, setHoloScanError] = useState('');
+  const [coningCrates, setConingCrates] = useState([]);
+  const [coningScanInput, setConingScanInput] = useState('');
+  const [coningScanError, setConingScanError] = useState('');
 
   useEffect(() => {
     if (db.items.length && !db.items.some(i => i.id === itemId)) {
@@ -205,6 +237,28 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     });
     return map;
   }, [db.receive_from_cutter_machine_rows]);
+  const holoReceiveRowByBarcode = useMemo(() => {
+    const map = new Map();
+    db.receive_from_holo_machine_rows.forEach(row => {
+      if (row?.barcode) {
+        map.set(normalizeBarcode(row.barcode), row);
+      }
+    });
+    return map;
+  }, [db.receive_from_holo_machine_rows]);
+  const coningIssuedMap = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_coning_machine || []).forEach((issue) => {
+      const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+      refs.forEach((ref) => {
+        const id = ref?.rowId || ref?.id;
+        const rolls = Number(ref?.issueRolls ?? ref?.rollsIssued ?? 0);
+        if (!id || !Number.isFinite(rolls)) return;
+        map.set(id, (map.get(id) || 0) + rolls);
+      });
+    });
+    return map;
+  }, [db.issue_to_coning_machine]);
   const holoDerivedMeta = useMemo(() => {
     const lotSet = new Set();
     const itemSet = new Set();
@@ -227,6 +281,32 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
       return acc;
     }, { totalRolls: 0, totalWeight: 0 });
   }, [holoCrates]);
+
+  const coningMeta = useMemo(() => {
+    const lotSet = new Set();
+    const itemSet = new Set();
+    coningCrates.forEach((crate) => {
+      if (crate.lotNo) lotSet.add(crate.lotNo);
+      if (crate.itemId) itemSet.add(crate.itemId);
+    });
+    const totalRolls = coningCrates.reduce((sum, c) => sum + (Number(c.rollCount) || 0), 0);
+    const totalNet = coningCrates.reduce((sum, c) => sum + (Number(c.issueWeight) || 0), 0);
+    return {
+      lotNo: lotSet.size === 1 ? Array.from(lotSet)[0] : '',
+      itemId: itemSet.size === 1 ? Array.from(itemSet)[0] : '',
+      lotConflict: lotSet.size > 1,
+      itemConflict: itemSet.size > 1,
+      totalRolls,
+      totalNet,
+    };
+  }, [coningCrates]);
+  const coningExpectedCones = useMemo(() => {
+    const perConeGram = parseNum(coningForm.requiredPerConeNetWeight);
+    if (!perConeGram || perConeGram <= 0) return '';
+    if (!Number.isFinite(coningMeta.totalNet) || coningMeta.totalNet <= 0) return '';
+    const expected = (coningMeta.totalNet * 1000) / perConeGram; // total net (kg) -> grams
+    return Math.floor(expected);
+  }, [coningForm.requiredPerConeNetWeight, coningMeta.totalNet]);
 
   function toggle(id) {
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -329,6 +409,79 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
     setHoloScanError('');
   }
 
+  function addConingCrateFromScan() {
+    if (!isConing) return;
+    const normalized = normalizeBarcode(coningScanInput);
+    if (!normalized) {
+      setConingScanError('Enter or scan a holo receive barcode');
+      return;
+    }
+    const row = holoReceiveRowByBarcode.get(normalized);
+    if (!row) {
+      setConingScanError('Barcode not found in recent holo receipts. Refresh data and try again.');
+      return;
+    }
+    if (coningCrates.some(crate => crate.rowId === row.id)) {
+      setConingScanError('Crate already added');
+      return;
+    }
+    const issueMeta = row.issue || {};
+    const lotNo = issueMeta.lotNo || '';
+    const itemIdForRow = issueMeta.itemId || '';
+    if (coningCrates.length > 0) {
+      const referenceLot = coningMeta.lotNo || coningCrates[0].lotNo;
+      const referenceItem = coningMeta.itemId || coningCrates[0].itemId;
+      if (referenceLot && lotNo && referenceLot !== lotNo) {
+        setConingScanError('This crate belongs to a different lot. Issue lot-by-lot.');
+        return;
+      }
+      if (referenceItem && itemIdForRow && referenceItem !== itemIdForRow) {
+        setConingScanError('This crate belongs to a different item.');
+        return;
+      }
+    }
+
+    const alreadyIssued = coningIssuedMap.get(row.id) || 0;
+    const baseRolls = Number(row.rollCount || 0);
+    const baseWeight = Number(row.rollWeight || 0);
+    const remainingRolls = Math.max(0, baseRolls - alreadyIssued);
+    if (remainingRolls <= 0) {
+      setConingScanError('No rolls remaining in this crate');
+      return;
+    }
+    const perRoll = baseRolls > 0 && Number.isFinite(baseWeight) ? baseWeight / baseRolls : 0;
+    const defaultIssueRolls = remainingRolls;
+    const crate = {
+      rowId: row.id,
+      barcode: row.barcode || normalized,
+      lotNo,
+      itemId: itemIdForRow,
+      rollCount: baseRolls,
+      issueRolls: defaultIssueRolls,
+      issueWeight: Number((perRoll * defaultIssueRolls).toFixed(3)),
+      baseRolls,
+      baseWeight,
+      issuedSoFar: alreadyIssued,
+      remainingRolls,
+    };
+    setConingCrates(prev => [...prev, crate]);
+    setConingScanInput('');
+    setConingScanError('');
+  }
+
+  function updateConingCrate(rowId, field, value) {
+    setConingCrates(prev => prev.map(c => {
+      if (c.rowId !== rowId) return c;
+      const next = { ...c, [field]: value };
+      if (field === 'issueRolls') {
+        const rolls = parseNum(value) || 0;
+        const perRoll = (Number(c.baseWeight) || 0) / Math.max(1, Number(c.baseRolls) || 1);
+        next.issueWeight = Number((perRoll * rolls).toFixed(3));
+      }
+      return next;
+    }));
+  }
+
   function removeHoloCrate(rowId) {
     setHoloCrates(prev => prev.filter(crate => crate.rowId !== rowId));
   }
@@ -396,18 +549,20 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
 
   useEffect(() => {
     if (!isConing) return;
-    setConingForm(f => ({
-      ...f,
+    setConingForm({
       date: todayISO(),
-      itemId: f.itemId || db.items[0]?.id || '',
-      lotNo: '',
       machineId: '',
       operatorId: '',
-      rollsIssued: '',
+      coneTypeId: '',
+      wrapperId: '',
+      boxId: '',
+      requiredPerConeNetWeight: '',
       note: '',
-      receivedRowRefs: '',
-    }));
-  }, [isConing, db.items]);
+    });
+    setConingCrates([]);
+    setConingScanInput('');
+    setConingScanError('');
+  }, [isConing]);
 
   async function handleHoloSubmit(e) {
     e.preventDefault();
@@ -496,38 +651,61 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
 
   async function handleConingSubmit(e) {
     e.preventDefault();
-    if (!coningForm.date || !coningForm.itemId || !coningForm.lotNo) {
-      window.alert('Date, item, and lot are required');
-      return;
+    if (!coningForm.date) return window.alert('Date is required');
+    if (!coningForm.operatorId) return window.alert('Select an operator');
+    if (!coningForm.machineId) return window.alert('Select a machine');
+    if (!coningForm.coneTypeId) return window.alert('Select a cone type');
+    if (!coningForm.wrapperId) return window.alert('Select a wrapper');
+    if (!coningForm.boxId) return window.alert('Select a box');
+    const perConeNetGram = parseNum(coningForm.requiredPerConeNetWeight);
+    if (!perConeNetGram || perConeNetGram <= 0) return window.alert('Enter required per-cone net weight (grams)');
+    if (coningCrates.length === 0) return window.alert('Scan at least one holo crate');
+    if (coningMeta.lotConflict || coningMeta.itemConflict) {
+      return window.alert('Remove crates from other lots/items before issuing.');
     }
-    if (!coningForm.rollsIssued) {
-      window.alert('Rolls issued count is required');
-      return;
+    if (!coningMeta.lotNo || !coningMeta.itemId) {
+      return window.alert('Crates are missing lot/item data.');
     }
+    if (coningCrates.some(c => parseNum(c.issueRolls) == null || parseNum(c.issueRolls) <= 0)) {
+      return window.alert('Enter issue rolls for each crate.');
+    }
+    const expectedCones = perConeNetGram > 0 && coningMeta.totalNet > 0
+      ? Math.floor((coningMeta.totalNet * 1000) / perConeNetGram)
+      : 0;
     setConingSubmitting(true);
     try {
       await api.createIssueToConingMachine({
         date: coningForm.date,
-        itemId: coningForm.itemId,
-        lotNo: coningForm.lotNo,
         machineId: coningForm.machineId || null,
         operatorId: coningForm.operatorId || null,
-        rollsIssued: Number(coningForm.rollsIssued),
         note: coningForm.note || null,
-        receivedRowRefs: coningForm.receivedRowRefs.split(',').map(s => s.trim()).filter(Boolean),
+        requiredPerConeNetWeight: perConeNetGram,
+        expectedCones,
+        crates: coningCrates.map(c => ({
+          rowId: c.rowId,
+          barcode: c.barcode,
+          coneTypeId: coningForm.coneTypeId || null,
+          wrapperId: coningForm.wrapperId || null,
+          boxId: coningForm.boxId || null,
+          issueRolls: parseNum(c.issueRolls),
+          issueWeight: parseNum(c.issueWeight),
+        })),
       });
       window.alert('Issued to Coning machine');
       await refreshDb();
-      setConingForm(f => ({
-        ...f,
+      setConingForm({
         date: todayISO(),
-        lotNo: '',
         machineId: '',
         operatorId: '',
-        rollsIssued: '',
+        coneTypeId: '',
+        wrapperId: '',
+        boxId: '',
+        requiredPerConeNetWeight: '',
         note: '',
-        receivedRowRefs: '',
-      }));
+      });
+      setConingCrates([]);
+      setConingScanInput('');
+      setConingScanError('');
     } catch (err) {
       console.error('Failed to issue to coning', err);
       window.alert(err.message || 'Failed to issue to Coning machine');
@@ -736,30 +914,16 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
       );
     }
 
-    const unitLabel = 'Rolls issued';
+    const unitLabel = 'Rolls';
     return (
       <div className="space-y-6">
-        <Section title={`Issue to ${processDef.label}`}>
+        <Section title="Issue to Coning (Cones)">
           <form className="space-y-4" onSubmit={handleConingSubmit}>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className={`text-xs ${cls.muted}`}>Date</label>
                 <Input type="date" value={coningForm.date} onChange={(e) => setConingForm(prev => ({ ...prev, date: e.target.value }))} />
               </div>
-              <div>
-                <label className={`text-xs ${cls.muted}`}>Item</label>
-                <Select value={coningForm.itemId} onChange={(e) => setConingForm(prev => ({ ...prev, itemId: e.target.value }))}>
-                  <option value="">Select</option>
-                  {db.items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </Select>
-              </div>
-              <div>
-                <label className={`text-xs ${cls.muted}`}>Lot</label>
-                <Input value={coningForm.lotNo} onChange={(e) => setConingForm(prev => ({ ...prev, lotNo: e.target.value }))} placeholder="Lot number" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className={`text-xs ${cls.muted}`}>Machine</label>
                 <Select value={coningForm.machineId} onChange={(e) => setConingForm(prev => ({ ...prev, machineId: e.target.value }))}>
@@ -774,31 +938,111 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
                   {db.operators.map(operator => <option key={operator.id} value={operator.id}>{operator.name}</option>)}
                 </Select>
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <label className={`text-xs ${cls.muted}`}>{unitLabel}</label>
+                <label className={`text-xs ${cls.muted}`}>Cone type</label>
+                <Select value={coningForm.coneTypeId} onChange={(e) => setConingForm(prev => ({ ...prev, coneTypeId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.cone_types || []).map(ct => <option key={ct.id} value={ct.id}>{ct.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Wrapper</label>
+                <Select value={coningForm.wrapperId} onChange={(e) => setConingForm(prev => ({ ...prev, wrapperId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.wrappers || []).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Box</label>
+                <Select value={coningForm.boxId} onChange={(e) => setConingForm(prev => ({ ...prev, boxId: e.target.value }))}>
+                  <option value="">Select</option>
+                  {(db.boxes || []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Required per cone net wt. (grams)</label>
                 <Input
                   type="number"
                   min="0"
                   step="1"
-                  value={coningForm.rollsIssued}
-                  onChange={(e) => setConingForm(prev => ({ ...prev, rollsIssued: e.target.value }))}
-                  placeholder={`Enter ${unitLabel.toLowerCase()}`}
+                  value={coningForm.requiredPerConeNetWeight}
+                  onChange={(e) => setConingForm(prev => ({ ...prev, requiredPerConeNetWeight: e.target.value }))}
+                  placeholder="Enter target net weight per cone (g)"
                 />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Expected cones (calculated)</label>
+                <Input value={coningExpectedCones === '' ? '' : coningExpectedCones} readOnly placeholder="Auto-calculated" />
+              </div>
+              <div>
+                <label className={`text-xs ${cls.muted}`}>Note</label>
+                <Input value={coningForm.note} onChange={(e) => setConingForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
               </div>
             </div>
 
-            <div>
-              <label className={`text-xs ${cls.muted}`}>Received row refs (optional)</label>
-              <Input value={coningForm.receivedRowRefs} onChange={(e) => setConingForm(prev => ({ ...prev, receivedRowRefs: e.target.value }))} placeholder="comma separated receive row IDs" />
+            <div className="space-y-2">
+              <label className={`text-xs ${cls.muted}`}>Scan holo crate barcode</label>
+              <div className="flex gap-2 items-center">
+                <Input
+                  value={coningScanInput}
+                  onChange={(e) => { setConingScanInput(e.target.value); if (coningScanError) setConingScanError(''); }}
+                  placeholder="REC-HLO crate barcode"
+                />
+                <Button type="button" onClick={addConingCrateFromScan} disabled={!coningScanInput.trim()}>Add crate</Button>
+              </div>
+              {coningScanError && <div className="text-xs text-red-500">{coningScanError}</div>}
             </div>
 
-            <div>
-              <label className={`text-xs ${cls.muted}`}>Note</label>
-              <Input value={coningForm.note} onChange={(e) => setConingForm(prev => ({ ...prev, note: e.target.value }))} placeholder="Reference / reason" />
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2 text-right">Rolls (issue)</th>
+                    <th className="py-2 pr-2 text-right">Issue wt. (kg)</th>
+                    <th className="py-2 pr-2 text-right">Remove</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coningCrates.length === 0 ? (
+                    <tr><td className="py-3 pr-2" colSpan={6}>No crates scanned yet.</td></tr>
+                  ) : coningCrates.map((crate) => (
+                    <tr key={crate.rowId} className={`border-t ${cls.rowBorder}`}>
+                      <td className="py-2 pr-2 font-mono">{crate.barcode}</td>
+                      <td className="py-2 pr-2">{crate.lotNo || '—'}</td>
+                      <td className="py-2 pr-2 text-right">
+                        <Input type="number" min="0" step="1" value={crate.issueRolls ?? ''} onChange={(e) => updateConingCrate(crate.rowId, 'issueRolls', e.target.value)} />
+                        <div className={`text-xs ${cls.muted}`}>Avail: {crate.baseRolls} · Issued: {crate.issuedSoFar || 0} · Remaining: {crate.remainingRolls}</div>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <div className="font-mono">{formatKg(crate.issueWeight || 0)}</div>
+                        <div className={`text-xs ${cls.muted}`}>Base: {formatKg(crate.baseWeight || 0)}</div>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <button className="text-sm text-red-500 underline" type="button" onClick={() => setConingCrates(prev => prev.filter(c => c.rowId !== crate.rowId))}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             <div className="flex items-center gap-2">
-              <Button type="submit" disabled={coningSubmitting}>{coningSubmitting ? 'Issuing…' : 'Record issue'}</Button>
+              <Pill>Lot: {coningMeta.lotNo || '—'}</Pill>
+              <Pill>Rolls: {coningMeta.totalRolls}</Pill>
+              <Pill>Net: {formatKg(coningMeta.totalNet)}</Pill>
+              <Pill>Expected cones: {coningExpectedCones === '' ? '—' : coningExpectedCones}</Pill>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button type="submit" disabled={coningSubmitting || refreshing}>{coningSubmitting ? 'Issuing…' : 'Record issue'}</Button>
               <Pill>{unitLabel}: {totalUnitsIssued}</Pill>
             </div>
           </form>
@@ -806,34 +1050,79 @@ export function IssueToMachine({ db, onIssueToMachine, refreshing, refreshDb, pr
 
         <Section title={`Issue history (${processDef.label})`}>
           <div className="overflow-x-auto mt-4">
-            <table className="min-w-full text-sm">
-              <thead className={`text-left ${cls.muted}`}>
-                <tr>
-                  <th className="py-2 pr-2">Date</th>
-                  <th className="py-2 pr-2">Lot</th>
-                  <th className="py-2 pr-2 text-right">{unitLabel}</th>
-                  <th className="py-2 pr-2">Barcode</th>
-                  <th className="py-2 pr-2">Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {issueList.length === 0 ? (
+            {isConing ? (
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
                   <tr>
-                    <td className="py-3 pr-2" colSpan={5}>No issue records yet.</td>
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2">Machine</th>
+                    <th className="py-2 pr-2">Operator</th>
+                    <th className="py-2 pr-2">Cone type</th>
+                    <th className="py-2 pr-2">Wrapper</th>
+                    <th className="py-2 pr-2">Box</th>
+                    <th className="py-2 pr-2 text-right">Req. wt (g)</th>
+                    <th className="py-2 pr-2 text-right">Expected cones</th>
+                    <th className="py-2 pr-2 text-right">Rolls issued</th>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Note</th>
                   </tr>
-                ) : (
-                  issueList.map((issue) => (
-                    <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
-                      <td className="py-2 pr-2">{issue.date || '—'}</td>
-                      <td className="py-2 pr-2">{issue.lotNo}</td>
-                      <td className="py-2 pr-2 text-right">{issue.rollsIssued || 0}</td>
-                      <td className="py-2 pr-2">{issue.barcode || '—'}</td>
-                      <td className="py-2 pr-2">{issue.note || '—'}</td>
+                </thead>
+                <tbody>
+                  {issueList.length === 0 ? (
+                    <tr>
+                      <td className="py-3 pr-2" colSpan={12}>No issue records yet.</td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    issueList.map((issue) => (
+                      <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{issue.date || '—'}</td>
+                        <td className="py-2 pr-2">{issue.lotNo}</td>
+                        <td className="py-2 pr-2">{issue.machineId ? (machineMap.get(issue.machineId)?.name || issue.machineId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.operatorId ? (operatorMap.get(issue.operatorId)?.name || issue.operatorId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.coneTypeId ? (coneTypeMap.get(issue.receivedRowRefs[0].coneTypeId)?.name || issue.receivedRowRefs[0].coneTypeId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.wrapperId ? (wrapperMap.get(issue.receivedRowRefs[0].wrapperId)?.name || issue.receivedRowRefs[0].wrapperId) : '—'}</td>
+                        <td className="py-2 pr-2">{issue.receivedRowRefs?.[0]?.boxId ? (boxMap.get(issue.receivedRowRefs[0].boxId)?.name || issue.receivedRowRefs[0].boxId) : '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.requiredPerConeNetWeight ?? '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.expectedCones ?? '—'}</td>
+                        <td className="py-2 pr-2 text-right">{issue.rollsIssued || 0}</td>
+                        <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                        <td className="py-2 pr-2">{issue.note || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead className={`text-left ${cls.muted}`}>
+                  <tr>
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Lot</th>
+                    <th className="py-2 pr-2 text-right">{unitLabel}</th>
+                    <th className="py-2 pr-2">Barcode</th>
+                    <th className="py-2 pr-2">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {issueList.length === 0 ? (
+                    <tr>
+                      <td className="py-3 pr-2" colSpan={5}>No issue records yet.</td>
+                    </tr>
+                  ) : (
+                    issueList.map((issue) => (
+                      <tr key={issue.id} className={`border-t ${cls.rowBorder}`}>
+                        <td className="py-2 pr-2">{issue.date || '—'}</td>
+                        <td className="py-2 pr-2">{issue.lotNo}</td>
+                        <td className="py-2 pr-2 text-right">{issue.rollsIssued || 0}</td>
+                        <td className="py-2 pr-2">{issue.barcode || '—'}</td>
+                        <td className="py-2 pr-2">{issue.note || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </Section>
       </div>

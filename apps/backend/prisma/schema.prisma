@@ -164,6 +164,19 @@ model RollType {
   receiveRows ReceiveFromHoloMachineRow[]
 }
 
+model ConeType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  weight    Float?
+  createdAt DateTime @default(now())
+}
+
+model Wrapper {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
 model IssueToConingMachine {
   id              String   @id @default(cuid())
   date            String
@@ -174,6 +187,8 @@ model IssueToConingMachine {
   barcode         String   @unique
   note            String?
   rollsIssued     Int      @default(0)
+  requiredPerConeNetWeight Float   @default(0)
+  expectedCones  Float     @default(0)
   receivedRowRefs Json     @default("[]")
   createdAt       DateTime @default(now())
   machine         Machine?  @relation(fields: [machineId], references: [id])
@@ -183,10 +198,15 @@ model IssueToConingMachine {
 
 model ReceiveFromConingMachineRow {
   id          String   @id @default(cuid())
+  barcode     String?  @unique
   date        String?
   issueId     String
   coneCount   Int
   coneWeight  Float?
+  netWeight   Float?
+  tareWeight  Float?
+  grossWeight Float?
+  boxId       String?
   machineNo   String?
   operatorId  String?
   helperId    String?
@@ -196,6 +216,7 @@ model ReceiveFromConingMachineRow {
   issue       IssueToConingMachine @relation("IssueConingRelation", fields: [issueId], references: [id])
   operator    Operator?            @relation("OperatorConingReceive", fields: [operatorId], references: [id])
   helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
+  box         Box?                 @relation(fields: [boxId], references: [id])
 }
 
 model ReceiveFromConingMachinePieceTotal {
@@ -314,6 +335,7 @@ model Box {
   weight      Float
   receiveRows ReceiveFromCutterMachineRow[]
   holoReceiveRows ReceiveFromHoloMachineRow[]
+  coningReceiveRows ReceiveFromConingMachineRow[]
 }
 
 

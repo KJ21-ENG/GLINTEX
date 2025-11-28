@@ -39,6 +39,12 @@ export function Masters({
   onAddRollType,
   onDeleteRollType,
   onEditRollType,
+  onAddConeType,
+  onDeleteConeType,
+  onEditConeType,
+  onAddWrapper,
+  onDeleteWrapper,
+  onEditWrapper,
   onAddBox,
   onDeleteBox,
   onEditBox,
@@ -50,7 +56,7 @@ export function Masters({
   const [supplierName, setSupplierName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | rollTypes | boxes
+  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | rollTypes | coneTypes | wrappers | boxes
 
   async function addItem() {
     const name = itemName.trim();
@@ -269,6 +275,12 @@ export function Masters({
         <button onClick={() => setTab('rollTypes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='rollTypes' ? cls.navActive : 'border-transparent'} ${tab!=='rollTypes' ? cls.navHover : ''}`}>
           Roll types
         </button>
+        <button onClick={() => setTab('coneTypes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='coneTypes' ? cls.navActive : 'border-transparent'} ${tab!=='coneTypes' ? cls.navHover : ''}`}>
+          Cone types
+        </button>
+        <button onClick={() => setTab('wrappers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='wrappers' ? cls.navActive : 'border-transparent'} ${tab!=='wrappers' ? cls.navHover : ''}`}>
+          Wrappers
+        </button>
         <button onClick={() => setTab('boxes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='boxes' ? cls.navActive : 'border-transparent'} ${tab!=='boxes' ? cls.navHover : ''}`}>
           Boxes
         </button>
@@ -344,6 +356,39 @@ export function Masters({
             onEdit={onEditRollType}
             disabled={disable}
             cls={cls}
+            title="Roll type"
+            addLabel="Add roll type"
+          />
+        </Section>
+      )}
+
+      {tab === 'coneTypes' && (
+        <Section title="Cone types">
+          <RollTypePanel
+            rollTypes={db.cone_types || []}
+            onAdd={onAddConeType}
+            onDelete={onDeleteConeType}
+            onEdit={onEditConeType}
+            disabled={disable}
+            cls={cls}
+            title="Cone type"
+            addLabel="Add cone type"
+          />
+        </Section>
+      )}
+
+      {tab === 'wrappers' && (
+        <Section title="Wrappers">
+          <RollTypePanel
+            rollTypes={db.wrappers || []}
+            onAdd={onAddWrapper}
+            onDelete={onDeleteWrapper}
+            onEdit={onEditWrapper}
+            disabled={disable}
+            cls={cls}
+            title="Wrapper"
+            addLabel="Add wrapper"
+            showWeight={false}
           />
         </Section>
       )}
@@ -493,7 +538,7 @@ function WorkerRow({ worker, onEdit, onDelete, disabled, cls }) {
   );
 }
 
-function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
+function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls, title = 'Roll type', addLabel = 'Add', emptyLabel, showWeight = true }) {
   const [name, setName] = useState('');
   const [weight, setWeight] = useState('');
   const [saving, setSaving] = useState(false);
@@ -506,7 +551,7 @@ function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
     if (!trimmed) return;
     setSaving(true);
     try {
-      await onAdd(trimmed, weight);
+      await onAdd(trimmed, showWeight ? weight : undefined);
       setName('');
       setWeight('');
     } catch (err) {
@@ -521,7 +566,7 @@ function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
     if (!trimmed) return;
     setSaving(true);
     try {
-      await onEdit(id, trimmed, editWeight);
+      await onEdit(id, trimmed, showWeight ? editWeight : undefined);
       setEditingId(null);
       setEditName('');
       setEditWeight('');
@@ -548,16 +593,18 @@ function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
     <div className="space-y-4">
       <div className="grid md:grid-cols-4 gap-3">
         <div className="md:col-span-2">
-          <label className={`text-xs ${cls.muted}`}>Roll type name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} placeholder="e.g. Std 25g" />
+          <label className={`text-xs ${cls.muted}`}>{title} name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} placeholder={`e.g. ${title} A`} />
         </div>
-        <div>
-          <label className={`text-xs ${cls.muted}`}>Weight (kg per roll)</label>
-          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} placeholder="0.025" />
-        </div>
+        {showWeight && (
+          <div>
+            <label className={`text-xs ${cls.muted}`}>Weight (kg)</label>
+            <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} placeholder="0.025" />
+          </div>
+        )}
         <div className="flex items-end">
           <Button onClick={addRollType} disabled={disabled || saving || !name.trim()}>
-            Add roll type
+            {addLabel}
           </Button>
         </div>
       </div>
@@ -567,13 +614,13 @@ function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
           <thead className={`text-left ${cls.muted}`}>
             <tr>
               <th className="py-2 pr-2">Name</th>
-              <th className="py-2 pr-2 text-right">Weight (kg)</th>
+              {showWeight && <th className="py-2 pr-2 text-right">Weight (kg)</th>}
               <th className="py-2 pr-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {rollTypes.length === 0 ? (
-              <tr><td className="py-4 text-center text-sm" colSpan={3}>No roll types yet.</td></tr>
+              <tr><td className="py-4 text-center text-sm" colSpan={showWeight ? 3 : 2}>{emptyLabel || `No ${title.toLowerCase()}s yet.`}</td></tr>
             ) : rollTypes.map((rt) => {
               const isEditing = editingId === rt.id;
               return (
@@ -583,11 +630,13 @@ function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls }) {
                       <Input value={editName} onChange={(e) => setEditName(e.target.value)} disabled={disabled || saving} />
                     ) : rt.name}
                   </td>
-                  <td className="py-2 pr-2 text-right">
-                    {isEditing ? (
-                      <Input type="number" min="0" step="0.001" value={editWeight} onChange={(e) => setEditWeight(e.target.value)} disabled={disabled || saving} />
-                    ) : (rt.weight != null ? formatKg(rt.weight) : '—')}
-                  </td>
+                  {showWeight && (
+                    <td className="py-2 pr-2 text-right">
+                      {isEditing ? (
+                        <Input type="number" min="0" step="0.001" value={editWeight} onChange={(e) => setEditWeight(e.target.value)} disabled={disabled || saving} />
+                      ) : (rt.weight != null ? formatKg(rt.weight) : '—')}
+                    </td>
+                  )}
                   <td className="py-2 pr-2 text-right space-x-2">
                     {isEditing ? (
                       <>

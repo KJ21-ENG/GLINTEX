@@ -8,6 +8,7 @@ services:
     environment:
       # HOST_IP can be exported before running docker compose to make the dev UI reachable on the LAN
       VITE_API_BASE: http://${HOST_IP:-localhost}:${BACKEND_PORT:-4001}
+      VITE_LAN_HOST: ${HOST_IP:-localhost}
       CHOKIDAR_USEPOLLING: "1"
     volumes:
       - ./apps/frontend:/app

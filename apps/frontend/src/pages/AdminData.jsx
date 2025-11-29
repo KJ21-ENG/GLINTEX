@@ -23,9 +23,25 @@ export function AdminData({ db, onSaveBrand, savingBrand }) {
     const protocol = window.location?.protocol || 'http:';
     const host = window.location?.host || window.location?.hostname || 'localhost';
     const hostname = window.location?.hostname || 'localhost';
-    setAccessUrl(`${protocol}//${host}`);
+    const port = window.location?.port;
+    const lanHost = import.meta.env.VITE_LAN_HOST || hostname;
+
+    const frontendHost = host && !host.startsWith('localhost') ? host : `${lanHost}${port ? `:${port}` : ''}`;
+    setAccessUrl(`${protocol}//${frontendHost}`);
+
     const envBase = import.meta.env.VITE_API_BASE;
-    setApiBase(envBase || `${protocol}//${hostname}:4000`);
+    if (envBase) {
+      try {
+        const url = new URL(envBase);
+        const resolvedHost = url.hostname === 'localhost' ? lanHost : url.hostname;
+        url.hostname = resolvedHost;
+        setApiBase(url.toString().replace(/\/$/, ''));
+      } catch {
+        setApiBase(envBase);
+      }
+    } else {
+      setApiBase(`${protocol}//${lanHost}:4001`);
+    }
   }, []);
 
   function updateBrandField(field, value) {

@@ -1,175 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Small defaults */
-:root {
-  /* Brand (from logo) */
-  --brand-primary: #2E4CA6;
-  --brand-gold: #D4AF37;
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
 
-  /* Neutral palette (light theme) */
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --surface-contrast: #f1f5f9;
-  --text: #0f172a;
-  --muted: #64748b;
-  --border: #e6e9ee;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+ 
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+ 
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+ 
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+ 
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+ 
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+ 
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
 
-/* Header / subtle backgrounds */
-  --header-overlay: rgba(255,255,255,0.8);
-  /* Opaque panel background used by modals and sheets to avoid showing underlying UI */
-  --card-bg-solid: #ffffff;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+ 
+    --radius: 0.5rem;
+  }
+ 
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+ 
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+ 
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+ 
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+ 
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+ 
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+ 
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+ 
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+ 
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 48%;
+  }
 }
 
-/* Dark theme overrides */
-[data-theme="dark"] {
-  --bg: #060814;
-  --surface: rgba(255,255,255,0.04);
-  --surface-contrast: rgba(255,255,255,0.02);
-  --text: #ffffff;
-  --muted: rgba(255,255,255,0.72);
-  --border: rgba(255,255,255,0.08);
-  --header-overlay: rgba(2,6,23,0.6);
-  /* Opaque panel background for dark theme modals */
-  --card-bg-solid: #0b1220;
-}
-
-/* Small helper utility classes that use the variables */
-.theme-bg { background-color: var(--bg); }
-.theme-surface { background-color: var(--surface); }
-.theme-text { color: var(--text); }
-.theme-muted { color: var(--muted); }
-.theme-border { border-color: var(--border); }
-
-/* Center table cell contents app-wide (horizontal + vertical) */
-table th, table td { text-align: center !important; vertical-align: middle; }
-
-html, body, #root { height: 100%; }
-body { margin: 0; }
-
-/* Disabled piece helper: dim and strike-through for non-available pieces */
-.piece-disabled { opacity: 0.55; text-decoration: line-through; }
-.piece-disabled input[type="checkbox"] { cursor: not-allowed; }
-
-/* Hover and transition helpers */
-@layer components {
-  .hover-elevate { @apply transition-transform duration-150 ease-out; }
-  .hover-elevate:hover { @apply -translate-y-0.5 shadow-md; }
-
-  .soft-shadow { @apply transition-shadow duration-150; }
-  .soft-shadow:hover { @apply shadow-sm; }
-
-  .row-hover { @apply transition-colors duration-150; }
-  /* Use theme variable so hover works both in light and dark (data-theme based) */
-  .row-hover:hover { background-color: #e0e7ef; } /* Light mode increased contrast */
-  [data-theme="dark"] .row-hover:hover { background-color: #23263a; } /* Dark mode increased contrast */
-
-  .btn-hover { @apply transform transition-transform duration-150; }
-  .btn-hover:hover { @apply -translate-y-0.5 shadow-sm; }
-
-  .underline-on-hover { @apply transition-all duration-150; }
-  .underline-on-hover:hover { text-decoration: underline; }
-}
-
-/* Popover panel used by small hover panels/tooltips. Uses opaque card bg to avoid transparency */
-.popover-panel {
-  background: var(--card-bg-solid);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(2,6,23,0.6);
-  padding: 8px;
-  display: inline-block; /* allow width to fit content */
-  width: auto;
-  max-width: 360px;
-}
-
-.popover-panel .lots-grid {
-  display: grid;
-  grid-template-columns: repeat(4, auto);
-  gap: 6px 12px;
-}
-.popover-panel .lot-chip {
-  background: transparent;
-  border-radius: 6px;
-  padding: 4px 6px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-}
-.popover-panel .apply-arrow {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-}
-
-/* Whatsapp connected glowing status */
-.whatsapp-status-connected {
-  color: #10b981; /* Tailwind green-500 */
-  font-weight: 600;
-  text-shadow: 0 0 8px rgba(16,185,129,0.9), 0 0 18px rgba(16,185,129,0.6);
-  animation: whatsapp-glow 2s ease-in-out infinite alternate;
-}
-@keyframes whatsapp-glow {
-  from { text-shadow: 0 0 6px rgba(16,185,129,0.6), 0 0 12px rgba(16,185,129,0.4); }
-  to   { text-shadow: 0 0 12px rgba(16,185,129,0.95), 0 0 24px rgba(16,185,129,0.6); }
-}
-
-/* Whatsapp disconnected glowing red status */
-.whatsapp-status-disconnected {
-  color: #ef4444; /* Tailwind red-500 */
-  font-weight: 600;
-  text-shadow: 0 0 8px rgba(239,68,68,0.9), 0 0 18px rgba(239,68,68,0.6);
-  animation: whatsapp-glow-red 2s ease-in-out infinite alternate;
-}
-@keyframes whatsapp-glow-red {
-  from { text-shadow: 0 0 6px rgba(239,68,68,0.6), 0 0 12px rgba(239,68,68,0.4); }
-  to   { text-shadow: 0 0 12px rgba(239,68,68,0.95), 0 0 24px rgba(239,68,68,0.6); }
-}
-
-/* Whatsapp templates editor tweaks for dark mode */
-.whatsapp-templates textarea {
-  background: transparent; /* let cardBg variable handle background */
-  color: var(--text);
-  border-color: var(--border);
-}
-.whatsapp-templates .font-mono { color: var(--muted); }
-
-/* small hover helpers for template toolbar buttons */
-.whatsapp-templates button[title] { position: relative; }
-.whatsapp-templates button[title]:hover::after {
-  content: attr(title);
-  position: absolute;
-  top: -30px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--card-bg-solid);
-  color: var(--text);
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  box-shadow: 0 6px 18px rgba(2,6,23,0.6);
-  white-space: nowrap;
-  z-index: 60;
-}
-
-/* Modal / sheet helper to ensure the panel background is opaque so the overlay hides underlying UI */
-.modal-sheet {
-  background-color: var(--card-bg-solid);
-  /* subtle elevation so it reads above overlay */
-  box-shadow: 0 8px 24px rgba(2,6,23,0.6);
-}
-
-/* Center action buttons/icons placed inside table cells */
-table td > button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
 }

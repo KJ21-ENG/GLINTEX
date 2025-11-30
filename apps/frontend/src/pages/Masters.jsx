@@ -1,783 +1,338 @@
-/**
- * Masters page component for GLINTEX Inventory
- */
-
-import React, { useState, useMemo } from 'react';
-import { useBrand } from '../context';
-import { Section, Button, SecondaryButton, Input, SearchableInput, BobbinEditor, Select } from '../components';
+import React, { useState } from 'react';
+import { useInventory } from '../context/InventoryContext';
+import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label } from '../components/ui';
+import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
 
-export function Masters({
-  db,
-  onAddItem,
-  onDeleteItem,
-  onEditItem,
-  onAddYarn,
-  onDeleteYarn,
-  onEditYarn,
-  onAddCut,
-  onDeleteCut,
-  onEditCut,
-  onAddTwist,
-  onDeleteTwist,
-  onEditTwist,
-  onAddFirm,
-  onDeleteFirm,
-  onEditFirm,
-  onAddSupplier,
-  onDeleteSupplier,
-  onEditSupplier,
-  onAddMachine,
-  onDeleteMachine,
-  onEditMachine,
-  onAddWorker,
-  onDeleteWorker,
-  onEditWorker,
-  onAddBobbin,
-  onDeleteBobbin,
-  onEditBobbin,
-  onAddRollType,
-  onDeleteRollType,
-  onEditRollType,
-  onAddConeType,
-  onDeleteConeType,
-  onEditConeType,
-  onAddWrapper,
-  onDeleteWrapper,
-  onEditWrapper,
-  onAddBox,
-  onDeleteBox,
-  onEditBox,
-  refreshing,
-}) {
-  const { cls } = useBrand();
-  const [itemName, setItemName] = useState("");
-  const [firmName, setFirmName] = useState("");
-  const [supplierName, setSupplierName] = useState("");
-  const [machineName, setMachineName] = useState("");
-  const [working, setWorking] = useState(false);
-  const [tab, setTab] = useState('items'); // items | yarns | cuts | twists | firms | suppliers | machines | workers | bobbins | rollTypes | coneTypes | wrappers | boxes
+export function Masters() {
+  const { 
+    db, 
+    createItem, updateItem, deleteItem,
+    createYarn, updateYarn, deleteYarn,
+    createCut, updateCut, deleteCut,
+    createTwist, updateTwist, deleteTwist,
+    createFirm, updateFirm, deleteFirm,
+    createSupplier, updateSupplier, deleteSupplier,
+    createMachine, updateMachine, deleteMachine,
+    createOperator, updateOperator, deleteOperator,
+    createBobbin, updateBobbin, deleteBobbin,
+    createRollType, updateRollType, deleteRollType,
+    createConeType, updateConeType, deleteConeType,
+    createWrapper, updateWrapper, deleteWrapper,
+    createBox, updateBox, deleteBox,
+    refreshing 
+  } = useInventory();
 
-  async function addItem() {
-    const name = itemName.trim();
-    if (!name) return;
-    if (db.items.some(i => i.name.toLowerCase() === name.toLowerCase())) { alert("Item already exists"); return; }
-    setWorking(true);
-    try {
-      await onAddItem(name);
-      setItemName("");
-    } catch (err) {
-      alert(err.message || 'Failed to add item');
-    } finally {
-      setWorking(false);
-    }
-  }
+  const [activeTab, setActiveTab] = useState('items');
 
-  async function deleteItem(id) {
-    if (!confirm("Delete item? You cannot remove it if referenced by lots.")) return;
-    setWorking(true);
-    try {
-      await onDeleteItem(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete item');
-    } finally {
-      setWorking(false);
-    }
-  }
+  const tabs = [
+    { id: 'items', label: 'Items' },
+    { id: 'yarns', label: 'Yarns' },
+    { id: 'cuts', label: 'Cuts' },
+    { id: 'twists', label: 'Twists' },
+    { id: 'firms', label: 'Firms' },
+    { id: 'suppliers', label: 'Suppliers' },
+    { id: 'machines', label: 'Machines' },
+    { id: 'workers', label: 'Workers' },
+    { id: 'bobbins', label: 'Bobbins' },
+    { id: 'rollTypes', label: 'Roll Types' },
+    { id: 'coneTypes', label: 'Cone Types' },
+    { id: 'wrappers', label: 'Wrappers' },
+    { id: 'boxes', label: 'Boxes' },
+  ];
 
-  async function addFirm() {
-    const name = firmName.trim();
-    if (!name) return;
-    if (db.firms.some(f => f.name.toLowerCase() === name.toLowerCase())) { alert("Firm already exists"); return; }
-    setWorking(true);
-    try {
-      await onAddFirm(name);
-      setFirmName("");
-    } catch (err) {
-      alert(err.message || 'Failed to add firm');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function deleteFirm(id) {
-    if (!confirm("Delete firm? You cannot remove it if referenced by lots.")) return;
-    setWorking(true);
-    try {
-      await onDeleteFirm(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete firm');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function addSupplier() {
-    const name = supplierName.trim();
-    if (!name) return;
-    if (db.suppliers.some(s => s.name.toLowerCase() === name.toLowerCase())) { alert("Supplier already exists"); return; }
-    setWorking(true);
-    try {
-      await onAddSupplier(name);
-      setSupplierName("");
-    } catch (err) {
-      alert(err.message || 'Failed to add supplier');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function deleteSupplier(id) {
-    if (!confirm("Delete supplier? You cannot remove it if referenced by lots.")) return;
-    setWorking(true);
-    try {
-      await onDeleteSupplier(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete supplier');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function addMachine() {
-    const name = machineName.trim();
-    if (!name) return;
-    if (db.machines.some(m => m.name.toLowerCase() === name.toLowerCase())) { alert("Machine already exists"); return; }
-    setWorking(true);
-    try {
-      await onAddMachine(name);
-      setMachineName("");
-    } catch (err) {
-      alert(err.message || 'Failed to add machine');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function deleteMachine(id) {
-    if (!confirm("Delete machine? You cannot remove it if referenced by issue to machine records.")) return;
-    setWorking(true);
-    try {
-      await onDeleteMachine(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete machine');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function addBobbin(name, weight) {
-    setWorking(true);
-    try {
-      await onAddBobbin(name, weight);
-    } catch (err) {
-      alert(err.message || 'Failed to add bobbin');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function deleteBobbin(id) {
-    if (!confirm("Delete bobbin? You cannot remove it if referenced by receive rows.")) return;
-    setWorking(true);
-    try {
-      await onDeleteBobbin(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete bobbin');
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  const disable = working || refreshing;
-
-  const normalizedQuery = itemName.trim().toLowerCase();
-  const isDuplicate = normalizedQuery !== '' && db.items.some(i => i.name.trim().toLowerCase() === normalizedQuery);
-
-  const filteredItems = useMemo(() => {
-    const q = itemName.trim().toLowerCase();
-    if (!q) return db.items;
-    return db.items.filter(i => i.name.toLowerCase().includes(q));
-  }, [db.items, itemName]);
-
-  // Firms
-  const normalizedFirmQuery = firmName.trim().toLowerCase();
-  const isFirmDuplicate = normalizedFirmQuery !== '' && db.firms.some(f => f.name.trim().toLowerCase() === normalizedFirmQuery);
-  const filteredFirms = useMemo(() => {
-    const q = firmName.trim().toLowerCase();
-    if (!q) return db.firms;
-    return db.firms.filter(f => f.name.toLowerCase().includes(q));
-  }, [db.firms, firmName]);
-
-  // Suppliers
-  const normalizedSupplierQuery = supplierName.trim().toLowerCase();
-  const isSupplierDuplicate = normalizedSupplierQuery !== '' && db.suppliers.some(s => s.name.trim().toLowerCase() === normalizedSupplierQuery);
-  const filteredSuppliers = useMemo(() => {
-    const q = supplierName.trim().toLowerCase();
-    if (!q) return db.suppliers;
-    return db.suppliers.filter(s => s.name.toLowerCase().includes(q));
-  }, [db.suppliers, supplierName]);
-
-  // Machines
-  const normalizedMachineQuery = machineName.trim().toLowerCase();
-  const isMachineDuplicate = normalizedMachineQuery !== '' && db.machines.some(m => m.name.trim().toLowerCase() === normalizedMachineQuery);
-  const filteredMachines = useMemo(() => {
-    const q = machineName.trim().toLowerCase();
-    if (!q) return db.machines;
-    return db.machines.filter(m => m.name.toLowerCase().includes(q));
-  }, [db.machines, machineName]);
-
-  const workersList = useMemo(() => {
-    if (Array.isArray(db.workers) && db.workers.length > 0) {
-      return db.workers.map(w => ({ ...w, role: (w.role || 'operator') }));
-    }
-    const merged = [];
-    (db.operators || []).forEach(op => merged.push({ ...op, role: 'operator' }));
-    (db.helpers || []).forEach(helper => {
-      if (!merged.some(w => w.id === helper.id)) merged.push({ ...helper, role: 'helper' });
-    });
-    return merged;
-  }, [db.workers, db.operators, db.helpers]);
-
-  const boxes = useMemo(() => db.boxes || [], [db.boxes]);
-
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <button onClick={() => setTab('items')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='items' ? cls.navActive : 'border-transparent'} ${tab!=='items' ? cls.navHover : ''}`}>
-          Items
-        </button>
-        <button onClick={() => setTab('yarns')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='yarns' ? cls.navActive : 'border-transparent'} ${tab!=='yarns' ? cls.navHover : ''}`}>
-          Yarns
-        </button>
-        <button onClick={() => setTab('cuts')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='cuts' ? cls.navActive : 'border-transparent'} ${tab!=='cuts' ? cls.navHover : ''}`}>
-          Cuts
-        </button>
-        <button onClick={() => setTab('twists')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='twists' ? cls.navActive : 'border-transparent'} ${tab!=='twists' ? cls.navHover : ''}`}>
-          Twists
-        </button>
-        <button onClick={() => setTab('firms')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='firms' ? cls.navActive : 'border-transparent'} ${tab!=='firms' ? cls.navHover : ''}`}>
-          Firms
-        </button>
-        <button onClick={() => setTab('suppliers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='suppliers' ? cls.navActive : 'border-transparent'} ${tab!=='suppliers' ? cls.navHover : ''}`}>
-          Suppliers
-        </button>
-        <button onClick={() => setTab('machines')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='machines' ? cls.navActive : 'border-transparent'} ${tab!=='machines' ? cls.navHover : ''}`}>
-          Machines
-        </button>
-        <button onClick={() => setTab('workers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='workers' ? cls.navActive : 'border-transparent'} ${tab!=='workers' ? cls.navHover : ''}`}>
-          Workers
-        </button>
-        <button onClick={() => setTab('bobbins')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='bobbins' ? cls.navActive : 'border-transparent'} ${tab!=='bobbins' ? cls.navHover : ''}`}>
-          Bobbins
-        </button>
-        <button onClick={() => setTab('rollTypes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='rollTypes' ? cls.navActive : 'border-transparent'} ${tab!=='rollTypes' ? cls.navHover : ''}`}>
-          Roll types
-        </button>
-        <button onClick={() => setTab('coneTypes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='coneTypes' ? cls.navActive : 'border-transparent'} ${tab!=='coneTypes' ? cls.navHover : ''}`}>
-          Cone types
-        </button>
-        <button onClick={() => setTab('wrappers')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='wrappers' ? cls.navActive : 'border-transparent'} ${tab!=='wrappers' ? cls.navHover : ''}`}>
-          Wrappers
-        </button>
-        <button onClick={() => setTab('boxes')} className={`px-3 py-1 rounded-lg text-sm border ${tab==='boxes' ? cls.navActive : 'border-transparent'} ${tab!=='boxes' ? cls.navHover : ''}`}>
-          Boxes
-        </button>
-      </div>
-
-      {tab === 'items' && (
-        <Section title="Items">
-          <SearchableInput items={db.items} onAdd={onAddItem} onDelete={onDeleteItem} onEdit={onEditItem} placeholder="New item name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'yarns' && (
-        <Section title="Yarns">
-          <SearchableInput items={db.yarns || []} onAdd={onAddYarn} onDelete={onDeleteYarn} onEdit={onEditYarn} placeholder="New yarn name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'cuts' && (
-        <Section title="Cuts">
-          <SearchableInput items={db.cuts || []} onAdd={onAddCut} onDelete={onDeleteCut} onEdit={onEditCut} placeholder="New cut name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'twists' && (
-        <Section title="Twists">
-          <SearchableInput items={db.twists || []} onAdd={onAddTwist} onDelete={onDeleteTwist} onEdit={onEditTwist} placeholder="New twist name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'firms' && (
-        <Section title="Firms">
-          <SearchableInput items={db.firms} onAdd={onAddFirm} onDelete={onDeleteFirm} onEdit={onEditFirm} placeholder="New firm name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'suppliers' && (
-        <Section title="Suppliers">
-          <SearchableInput items={db.suppliers} onAdd={onAddSupplier} onDelete={onDeleteSupplier} onEdit={onEditSupplier} placeholder="New supplier name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'machines' && (
-        <Section title="Machines">
-          <SearchableInput items={db.machines} onAdd={onAddMachine} onDelete={onDeleteMachine} onEdit={onEditMachine} placeholder="New machine name" disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'workers' && (
-        <Section title="Workers">
-          <WorkersPanel
-            workers={workersList}
-            onAdd={onAddWorker}
-            onDelete={onDeleteWorker}
-            onEdit={onEditWorker}
-            disabled={disable}
-            cls={cls}
-          />
-        </Section>
-      )}
-
-      {tab === 'bobbins' && (
-        <Section title="Bobbins">
-          <BobbinEditor items={db.bobbins} onAdd={addBobbin} onDelete={deleteBobbin} onEdit={onEditBobbin} disabled={disable} />
-        </Section>
-      )}
-
-      {tab === 'rollTypes' && (
-        <Section title="Roll types">
-          <RollTypePanel
-            rollTypes={db.rollTypes || []}
-            onAdd={onAddRollType}
-            onDelete={onDeleteRollType}
-            onEdit={onEditRollType}
-            disabled={disable}
-            cls={cls}
-            title="Roll type"
-            addLabel="Add roll type"
-          />
-        </Section>
-      )}
-
-      {tab === 'coneTypes' && (
-        <Section title="Cone types">
-          <RollTypePanel
-            rollTypes={db.cone_types || []}
-            onAdd={onAddConeType}
-            onDelete={onDeleteConeType}
-            onEdit={onEditConeType}
-            disabled={disable}
-            cls={cls}
-            title="Cone type"
-            addLabel="Add cone type"
-          />
-        </Section>
-      )}
-
-      {tab === 'wrappers' && (
-        <Section title="Wrappers">
-          <RollTypePanel
-            rollTypes={db.wrappers || []}
-            onAdd={onAddWrapper}
-            onDelete={onDeleteWrapper}
-            onEdit={onEditWrapper}
-            disabled={disable}
-            cls={cls}
-            title="Wrapper"
-            addLabel="Add wrapper"
-            showWeight={false}
-          />
-        </Section>
-      )}
-
-      {tab === 'boxes' && (
-        <Section title="Boxes">
-          <BoxesPanel
-            boxes={boxes}
-            onAdd={onAddBox}
-            onDelete={onDeleteBox}
-            onEdit={onEditBox}
-            disabled={disable}
-            cls={cls}
-          />
-        </Section>
-      )}
-    </div>
-  );
-}
-
-function WorkersPanel({ workers, onAdd, onDelete, onEdit, disabled, cls }) {
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('operator');
-  const [message, setMessage] = useState(null);
-
-  async function addWorker() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    try {
-      await onAdd(trimmed, role);
-      setName('');
-      setRole('operator');
-      setMessage(null);
-    } catch (err) {
-      alert(err.message || 'Failed to add worker');
-    }
+  const renderContent = () => {
+      switch(activeTab) {
+          case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} />;
+          case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} />;
+          case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
+          case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
+          case 'firms': return <SimpleMasterCrud title="Firms" data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
+          case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
+          case 'machines': return <SimpleMasterCrud title="Machines" data={db.machines} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
+          case 'workers': return <WorkersMaster data={db.operators || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
+          case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} />;
+          case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} />;
+          case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} />;
+          case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} />;
+          case 'boxes': return <WeightMasterCrud title="Boxes" data={db.boxes} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} />;
+          default: return null;
+      }
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid md:grid-cols-3 gap-3">
-        <div>
-          <label className={`text-xs ${cls.muted}`}>Worker name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled} placeholder="e.g. Arjun" />
-        </div>
-        <div>
-          <label className={`text-xs ${cls.muted}`}>Role</label>
-          <Select value={role} onChange={(e) => setRole(e.target.value)} disabled={disabled}>
-            <option value="operator">Operator</option>
-            <option value="helper">Helper</option>
-          </Select>
-        </div>
-        <div className="flex items-end">
-          <Button onClick={addWorker} disabled={disabled || !name.trim()}>
-            Add worker
-          </Button>
-        </div>
-      </div>
-      {message && <div className={`text-sm ${cls.muted}`}>{message}</div>}
-      <div className="overflow-auto">
-        <table className="min-w-full text-sm">
-          <thead className={`text-left ${cls.muted}`}>
-            <tr>
-              <th className="py-2 pr-2">Name</th>
-              <th className="py-2 pr-2">Role</th>
-              <th className="py-2 pr-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {workers.length === 0 ? (
-              <tr><td colSpan={3} className="py-4 text-center text-sm">No workers yet.</td></tr>
-            ) : workers.map(worker => (
-              <WorkerRow
-                key={worker.id}
-                worker={worker}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                disabled={disabled}
-                cls={cls}
-              />
-            ))}
-          </tbody>
-        </table>
+    <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
+      <Card className="w-full md:w-64 shrink-0">
+          <CardHeader>
+              <CardTitle className="text-lg">Master Data</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+              <nav className="flex flex-col">
+                  {tabs.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setActiveTab(t.id)}
+                        className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 ${activeTab === t.id ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
+                      >
+                          {t.label}
+                      </button>
+                  ))}
+              </nav>
+          </CardContent>
+      </Card>
+
+      <div className="flex-1 w-full">
+          {renderContent()}
       </div>
     </div>
   );
 }
 
-function WorkerRow({ worker, onEdit, onDelete, disabled, cls }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(worker.name);
-  const [role, setRole] = useState(worker.role || 'operator');
-  const [saving, setSaving] = useState(false);
+// --- Sub Components ---
 
-  async function save() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setSaving(true);
-    try {
-      await onEdit(worker.id, trimmed, role);
-      setEditing(false);
-    } catch (err) {
-      alert(err.message || 'Failed to update worker');
-    } finally {
-      setSaving(false);
+function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+
+    const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName);
+        setNewName('');
     }
-  }
 
-  async function remove() {
-    if (!confirm('Delete this worker?')) return;
-    try {
-      await onDelete(worker.id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete worker');
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName);
+        setEditingId(null);
     }
-  }
 
-  if (editing) {
     return (
-      <tr className={`border-t ${cls.rowBorder}`}>
-        <td className="py-2 pr-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} />
-        </td>
-        <td className="py-2 pr-2">
-          <Select value={role} onChange={(e) => setRole(e.target.value)} disabled={disabled || saving}>
-            <option value="operator">Operator</option>
-            <option value="helper">Helper</option>
-          </Select>
-        </td>
-        <td className="py-2 pr-2 text-right flex gap-2 justify-end">
-          <Button onClick={save} disabled={disabled || saving}>{saving ? 'Saving…' : 'Save'}</Button>
-          <SecondaryButton onClick={() => setEditing(false)} disabled={disabled || saving}>Cancel</SecondaryButton>
-        </td>
-      </tr>
-    );
-  }
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>{title}</CardTitle>
+                <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                    <Input placeholder={`New ${title} name`} value={newName} onChange={e=>setNewName(e.target.value)} />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
 
-  return (
-    <tr className={`border-t ${cls.rowBorder}`}>
-      <td className="py-2 pr-2">{worker.name}</td>
-      <td className="py-2 pr-2 capitalize">{worker.role || 'operator'}</td>
-      <td className="py-2 pr-2 text-right flex gap-2 justify-end">
-        <SecondaryButton onClick={() => setEditing(true)} disabled={disabled}>Edit</SecondaryButton>
-        <button className="text-sm text-red-500 underline" onClick={remove} disabled={disabled}>Delete</button>
-      </td>
-    </tr>
-  );
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" />
+                                        ) : item.name}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name)}}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
 }
 
-function RollTypePanel({ rollTypes, onAdd, onDelete, onEdit, disabled, cls, title = 'Roll type', addLabel = 'Add', emptyLabel, showWeight = true }) {
-  const [name, setName] = useState('');
-  const [weight, setWeight] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editName, setEditName] = useState('');
-  const [editWeight, setEditWeight] = useState('');
+function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newWeight, setNewWeight] = useState('');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editWeight, setEditWeight] = useState('');
 
-  async function addRollType() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setSaving(true);
-    try {
-      await onAdd(trimmed, showWeight ? weight : undefined);
-      setName('');
-      setWeight('');
-    } catch (err) {
-      alert(err.message || 'Failed to add roll type');
-    } finally {
-      setSaving(false);
+    const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, Number(newWeight));
+        setNewName('');
+        setNewWeight('');
     }
-  }
 
-  async function saveEdit(id) {
-    const trimmed = editName.trim();
-    if (!trimmed) return;
-    setSaving(true);
-    try {
-      await onEdit(id, trimmed, showWeight ? editWeight : undefined);
-      setEditingId(null);
-      setEditName('');
-      setEditWeight('');
-    } catch (err) {
-      alert(err.message || 'Failed to update roll type');
-    } finally {
-      setSaving(false);
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, Number(editWeight));
+        setEditingId(null);
     }
-  }
 
-  async function handleDelete(id) {
-    if (!confirm('Delete roll type? You cannot remove it if referenced by receive rows.')) return;
-    setSaving(true);
-    try {
-      await onDelete(id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete roll type');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid md:grid-cols-4 gap-3">
-        <div className="md:col-span-2">
-          <label className={`text-xs ${cls.muted}`}>{title} name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} placeholder={`e.g. ${title} A`} />
-        </div>
-        {showWeight && (
-          <div>
-            <label className={`text-xs ${cls.muted}`}>Weight (kg)</label>
-            <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} placeholder="0.025" />
-          </div>
-        )}
-        <div className="flex items-end">
-          <Button onClick={addRollType} disabled={disabled || saving || !name.trim()}>
-            {addLabel}
-          </Button>
-        </div>
-      </div>
-
-      <div className="overflow-auto">
-        <table className="min-w-full text-sm">
-          <thead className={`text-left ${cls.muted}`}>
-            <tr>
-              <th className="py-2 pr-2">Name</th>
-              {showWeight && <th className="py-2 pr-2 text-right">Weight (kg)</th>}
-              <th className="py-2 pr-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rollTypes.length === 0 ? (
-              <tr><td className="py-4 text-center text-sm" colSpan={showWeight ? 3 : 2}>{emptyLabel || `No ${title.toLowerCase()}s yet.`}</td></tr>
-            ) : rollTypes.map((rt) => {
-              const isEditing = editingId === rt.id;
-              return (
-                <tr key={rt.id} className={`border-t ${cls.rowBorder}`}>
-                  <td className="py-2 pr-2">
-                    {isEditing ? (
-                      <Input value={editName} onChange={(e) => setEditName(e.target.value)} disabled={disabled || saving} />
-                    ) : rt.name}
-                  </td>
-                  {showWeight && (
-                    <td className="py-2 pr-2 text-right">
-                      {isEditing ? (
-                        <Input type="number" min="0" step="0.001" value={editWeight} onChange={(e) => setEditWeight(e.target.value)} disabled={disabled || saving} />
-                      ) : (rt.weight != null ? formatKg(rt.weight) : '—')}
-                    </td>
-                  )}
-                  <td className="py-2 pr-2 text-right space-x-2">
-                    {isEditing ? (
-                      <>
-                        <button className="text-xs underline" disabled={disabled || saving} onClick={() => saveEdit(rt.id)}>Save</button>
-                        <button className="text-xs underline text-red-400" disabled={disabled || saving} onClick={() => { setEditingId(null); }}>Cancel</button>
-                      </>
-                    ) : (
-                      <>
-                        <button className="text-xs underline" disabled={disabled || saving} onClick={() => { setEditingId(rt.id); setEditName(rt.name); setEditWeight(rt.weight ?? ''); }}>Edit</button>
-                        <button className="text-xs underline text-red-400" disabled={disabled || saving} onClick={() => handleDelete(rt.id)}>Delete</button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function BoxesPanel({ boxes, onAdd, onDelete, onEdit, disabled, cls }) {
-  const [name, setName] = useState('');
-  const [weight, setWeight] = useState('');
-
-  async function addBox() {
-    const trimmed = name.trim();
-    const weightNum = Number(weight);
-    if (!trimmed || !Number.isFinite(weightNum) || weightNum <= 0) {
-      alert('Enter a valid name and positive weight.');
-      return;
-    }
-    try {
-      await onAdd(trimmed, weightNum);
-      setName('');
-      setWeight('');
-    } catch (err) {
-      alert(err.message || 'Failed to add box');
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid md:grid-cols-3 gap-3">
-        <div>
-          <label className={`text-xs ${cls.muted}`}>Box name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled} placeholder="Carton 1" />
-        </div>
-        <div>
-          <label className={`text-xs ${cls.muted}`}>Weight (kg)</label>
-          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled} placeholder="0.650" />
-        </div>
-        <div className="flex items-end">
-          <Button onClick={addBox} disabled={disabled || !name.trim()}>
-            Add box
-          </Button>
-        </div>
-      </div>
-
-      <div className="overflow-auto">
-        <table className="min-w-full text-sm">
-          <thead className={`text-left ${cls.muted}`}>
-            <tr>
-              <th className="py-2 pr-2">Name</th>
-              <th className="py-2 pr-2 text-right">Weight (kg)</th>
-              <th className="py-2 pr-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {boxes.length === 0 ? (
-              <tr><td colSpan={3} className="py-4 text-center text-sm">No boxes yet.</td></tr>
-            ) : boxes.map(box => (
-              <BoxRow key={box.id} box={box} onEdit={onEdit} onDelete={onDelete} disabled={disabled} cls={cls} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function BoxRow({ box, onEdit, onDelete, disabled, cls }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(box.name);
-  const [weight, setWeight] = useState(String(box.weight ?? ''));
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    const trimmed = name.trim();
-    const weightNum = Number(weight);
-    if (!trimmed || !Number.isFinite(weightNum) || weightNum <= 0) {
-      alert('Enter valid values.');
-      return;
-    }
-    setSaving(true);
-    try {
-      await onEdit(box.id, trimmed, weightNum);
-      setEditing(false);
-    } catch (err) {
-      alert(err.message || 'Failed to update box');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function remove() {
-    if (!confirm('Delete this box?')) return;
-    try {
-      await onDelete(box.id);
-    } catch (err) {
-      alert(err.message || 'Failed to delete box');
-    }
-  }
-
-  if (editing) {
     return (
-      <tr className={`border-t ${cls.rowBorder}`}>
-        <td className="py-2 pr-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} disabled={disabled || saving} />
-        </td>
-        <td className="py-2 pr-2 text-right">
-          <Input type="number" min="0" step="0.001" value={weight} onChange={(e) => setWeight(e.target.value)} disabled={disabled || saving} />
-        </td>
-        <td className="py-2 pr-2 text-right flex gap-2 justify-end">
-          <Button onClick={save} disabled={disabled || saving}>{saving ? 'Saving…' : 'Save'}</Button>
-          <SecondaryButton onClick={() => setEditing(false)} disabled={disabled || saving}>Cancel</SecondaryButton>
-        </td>
-      </tr>
-    );
-  }
+        <Card>
+             <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>{title}</CardTitle>
+                 <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                    <Input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1" />
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e=>setNewWeight(e.target.value)} className="w-32" />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
 
-  return (
-    <tr className={`border-t ${cls.rowBorder}`}>
-      <td className="py-2 pr-2">{box.name}</td>
-      <td className="py-2 pr-2 text-right">{formatKg(box.weight || 0)} kg</td>
-      <td className="py-2 pr-2 text-right flex gap-2 justify-end">
-        <SecondaryButton onClick={() => setEditing(true)} disabled={disabled}>Edit</SecondaryButton>
-        <button className="text-sm text-red-500 underline" onClick={remove} disabled={disabled}>Delete</button>
-      </td>
-    </tr>
-  );
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead className="text-right">Weight (kg)</TableHead>
+                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                             {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" /> : item.name}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e=>setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" /> : formatKg(item.weight)}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight)}}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newRole, setNewRole] = useState('operator');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editRole, setEditRole] = useState('operator');
+
+    const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, newRole);
+        setNewName('');
+    }
+
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, editRole);
+        setEditingId(null);
+    }
+
+    return (
+        <Card>
+             <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Workers</CardTitle>
+                 <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                    <Input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1" />
+                    <Select value={newRole} onChange={e=>setNewRole(e.target.value)} className="w-32">
+                        <option value="operator">Operator</option>
+                        <option value="helper">Helper</option>
+                    </Select>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
+
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Role</TableHead>
+                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" /> : item.name}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select value={editRole} onChange={e=>setEditRole(e.target.value)} className="h-8">
+                                                <option value="operator">Operator</option>
+                                                <option value="helper">Helper</option>
+                                            </Select>
+                                        ) : <Badge variant="outline" className="capitalize">{item.role || 'operator'}</Badge>}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator')}}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
 }

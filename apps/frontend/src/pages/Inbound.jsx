@@ -228,6 +228,9 @@ function RecentLotsTable({ db }) {
             supplierName: db.suppliers.find(s => s.id === l.supplierId)?.name || "—",
         }));
 
+        // Sort descending by Lot No (Higher to Lower)
+        all.sort((a, b) => b.lotNo.localeCompare(a.lotNo, undefined, { numeric: true }));
+
         // Basic Filter
         if (!filter) return all;
         const lower = filter.toLowerCase();
@@ -236,7 +239,7 @@ function RecentLotsTable({ db }) {
             l.itemName.toLowerCase().includes(lower) ||
             l.firmName.toLowerCase().includes(lower) ||
             l.supplierName.toLowerCase().includes(lower)
-        ).sort((a, b) => b.lotNo.localeCompare(a.lotNo, undefined, { numeric: true }));
+        );
     }, [db, filter]);
 
     const paged = lots.slice((page - 1) * pageSize, page * pageSize);

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { formatKg } from '../../utils';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button, Card, CardHeader, CardTitle, CardContent } from '../ui';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button, Card, CardHeader, CardTitle, CardContent, Badge } from '../ui';
 import { Trash2 } from 'lucide-react';
 import * as api from '../../api';
 
@@ -13,86 +13,128 @@ export function ReceiveHistoryTable() {
     const history = useMemo(() => {
         let rows = [];
         if (process === 'holo') {
-            rows = db.receive_from_holo_machine || [];
+            rows = db.receive_from_holo_machine_rows || [];
         } else if (process === 'coning') {
-            rows = db.receive_from_coning_machine || [];
+            rows = db.receive_from_coning_machine_rows || [];
         } else {
-            rows = db.receive_from_cutter_machine || [];
+            rows = db.receive_from_cutter_machine_rows || [];
         }
-        return rows.sort((a, b) => (b.receiveDate || '').localeCompare(a.receiveDate || ''));
+        // Sort by created date descending
+        return rows.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     }, [db, process]);
 
-    // Helper Maps
-    const itemNameById = useMemo(() => {
-        const map = new Map();
-        (db.items || []).forEach(i => map.set(i.id, i.name || '—'));
-        return map;
-    }, [db.items]);
-
-    const handleDelete = async (id) => {
-        if (!confirm('Delete this receive record?')) return;
-        setDeletingId(id);
-        try {
-            // Assuming generic delete endpoint or specific ones
-            // The context actions usually wrap these.
-            // Let's use api directly if context doesn't have it exposed generically enough
-            // Actually context has deleteIssueToMachine but not explicit deleteReceive...
-            // Let's assume an API endpoint exists like /api/receive_from_cutter_machine/:id
-            // I'll try to use a generic approach or specific based on process
-
-            let endpoint = '';
-            if (process === 'holo') endpoint = `/api/receive_from_holo_machine/${id}`;
-            else if (process === 'coning') endpoint = `/api/receive_from_coning_machine/${id}`;
-            else endpoint = `/api/receive_from_cutter_machine/${id}`;
-
-            // Using internal request helper if possible, or just fetch
-            // Since I can't import 'request' from api/client easily (it's not exported), 
-            // I will rely on the fact that I might need to add these delete functions to client.js or use a raw fetch if needed.
-            // But wait, I can add them to client.js? No, I should check if they exist.
-            // client.js has deleteIssueToMachine but not deleteReceive...
-            // I'll assume for now I can't delete or I need to add it.
-            // User didn't explicitly ask for delete in history, but "Display tailored receive history table" implies full functionality usually.
-            // I'll skip delete implementation for now to avoid breaking if API is missing, or just show the table.
-            // Actually, I'll add a simple alert "Delete not implemented" if I can't find the function, 
-            // OR I can try to add it to client.js if I was allowed to modify it extensively.
-            // I'll stick to just displaying for now as per requirement "Display tailored receive history table".
-
-            alert("Delete functionality not yet configured for this table.");
-
-        } catch (e) {
-            alert(e.message);
-        } finally {
-            setDeletingId(null);
+    // Helper for Coning Machine Lookup
+    const getConingMachineName = (row) => {
+        if (row.machineNo) return row.machineNo;
+        // Fallback to looking up the issue's machine
+        if (row.issueId) {
+            const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+            if (issue && issue.machineId) {
+                const machine = db.machines?.find(m => m.id === issue.machineId);
+                return machine ? machine.name : '—';
+            }
         }
+        return '—';
     };
 
     return (
         <Card>
-            <CardHeader><CardTitle>Receive History ({process})</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Receive History ({process === 'cutter' ? 'Cutter' : process === 'holo' ? 'Holography' : 'Coning'})</CardTitle></CardHeader>
             <CardContent>
-                <div className="rounded-md border max-h-[400px] overflow-y-auto">
+                <div className="rounded-md border max-h-[600px] overflow-y-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Lot</TableHead>
-                                <TableHead>Item</TableHead>
-                                <TableHead className="">Net Weight</TableHead>
-                                {/* Add specific columns based on process if needed */}
+                                {process === 'cutter' && (
+                                    <>
+                                        <TableHead>Piece</TableHead>
+                                        <TableHead>Cut</TableHead>
+                                        <TableHead>Barcode</TableHead>
+                                        <TableHead>Machine</TableHead>
+                                        <TableHead>Employee</TableHead>
+                                        <TableHead className="text-right">Net Wt (kg)</TableHead>
+                                        <TableHead className="text-right">Bobbin Qty</TableHead>
+                                        <TableHead>Bobbin</TableHead>
+                                    </>
+                                )}
+                                {process === 'holo' && (
+                                    <>
+                                        <TableHead>Date</TableHead>
+                                        <TableHead>Lot</TableHead>
+                                        <TableHead>Barcode</TableHead>
+                                        <TableHead className="text-right">Rolls</TableHead>
+                                        <TableHead className="text-right">Weight (kg)</TableHead>
+                                        <TableHead>Machine</TableHead>
+                                        <TableHead>Operator</TableHead>
+                                        <TableHead>Helper</TableHead>
+                                        <TableHead>Notes</TableHead>
+                                    </>
+                                )}
+                                {process === 'coning' && (
+                                    <>
+                                        <TableHead>Date</TableHead>
+                                        <TableHead>Lot</TableHead>
+                                        <TableHead>Barcode</TableHead>
+                                        <TableHead>Box</TableHead>
+                                        <TableHead className="text-right">Cones</TableHead>
+                                        <TableHead className="text-right">Weight (kg)</TableHead>
+                                        <TableHead>Machine</TableHead>
+                                        <TableHead>Operator</TableHead>
+                                        <TableHead>Notes</TableHead>
+                                    </>
+                                )}
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {history.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
                             ) : (
-                                history.map(r => (
-                                    <TableRow key={r.id}>
-                                        <TableCell>{r.receiveDate}</TableCell>
-                                        <TableCell>{r.lotNo}</TableCell>
-                                        <TableCell>{itemNameById.get(r.itemId) || '—'}</TableCell>
-                                        <TableCell className="">{formatKg(r.netWeight)}</TableCell>
-                                    </TableRow>
-                                ))
+                                history.map(r => {
+                                    if (process === 'cutter') {
+                                        return (
+                                            <TableRow key={r.id}>
+                                                <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
+                                                <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
+                                                <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
+                                                <TableCell>{r.machineNo || '—'}</TableCell>
+                                                <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
+                                                <TableCell className="text-right font-medium">{formatKg(r.netWt)}</TableCell>
+                                                <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
+                                                <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
+                                            </TableRow>
+                                        );
+                                    } else if (process === 'holo') {
+                                        const dateDisplay = r.date ? new Date(r.date).toLocaleDateString() : (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—');
+                                        return (
+                                            <TableRow key={r.id}>
+                                                <TableCell>{dateDisplay}</TableCell>
+                                                <TableCell>{r.issue?.lotNo || '—'}</TableCell>
+                                                <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                <TableCell className="text-right">1</TableCell>
+                                                <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
+                                                <TableCell>{r.machineNo || r.machine?.name || '—'}</TableCell>
+                                                <TableCell>{r.operator?.name || '—'}</TableCell>
+                                                <TableCell>{r.helper?.name || '—'}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
+                                            </TableRow>
+                                        );
+                                    } else if (process === 'coning') {
+                                        const dateDisplay = r.date ? new Date(r.date).toLocaleDateString() : (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—');
+                                        return (
+                                            <TableRow key={r.id}>
+                                                <TableCell>{dateDisplay}</TableCell>
+                                                <TableCell>{r.issue?.lotNo || '—'}</TableCell>
+                                                <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                <TableCell>{r.box?.name || '—'}</TableCell>
+                                                <TableCell className="text-right">{r.coneCount}</TableCell>
+                                                <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
+                                                <TableCell>{getConingMachineName(r)}</TableCell>
+                                                <TableCell>{r.operator?.name || '—'}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
+                                            </TableRow>
+                                        );
+                                    }
+                                })
                             )}
                         </TableBody>
                     </Table>

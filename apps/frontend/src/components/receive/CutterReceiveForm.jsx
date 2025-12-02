@@ -75,35 +75,45 @@ export function CutterReceiveForm() {
 
     function handleAdd() {
         if (!issueRecord) return;
-        if (!isWastage && (!cutId || !helperId || !bobbinId || !boxId || !bobbinQty || !grossWeight)) {
-            alert('Please fill all fields');
+        
+        // Validation: Bobbin, Box, Qty, Gross Weight are mandatory. Cut and Helper are optional.
+        if (!bobbinId || !boxId || !bobbinQty || !grossWeight) {
+            alert('Please fill all fields (Bobbin, Box, Qty, Gross Weight)');
             return;
         }
 
-        // If wastage, we might allow minimal fields, but user asked for "Check box for mark remaining pending is wastage"
-        // This implies it's a flag on the receive entry.
+        const pieceIdToUse = issueRecord.pieceIds?.[0];
+        if (!pieceIdToUse) {
+            alert('No piece ID found in issue record');
+            return;
+        }
+
+        const cutName = db.cuts.find(c => c.id === cutId)?.name;
+        const helperName = db.workers.find(o => o.id === helperId)?.name;
 
         setCart(prev => [...prev, {
             id: uid(),
             issueId: issueRecord.id,
+            pieceId: pieceIdToUse,
             lotNo: issueRecord.lotNo,
             itemId: issueRecord.itemId,
+            operatorId: issueRecord.operatorId, // Capture operator from issue
             cutId, helperId, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
-            netWeight: isWastage ? 0 : netWeight, // Wastage logic might differ, assuming net weight calc applies or is 0 if just marking pending
+            netWeight: netWeight,
 
             // Display Names
             itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
-            cutName: db.cuts.find(c => c.id === cutId)?.name,
-            helperName: db.operators.find(o => o.id === helperId)?.name,
+            cutName: cutName,
+            helperName: helperName,
+            operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
             bobbinName: selectedBobbin?.name,
             boxName: selectedBox?.name
         }]);
 
-        // Reset fields for next box of same issue? Or reset issue?
-        // Usually multiple boxes per issue. Keep issue, reset weights.
+        // Reset fields for next box
         setGrossWeight('');
         setBobbinQty('');
-        // Keep Cut/Helper/Bobbin/Box as they might be same for next box
+        setIsWastage(false); 
     }
 
     async function handleSave() {
@@ -111,26 +121,23 @@ export function CutterReceiveForm() {
         setSaving(true);
         try {
             for (const entry of cart) {
-                await api.manualReceiveFromMachine({ // Using manual endpoint or create specific one?
-                    // The manual endpoint might not support all new fields.
-                    // If backend changes are needed, I should have planned for them.
-                    // User said "backend... are there in the code just they are missing on the front end".
-                    // So I assume api.manualReceiveFromCutterMachine supports these extra fields or I need to check payload.
-                    // Let's assume standard payload structure extension.
-
-                    pieceId: entry.issueId, // Mapping issueId to pieceId as per context usually
+                await api.manualReceiveFromMachine({ 
+                    pieceId: entry.pieceId,
                     lotNo: entry.lotNo,
                     bobbinId: entry.bobbinId,
                     boxId: entry.boxId,
                     bobbinQuantity: Number(entry.bobbinQty),
                     grossWeight: Number(entry.grossWeight),
                     receiveDate: entry.receiveDate,
-
-                    // New Fields
+                    operatorId: entry.operatorId, // Pass operatorId
                     cutId: entry.cutId,
                     helperId: entry.helperId,
                     isWastage: entry.isWastage
                 });
+
+                if (entry.isWastage) {
+                    await api.markPieceWastage({ pieceId: entry.pieceId });
+                }
             }
             await refreshDb();
             setCart([]);
@@ -168,7 +175,7 @@ export function CutterReceiveForm() {
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
-                            <div><span className="font-semibold">Operator:</span> {db.operators.find(o => o.id === issueRecord.operatorId)?.name}</div>
+                            <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
                         </div>
                     )}
                 </CardContent>
@@ -184,17 +191,17 @@ export function CutterReceiveForm() {
                                 <Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} />
                             </div>
                             <div>
-                                <Label>Cut</Label>
+                                <Label>Cut (Optional)</Label>
                                 <Select value={cutId} onChange={e => setCutId(e.target.value)}>
                                     <option value="">Select Cut</option>
                                     {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </Select>
                             </div>
                             <div>
-                                <Label>Helper</Label>
+                                <Label>Helper (Optional)</Label>
                                 <Select value={helperId} onChange={e => setHelperId(e.target.value)}>
                                     <option value="">Select Helper</option>
-                                    {db.operators?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                    {db.helpers?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                 </Select>
                             </div>
                             <div className="flex items-end pb-2">
@@ -205,38 +212,36 @@ export function CutterReceiveForm() {
                             </div>
                         </div>
 
-                        {!isWastage && (
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                <div>
-                                    <Label>Bobbin Type</Label>
-                                    <Select value={bobbinId} onChange={e => setBobbinId(e.target.value)}>
-                                        <option value="">Select Bobbin</option>
-                                        {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                                    </Select>
-                                </div>
-                                <div>
-                                    <Label>Box Type</Label>
-                                    <Select value={boxId} onChange={e => setBoxId(e.target.value)}>
-                                        <option value="">Select Box</option>
-                                        {db.boxes?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                                    </Select>
-                                </div>
-                                <div>
-                                    <Label>Bobbin Qty</Label>
-                                    <Input type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} />
-                                </div>
-                                <div>
-                                    <Label>Gross Weight</Label>
-                                    <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} />
-                                </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div>
+                                <Label>Bobbin Type</Label>
+                                <Select value={bobbinId} onChange={e => setBobbinId(e.target.value)}>
+                                    <option value="">Select Bobbin</option>
+                                    {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                                </Select>
                             </div>
-                        )}
+                            <div>
+                                <Label>Box Type</Label>
+                                <Select value={boxId} onChange={e => setBoxId(e.target.value)}>
+                                    <option value="">Select Box</option>
+                                    {db.boxes?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                                </Select>
+                            </div>
+                            <div>
+                                <Label>Bobbin Qty</Label>
+                                <Input type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} />
+                            </div>
+                            <div>
+                                <Label>Gross Weight</Label>
+                                <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} />
+                            </div>
+                        </div>
 
                         <div className="flex justify-between items-center pt-2">
                             <div className="text-sm font-medium">
-                                {!isWastage && `Calculated Net Weight: ${formatKg(netWeight)}`}
+                                {`Calculated Net Weight: ${formatKg(netWeight)}`}
                             </div>
-                            <Button onClick={handleAdd} disabled={!isWastage && !netWeight}>
+                            <Button onClick={handleAdd} disabled={!netWeight}>
                                 <Plus className="w-4 h-4 mr-2" /> Add to List
                             </Button>
                         </div>
@@ -264,7 +269,11 @@ export function CutterReceiveForm() {
                                             {entry.isWastage ? (
                                                 <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
                                             ) : (
-                                                `${entry.bobbinQty} x ${entry.bobbinName} | ${entry.cutName} | ${entry.helperName}`
+                                                <div>
+                                                    {entry.bobbinQty} x {entry.bobbinName}
+                                                    {entry.cutName && ` | ${entry.cutName}`}
+                                                    {entry.helperName && ` | ${entry.helperName}`}
+                                                </div>
                                             )}
                                         </TableCell>
                                         <TableCell className="">{formatKg(entry.netWeight)}</TableCell>

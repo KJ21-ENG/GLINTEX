@@ -160,7 +160,7 @@ export function ConingReceiveForm() {
                                         <TableCell>
                                             <Input type="number" value={row.grossWeight} onChange={e=>updateRow(row.id, 'grossWeight', e.target.value)} className="h-8" />
                                         </TableCell>
-                                        <TableCell className="text-right">
+                                        <TableCell className="">
                                             {formatKg(calcRowNet(row))}
                                         </TableCell>
                                         <TableCell>

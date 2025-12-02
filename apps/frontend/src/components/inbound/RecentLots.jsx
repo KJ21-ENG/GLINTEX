@@ -273,7 +273,7 @@ export function RecentLots({ db }) {
                 </ColumnFilter>
               </div>
             </th>
-            <th className="py-2 pr-2 text-right">
+            <th className="py-2 pr-2">
               <div className="flex items-center gap-1 justify-end">
                 <span>Pieces</span>
                 <ColumnFilter
@@ -309,7 +309,7 @@ export function RecentLots({ db }) {
                 </ColumnFilter>
               </div>
             </th>
-            <th className="py-2 pr-2 text-right">
+            <th className="py-2 pr-2">
               <div className="flex items-center gap-1 justify-end">
                 <span>Weight (kg)</span>
                 <ColumnFilter
@@ -358,8 +358,8 @@ export function RecentLots({ db }) {
                 <td className="py-2 pr-2">{r.itemName}</td>
                 <td className="py-2 pr-2">{r.firmName}</td>
                 <td className="py-2 pr-2">{r.supplierName}</td>
-                <td className="py-2 pr-2 text-right">{r.totalPieces}</td>
-                <td className="py-2 pr-2 text-right">{formatKg(r.totalWeight)}</td>
+                <td className="py-2 pr-2">{r.totalPieces}</td>
+                <td className="py-2 pr-2">{formatKg(r.totalWeight)}</td>
               </tr>
             ))
           )}

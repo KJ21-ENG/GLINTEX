@@ -66,7 +66,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
         ) : '—'}
       </td>
       <td className="py-2 pr-2">{p.seq}</td>
-      <td className="py-2 pr-2 text-right">
+      <td className="py-2 pr-2">
         <div className="flex items-center justify-end gap-2">
               {editing ? (
             <>
@@ -85,7 +85,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
           )}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right">
+      <td className="py-2 pr-2">
         <div className="flex items-center justify-end gap-2">
           <span style={{ textDecoration: 'none', textDecorationLine: 'none', textDecorationColor: 'transparent', opacity: 1, display: 'inline-block' }}>
             {formatKg(pendingWeight)}
@@ -102,7 +102,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
           ) : null}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right">{totalUnits || 0}</td>
+      <td className="py-2 pr-2">{totalUnits || 0}</td>
     </tr>
     <ContextMenu open={ctxOpen} x={ctxPos.x} y={ctxPos.y} onClose={closeContextMenu}>
       <div className="text-xs">

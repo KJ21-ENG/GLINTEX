@@ -49,9 +49,9 @@ export function Reports() {
                       <TableHeader>
                           <TableRow>
                               <TableHead>Supplier</TableHead>
-                              <TableHead className="text-right">Lots</TableHead>
-                              <TableHead className="text-right">Pieces</TableHead>
-                              <TableHead className="text-right">Weight</TableHead>
+                              <TableHead className="">Lots</TableHead>
+                              <TableHead className="">Pieces</TableHead>
+                              <TableHead className="">Weight</TableHead>
                           </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -59,9 +59,9 @@ export function Reports() {
                            supplierRows.map((r, i) => (
                               <TableRow key={i}>
                                   <TableCell>{r.supplierName}</TableCell>
-                                  <TableCell className="text-right">{r.lotsCount}</TableCell>
-                                  <TableCell className="text-right">{r.pieces}</TableCell>
-                                  <TableCell className="text-right">{formatKg(r.weight)}</TableCell>
+                                  <TableCell className="">{r.lotsCount}</TableCell>
+                                  <TableCell className="">{r.pieces}</TableCell>
+                                  <TableCell className="">{formatKg(r.weight)}</TableCell>
                               </TableRow>
                           ))}
                       </TableBody>
@@ -76,9 +76,9 @@ export function Reports() {
                       <TableHeader>
                           <TableRow>
                               <TableHead>Firm</TableHead>
-                              <TableHead className="text-right">Lots</TableHead>
-                              <TableHead className="text-right">Pieces</TableHead>
-                              <TableHead className="text-right">Weight</TableHead>
+                              <TableHead className="">Lots</TableHead>
+                              <TableHead className="">Pieces</TableHead>
+                              <TableHead className="">Weight</TableHead>
                           </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -86,9 +86,9 @@ export function Reports() {
                            firmRows.map((r, i) => (
                               <TableRow key={i}>
                                   <TableCell>{r.firmName}</TableCell>
-                                  <TableCell className="text-right">{r.lotsCount}</TableCell>
-                                  <TableCell className="text-right">{r.pieces}</TableCell>
-                                  <TableCell className="text-right">{formatKg(r.weight)}</TableCell>
+                                  <TableCell className="">{r.lotsCount}</TableCell>
+                                  <TableCell className="">{r.pieces}</TableCell>
+                                  <TableCell className="">{formatKg(r.weight)}</TableCell>
                               </TableRow>
                           ))}
                       </TableBody>

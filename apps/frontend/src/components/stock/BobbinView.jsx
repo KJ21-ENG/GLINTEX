@@ -140,9 +140,9 @@ export function BobbinView({ db, filters }) {
                         <TableHead>Item</TableHead>
                         <TableHead>Firm</TableHead>
                         <TableHead>Supplier</TableHead>
-                        <TableHead className="text-right">Bobbins (Avail/Total)</TableHead>
-                        <TableHead className="text-right">Weight (Avail/Total)</TableHead>
-                        <TableHead className="text-right">Crates</TableHead>
+                        <TableHead className="">Bobbins (Avail/Total)</TableHead>
+                        <TableHead className="">Weight (Avail/Total)</TableHead>
+                        <TableHead className="">Crates</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -162,9 +162,9 @@ export function BobbinView({ db, filters }) {
                                         <TableCell>{l.itemName}</TableCell>
                                         <TableCell>{l.firmName}</TableCell>
                                         <TableCell>{l.supplierName}</TableCell>
-                                        <TableCell className="text-right">{l.availableBobbins} / {l.totalBobbins}</TableCell>
-                                        <TableCell className="text-right">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
-                                        <TableCell className="text-right">{l.crates?.length || l.crateCount}</TableCell>
+                                        <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
+                                        <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
+                                        <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>
                                     </TableRow>
                                     {isExpanded && !isSummary && (
                                         <TableRow className="bg-muted/30">
@@ -176,8 +176,8 @@ export function BobbinView({ db, filters }) {
                                                                 <TableHead>Barcode</TableHead>
                                                                 <TableHead>Date</TableHead>
                                                                 <TableHead>Bobbin Type</TableHead>
-                                                                <TableHead className="text-right">Bobbins (Avail)</TableHead>
-                                                                <TableHead className="text-right">Weight (Avail)</TableHead>
+                                                                <TableHead className="">Bobbins (Avail)</TableHead>
+                                                                <TableHead className="">Weight (Avail)</TableHead>
                                                                 <TableHead>Operator</TableHead>
                                                             </TableRow>
                                                         </TableHeader>
@@ -187,8 +187,8 @@ export function BobbinView({ db, filters }) {
                                                                     <TableCell className="font-mono text-xs">{c.barcode}</TableCell>
                                                                     <TableCell>{c.date}</TableCell>
                                                                     <TableCell>{c.bobbinName}</TableCell>
-                                                                    <TableCell className="text-right">{c.availableBobbins} / {c.bobbinQty}</TableCell>
-                                                                    <TableCell className="text-right">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
+                                                                    <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
+                                                                    <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
                                                                     <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
                                                                 </TableRow>
                                                             ))}

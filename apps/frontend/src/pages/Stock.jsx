@@ -339,9 +339,9 @@ export function Stock() {
                     <TableHead>Item</TableHead>
                     <TableHead>Firm</TableHead>
                     <TableHead>Supplier</TableHead>
-                    <TableHead className="text-right">Pieces</TableHead>
-                    <TableHead className="text-right">Total Wt</TableHead>
-                    <TableHead className="text-right">Pending Wt</TableHead>
+                    <TableHead className="">Pieces</TableHead>
+                    <TableHead className="">Total Wt</TableHead>
+                    <TableHead className="">Pending Wt</TableHead>
                 </TableRow>
             </TableHeader>
             <TableBody>
@@ -366,11 +366,11 @@ export function Stock() {
                                     <TableCell>{l.itemName}</TableCell>
                                     <TableCell>{l.firmName}</TableCell>
                                     <TableCell>{l.supplierName}</TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="">
                                         {`${l.availableCount ?? (l.pieces||[]).filter(p=>p.status==='available').length} / ${l.totalPieces ?? (l.pieces||[]).length}`}
                                     </TableCell>
-                                    <TableCell className="text-right">{formatKg(l.totalWeight)}</TableCell>
-                                    <TableCell className="text-right font-bold">
+                                    <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
+                                    <TableCell className="font-bold">
                                         {formatKg(l.pendingWeight)}
                                     </TableCell>
                                 </TableRow>
@@ -407,9 +407,9 @@ export function Stock() {
                                                             <TableHead>Piece ID</TableHead>
                                                             <TableHead>Barcode</TableHead>
                                                             <TableHead>Seq</TableHead>
-                                                            <TableHead className="text-right">Weight</TableHead>
-                                                            <TableHead className="text-right">Pending</TableHead>
-                                                            <TableHead className="text-right">Total Units</TableHead>
+                                                            <TableHead className="">Weight</TableHead>
+                                                            <TableHead className="">Pending</TableHead>
+                                                            <TableHead className="">Total Units</TableHead>
                                                             <TableHead className="w-[50px]"></TableHead>
                                                         </TableRow>
                                                     </TableHeader>

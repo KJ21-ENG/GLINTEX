@@ -130,7 +130,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Name</TableHead>
-                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -143,7 +143,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                                             <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" />
                                         ) : item.name}
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
@@ -210,8 +210,8 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Name</TableHead>
-                                <TableHead className="text-right">Weight (kg)</TableHead>
-                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                                <TableHead className="">Weight (kg)</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -222,10 +222,10 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                                     <TableCell>
                                         {editingId === item.id ? <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" /> : item.name}
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="">
                                         {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e=>setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" /> : formatKg(item.weight)}
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
@@ -295,7 +295,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Role</TableHead>
-                                <TableHead className="w-[100px] text-right">Actions</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -314,7 +314,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                             </Select>
                                         ) : <Badge variant="outline" className="capitalize">{item.role || 'operator'}</Badge>}
                                     </TableCell>
-                                    <TableCell className="text-right">
+                                    <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>

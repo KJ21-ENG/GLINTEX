@@ -101,8 +101,8 @@ export function HoloView({ db, filters }) {
                     <TableHead>Item</TableHead>
                     <TableHead>Yarn / Twist</TableHead>
                     <TableHead>Firm / Supplier</TableHead>
-                    <TableHead className="text-right">Total Rolls</TableHead>
-                    <TableHead className="text-right">Net Weight</TableHead>
+                    <TableHead className="">Total Rolls</TableHead>
+                    <TableHead className="">Net Weight</TableHead>
                 </TableRow>
             </TableHeader>
             <TableBody>
@@ -121,8 +121,8 @@ export function HoloView({ db, filters }) {
                                     <TableCell>{l.itemName}</TableCell>
                                     <TableCell>{l.yarnName} / {l.twistName}</TableCell>
                                     <TableCell>{l.firmName}<br/><span className="text-xs text-muted-foreground">{l.supplierName}</span></TableCell>
-                                    <TableCell className="text-right">{l.totalRolls}</TableCell>
-                                    <TableCell className="text-right">{formatKg(l.totalWeight)}</TableCell>
+                                    <TableCell className="">{l.totalRolls}</TableCell>
+                                    <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                                 </TableRow>
                                 {isExpanded && (
                                     <TableRow className="bg-muted/30">
@@ -134,9 +134,9 @@ export function HoloView({ db, filters }) {
                                                             <TableHead>Barcode</TableHead>
                                                             <TableHead>Date</TableHead>
                                                             <TableHead>Roll Type</TableHead>
-                                                            <TableHead className="text-right">Rolls</TableHead>
-                                                            <TableHead className="text-right">Net Wt</TableHead>
-                                                            <TableHead className="text-right">Gross Wt</TableHead>
+                                                            <TableHead className="">Rolls</TableHead>
+                                                            <TableHead className="">Net Wt</TableHead>
+                                                            <TableHead className="">Gross Wt</TableHead>
                                                             <TableHead>Machine</TableHead>
                                                         </TableRow>
                                                     </TableHeader>
@@ -146,9 +146,9 @@ export function HoloView({ db, filters }) {
                                                                 <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                                 <TableCell>{r.date}</TableCell>
                                                                 <TableCell>{r.rollType?.name || '—'}</TableCell>
-                                                                <TableCell className="text-right">{r.rollCount}</TableCell>
-                                                                <TableCell className="text-right">{formatKg(r.rollWeight)}</TableCell>
-                                                                <TableCell className="text-right">{formatKg(r.grossWeight)}</TableCell>
+                                                                <TableCell className="">{r.rollCount}</TableCell>
+                                                                <TableCell className="">{formatKg(r.rollWeight)}</TableCell>
+                                                                <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
                                                                 <TableCell>{r.machineNo}</TableCell>
                                                             </TableRow>
                                                         ))}

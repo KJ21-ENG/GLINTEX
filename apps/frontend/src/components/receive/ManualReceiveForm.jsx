@@ -161,7 +161,7 @@ export function ManualReceiveForm() {
                             <TableRow>
                                 <TableHead>Piece</TableHead>
                                 <TableHead>Details</TableHead>
-                                <TableHead className="text-right">Net Weight</TableHead>
+                                <TableHead className="">Net Weight</TableHead>
                                 <TableHead className="w-[50px]"></TableHead>
                             </TableRow>
                         </TableHeader>
@@ -172,7 +172,7 @@ export function ManualReceiveForm() {
                                     <TableCell className="text-xs text-muted-foreground">
                                         {entry.bobbinQty} x {entry.bobbinName} in {entry.boxName}
                                     </TableCell>
-                                    <TableCell className="text-right">{formatKg(entry.netWeight)}</TableCell>
+                                    <TableCell className="">{formatKg(entry.netWeight)}</TableCell>
                                     <TableCell>
                                         <Button variant="ghost" size="icon" onClick={()=>setCart(c => c.filter(x => x.id !== entry.id))} className="h-6 w-6 text-destructive">
                                             x

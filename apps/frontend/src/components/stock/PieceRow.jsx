@@ -82,7 +82,7 @@ export function PieceRow({
         ) : '—'}
       </td>
       <td className="py-2 pr-2 text-sm">{p.seq}</td>
-      <td className="py-2 pr-2 text-right">
+      <td className="py-2 pr-2">
         <div className="flex items-center justify-end gap-2 h-9">
           {editing ? (
             <div className="flex items-center gap-1 animate-in fade-in zoom-in-95 duration-200">
@@ -107,7 +107,7 @@ export function PieceRow({
           )}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right text-sm">
+      <td className="py-2 pr-2 text-sm">
         <div className="flex flex-col items-end">
              <span>{formatKg(pendingWeight)}</span>
              {wastageWeight > 0 && (
@@ -118,8 +118,8 @@ export function PieceRow({
              )}
         </div>
       </td>
-      <td className="py-2 pr-2 text-right text-sm">{totalUnits || 0}</td>
-      <td className="py-2 pr-2 text-right relative">
+      <td className="py-2 pr-2 text-sm">{totalUnits || 0}</td>
+      <td className="py-2 pr-2 relative">
         <div ref={menuRef}>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMenuOpen(!menuOpen)}>
                 <MoreVertical className="w-4 h-4" />

@@ -172,7 +172,7 @@ export function IssueToCutter() {
                                     <TableRow>
                                         <TableHead className="w-[40px]"></TableHead>
                                         <TableHead>ID</TableHead>
-                                        <TableHead className="text-right">Weight</TableHead>
+                                        <TableHead className="">Weight</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -184,7 +184,7 @@ export function IssueToCutter() {
                                                 <input type="checkbox" checked={selected.includes(p.id)} onChange={()=>toggle(p.id)} className="rounded border-gray-300 text-primary focus:ring-primary" />
                                             </TableCell>
                                             <TableCell className="font-mono">{p.id}</TableCell>
-                                            <TableCell className="text-right">{formatKg(p.weight)}</TableCell>
+                                            <TableCell className="">{formatKg(p.weight)}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>

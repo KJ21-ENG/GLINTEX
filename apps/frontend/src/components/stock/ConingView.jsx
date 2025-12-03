@@ -2,8 +2,9 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { LotPopover } from './LotPopover';
 
-export function ConingView({ db, filters, search = '', groupBy = false }) {
+export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
@@ -110,7 +111,7 @@ export function ConingView({ db, filters, search = '', groupBy = false }) {
       if (filters.to && lot.date > filters.to) return false;
       if (filters.status !== 'all' && lot.statusType !== filters.status) return false;
       return true;
-    }).sort((a,b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
+    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
   }, [coningLots, filters, search]);
 
   const displayLots = useMemo(() => {
@@ -130,11 +131,13 @@ export function ConingView({ db, filters, search = '', groupBy = false }) {
         totalWeight: 0,
         statusType: lot.statusType,
         rows: [],
+        lots: [],
       };
       existing.totalCones += lot.totalCones;
       existing.totalWeight += lot.totalWeight;
       existing.statusType = existing.totalCones > 0 ? 'active' : 'inactive';
       existing.rows = [];
+      existing.lots.push(lot.lotNo);
       map.set(key, existing);
     });
     return Array.from(map.values());
@@ -142,82 +145,86 @@ export function ConingView({ db, filters, search = '', groupBy = false }) {
 
   return (
     <div className="rounded-md border bg-card">
-        <Table>
-            <TableHeader>
-                <TableRow>
-                    <TableHead className="w-[30px]"></TableHead>
-                    <TableHead>Lot No</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Firm / Supplier</TableHead>
-                    <TableHead className="">Cones</TableHead>
-                    <TableHead className="">Net Weight</TableHead>
-                </TableRow>
-            </TableHeader>
-            <TableBody>
-                {displayLots.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
-                ) : (
-                    displayLots.map((lot) => {
-                        const isExpanded = !groupBy && expandedLot === lot.lotNo;
-                        return (
-                            <React.Fragment key={lot.lotNo}>
-                                <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
-                                    <TableCell>
-                                        {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
-                                    </TableCell>
-                                    <TableCell className="font-medium">{groupBy ? '—' : (lot.lotNo || '—')}</TableCell>
-                                    <TableCell>{lot.itemName}</TableCell>
-                                    <TableCell>
-                                      {lot.firmName}
-                                      <div className="text-xs text-muted-foreground">{lot.supplierName}</div>
-                                    </TableCell>
-                                    <TableCell className="">{lot.totalCones}</TableCell>
-                                    <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[30px]"></TableHead>
+            <TableHead>Lot No</TableHead>
+            <TableHead>Item</TableHead>
+            <TableHead>Firm / Supplier</TableHead>
+            <TableHead className="">Cones</TableHead>
+            <TableHead className="">Net Weight</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {displayLots.length === 0 ? (
+            <TableRow><TableCell colSpan={6} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
+          ) : (
+            displayLots.map((lot) => {
+              const isExpanded = !groupBy && expandedLot === lot.lotNo;
+              return (
+                <React.Fragment key={lot.lotNo}>
+                  <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
+                    <TableCell>
+                      {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
+                    </TableCell>
+                    <TableCell className="font-medium">
+                      {groupBy ? (
+                        <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
+                      ) : (lot.lotNo || '—')}
+                    </TableCell>
+                    <TableCell>{lot.itemName}</TableCell>
+                    <TableCell>
+                      {lot.firmName}
+                      <div className="text-xs text-muted-foreground">{lot.supplierName}</div>
+                    </TableCell>
+                    <TableCell className="">{lot.totalCones}</TableCell>
+                    <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
+                  </TableRow>
+                  {isExpanded && (
+                    <TableRow className="bg-muted/30">
+                      <TableCell colSpan={6} className="p-4">
+                        <div className="border rounded-md bg-background">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Barcode</TableHead>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Box</TableHead>
+                                <TableHead>Cone Type</TableHead>
+                                <TableHead className="">Cones</TableHead>
+                                <TableHead className="">Net / Gross Wt</TableHead>
+                                <TableHead>Machine</TableHead>
+                                <TableHead>Operator</TableHead>
+                                <TableHead>Notes</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {lot.rows.map((row) => (
+                                <TableRow key={row.id}>
+                                  <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                                  <TableCell>{row.date || '—'}</TableCell>
+                                  <TableCell>{row.boxName}</TableCell>
+                                  <TableCell>{row.coneType}</TableCell>
+                                  <TableCell className="">{row.coneCount}</TableCell>
+                                  <TableCell className="">{formatKg(row.netWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
+                                  <TableCell>{row.machineName}</TableCell>
+                                  <TableCell>{row.operatorName}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
                                 </TableRow>
-                                {isExpanded && (
-                                    <TableRow className="bg-muted/30">
-                                        <TableCell colSpan={6} className="p-4">
-                                            <div className="border rounded-md bg-background">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead>Barcode</TableHead>
-                                                            <TableHead>Date</TableHead>
-                                                            <TableHead>Box</TableHead>
-                                                            <TableHead>Cone Type</TableHead>
-                                                            <TableHead className="">Cones</TableHead>
-                                                            <TableHead className="">Net / Gross Wt</TableHead>
-                                                            <TableHead>Machine</TableHead>
-                                                            <TableHead>Operator</TableHead>
-                                                            <TableHead>Notes</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {lot.rows.map((row) => (
-                                                            <TableRow key={row.id}>
-                                                                <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                                                                <TableCell>{row.date || '—'}</TableCell>
-                                                                <TableCell>{row.boxName}</TableCell>
-                                                                <TableCell>{row.coneType}</TableCell>
-                                                                <TableCell className="">{row.coneCount}</TableCell>
-                                                                <TableCell className="">{formatKg(row.netWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
-                                                                <TableCell>{row.machineName}</TableCell>
-                                                                <TableCell>{row.operatorName}</TableCell>
-                                                                <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
-                                                            </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                            </div>
-                                        </TableCell>
-                                    </TableRow>
-                                )}
-                            </React.Fragment>
-                        );
-                    })
-                )}
-            </TableBody>
-        </Table>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
     </div>
   );
 }

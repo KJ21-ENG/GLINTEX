@@ -1,11 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, Badge, Button, Input } from '../ui';
-import { formatKg, aggregateLots } from '../../utils';
-import { ChevronDown, ChevronRight, Search } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
+import { formatKg } from '../../utils';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
-export function BobbinView({ db, filters }) {
+export function BobbinView({ db, filters, search = '', groupBy = false }) {
   const [expandedLot, setExpandedLot] = useState(null);
-  const [isSummary, setIsSummary] = useState(false);
+  useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
   // --- Data Prep ---
   
@@ -107,6 +107,11 @@ export function BobbinView({ db, filters }) {
   // 5. Filter & Sort
   const filteredLots = useMemo(() => {
     return bobbinLots.filter(l => {
+        if (search) {
+          const s = search.toLowerCase();
+          const hit = [l.lotNo, l.itemName, l.firmName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
+          if (!hit) return false;
+        }
         if (filters.item && l.itemId !== filters.item) return false;
         if (filters.firm && l.firmId !== filters.firm) return false;
         if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -118,19 +123,44 @@ export function BobbinView({ db, filters }) {
         
         return true;
     }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
-  }, [bobbinLots, filters]);
+  }, [bobbinLots, filters, search]);
 
-  const displayData = isSummary ? aggregateLots(filteredLots) : filteredLots;
+  const displayData = useMemo(() => {
+    if (!groupBy) return filteredLots;
+    const map = new Map();
+    filteredLots.forEach((lot) => {
+      const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+      const existing = map.get(key) || {
+        lotNo: '', // display dash for grouped rows
+        itemId: lot.itemId,
+        itemName: lot.itemName,
+        firmId: lot.firmId,
+        firmName: lot.firmName,
+        supplierName: lot.supplierName,
+        totalBobbins: 0,
+        issuedBobbins: 0,
+        availableBobbins: 0,
+        totalWeight: 0,
+        issuedWeight: 0,
+        availableWeight: 0,
+        crateCount: 0,
+        crates: [],
+        statusType: lot.availableBobbins > 0 ? 'active' : 'inactive',
+      };
+      existing.totalBobbins += lot.totalBobbins;
+      existing.issuedBobbins += lot.issuedBobbins;
+      existing.availableBobbins += lot.availableBobbins;
+      existing.totalWeight += lot.totalWeight;
+      existing.issuedWeight += lot.issuedWeight;
+      existing.availableWeight += lot.availableWeight;
+      existing.crateCount += lot.crateCount || lot.crates?.length || 0;
+      map.set(key, existing);
+    });
+    return Array.from(map.values());
+  }, [filteredLots, groupBy]);
 
   return (
-    <div className="space-y-4">
-        <div className="flex justify-end">
-             <label className="flex items-center gap-2 text-sm cursor-pointer bg-muted px-3 py-1 rounded-md">
-                <input type="checkbox" checked={isSummary} onChange={e=>setIsSummary(e.target.checked)} className="rounded border-gray-300" />
-                Group by Item/Firm
-             </label>
-        </div>
-
+        <div className="space-y-4">
         <div className="rounded-md border bg-card">
             <Table>
                 <TableHeader>
@@ -150,15 +180,15 @@ export function BobbinView({ db, filters }) {
                         <TableRow><TableCell colSpan={8} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
                     ) : (
                         displayData.map((l, idx) => {
-                            const isExpanded = expandedLot === l.lotNo;
+                            const isExpanded = !groupBy && expandedLot === l.lotNo;
                             const rowKey = l.lotNo || idx;
                             return (
                                 <React.Fragment key={rowKey}>
-                                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !isSummary && setExpandedLot(isExpanded ? null : l.lotNo)}>
+                                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
                                         <TableCell>
-                                            {!isSummary && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
+                                            {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                                         </TableCell>
-                                        <TableCell className="font-medium">{isSummary ? '—' : l.lotNo}</TableCell>
+                                        <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
                                         <TableCell>{l.itemName}</TableCell>
                                         <TableCell>{l.firmName}</TableCell>
                                         <TableCell>{l.supplierName}</TableCell>
@@ -166,7 +196,7 @@ export function BobbinView({ db, filters }) {
                                         <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
                                         <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>
                                     </TableRow>
-                                    {isExpanded && !isSummary && (
+                                    {isExpanded && !groupBy && (
                                         <TableRow className="bg-muted/30">
                                             <TableCell colSpan={8} className="p-4">
                                                 <div className="border rounded-md bg-background">

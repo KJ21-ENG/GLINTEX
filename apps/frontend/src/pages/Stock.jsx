@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
 import { PieceRow } from '../components/stock/PieceRow';
 import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
+import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots } from '../utils';
 import * as api from '../api';
@@ -26,15 +27,18 @@ export function Stock() {
   const { db, createIssueToMachine, refreshing, refreshDb, process } = useInventory();
   
   // --- Process Config ---
-  const processDef = getProcessDefinition(process || 'cutter');
+  const processId = process || 'cutter';
+  const processDef = getProcessDefinition(processId);
   const { receiveTotalsKey, receiveUnitField, receiveWeightField, unitLabelPlural } = processDef;
-  const isCutter = (process || 'cutter') === 'cutter';
+  const isCutter = processId === 'cutter';
+  const isHolo = processId === 'holo';
+  const isConing = processId === 'coning';
   
   // --- UI State ---
-  const [view, setView] = useState('jumbo'); // 'jumbo' | 'bobbins' | 'holo'
-  const [isSummary, setIsSummary] = useState(false);
+  const [view, setView] = useState(() => (isHolo ? 'holo' : 'jumbo')); // 'jumbo' | 'bobbins' | 'holo'
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
+  const [groupByItemFirm, setGroupByItemFirm] = useState(false);
   
   // --- Filters ---
   const [search, setSearch] = useState("");
@@ -147,11 +151,34 @@ export function Stock() {
   }, [allLots, search, filters]);
 
   const displayedLots = useMemo(() => {
-      if (isSummary) {
-          try { return aggregateLots(filteredLots); } catch(e) { return filteredLots; }
-      }
-      return filteredLots;
-  }, [filteredLots, isSummary]);
+      if (!groupByItemFirm) return filteredLots;
+      const map = new Map();
+      filteredLots.forEach((lot) => {
+        const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+        const existing = map.get(key) || {
+          lotNo: `Group-${key}`,
+          itemId: lot.itemId,
+          itemName: lot.itemName,
+          firmId: lot.firmId,
+          firmName: lot.firmName,
+          supplierName: lot.supplierName,
+          totalWeight: 0,
+          pendingWeight: 0,
+          availableCount: 0,
+          totalPieces: 0,
+          pieces: [],
+          statusType: 'inactive',
+        };
+        existing.totalWeight += Number(lot.totalWeight || 0);
+        existing.pendingWeight += Number(lot.pendingWeight || 0);
+        const available = lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available').length;
+        existing.availableCount += available;
+        existing.totalPieces += lot.totalPieces ?? (lot.pieces || []).length;
+        existing.statusType = existing.pendingWeight > EPSILON ? 'active' : 'inactive';
+        map.set(key, existing);
+      });
+      return Array.from(map.values());
+  }, [filteredLots, groupByItemFirm]);
 
   // --- Handlers ---
   
@@ -159,6 +186,24 @@ export function Stock() {
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
   const [issuing, setIssuing] = useState(false);
+
+  // Keep view aligned with process (match main-branch behaviour)
+  useEffect(() => {
+    if (isHolo) {
+      setView('holo');
+      return;
+    }
+    // For coning/other processes, force jumbo like main-branch behaviour
+    if (!isCutter) {
+      if (view !== 'jumbo') setView('jumbo');
+      return;
+    }
+    if (view === 'holo') {
+      setView('jumbo');
+    }
+  }, [isCutter, isHolo, view]);
+
+  useEffect(() => { setExpandedLot(null); }, [groupByItemFirm, view, processId]);
 
   async function handleMarkWastage(pieceId) {
     if (!pieceId) return;
@@ -236,6 +281,7 @@ export function Stock() {
 
   // --- Render Helper ---
   const toggleExpand = (lotNo) => setExpandedLot(prev => prev === lotNo ? null : lotNo);
+  const showBobbins = isCutter && view === 'bobbins';
 
   return (
     <div className="space-y-6 fade-in">
@@ -245,30 +291,22 @@ export function Stock() {
               <h1 className="text-2xl font-bold tracking-tight">Stock & Inventory</h1>
               <div className="flex gap-2">
                   {/* View Toggles */}
-                  <div className="flex p-1 bg-muted rounded-lg">
+                  {isCutter ? (
+                    <div className="flex p-1 bg-muted rounded-lg">
                       <button 
                         onClick={()=>setView('jumbo')}
                         className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view==='jumbo' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
                       >
                         Jumbo Rolls
                       </button>
-                      {isCutter && (
-                        <button 
-                            onClick={()=>setView('bobbins')}
-                            className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view==='bobbins' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
-                        >
-                            Bobbins
-                        </button>
-                      )}
-                      {!isCutter && (
-                           <button 
-                            onClick={()=>setView('holo')}
-                            className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view==='holo' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
-                           >
-                             Holo Rolls
-                           </button>
-                      )}
-                  </div>
+                      <button 
+                          onClick={()=>setView('bobbins')}
+                          className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view==='bobbins' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
+                      >
+                          Bobbins
+                      </button>
+                    </div>
+                  ) : null}
                   {/* Export Button */}
                   <Button variant="outline" size="icon" onClick={() => exportXlsx(filteredLots, {})}>
                       <Download className="w-4 h-4" />
@@ -305,6 +343,13 @@ export function Stock() {
                           {db?.firms?.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
                       </Select>
                   </div>
+                  <div className="w-[160px]">
+                      <Label className="text-xs mb-1 block">Supplier</Label>
+                      <Select className="bg-background" value={filters.supplier} onChange={e=>setFilters(f=>({...f, supplier: e.target.value}))}>
+                          <option value="">All Suppliers</option>
+                          {db?.suppliers?.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                      </Select>
+                  </div>
                   <div className="w-[140px]">
                       <Label className="text-xs mb-1 block">Status</Label>
                       <Select className="bg-background" value={filters.status} onChange={e=>setFilters(f=>({...f, status: e.target.value}))}>
@@ -313,10 +358,18 @@ export function Stock() {
                           <option value="all">All</option>
                       </Select>
                   </div>
-                   <div className="flex items-center gap-2 ml-auto pb-1">
+                  <div className="w-[130px]">
+                      <Label className="text-xs mb-1 block">From</Label>
+                      <Input type="date" className="bg-background" value={filters.from} onChange={e=>setFilters(f=>({...f, from: e.target.value}))} />
+                  </div>
+                  <div className="w-[130px]">
+                      <Label className="text-xs mb-1 block">To</Label>
+                      <Input type="date" className="bg-background" value={filters.to} onChange={e=>setFilters(f=>({...f, to: e.target.value}))} />
+                  </div>
+                  <div className="flex items-center gap-2 ml-auto pb-1">
                       <Label className="text-xs cursor-pointer flex items-center gap-2">
-                        <input type="checkbox" checked={isSummary} onChange={e=>setIsSummary(e.target.checked)} className="rounded border-gray-300" />
-                        Summary View
+                        <input type="checkbox" checked={groupByItemFirm} onChange={e=>setGroupByItemFirm(e.target.checked)} className="rounded border-gray-300" />
+                        Group by Item / Firm
                       </Label>
                    </div>
               </CardContent>
@@ -324,10 +377,12 @@ export function Stock() {
       </div>
 
       {/* Main Content based on View */}
-      {view === 'bobbins' ? (
-          <BobbinView db={db} filters={filters} />
-      ) : view === 'holo' ? (
-          <HoloView db={db} filters={filters} />
+      {processId === 'coning' ? (
+          <ConingView db={db} filters={filters} search={search} groupBy={groupByItemFirm} />
+      ) : isHolo ? (
+          <HoloView db={db} filters={filters} search={search} groupBy={groupByItemFirm} />
+      ) : showBobbins ? (
+          <BobbinView db={db} filters={filters} search={search} groupBy={groupByItemFirm} />
       ) : (
       <div className="rounded-md border bg-card">
         <Table>
@@ -349,19 +404,19 @@ export function Stock() {
                      <TableRow><TableCell colSpan={9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
                 ) : (
                     displayedLots.map((l, idx) => {
-                        const isExpanded = expandedLot === l.lotNo;
+                        const isExpanded = !groupByItemFirm && expandedLot === l.lotNo;
                         return (
                             <React.Fragment key={l.lotNo || idx}>
                                 <TableRow 
                                     className="cursor-pointer hover:bg-muted/50"
-                                    onClick={() => !isSummary && toggleExpand(l.lotNo)}
+                                    onClick={() => !groupByItemFirm && toggleExpand(l.lotNo)}
                                 >
                                     <TableCell>
-                                        {!isSummary && (
+                                        {!groupByItemFirm && (
                                             isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />
                                         )}
                                     </TableCell>
-                                    <TableCell className="font-medium">{l.lotNo}</TableCell>
+                                    <TableCell className="font-medium">{groupByItemFirm ? '—' : (l.lotNo || '—')}</TableCell>
                                     <TableCell>{l.date}</TableCell>
                                     <TableCell>{l.itemName}</TableCell>
                                     <TableCell>{l.firmName}</TableCell>
@@ -374,7 +429,7 @@ export function Stock() {
                                         {formatKg(l.pendingWeight)}
                                     </TableCell>
                                 </TableRow>
-                                {isExpanded && !isSummary && (
+                                {isExpanded && !groupByItemFirm && (
                                     <TableRow className="bg-muted/30 hover:bg-muted/30">
                                         <TableCell colSpan={9} className="p-4">
                                             <div className="bg-background border rounded-lg p-4 shadow-sm">

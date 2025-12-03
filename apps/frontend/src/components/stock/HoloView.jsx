@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, Badge } from '../ui';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
-export function HoloView({ db, filters }) {
+export function HoloView({ db, filters, search = '', groupBy = false }) {
   const [expandedLot, setExpandedLot] = useState(null);
+  useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
   // --- Data Prep ---
   
@@ -45,9 +46,11 @@ export function HoloView({ db, filters }) {
       return {
         ...row,
         lotNo,
-        itemId: issue?.itemId || '',
+        itemId: issue?.itemId || lotMeta?.itemId || '',
         itemName: lotMeta?.itemName || '—',
+        firmId: lotMeta?.firmId || '',
         firmName: lotMeta?.firmName || '—',
+        supplierId: lotMeta?.supplierId || '',
         supplierName: lotMeta?.supplierName || '—',
         yarnName: yarn?.name || '—',
         twistName: twist?.name || '—',
@@ -61,9 +64,13 @@ export function HoloView({ db, filters }) {
   const holoLots = useMemo(() => {
     const map = new Map();
     holoRows.forEach((row) => {
-      const lotNo = row.lotNo || '(No Lot)';
-      const existing = map.get(lotNo) || {
-        lotNo,
+      const lotKey = `${row.lotNo || '(No Lot)'}::${row.twistName || '—'}`; // separate rows per twist even if lot matches
+      const existing = map.get(lotKey) || {
+        lotNo: row.lotNo || '(No Lot)',
+        twistKey: row.twistName || '—',
+        itemId: row.itemId || '',
+        firmId: row.firmId || '',
+        supplierId: row.supplierId || '',
         itemName: row.itemName,
         firmName: row.firmName,
         supplierName: row.supplierName,
@@ -77,19 +84,61 @@ export function HoloView({ db, filters }) {
       existing.rows.push(row);
       existing.totalRolls += row.rollCount;
       existing.totalWeight += row.rollWeight;
-      map.set(lotNo, existing);
+      map.set(lotKey, existing);
     });
-    return Array.from(map.values());
+    return Array.from(map.values()).map((lot) => ({
+      ...lot,
+      statusType: lot.totalRolls > 0 ? 'active' : 'inactive',
+      date: lot.rows?.[0]?.date || lot.rows?.[0]?.createdAt || '',
+    }));
   }, [holoRows]);
 
   // 5. Filter
   const filteredLots = useMemo(() => {
-      return holoLots.filter(l => {
-        if (filters.item && l.itemId !== filters.item) return false; // Note: itemId might need to be passed up
-        // Basic text filter if needed
+    return holoLots.filter(l => {
+        if (search) {
+          const s = search.toLowerCase();
+          const hit = [l.lotNo, l.itemName, l.yarnName, l.twistName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
+          if (!hit) return false;
+        }
+        if (filters.item && l.itemId !== filters.item) return false;
+        if (filters.firm && l.firmId !== filters.firm) return false;
+        if (filters.supplier && l.supplierId !== filters.supplier) return false;
+        if (filters.from && l.date < filters.from) return false;
+        if (filters.to && l.date > filters.to) return false;
+        if (filters.status !== 'all' && l.statusType !== filters.status) return false;
         return true;
-      }).sort((a,b) => a.lotNo.localeCompare(b.lotNo));
-  }, [holoLots, filters]);
+      }).sort((a,b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
+  }, [holoLots, filters, search]);
+
+  const displayLots = useMemo(() => {
+    if (!groupBy) return filteredLots;
+    const map = new Map();
+    filteredLots.forEach((lot) => {
+      const key = `${lot.itemId || ''}::${lot.firmId || ''}::${lot.twistName || ''}`;
+      const existing = map.get(key) || {
+        lotNo: '', // grouped rows show dash in lot column
+        itemId: lot.itemId,
+        itemName: lot.itemName,
+        firmId: lot.firmId,
+        firmName: lot.firmName,
+        supplierId: lot.supplierId,
+        supplierName: lot.supplierName,
+        yarnName: lot.yarnName,
+        twistName: lot.twistName,
+        totalRolls: 0,
+        totalWeight: 0,
+        rows: [],
+        statusType: lot.statusType,
+      };
+      existing.totalRolls += lot.totalRolls;
+      existing.totalWeight += lot.totalWeight;
+      existing.statusType = existing.totalRolls > 0 ? 'active' : 'inactive';
+      existing.rows = []; // collapse detail when grouped
+      map.set(key, existing);
+    });
+    return Array.from(map.values());
+  }, [filteredLots, groupBy]);
 
   return (
     <div className="rounded-md border bg-card">
@@ -106,18 +155,18 @@ export function HoloView({ db, filters }) {
                 </TableRow>
             </TableHeader>
             <TableBody>
-                {filteredLots.length === 0 ? (
+                {displayLots.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
                 ) : (
-                    filteredLots.map((l, idx) => {
-                        const isExpanded = expandedLot === l.lotNo;
+                    displayLots.map((l, idx) => {
+                        const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
                         return (
                             <React.Fragment key={l.lotNo || idx}>
-                                <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => setExpandedLot(isExpanded ? null : l.lotNo)}>
+                                <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
                                     <TableCell>
-                                        {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                        {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                                     </TableCell>
-                                    <TableCell className="font-medium">{l.lotNo}</TableCell>
+                                    <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
                                     <TableCell>{l.itemName}</TableCell>
                                     <TableCell>{l.yarnName} / {l.twistName}</TableCell>
                                     <TableCell>{l.firmName}<br/><span className="text-xs text-muted-foreground">{l.supplierName}</span></TableCell>

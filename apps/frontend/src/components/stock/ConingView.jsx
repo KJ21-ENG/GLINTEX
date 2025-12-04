@@ -111,7 +111,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       if (filters.to && lot.date > filters.to) return false;
       if (filters.status !== 'all' && lot.statusType !== filters.status) return false;
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
+    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
   }, [coningLots, filters, search]);
 
   const displayLots = useMemo(() => {

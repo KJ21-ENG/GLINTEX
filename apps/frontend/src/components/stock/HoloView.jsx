@@ -109,7 +109,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
+    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
   }, [holoLots, filters, search]);
 
   const displayLots = useMemo(() => {

@@ -122,7 +122,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         if (filters.status === 'inactive' && l.availableBobbins > 0) return false;
         
         return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || ''));
+    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
   }, [bobbinLots, filters, search]);
 
   const displayData = useMemo(() => {

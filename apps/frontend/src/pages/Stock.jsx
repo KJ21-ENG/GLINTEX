@@ -153,7 +153,7 @@ export function Stock() {
         if (status !== filters.status) return false;
       }
       return true;
-    });
+    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
   }, [allLots, search, filters]);
 
   const displayedLots = useMemo(() => {

@@ -6,7 +6,7 @@ import { Search, QrCode } from 'lucide-react';
 import * as api from '../../api';
 
 export function IssueToCutter() {
-  const { db, createIssueToMachine, refreshing } = useInventory();
+  const { db, createIssueToMachine, refreshing, loading } = useInventory();
   
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState("");
@@ -20,29 +20,33 @@ export function IssueToCutter() {
   const [issuing, setIssuing] = useState(false);
 
   // Filtered Lots
+  const lots = db?.lots || [];
+  const inboundItems = db?.inbound_items || [];
+  const issueToCutterRows = db?.issue_to_cutter_machine || [];
+
   const candidateLots = useMemo(() => {
     if (!itemId) return [];
-    return db.lots
+    return lots
         .filter(l => l.itemId === itemId)
         .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  }, [db.lots, itemId]);
+  }, [itemId, lots]);
 
   // Available Pieces
   const availablePieces = useMemo(() => {
       if (!lotNo) return [];
-      return db.inbound_items
+      return inboundItems
         .filter(ii => ii.lotNo===lotNo && ii.itemId===itemId && ii.status==='available')
         .sort((a,b)=> a.seq - b.seq);
-  }, [db.inbound_items, lotNo, itemId]);
+  }, [inboundItems, lotNo, itemId]);
 
   // Last Issue Info
   const lastIssueForLot = useMemo(() => {
     if (!lotNo) return null;
-    const rows = db.issue_to_cutter_machine
+    const rows = issueToCutterRows
         .filter(record => record.lotNo === lotNo)
         .sort((a,b)=> b.date.localeCompare(a.date));
     return rows[0] || null;
-  }, [db.issue_to_cutter_machine, lotNo]);
+  }, [issueToCutterRows, lotNo]);
 
   // Handlers
   async function handleScan(e) {
@@ -85,6 +89,14 @@ export function IssueToCutter() {
 
   function toggle(id) {
       setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  if (loading || !db) {
+    return (
+      <div className="flex justify-center py-8 text-muted-foreground text-sm">
+        Loading inventory data...
+      </div>
+    );
   }
 
   return (

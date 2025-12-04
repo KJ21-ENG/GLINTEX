@@ -16,7 +16,7 @@ export const useBrand = useInventory;
 
 export const InventoryProvider = ({ children }) => {
   // --- State ---
-  const [db, setDb] = useState(null);
+  const [db, setDb] = useState(() => normalizeDb({}));
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);

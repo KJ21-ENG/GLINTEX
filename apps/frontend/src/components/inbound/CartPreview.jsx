@@ -17,14 +17,14 @@ export function CartPreview({ previewLotNo, cart, removeFromCart }) {
       ) : (
         <div className="overflow-auto">
           <table className="w-full text-sm">
-            <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">#</th><th className="py-2 pr-2">Piece ID (preview)</th><th className="py-2 pr-2">Weight (kg)</th><th className="py-2 pr-2 text-right">Actions</th></tr></thead>
+            <thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">#</th><th className="py-2 pr-2">Piece ID (preview)</th><th className="py-2 pr-2">Weight (kg)</th><th className="py-2 pr-2">Actions</th></tr></thead>
             <tbody>
               {cart.map((r) => (
                 <tr key={r.tempId} className={`border-t ${cls.rowBorder}`}>
                   <td className="py-2 pr-2">{r.seq}</td>
                   <td className="py-2 pr-2">{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Auto-generated'}</td>
                   <td className="py-2 pr-2">{formatKg(r.weight)}</td>
-                  <td className="py-2 pl-2 text-right"><SecondaryButton onClick={()=>removeFromCart(r.tempId)}>Remove</SecondaryButton></td>
+                  <td className="py-2 pl-2"><SecondaryButton onClick={()=>removeFromCart(r.tempId)}>Remove</SecondaryButton></td>
                 </tr>
               ))}
             </tbody>

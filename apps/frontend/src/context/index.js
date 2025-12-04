@@ -2,4 +2,4 @@
  * Barrel export for context
  */
 
-export * from './BrandContext.jsx';
+export * from './InventoryContext.jsx';

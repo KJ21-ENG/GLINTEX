@@ -1,47 +1,101 @@
-/**
- * Reports page component for GLINTEX Inventory
- */
+import React, { useMemo } from 'react';
+import { useInventory } from '../context/InventoryContext';
+import { Card, CardHeader, CardTitle, CardContent, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
+import { formatKg } from '../utils';
 
-import React from 'react';
-import { useBrand } from '../context';
-import { Section } from '../components';
-import { formatKg, groupBy } from '../utils';
+function groupBy(arr, keyFn) {
+    const m = {};
+    for (const x of arr) {
+        const k = keyFn(x);
+        (m[k] ||= []).push(x);
+    }
+    return m;
+}
 
-export function Reports({ db }) {
-  const { cls } = useBrand();
-  const bySupplier = groupBy(db.lots.filter(l => l.supplierId), l => l.supplierId);
-  const supplierRows = Object.entries(bySupplier).map(([supplierId, lots]) => ({ supplierName: db.suppliers.find(s=>s.id===supplierId)?.name || "—", lotsCount: lots.length, pieces: lots.reduce((s,l)=>s+l.totalPieces,0), weight: lots.reduce((s,l)=>s+l.totalWeight,0) }));
-  
-  const byFirm = groupBy(db.lots, l => l.firmId);
-  const firmRows = Object.entries(byFirm).map(([firmId, lots]) => ({ firmName: db.firms.find(f=>f.id===firmId)?.name || "—", lotsCount: lots.length, pieces: lots.reduce((s,l)=>s+l.totalPieces,0), weight: lots.reduce((s,l)=>s+l.totalWeight,0) }));
-  
+export function Reports() {
+  const { db } = useInventory();
+
+  const supplierRows = useMemo(() => {
+      if (!db?.lots) return [];
+      const bySupplier = groupBy(db.lots.filter(l => l.supplierId), l => l.supplierId);
+      return Object.entries(bySupplier).map(([supplierId, lots]) => ({
+          supplierName: db.suppliers.find(s=>s.id===supplierId)?.name || "—",
+          lotsCount: lots.length,
+          pieces: lots.reduce((s,l)=>s+(l.totalPieces || 0), 0),
+          weight: lots.reduce((s,l)=>s+(l.totalWeight || 0), 0)
+      }));
+  }, [db.lots, db.suppliers]);
+
+  const firmRows = useMemo(() => {
+      if (!db?.lots) return [];
+      const byFirm = groupBy(db.lots, l => l.firmId);
+      return Object.entries(byFirm).map(([firmId, lots]) => ({
+          firmName: db.firms.find(f=>f.id===firmId)?.name || "—",
+          lotsCount: lots.length,
+          pieces: lots.reduce((s,l)=>s+(l.totalPieces || 0), 0),
+          weight: lots.reduce((s,l)=>s+(l.totalWeight || 0), 0)
+      }));
+  }, [db.lots, db.firms]);
+
   return (
-    <div className="space-y-6">
-      <Section title="Supplier-wise Purchases">
-        <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Supplier</th><th className="py-2 pr-2 text-right">Lots</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
-            <tbody>
-              {supplierRows.length===0? <tr><td colSpan={4} className="py-4">No data.</td></tr> : supplierRows.map((r, idx)=> (
-                <tr key={idx} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2">{r.supplierName}</td><td className="py-2 pr-2 text-right">{r.lotsCount}</td><td className="py-2 pr-2 text-right">{r.pieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.weight)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Section>
-      
-      <Section title="Firm-wise Summary">
-        <div className="overflow-auto">
-          <table className="w-full text-sm"><thead className={`text-left ${cls.muted}`}><tr><th className="py-2 pr-2">Firm</th><th className="py-2 pr-2 text-right">Lots</th><th className="py-2 pr-2 text-right">Pieces</th><th className="py-2 pr-2 text-right">Weight (kg)</th></tr></thead>
-            <tbody>
-              {firmRows.length===0? <tr><td colSpan={4} className="py-4">No data.</td></tr> : firmRows.map((r, idx)=> (
-                <tr key={idx} className={`border-t ${cls.rowBorder}`}><td className="py-2 pr-2">{r.firmName}</td><td className="py-2 pr-2 text-right">{r.lotsCount}</td><td className="py-2 pr-2 text-right">{r.pieces}</td><td className="py-2 pr-2 text-right">{formatKg(r.weight)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Section>
+    <div className="space-y-6 fade-in">
+      <h1 className="text-2xl font-bold tracking-tight">Reports & Analytics</h1>
 
-      <Section title="Valuation (Info)"><div className={`${cls.muted} text-sm`}>Costing method not required. Valuation is disabled. If you want to enable it later, we can add Weighted Average at lot level and compute COGS during issue.</div></Section>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Card>
+              <CardHeader><CardTitle>Supplier Summary</CardTitle></CardHeader>
+              <CardContent>
+                  <Table>
+                      <TableHeader>
+                          <TableRow>
+                              <TableHead>Supplier</TableHead>
+                              <TableHead className="">Lots</TableHead>
+                              <TableHead className="">Pieces</TableHead>
+                              <TableHead className="">Weight</TableHead>
+                          </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                          {supplierRows.length === 0 ? <TableRow><TableCell colSpan={4} className="text-center">No data</TableCell></TableRow> : 
+                           supplierRows.map((r, i) => (
+                              <TableRow key={i}>
+                                  <TableCell>{r.supplierName}</TableCell>
+                                  <TableCell className="">{r.lotsCount}</TableCell>
+                                  <TableCell className="">{r.pieces}</TableCell>
+                                  <TableCell className="">{formatKg(r.weight)}</TableCell>
+                              </TableRow>
+                          ))}
+                      </TableBody>
+                  </Table>
+              </CardContent>
+          </Card>
+
+          <Card>
+              <CardHeader><CardTitle>Firm Summary</CardTitle></CardHeader>
+              <CardContent>
+                  <Table>
+                      <TableHeader>
+                          <TableRow>
+                              <TableHead>Firm</TableHead>
+                              <TableHead className="">Lots</TableHead>
+                              <TableHead className="">Pieces</TableHead>
+                              <TableHead className="">Weight</TableHead>
+                          </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                          {firmRows.length === 0 ? <TableRow><TableCell colSpan={4} className="text-center">No data</TableCell></TableRow> : 
+                           firmRows.map((r, i) => (
+                              <TableRow key={i}>
+                                  <TableCell>{r.firmName}</TableCell>
+                                  <TableCell className="">{r.lotsCount}</TableCell>
+                                  <TableCell className="">{r.pieces}</TableCell>
+                                  <TableCell className="">{formatKg(r.weight)}</TableCell>
+                              </TableRow>
+                          ))}
+                      </TableBody>
+                  </Table>
+              </CardContent>
+          </Card>
+      </div>
     </div>
   );
 }

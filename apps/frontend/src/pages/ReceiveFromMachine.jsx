@@ -1,10 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { ManualReceiveForm, HoloReceiveForm, ConingReceiveForm, CutterReceiveForm, ReceiveHistoryTable } from '../components/receive';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui';
+import { ManualReceiveForm, HoloReceiveForm, ConingReceiveForm, CutterReceiveForm, CutterCsvUpload, ReceiveHistoryTable } from '../components/receive';
+import { Button } from '../components/ui';
 
 export function ReceiveFromMachine() {
   const { process } = useInventory();
+  const [cutterMode, setCutterMode] = useState('scan');
+
+  useEffect(() => {
+    if (process !== 'cutter') {
+      setCutterMode('scan');
+    }
+  }, [process]);
 
   return (
     <div className="space-y-6 fade-in">
@@ -15,7 +22,17 @@ export function ReceiveFromMachine() {
       ) : process === 'coning' ? (
         <ConingReceiveForm />
       ) : process === 'cutter' ? (
-        <CutterReceiveForm />
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button variant={cutterMode === 'scan' ? 'default' : 'outline'} onClick={() => setCutterMode('scan')}>
+              Manual / Barcode
+            </Button>
+            <Button variant={cutterMode === 'csv' ? 'default' : 'outline'} onClick={() => setCutterMode('csv')}>
+              CSV Upload
+            </Button>
+          </div>
+          {cutterMode === 'csv' ? <CutterCsvUpload /> : <CutterReceiveForm />}
+        </div>
       ) : (
         <ManualReceiveForm />
       )}

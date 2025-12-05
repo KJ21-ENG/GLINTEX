@@ -192,7 +192,10 @@ function WhatsAppSettings({ db, refreshDb, updateSettings }) {
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                             <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                            <span className="font-medium capitalize">{status.status === 'qr' ? 'Scan QR' : status.status}</span>
+                            <div className="flex flex-col">
+                                <span className="font-medium capitalize">{status.status === 'qr' ? 'Scan QR' : status.status}</span>
+                                {status.mobile && <span className="text-xs text-muted-foreground">+{status.mobile}</span>}
+                            </div>
                         </div>
                         <div className="flex gap-2">
                             <Button size="sm" onClick={handleConnect} disabled={working || isConnected}>

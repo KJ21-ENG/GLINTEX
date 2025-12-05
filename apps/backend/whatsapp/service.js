@@ -220,7 +220,11 @@ class WhatsappService {
   }
 
   getStatus() {
-    return { status: this.status, hasQr: !!this.qrDataUrl, initializing: !this.initialized };
+    let mobile = null;
+    if (this.status === 'connected' && this.client && this.client.info && this.client.info.wid) {
+      mobile = this.client.info.wid.user;
+    }
+    return { status: this.status, hasQr: !!this.qrDataUrl, initializing: !this.initialized, mobile };
   }
 
   getQrDataUrl() {

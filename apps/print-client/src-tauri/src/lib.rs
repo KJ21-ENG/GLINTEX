@@ -7,6 +7,9 @@ use std::process::Command;
 use std::thread;
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 #[derive(Serialize)]
 struct PrinterList {
     printers: Vec<String>,
@@ -25,9 +28,13 @@ async fn list_printers() -> impl Responder {
     let mut printers = Vec::new();
 
     if platform == "windows" {
-        let output = Command::new("powershell")
-            .args(&["Get-Printer", "|", "Select-Object", "Name"])
-            .output();
+        let mut cmd = Command::new("powershell");
+        cmd.args(&["Get-Printer", "|", "Select-Object", "Name"]);
+        
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        let output = cmd.output();
 
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -71,10 +78,13 @@ async fn print(job: web::Json<PrintJob>) -> impl Responder {
 
     if platform == "windows" {
         // Simple text print for Windows
-        status = Command::new("notepad")
-            .arg("/p")
-            .arg(&file_path)
-            .status();
+        let mut cmd = Command::new("notepad");
+        cmd.arg("/p").arg(&file_path);
+        
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        status = cmd.status();
     } else {
         // Mac/Linux
         let mut cmd = Command::new("lp");
@@ -117,6 +127,11 @@ fn start_server() {
     });
 }
 
+#[tauri::command]
+fn stop_service_app(app_handle: tauri::AppHandle) {
+    app_handle.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -125,6 +140,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
+        .invoke_handler(tauri::generate_handler![stop_service_app])
         .setup(|app| {
             start_server();
             Ok(())

@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import { enable, isEnabled, disable } from "@tauri-apps/plugin-autostart";
+import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
   const [serverStatus, setServerStatus] = useState("Checking...");
   const [autostart, setAutostart] = useState(false);
   const [printers, setPrinters] = useState([]);
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     checkAutostart();
@@ -20,6 +22,7 @@ function App() {
       setAutostart(enabled);
     } catch (error) {
       console.error("Failed to check autostart:", error);
+      setErrorMsg("Failed to check autostart status.");
     }
   };
 
@@ -34,7 +37,7 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to toggle autostart:", error);
-      alert("Failed to change autostart settings. You might need to run as admin.");
+      setErrorMsg("Failed to change autostart. Try running as Admin.");
     }
   };
 
@@ -45,6 +48,7 @@ function App() {
         setServerStatus("Online");
         const data = await response.json();
         setPrinters(data.printers || []);
+        setErrorMsg(""); // Clear error if connected
       } else {
         setServerStatus("Error");
       }
@@ -53,9 +57,17 @@ function App() {
     }
   };
 
+  const handleStopService = async () => {
+    try {
+      await invoke("stop_service_app");
+    } catch (error) {
+      console.error("Failed to stop service:", error);
+    }
+  };
+
   return (
     <div className="container">
-      <h1>Local Print Service</h1>
+      <h1>Glintex Print Service</h1>
 
       <div className="card">
         <h2>Status</h2>
@@ -64,6 +76,9 @@ function App() {
           {serverStatus}
         </div>
         <p>Port: 9090</p>
+        <button className="stop-btn" onClick={handleStopService}>
+          Stop Service & Exit
+        </button>
       </div>
 
       <div className="card">
@@ -78,6 +93,7 @@ function App() {
             Start on System Startup
           </label>
         </div>
+        {errorMsg && <p className="error-text">{errorMsg}</p>}
       </div>
 
       <div className="card">

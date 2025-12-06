@@ -5,15 +5,16 @@ import DashboardLayout from "../components/layouts/DashboardLayout";
 // We will import the pages directly. 
 // Note: They will be broken until refactored in the next steps, 
 // but we are following the plan to refactor them immediately after.
-import { 
-  Inbound, 
-  Stock, 
-  IssueToMachine, 
-  ReceiveFromMachine, 
-  Masters, 
-  Reports, 
-  Settings 
+import {
+  Inbound,
+  Stock,
+  IssueToMachine,
+  ReceiveFromMachine,
+  Masters,
+  Reports,
+  Settings
 } from "../pages";
+import StickerTest from "../pages/Settings/StickerTest";
 
 export const router = createBrowserRouter([
   {
@@ -51,6 +52,10 @@ export const router = createBrowserRouter([
       {
         path: "settings",
         element: <Settings />,
+      },
+      {
+        path: "settings/sticker-test",
+        element: <StickerTest />,
       },
     ],
   },

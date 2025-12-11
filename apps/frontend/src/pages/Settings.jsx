@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer } from 'lucide-react';
 import * as api from '../api';
 
 export function Settings() {
     const { db, brand, refreshing, refreshDb, updateSettings } = useInventory();
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('whatsapp');
 
     return (
@@ -27,6 +29,12 @@ export function Settings() {
                         </button>
                         <button onClick={() => setActiveTab('data')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'data' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
                             <Database className="w-4 h-4" /> Raw Data
+                        </button>
+                        <button
+                            onClick={() => navigate('/app/settings/sticker-test')}
+                            className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
+                        >
+                            <Printer className="w-4 h-4" /> Sticker / Label Printing
                         </button>
                     </nav>
                 </CardContent>

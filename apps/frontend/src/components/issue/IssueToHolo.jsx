@@ -3,6 +3,7 @@ import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 export function IssueToHolo() {
   const { db, refreshDb } = useInventory();
@@ -108,7 +109,7 @@ export function IssueToHolo() {
       if (crates.length === 0) return;
       setSubmitting(true);
       try {
-          await api.createIssueToHoloMachine({
+          const created = await api.createIssueToHoloMachine({
               date: form.date,
               itemId: meta.itemId,
               lotNo: meta.lotNo,
@@ -126,6 +127,34 @@ export function IssueToHolo() {
                   issuedBobbinWeight: Number(c.issuedBobbinWeight)
               }))
           });
+          const template = loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
+          if (template && created?.issueToHoloMachine) {
+            const confirmPrint = window.confirm('Print sticker for this issue?');
+            if (confirmPrint) {
+              const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
+              const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
+              const itemName = db.items.find((i) => i.id === meta.itemId)?.name;
+              const twistName = db.twists?.find((t) => t.id === form.twistId)?.name;
+              const yarnName = db.yarns?.find((y) => y.id === form.yarnId)?.name;
+              await printStageTemplate(
+                LABEL_STAGE_KEYS.HOLO_ISSUE,
+                {
+                  lotNo: created.issueToHoloMachine.lotNo || meta.lotNo,
+                  barcode: created.issueToHoloMachine.barcode,
+                  itemName,
+                  machineName,
+                  operatorName,
+                  totalRolls: holoTotals.rolls,
+                  totalWeight: holoTotals.weight,
+                  yarnKg: created.issueToHoloMachine.yarnKg,
+                  twistName,
+                  yarnName,
+                  date: form.date,
+                },
+                { template },
+              );
+            }
+          }
           await refreshDb();
           setCrates([]);
           setForm(prev => ({ ...prev, yarnKg: '', note: '' }));

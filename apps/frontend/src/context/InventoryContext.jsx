@@ -112,7 +112,11 @@ export const InventoryProvider = ({ children }) => {
   // --- API Actions ---
   // These wrappers handle the API call + Refresh
   const actions = useMemo(() => ({
-    createLot: async (payload) => { await api.createLot(payload); await refreshDb(); },
+    createLot: async (payload) => {
+      const res = await api.createLot(payload);
+      const normalized = await refreshDb();
+      return { res, db: normalized };
+    },
     deleteLot: async (lotNo) => { await api.deleteLot(lotNo); await refreshDb(); },
 
     createIssueToMachine: async (payload) => { const res = await api.createIssueToMachine(payload); await refreshDb(); return res; },

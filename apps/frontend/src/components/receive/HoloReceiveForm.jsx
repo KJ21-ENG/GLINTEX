@@ -3,6 +3,7 @@ import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 export function HoloReceiveForm() {
   const { db, refreshDb } = useInventory();
@@ -74,7 +75,7 @@ export function HoloReceiveForm() {
       if (!issue) return;
       setSubmitting(true);
       try {
-          await api.manualReceiveFromHoloMachine({
+          const result = await api.manualReceiveFromHoloMachine({
               issueId: issue.id,
               pieceId: selectedPiece?.id, // Should be selected from issue crates ideally
               rollCount: Number(form.rollCount),
@@ -87,6 +88,30 @@ export function HoloReceiveForm() {
               operatorId: form.operatorId,
               notes: form.notes
           });
+          const template = loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
+          if (template && result?.row) {
+            const confirmPrint = window.confirm('Print sticker for this receive?');
+            if (confirmPrint) {
+              const rollTypeName = db?.rollTypes?.find((r) => r.id === form.rollTypeId)?.name;
+              const boxName = db?.boxes?.find((b) => b.id === form.boxId)?.name;
+              const operatorName = db?.operators?.find((o) => o.id === form.operatorId)?.name;
+              await printStageTemplate(
+                LABEL_STAGE_KEYS.HOLO_RECEIVE,
+                {
+                  lotNo: issue.lotNo,
+                  barcode: result.row.barcode,
+                  rollCount: form.rollCount,
+                  grossWeight: form.grossWeight,
+                  netWeight,
+                  rollType: rollTypeName,
+                  boxName,
+                  operatorName,
+                  date: form.date,
+                },
+                { template },
+              );
+            }
+          }
           await refreshDb();
           alert('Received successfully');
           

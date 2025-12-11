@@ -13,6 +13,7 @@ import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 
 const EPSILON = 1e-9;
 
@@ -277,7 +278,32 @@ export function Stock() {
         machineId,
         operatorId
       };
-      await createIssueToMachine(payload);
+      const result = await createIssueToMachine(payload);
+      const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+      const template = loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
+      if (template && issueRecord) {
+        const confirmPrint = window.confirm('Print sticker for this issue?');
+        if (confirmPrint) {
+          const itemName = lotsMap[lotNo]?.itemName;
+          const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
+          const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+          await printStageTemplate(
+            LABEL_STAGE_KEYS.CUTTER_ISSUE,
+            {
+              lotNo: issueRecord.lotNo,
+              itemName,
+              barcode: issueRecord.barcode,
+              count: issueRecord.count || pieceIds.length,
+              totalWeight: issueRecord.totalWeight,
+              pieceIds,
+              machineName,
+              operatorName,
+              date,
+            },
+            { template },
+          );
+        }
+      }
       setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
       setIssueModalOpen(false);
     } catch (e) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label } from '../components/ui';
 import { formatKg, uid, todayISO } from '../utils';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search } from 'lucide-react';
 
 export function Inbound() {
@@ -58,22 +59,48 @@ export function Inbound() {
         setSaving(true);
         try {
             const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
+            const savedLotNo = previewLotNo;
+            let result = null;
             try {
-                await createLot({ date, itemId, firmId, supplierId, pieces });
+                result = await createLot({ date, itemId, firmId, supplierId, pieces });
             } catch (err) {
                 if (err && String(err.message || '').toLowerCase().includes('lot already exists')) {
                     await fetchSequence(); // Retry with new sequence
-                    await createLot({ date, itemId, firmId, supplierId, pieces });
+                    result = await createLot({ date, itemId, firmId, supplierId, pieces });
                 } else {
                     throw err;
+                }
+            }
+
+            const refreshedDb = result?.db || db;
+            const lotNo = result?.res?.lot?.lotNo || savedLotNo;
+            const piecesForLot = (refreshedDb?.inbound_items || []).filter((p) => p.lotNo === lotNo);
+            const itemName = refreshedDb?.items?.find((i) => i.id === itemId)?.name;
+            const inboundTemplate = loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+            if (inboundTemplate && piecesForLot.length > 0) {
+                const confirmPrint = window.confirm(`Print ${piecesForLot.length} stickers for lot ${lotNo}?`);
+                if (confirmPrint) {
+                    for (const piece of piecesForLot) {
+                        await printStageTemplate(
+                            LABEL_STAGE_KEYS.INBOUND,
+                            {
+                                lotNo,
+                                itemName,
+                                pieceId: piece.id,
+                                seq: piece.seq,
+                                weight: piece.weight,
+                                barcode: piece.barcode,
+                                date,
+                            },
+                            { template: inboundTemplate },
+                        );
+                    }
                 }
             }
 
             // Success
             const totalPieces = cart.length;
             const totalWeight = cart.reduce((s, r) => s + (Number(r.weight) || 0), 0);
-            // Ideally show a toast here instead of alert, but preserving simple functionality
-            // alert(`Saved Lot with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
 
             // Reset
             setCart([]);

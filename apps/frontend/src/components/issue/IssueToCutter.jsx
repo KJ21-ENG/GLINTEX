@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge,
 import { formatKg, todayISO } from '../../utils';
 import { Search, QrCode } from 'lucide-react';
 import * as api from '../../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 export function IssueToCutter() {
   const { db, createIssueToMachine, refreshing, loading } = useInventory();
@@ -76,7 +77,32 @@ export function IssueToCutter() {
       setIssuing(true);
       try {
           const payload = { date, itemId, lotNo, pieceIds: selected, note, machineId, operatorId };
-          await createIssueToMachine(payload);
+          const result = await createIssueToMachine(payload);
+          const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+          const template = loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
+          if (template && issueRecord) {
+            const confirmPrint = window.confirm('Print sticker for this issue?');
+            if (confirmPrint) {
+              const itemName = db?.items?.find((i) => i.id === itemId)?.name;
+              const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
+              const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+              await printStageTemplate(
+                LABEL_STAGE_KEYS.CUTTER_ISSUE,
+                {
+                  lotNo: issueRecord.lotNo,
+                  itemName,
+                  barcode: issueRecord.barcode,
+                  count: issueRecord.count || selected.length,
+                  totalWeight: issueRecord.totalWeight,
+                  pieceIds: selected,
+                  machineName,
+                  operatorName,
+                  date,
+                },
+                { template },
+              );
+            }
+          }
           setSelected([]);
           setNote("");
           alert(`Issued ${selected.length} pieces successfully.`);

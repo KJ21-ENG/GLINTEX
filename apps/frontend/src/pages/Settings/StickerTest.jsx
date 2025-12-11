@@ -2,33 +2,25 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Copy, FileCode2, Printer, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../../components/ui';
+import {
+  DEFAULT_DIMENSIONS,
+  DEFAULT_CONTENT,
+  LABEL_STAGE_KEYS,
+  getStageVariables,
+  normalizeBlock,
+  migrateContent,
+  buildTspl,
+  loadTemplate,
+  saveTemplate,
+  setPreferredPrinter,
+  getPreferredPrinter,
+} from '../../utils/labelPrint';
 
-const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
 const PX_PER_MM = 3.6; // for on-screen preview
 
 const SNAP_TOLERANCE_MM = 1.5;
 const NUDGE_STEP_PX = 1;
 const NUDGE_STEP_FAST_PX = 5;
-
-const DEFAULT_DIMENSIONS = {
-  width: 48,
-  height: 25,
-  horizontalGap: 2,
-  verticalGap: 2,
-  pageWidth: 104,
-  marginTop: 0,
-  marginLeft: 0,
-  fontSize: 10,
-  columns: 2,
-  offsetX: 0,
-  offsetY: 0,
-  orientation: 'portrait',
-};
-
-const DEFAULT_CONTENT = {
-  copies: 1,
-  texts: [], // blank canvas by default
-};
 
 const getFontScale = (fontSize) => Math.max(1, Math.round(fontSize / 10) || 1);
 
@@ -38,170 +30,11 @@ const snapAngle = (angle = 0) => {
   return steps.reduce((best, step) => (Math.abs(step - normalized) < Math.abs(best - normalized) ? step : best), 0);
 };
 
-const mmToDots = (mm) => Math.round(mm * DOTS_PER_MM);
 const mmToPx = (mm) => mm * PX_PER_MM;
-const sanitizeText = (text = '') => text.replace(/"/g, "'");
 
-const normalizeTextBlock = (block = {}, fallbackId = 0) => ({
-  id: block.id || `text-${Date.now()}-${fallbackId}`,
-  value: block.value ?? '',
-  pos: {
-    x: block.pos?.x ?? 5,
-    y: block.pos?.y ?? 5,
-  },
-  angle: snapAngle(block.angle || 0),
-  style: {
-    size: block.style?.size ?? 10,
-    bold: block.style?.bold ?? false,
-    italic: block.style?.italic ?? false,
-    underline: block.style?.underline ?? false,
-    background: {
-      enabled: block.style?.background?.enabled ?? false,
-      color: block.style?.background?.color ?? '#000000',
-      textColor: block.style?.background?.textColor ?? '#ffffff',
-      paddingMm: block.style?.background?.paddingMm ?? 0.8,
-    },
-  },
-});
+const normalizeTextBlock = (block = {}, fallbackId = 0) => normalizeBlock(block, fallbackId);
 
-const migrateLegacyContent = (raw) => {
-  if (!raw) return { ...DEFAULT_CONTENT };
-  if (raw.texts && Array.isArray(raw.texts)) {
-    return {
-      copies: raw.copies || 1,
-      texts: raw.texts.map((t, idx) => normalizeTextBlock(t, idx)),
-    };
-  }
-  // legacy keys: title/subtitle/code/price
-  const legacyKeys = ['title', 'subtitle', 'code', 'price'];
-  const texts = legacyKeys
-    .map((key, idx) => {
-      if (!raw[key]) return null;
-      return normalizeTextBlock(
-        {
-          id: `legacy-${key}`,
-          value: raw[key],
-          pos: raw[`${key}Pos`],
-          angle: raw[`${key}Angle`],
-          style: raw[`${key}Style`],
-        },
-        idx
-      );
-    })
-    .filter(Boolean);
-  return {
-    copies: raw.copies || 1,
-    texts,
-  };
-};
-
-const buildTspl = (dimensions, content) => {
-  const {
-    width,
-    height,
-    pageWidth,
-    horizontalGap,
-    verticalGap,
-    columns,
-    marginLeft,
-    marginTop,
-    offsetX,
-    offsetY,
-    orientation,
-  } = dimensions;
-  const totalWidth = Math.max(pageWidth, width * columns + horizontalGap * (columns - 1));
-  const scale = getFontScale(dimensions.fontSize);
-  const lines = [
-    `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
-    `GAP ${verticalGap.toFixed(2)} mm,0`,
-    'DENSITY 8',
-    'SPEED 4',
-    `DIRECTION ${orientation === 'landscape' ? 1 : 0}`,
-    'REFERENCE 0,0',
-    'CLS',
-  ];
-
-  // Use a TSPL font that TE-244 ships with (3 = 16x24)
-  const fontName = '3';
-  const fields = (content.texts || []).map((t, idx) => ({
-    id: t.id || `text-${idx}`,
-    value: t.value || '',
-    pos: t.pos || { x: 0, y: 0 },
-    angle: t.angle || 0,
-    font: fontName,
-    style: t.style || {},
-  }));
-
-  for (let col = 0; col < columns; col += 1) {
-    const columnOffset = marginLeft + (width + horizontalGap) * col + offsetX;
-    const baseY = marginTop + offsetY;
-
-    fields.forEach((field) => {
-      const style = field.style || {};
-      if (style.visible === false) return;
-      const fieldScale = getFontScale(style.size || dimensions.fontSize);
-      const effectiveScale = fieldScale; // keep bold visual only; do not inflate size to match preview
-      const angle = snapAngle(field.angle);
-      const x = mmToDots(columnOffset + field.pos.x);
-      const y = mmToDots(baseY + field.pos.y);
-      const paddingMm = style.background?.paddingMm ?? 0.8;
-      const charHeightMm = 3 * fieldScale;
-      const charWidthMm = 2 * fieldScale;
-      const textWidthMm = Math.max(1, sanitizeText(field.value).length) * charWidthMm;
-      const textHeightMm = charHeightMm;
-      const boxWidthMm = textWidthMm + (style.background?.enabled ? paddingMm * 2 : 0);
-      const boxHeightMm = textHeightMm + (style.background?.enabled ? paddingMm * 2 : 0);
-      const underlineExtraMm = style.underline ? charHeightMm * 0.3 : 0;
-      const totalBoxHeightMm = boxHeightMm + underlineExtraMm;
-
-      let boxLeftMm = columnOffset + field.pos.x - paddingMm;
-      let boxTopMm = baseY + field.pos.y - paddingMm;
-      let boxWmm = boxWidthMm;
-      let boxHmm = totalBoxHeightMm;
-
-      // adjust box for rotation to cover the rendered glyph area
-      if (angle === 90) {
-        boxLeftMm = columnOffset + field.pos.x - paddingMm - totalBoxHeightMm;
-        boxTopMm = baseY + field.pos.y - paddingMm;
-        boxWmm = totalBoxHeightMm;
-        boxHmm = boxWidthMm;
-      } else if (angle === 180) {
-        boxLeftMm = columnOffset + field.pos.x - paddingMm - boxWidthMm;
-        boxTopMm = baseY + field.pos.y - paddingMm - totalBoxHeightMm;
-      } else if (angle === 270) {
-        boxLeftMm = columnOffset + field.pos.x - paddingMm;
-        boxTopMm = baseY + field.pos.y - paddingMm - boxWidthMm;
-        boxWmm = totalBoxHeightMm;
-        boxHmm = boxWidthMm;
-      }
-
-      const boxX = mmToDots(boxLeftMm);
-      const boxY = mmToDots(boxTopMm);
-      const boxW = Math.max(1, mmToDots(boxWmm));
-      const boxH = Math.max(1, mmToDots(boxHmm));
-
-      lines.push(`SETBOLD ${style.bold ? 3 : 0}`);
-      lines.push(style.underline ? 'UNDERLINE ON' : 'UNDERLINE OFF');
-      const textLine = `TEXT ${x},${y},"${field.font}",${angle},${effectiveScale},${effectiveScale},"${sanitizeText(field.value)}"`;
-      lines.push(textLine);
-      if (style.underline) {
-        const textLen = Math.max(1, sanitizeText(field.value).length);
-        const lineWidth = Math.max(16 * effectiveScale, Math.round(textLen * 16 * effectiveScale));
-        const underlineY = y + Math.round(24 * effectiveScale) + 4;
-        lines.push(`BAR ${x},${underlineY},${lineWidth},2`);
-      }
-      if (style.background?.enabled) {
-        // Invert the area after drawing text to get white text on dark background
-        lines.push(`REVERSE ${boxX},${boxY},${boxW},${boxH}`);
-      }
-      lines.push('UNDERLINE OFF');
-      lines.push('SETBOLD 0');
-    });
-  }
-
-  lines.push(`PRINT ${content.copies}`);
-  return `${lines.join('\r\n')}\r\n`;
-};
+const migrateLegacyContent = (raw) => migrateContent(raw);
 
 const LabelPreview = ({
   dimensions,
@@ -265,18 +98,26 @@ const LabelPreview = ({
   const preDragSnapshotRef = useRef(null);
   const dragMovedRef = useRef(false);
 
-  const measureTextBlock = (text) => {
-    const scale = getFontScale(text.style?.size || dimensions.fontSize);
+  const measureBlock = (block) => {
+    if (block.type === 'barcode') {
+      const moduleMm = block.style?.moduleMm ?? 0.3;
+      const heightMm = block.style?.heightMm ?? 12;
+      const valueLength = Math.max(1, (block.value || '').length);
+      const modules = Math.max(30, valueLength * 11 + 35); // rough Code128 width estimate
+      const widthMm = modules * moduleMm;
+      return { widthMm, heightMm };
+    }
+    const scale = getFontScale(block.style?.size || dimensions.fontSize);
     const charHeightMm = 3 * scale;
     const charWidthMm = 2 * scale;
-    const paddingMm = text.style?.background?.enabled ? text.style.background.paddingMm ?? 0.8 : 0;
-    const widthMm = Math.max(1, (text.value || '').length) * charWidthMm + paddingMm * 2;
+    const paddingMm = block.style?.background?.enabled ? block.style.background.paddingMm ?? 0.8 : 0;
+    const widthMm = Math.max(1, (block.value || '').length) * charWidthMm + paddingMm * 2;
     const heightMm = charHeightMm + paddingMm * 2;
     return { widthMm, heightMm };
   };
 
   const computeBoundingBox = (text) => {
-    const { widthMm, heightMm } = measureTextBlock(text);
+    const { widthMm, heightMm } = measureBlock(text);
     const angle = snapAngle(text.angle || 0);
     let minX = 0;
     let maxX = widthMm;
@@ -318,10 +159,37 @@ const LabelPreview = ({
     };
   };
 
-  const textStyle = (pos, angle, style = {}, selected = false) => {
+  const blockStyle = (block, selected = false) => {
+    const angle = block.angle || 0;
+    const pos = block.pos || { x: 0, y: 0 };
+    if (block.type === 'barcode') {
+      const { widthMm, heightMm } = measureBlock(block);
+      return {
+        position: 'absolute',
+        left: `${mmToPx(pos.x + offsetX)}px`,
+        top: `${mmToPx(pos.y + offsetY)}px`,
+        width: `${mmToPx(widthMm)}px`,
+        height: `${mmToPx(heightMm)}px`,
+        transform: `rotate(${snapAngle(angle)}deg)`,
+        transformOrigin: 'top left',
+        backgroundImage:
+          'repeating-linear-gradient(90deg, #0f172a, #0f172a 2px, transparent 2px, transparent 4px)',
+        backgroundSize: '6px 100%',
+        color: '#0f172a',
+        display: 'flex',
+        alignItems: 'flex-end',
+        fontSize: '10px',
+        padding: '2px',
+        borderRadius: '4px',
+        opacity: block.style?.visible === false ? 0.35 : 1,
+        cursor: block.style?.visible === false ? 'not-allowed' : 'move',
+        outline: selected ? '1px dashed #818cf8' : 'none',
+        outlineOffset: '3px',
+      };
+    }
+    const style = block.style || {};
     const scale = getFontScale(style.size || dimensions.fontSize);
     const charHeightMm = 3 * scale; // TSPL font 3: 24 dots high -> 3mm @203dpi
-    const charWidthMm = 2 * scale; // TSPL font 3: 16 dots wide -> 2mm @203dpi
     const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
     const paddingPx = mmToPx(paddingMm);
     const backgroundColor = style.background?.enabled ? style.background.color || '#000000' : 'transparent';
@@ -345,7 +213,6 @@ const LabelPreview = ({
       cursor: style.visible === false ? 'not-allowed' : 'move',
       outline: selected ? '1px dashed #818cf8' : 'none',
       outlineOffset: '4px',
-    // background/text colors
       backgroundColor,
       color: textColor,
       padding: `${paddingPx}px`,
@@ -558,13 +425,19 @@ const LabelPreview = ({
 
     return (
       <div
-        style={textStyle(pos, angle, style, isSelected)}
-        className={`${className} select-none cursor-move`}
+        style={blockStyle(text, isSelected)}
+        className={`${className} select-none`}
         onMouseDown={onMouseDown}
         onTouchStart={onTouchStart}
         onClick={() => {}}
       >
-        {text.value || ''}
+        {text.type === 'barcode' ? (
+          <div className="absolute inset-x-1 bottom-1 text-[10px] font-mono bg-white/80 px-1 rounded">
+            {text.value || ''}
+          </div>
+        ) : (
+          text.value || ''
+        )}
         {isSelected && (
           <div
             className="absolute w-7 h-7 bg-white border border-slate-300 rounded-full flex items-center justify-center text-[10px] text-slate-600 shadow-sm cursor-pointer"
@@ -741,7 +614,7 @@ const LabelPreview = ({
                 ))}
                 {(!content.texts || content.texts.length === 0) && (
                   <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-                    Add text to start designing
+                    Add text or barcode to start designing
                   </div>
                 )}
               </div>
@@ -756,7 +629,7 @@ const LabelPreview = ({
 const StickerTest = () => {
   const navigate = useNavigate();
   const [printers, setPrinters] = useState([]);
-  const [selectedPrinter, setSelectedPrinter] = useState('');
+  const [selectedPrinter, setSelectedPrinter] = useState(() => getPreferredPrinter() || '');
   const [serviceStatus, setServiceStatus] = useState({ state: 'idle', message: 'Idle', tone: 'muted' });
   const [dimensions, setDimensions] = useState(() => {
     const saved = localStorage.getItem('stickerDimensions');
@@ -764,14 +637,25 @@ const StickerTest = () => {
   });
   const [content, setContent] = useState(() => {
     const saved = localStorage.getItem('stickerContent');
-    return migrateLegacyContent(saved ? JSON.parse(saved) : null);
+    return migrateContent(saved ? JSON.parse(saved) : null);
   });
   const [selectedIds, setSelectedIds] = useState([]);
+  const [templateStage, setTemplateStage] = useState(LABEL_STAGE_KEYS.INBOUND);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [clipboard, setClipboard] = useState([]);
   const [lastCommand, setLastCommand] = useState('');
   const undoStack = useRef([]);
   const redoStack = useRef([]);
+  const stageVariables = useMemo(() => getStageVariables(templateStage), [templateStage]);
+  const inputRef = useRef(null);
+  const [mention, setMention] = useState({
+    open: false,
+    query: '',
+    start: -1,
+    caret: 0,
+    targetId: null,
+  });
+  const [mentionIndex, setMentionIndex] = useState(0);
 
   const cloneContent = (value) => JSON.parse(JSON.stringify(value || {}));
 
@@ -820,6 +704,10 @@ const StickerTest = () => {
   useEffect(() => {
     localStorage.setItem('stickerContent', JSON.stringify(content));
   }, [content]);
+
+  useEffect(() => {
+    setPreferredPrinter(selectedPrinter || '');
+  }, [selectedPrinter]);
 
   useEffect(() => {
     fetchPrinters();
@@ -881,6 +769,44 @@ const StickerTest = () => {
     setContentWithHistory((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleSaveTemplateStage = () => {
+    saveTemplate(templateStage, { dimensions, content });
+    alert(`Template saved for ${templateStage}`);
+  };
+
+  const handleLoadTemplateStage = () => {
+    const tpl = loadTemplate(templateStage);
+    if (!tpl) {
+      alert('No template saved for this stage yet.');
+      return;
+    }
+    setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
+    setContent(migrateContent(tpl.content || tpl));
+    setSelectedIds([]);
+  };
+
+  const handleExportTemplate = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ dimensions, content }, null, 2));
+      alert('Template copied to clipboard');
+    } catch (e) {
+      alert('Unable to copy template JSON');
+    }
+  };
+
+  const handleImportTemplate = () => {
+    const raw = window.prompt('Paste template JSON');
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      setDimensions({ ...DEFAULT_DIMENSIONS, ...(parsed.dimensions || parsed?.layout || {}) });
+      setContent(migrateContent(parsed.content || parsed));
+      setSelectedIds([]);
+    } catch (e) {
+      alert('Invalid template JSON');
+    }
+  };
+
   const addTextBlock = () => {
     const base = normalizeTextBlock({
       id: `text-${Date.now()}`,
@@ -892,11 +818,78 @@ const StickerTest = () => {
     setSelectedIds([base.id]);
   };
 
+  const addBarcodeBlock = () => {
+    const base = normalizeTextBlock({
+      id: `barcode-${Date.now()}`,
+      type: 'barcode',
+      value: '{{barcode}}',
+      pos: { x: 5, y: 5 },
+      style: { heightMm: 12, moduleMm: 0.3, humanReadable: true },
+    });
+    setContentWithHistory((prev) => ({ ...prev, texts: [...(prev.texts || []), base] }));
+    setSelectedIds([base.id]);
+  };
+
   const updateTextValue = (id, value) => {
     setContentWithHistory((prev) => ({
       ...prev,
       texts: (prev.texts || []).map((t) => (t.id === id ? { ...t, value } : t)),
     }));
+  };
+
+  const closeMention = () => {
+    setMention({ open: false, query: '', start: -1, caret: 0, targetId: null });
+    setMentionIndex(0);
+  };
+
+  const handleValueChange = (id, nextValue, caretPos) => {
+    updateTextValue(id, nextValue);
+    const beforeCaret = nextValue.slice(0, caretPos);
+    const lastAt = beforeCaret.lastIndexOf('@');
+    if (lastAt === -1) {
+      closeMention();
+      return;
+    }
+    const afterAt = beforeCaret.slice(lastAt + 1);
+    if (!/^[a-zA-Z0-9_]*$/.test(afterAt)) {
+      closeMention();
+      return;
+    }
+    setMention({
+      open: true,
+      query: afterAt,
+      start: lastAt,
+      caret: caretPos,
+      targetId: id,
+    });
+    setMentionIndex(0);
+  };
+
+  const applyMention = (id, key) => {
+    const texts = content.texts || [];
+    const target = texts.find((t) => t.id === id);
+    if (!target) return;
+    const value = target.value || '';
+    const start = mention.start ?? -1;
+    const caret = mention.caret ?? value.length;
+    if (start < 0 || start > caret) return;
+    const before = value.slice(0, start);
+    const after = value.slice(caret);
+    const inserted = `@${key}`;
+    const nextValue = `${before}${inserted}${after}`;
+    updateTextValue(id, nextValue);
+    closeMention();
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        const pos = before.length + inserted.length;
+        try {
+          inputRef.current.setSelectionRange(pos, pos);
+          inputRef.current.focus();
+        } catch (e) {
+          // ignore
+        }
+      }
+    });
   };
 
   const updateTextStyle = (id, patch) => {
@@ -993,11 +986,14 @@ const StickerTest = () => {
       ? 'bg-red-50 text-red-700 border-red-200'
       : 'bg-slate-50 text-slate-600 border-slate-200';
 
-  const textBlocks = [
-    { key: 'title', label: 'Title', helper: 'Primary text', angleKey: 'titleAngle', posKey: 'titlePos', styleKey: 'titleStyle' },
-    { key: 'subtitle', label: 'Subtitle', helper: 'Secondary line', angleKey: 'subtitleAngle', posKey: 'subtitlePos', styleKey: 'subtitleStyle' },
-    { key: 'code', label: 'SKU / Code', helper: 'Mono font, good for IDs', angleKey: 'codeAngle', posKey: 'codePos', styleKey: 'codeStyle' },
-    { key: 'price', label: 'Price', helper: 'Right align in preview', angleKey: 'priceAngle', posKey: 'pricePos', styleKey: 'priceStyle' },
+  const stageOptions = [
+    { value: LABEL_STAGE_KEYS.INBOUND, label: 'Inbound' },
+    { value: LABEL_STAGE_KEYS.CUTTER_ISSUE, label: 'Issue to machine (cutter)' },
+    { value: LABEL_STAGE_KEYS.CUTTER_RECEIVE, label: 'Receive from machine (cutter)' },
+    { value: LABEL_STAGE_KEYS.HOLO_ISSUE, label: 'Issue to machine (holo)' },
+    { value: LABEL_STAGE_KEYS.HOLO_RECEIVE, label: 'Receive from machine (holo)' },
+    { value: LABEL_STAGE_KEYS.CONING_ISSUE, label: 'Issue to machine (coning)' },
+    { value: LABEL_STAGE_KEYS.CONING_RECEIVE, label: 'Receive from machine (coning)' },
   ];
 
   return (
@@ -1158,6 +1154,47 @@ const StickerTest = () => {
               </div>
             </div>
 
+            <div className="pt-2 border-t border-dashed space-y-2">
+              <Label className="text-sm font-medium">Stage template</Label>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={templateStage}
+                  onChange={(e) => setTemplateStage(e.target.value)}
+                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {stageOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <Button size="sm" variant="outline" onClick={handleLoadTemplateStage}>Load</Button>
+                <Button size="sm" variant="outline" onClick={handleSaveTemplateStage}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={handleExportTemplate}>Copy JSON</Button>
+                <Button size="sm" variant="ghost" onClick={handleImportTemplate}>Import</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Templates are saved locally per stage and reused by app flows.</p>
+            </div>
+
+            <div className="pt-2 border-t border-dashed space-y-1">
+              <div className="text-sm font-medium">Variables (read-only)</div>
+              <div className="text-xs text-muted-foreground">
+                {'Type @varName in text or {{varName}} inside text/barcode value. Barcode defaults to {{barcode}} and always shows the value underneath.'}
+              </div>
+              <div className="border rounded-md bg-slate-50 p-2 max-h-48 overflow-auto">
+                {stageVariables.length === 0 ? (
+                  <div className="text-xs text-muted-foreground">No variables for this stage.</div>
+                ) : (
+                  <ul className="text-xs space-y-1">
+                    {stageVariables.map((v) => (
+                      <li key={v.key} className="flex justify-between">
+                        <span className="font-mono text-[11px]">@{v.key}</span>
+                        <span className="text-muted-foreground">{v.label}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
             <div className="pt-2 border-t border-dashed">
               <Label>Copies</Label>
               <Input
@@ -1195,6 +1232,9 @@ const StickerTest = () => {
                 <Button size="sm" onClick={addTextBlock}>
                   + Add text
                 </Button>
+                <Button size="sm" variant="outline" onClick={addBarcodeBlock}>
+                  + Add barcode
+                </Button>
                 {selectedIds.length > 0 && (
                   <Badge variant="outline" className="text-xs">
                     Selected: {selectedIds[0]}{selectedIds.length > 1 ? ` (+${selectedIds.length - 1})` : ''}
@@ -1215,11 +1255,15 @@ const StickerTest = () => {
                   const primarySelectedId = selectedIds[0];
                   const text = (content.texts || []).find((t) => t.id === primarySelectedId);
                   if (!text) return <div className="text-sm text-muted-foreground">Select a text to edit.</div>;
+                  const isBarcode = text.type === 'barcode';
                   return (
                     <>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-semibold">Editing: {text.id}</p>
+                          <Badge variant="outline" className="text-[11px]">
+                            {isBarcode ? 'Barcode' : 'Text'}
+                          </Badge>
                           <Badge variant="outline" className="text-[11px]">X: {text.pos?.x ?? 0}mm · Y: {text.pos?.y ?? 0}mm</Badge>
                         </div>
                         <Button size="sm" variant="destructive" onClick={() => removeText(text.id)}>
@@ -1227,108 +1271,209 @@ const StickerTest = () => {
                         </Button>
                       </div>
                       <Input
+                        ref={inputRef}
                         value={text.value}
-                        onChange={(e) => updateTextValue(text.id, e.target.value)}
+                        onChange={(e) => handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)}
+                        onSelect={(e) => handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)}
+                        onKeyDown={(e) => {
+                          if (!mention.open) return;
+                          const filtered = stageVariables.filter((v) =>
+                            mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                          );
+                          if (filtered.length === 0) return;
+                          if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
+                            e.preventDefault();
+                          }
+                          if (e.key === 'ArrowDown') {
+                            setMentionIndex((prev) => (prev + 1) % filtered.length);
+                          } else if (e.key === 'ArrowUp') {
+                            setMentionIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+                          } else if (e.key === 'Enter' || e.key === 'Tab') {
+                            const pick = filtered[mentionIndex] || filtered[0];
+                            if (pick) applyMention(text.id, pick.key);
+                          } else if (e.key === 'Escape') {
+                            closeMention();
+                          }
+                        }}
                         placeholder="Enter text"
                       />
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <Label className="text-xs">Font size (pt)</Label>
-                        <Input
-                          type="number"
-                          min="6"
-                          className="h-8 w-20"
-                          value={text.style?.size || dimensions.fontSize}
-                          onChange={(e) => updateTextStyle(text.id, { size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize) })}
-                        />
-                        <div className="flex gap-1 ml-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={text.style?.bold ? 'default' : 'outline'}
-                            className="h-8"
-                            onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
-                          >
-                            B
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={text.style?.italic ? 'default' : 'outline'}
-                            className="h-8"
-                            onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
-                          >
-                            I
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={text.style?.underline ? 'default' : 'outline'}
-                            className="h-8"
-                            onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
-                          >
-                            U
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={text.style?.background?.enabled ? 'default' : 'outline'}
-                            className="h-8"
-                            onClick={() => {
-                              const nextEnabled = !text.style?.background?.enabled;
-                              updateTextBackground(text.id, {
-                                enabled: nextEnabled,
-                                color: text.style?.background?.color || '#000000',
-                                textColor: text.style?.background?.textColor || '#ffffff',
-                                paddingMm: text.style?.background?.paddingMm ?? 0.8,
-                              });
-                            }}
-                          >
-                            BG
-                          </Button>
-                        </div>
-                        <div className="flex items-center gap-2 ml-4">
-                          <Label className="text-xs">Angle</Label>
-                          <select
-                            value={text.angle || 0}
-                            onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
-                            className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            {[0, 90, 180, 270].map((deg) => (
-                              <option key={deg} value={deg}>{deg}°</option>
-                            ))}
-                          </select>
-                        </div>
-                        {text.style?.background?.enabled && (
-                          <div className="flex flex-wrap items-center gap-2 mt-2">
-                            <Label className="text-xs">BG color</Label>
-                            <input
-                              type="color"
-                              value={text.style?.background?.color || '#000000'}
-                              onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
-                              className="h-8 w-10 border rounded cursor-pointer"
-                            />
-                            <Label className="text-xs ml-2">Text color</Label>
-                            <input
-                              type="color"
-                              value={text.style?.background?.textColor || '#ffffff'}
-                              onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
-                              className="h-8 w-10 border rounded cursor-pointer"
-                            />
-                            <Label className="text-xs ml-2">Padding (mm)</Label>
-                            <Input
-                              type="number"
-                              step="0.1"
-                              className="h-8 w-20"
-                              value={text.style?.background?.paddingMm ?? 0.8}
-                              onChange={(e) =>
-                                updateTextBackground(text.id, {
-                                  paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
-                                })
-                              }
-                            />
+                      {mention.open && mention.targetId === text.id && (
+                        <div className="relative">
+                          <div className="absolute z-10 mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg">
+                            <div className="max-h-48 overflow-auto text-sm">
+                              {stageVariables
+                                .filter((v) =>
+                                  mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                )
+                                .map((v, idx) => (
+                                  <button
+                                    key={v.key}
+                                    type="button"
+                                    className={`w-full text-left px-3 py-2 flex items-center justify-between ${
+                                      idx === mentionIndex ? 'bg-indigo-50' : ''
+                                    }`}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      applyMention(text.id, v.key);
+                                    }}
+                                  >
+                                    <span className="font-mono text-xs">@{v.key}</span>
+                                    <span className="text-xs text-muted-foreground">{v.label}</span>
+                                  </button>
+                                ))}
+                            </div>
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
+                      {isBarcode ? (
+                        <div className="space-y-2 text-xs text-muted-foreground">
+                          <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <Label className="text-xs">Height (mm)</Label>
+                              <Input
+                                type="number"
+                                step="0.5"
+                                className="h-8"
+                                value={text.style?.heightMm ?? 12}
+                                onChange={(e) => updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })}
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs">Module width (mm)</Label>
+                              <Input
+                                type="number"
+                                step="0.05"
+                                className="h-8"
+                                value={text.style?.moduleMm ?? 0.3}
+                                onChange={(e) => updateTextStyle(text.id, { moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3) })}
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Human readable</Label>
+                              <Button
+                                size="sm"
+                                variant={text.style?.humanReadable === false ? 'outline' : 'default'}
+                                className="h-8"
+                                onClick={() => updateTextStyle(text.id, { humanReadable: text.style?.humanReadable === false ? true : false })}
+                              >
+                                {text.style?.humanReadable === false ? 'Off' : 'On'}
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Angle</Label>
+                              <select
+                                value={text.angle || 0}
+                                onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                {[0, 90, 180, 270].map((deg) => (
+                                  <option key={deg} value={deg}>{deg}°</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <Label className="text-xs">Font size (pt)</Label>
+                          <Input
+                            type="number"
+                            min="6"
+                            className="h-8 w-20"
+                            value={text.style?.size || dimensions.fontSize}
+                            onChange={(e) => updateTextStyle(text.id, { size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize) })}
+                          />
+                          <div className="flex gap-1 ml-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={text.style?.bold ? 'default' : 'outline'}
+                              className="h-8"
+                              onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
+                            >
+                              B
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={text.style?.italic ? 'default' : 'outline'}
+                              className="h-8"
+                              onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
+                            >
+                              I
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={text.style?.underline ? 'default' : 'outline'}
+                              className="h-8"
+                              onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
+                            >
+                              U
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={text.style?.background?.enabled ? 'default' : 'outline'}
+                              className="h-8"
+                              onClick={() => {
+                                const nextEnabled = !text.style?.background?.enabled;
+                                updateTextBackground(text.id, {
+                                  enabled: nextEnabled,
+                                  color: text.style?.background?.color || '#000000',
+                                  textColor: text.style?.background?.textColor || '#ffffff',
+                                  paddingMm: text.style?.background?.paddingMm ?? 0.8,
+                                });
+                              }}
+                            >
+                              BG
+                            </Button>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <Label className="text-xs">Angle</Label>
+                            <select
+                              value={text.angle || 0}
+                              onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                              className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              {[0, 90, 180, 270].map((deg) => (
+                                <option key={deg} value={deg}>{deg}°</option>
+                              ))}
+                            </select>
+                          </div>
+                          {text.style?.background?.enabled && (
+                            <div className="flex flex-wrap items-center gap-2 mt-2">
+                              <Label className="text-xs">BG color</Label>
+                              <input
+                                type="color"
+                                value={text.style?.background?.color || '#000000'}
+                                onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
+                                className="h-8 w-10 border rounded cursor-pointer"
+                              />
+                              <Label className="text-xs ml-2">Text color</Label>
+                              <input
+                                type="color"
+                                value={text.style?.background?.textColor || '#ffffff'}
+                                onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
+                                className="h-8 w-10 border rounded cursor-pointer"
+                              />
+                              <Label className="text-xs ml-2">Padding (mm)</Label>
+                              <Input
+                                type="number"
+                                step="0.1"
+                                className="h-8 w-20"
+                                value={text.style?.background?.paddingMm ?? 0.8}
+                                onChange={(e) =>
+                                  updateTextBackground(text.id, {
+                                    paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
+                                  })
+                                }
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <Label className="text-xs">X (mm)</Label>

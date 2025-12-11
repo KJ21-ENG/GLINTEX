@@ -3,6 +3,7 @@ import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 export function IssueToConing() {
   const { db, refreshDb } = useInventory();
@@ -107,7 +108,7 @@ export function IssueToConing() {
       
       setSubmitting(true);
       try {
-          await api.createIssueToConingMachine({
+          const created = await api.createIssueToConingMachine({
               date: form.date,
               machineId: form.machineId || null,
               operatorId: form.operatorId || null,
@@ -124,6 +125,29 @@ export function IssueToConing() {
                   issueWeight: Number(c.issueWeight)
               }))
           });
+          const template = loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
+          if (template && created?.issueToConingMachine) {
+            const confirmPrint = window.confirm('Print sticker for this issue?');
+            if (confirmPrint) {
+              const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
+              const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
+              await printStageTemplate(
+                LABEL_STAGE_KEYS.CONING_ISSUE,
+                {
+                  lotNo: created.issueToConingMachine.lotNo,
+                  barcode: created.issueToConingMachine.barcode,
+                  totalRolls: coningMeta.totalRolls,
+                  totalWeight: coningMeta.totalNet,
+                  expectedCones: created.issueToConingMachine.expectedCones,
+                  perConeTargetG: form.targetWeight,
+                  machineName,
+                  operatorName,
+                  date: form.date,
+                },
+                { template },
+              );
+            }
+          }
           await refreshDb();
           setCrates([]);
           alert('Issued to Coning successfully');

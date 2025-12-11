@@ -3,6 +3,7 @@ import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 export function ConingReceiveForm() {
   const { db, refreshDb } = useInventory();
@@ -80,6 +81,11 @@ export function ConingReceiveForm() {
       if (!issue || cart.length === 0) return;
       setSubmitting(true);
       try {
+          const template = loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+          const confirmPrint = template ? window.confirm('Print stickers for these receives?') : false;
+          const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
+          const baseCount = existingRows.length;
+          const baseCode = issue.barcode || issue.lotNo || issue.id;
           for (const row of cart) {
               await api.manualReceiveFromConingMachine({
                   issueId: issue.id,
@@ -91,6 +97,28 @@ export function ConingReceiveForm() {
                   operatorId: row.operatorId,
                   notes: row.notes
               });
+              if (confirmPrint) {
+                const index = cart.indexOf(row);
+                const paddedIndex = String(baseCount + index + 1).padStart(3, '0');
+                const barcode = `RCN-${baseCode}-${paddedIndex}`;
+                const boxName = db.boxes.find((b) => b.id === row.boxId)?.name;
+                const operatorName = db.operators.find((o) => o.id === row.operatorId)?.name;
+                await printStageTemplate(
+                  LABEL_STAGE_KEYS.CONING_RECEIVE,
+                  {
+                    lotNo: issue.lotNo,
+                    issueBarcode: issue.barcode,
+                    barcode,
+                    coneCount: row.coneCount,
+                    grossWeight: row.grossWeight,
+                    netWeight: calcRowNet(row),
+                    boxName,
+                    operatorName,
+                    date: receiveDate,
+                  },
+                  { template },
+                );
+              }
           }
           await refreshDb();
           setCart([]);

@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -73,7 +74,19 @@ export function CutterReceiveForm() {
         return Math.max(0, g - tare);
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
-    function handleAdd() {
+    const computeNextBarcode = (pieceId, lotNo, seq) => {
+        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId);
+        const existingMax = existing.reduce((max, row) => {
+            const idx = parseReceiveCrateIndex(row.barcode);
+            if (idx != null && idx > max) return idx;
+            return max;
+        }, 0);
+        const inCartCount = cart.filter((c) => c.pieceId === pieceId).length;
+        const nextIndex = existingMax + inCartCount + 1;
+        return makeReceiveBarcode({ lotNo, seq, crateIndex: nextIndex });
+    };
+
+    async function handleAdd() {
         if (!issueRecord) return;
         
         // Validation: Bobbin, Box, Qty, Gross Weight are mandatory. Cut and Helper are optional.
@@ -88,6 +101,10 @@ export function CutterReceiveForm() {
             return;
         }
 
+        const pieceMeta = db.inbound_items.find((p) => p.id === pieceIdToUse);
+        const seq = pieceMeta?.seq || Number((pieceMeta?.id || '').split('-').pop());
+        const receiveBarcode = computeNextBarcode(pieceIdToUse, issueRecord.lotNo, seq || 0);
+
         const cutName = db.cuts.find(c => c.id === cutId)?.name;
         const helperName = db.workers.find(o => o.id === helperId)?.name;
 
@@ -100,6 +117,7 @@ export function CutterReceiveForm() {
             operatorId: issueRecord.operatorId, // Capture operator from issue
             cutId, helperId, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
             netWeight: netWeight,
+            barcode: receiveBarcode,
 
             // Display Names
             itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
@@ -109,6 +127,31 @@ export function CutterReceiveForm() {
             bobbinName: selectedBobbin?.name,
             boxName: selectedBox?.name
         }]);
+
+        const template = loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+        if (template && receiveBarcode) {
+            const confirmPrint = window.confirm('Print sticker for this crate?');
+            if (confirmPrint) {
+                await printStageTemplate(
+                    LABEL_STAGE_KEYS.CUTTER_RECEIVE,
+                    {
+                        lotNo: issueRecord.lotNo,
+                        pieceId: pieceIdToUse,
+                        barcode: receiveBarcode,
+                        netWeight: netWeight,
+                        grossWeight,
+                        bobbinQty,
+                        bobbinName: selectedBobbin?.name,
+                        boxName: selectedBox?.name,
+                        cutName,
+                        helperName,
+                        operatorName: db.workers.find((o) => o.id === issueRecord.operatorId)?.name,
+                        date: receiveDate,
+                    },
+                    { template },
+                );
+            }
+        }
 
         // Reset fields for next box
         setGrossWeight('');

@@ -1,4 +1,4 @@
-// Shared label printing helpers for StickerTest and stage flows.
+// Shared label printing helpers for LabelDesigner and stage flows.
 // Handles template storage (localStorage), TSPL generation for text + Code128 barcodes,
 // placeholder substitution, and posting jobs to the local print service.
 

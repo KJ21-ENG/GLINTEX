@@ -14,7 +14,7 @@ import {
   Reports,
   Settings
 } from "../pages";
-import StickerTest from "../pages/Settings/StickerTest";
+import LabelDesigner from "../pages/Settings/LabelDesigner";
 
 export const router = createBrowserRouter([
   {
@@ -54,8 +54,8 @@ export const router = createBrowserRouter([
         element: <Settings />,
       },
       {
-        path: "settings/sticker-test",
-        element: <StickerTest />,
+        path: "settings/label-designer",
+        element: <LabelDesigner />,
       },
     ],
   },

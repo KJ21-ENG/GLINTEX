@@ -493,6 +493,20 @@ const LabelPreview = ({
       dyMm = mappedDy;
     }
 
+    // Adjust for element rotation
+    const target = (content.texts || []).find((t) => t.id === resizing.id);
+    const angle = target ? snapAngle(target.angle || 0) : 0;
+    if (angle !== 0) {
+      const rad = (angle * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      // Rotate vector by -angle
+      const rDx = dxMm * cos + dyMm * sin;
+      const rDy = -dxMm * sin + dyMm * cos;
+      dxMm = rDx;
+      dyMm = rDy;
+    }
+
     if (dxMm !== 0 || dyMm !== 0) {
       resizeMovedRef.current = true;
     }
@@ -519,10 +533,8 @@ const LabelPreview = ({
       if (resizing.type === 'line') {
         const lengthBase = Number(resizing.origin.lengthMm);
         const thicknessBase = Number(resizing.origin.thicknessMm);
-        const angle = snapAngle(target.angle || 0);
-        const horizontal = angle === 0 || angle === 180;
-        const nextLength = Math.min(200, Math.max(0.1, lengthBase + (horizontal ? dxMm : dyMm)));
-        const nextThickness = Math.min(10, Math.max(0.1, thicknessBase + (horizontal ? dyMm : dxMm)));
+        const nextLength = Math.min(200, Math.max(0.1, lengthBase + dxMm));
+        const nextThickness = Math.min(10, Math.max(0.1, thicknessBase + dyMm));
         return {
           ...prev,
           texts: allTexts.map((t) => {
@@ -929,7 +941,7 @@ const HelpPopover = ({ text }) => {
   );
 };
 
-const StickerTest = () => {
+const LabelDesigner = () => {
   const navigate = useNavigate();
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState(() => getPreferredPrinter() || '');
@@ -1284,7 +1296,7 @@ const StickerTest = () => {
         <Button variant="ghost" size="sm" onClick={() => navigate('/app/settings')} className="px-2">
           <ArrowLeft className="w-4 h-4 mr-1" /> Back to Settings
         </Button>
-        <h1 className="text-xl font-semibold">Sticker / Label Test Bench</h1>
+        <h1 className="text-xl font-semibold">Label Designer</h1>
         <Badge variant="outline" className="ml-auto">Silent printing via local service</Badge>
       </div>
 
@@ -1930,4 +1942,4 @@ const StickerTest = () => {
   );
 };
 
-export default StickerTest;
+export default LabelDesigner;

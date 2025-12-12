@@ -31,10 +31,10 @@ export function Settings() {
                             <Database className="w-4 h-4" /> Raw Data
                         </button>
                         <button
-                            onClick={() => navigate('/app/settings/sticker-test')}
+                            onClick={() => navigate('/app/settings/label-designer')}
                             className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
                         >
-                            <Printer className="w-4 h-4" /> Sticker / Label Printing
+                            <Printer className="w-4 h-4" /> Label Designer
                         </button>
                     </nav>
                 </CardContent>

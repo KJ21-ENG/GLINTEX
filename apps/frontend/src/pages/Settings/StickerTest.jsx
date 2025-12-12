@@ -22,7 +22,14 @@ const SNAP_TOLERANCE_MM = 1.5;
 const NUDGE_STEP_PX = 1;
 const NUDGE_STEP_FAST_PX = 5;
 
-const getFontScale = (fontSize) => Math.max(1, Math.round(fontSize / 10) || 1);
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+// Keep preview scale in sync with `buildTspl` (supports fractional steps).
+const getFontScale = (fontSize) => {
+  const numeric = Number(fontSize);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 1;
+  return clampNumber(numeric / 10, 0.1, 10);
+};
 
 const snapAngle = (angle = 0) => {
   const normalized = ((angle % 360) + 360) % 360;
@@ -94,11 +101,24 @@ const LabelPreview = ({
   }, [width, height, orientation]);
 
   const [dragging, setDragging] = useState({ ids: [], startX: 0, startY: 0, origins: {} });
+  const [resizing, setResizing] = useState(null);
   const [guides, setGuides] = useState({ vertical: null, horizontal: null });
   const preDragSnapshotRef = useRef(null);
   const dragMovedRef = useRef(false);
+  const preResizeSnapshotRef = useRef(null);
+  const resizeMovedRef = useRef(false);
 
   const measureBlock = (block) => {
+    if (block.type === 'line') {
+      const angle = snapAngle(block.angle || 0);
+      const lengthMm = Math.max(0.1, Number(block.style?.lengthMm ?? 20));
+      const thicknessMm = Math.max(0.1, Number(block.style?.thicknessMm ?? 0.6));
+      const horizontal = angle === 0 || angle === 180;
+      return {
+        widthMm: horizontal ? lengthMm : thicknessMm,
+        heightMm: horizontal ? thicknessMm : lengthMm,
+      };
+    }
     if (block.type === 'barcode') {
       const moduleMm = block.style?.moduleMm ?? 0.3;
       const heightMm = block.style?.heightMm ?? 12;
@@ -111,14 +131,15 @@ const LabelPreview = ({
     const charHeightMm = 3 * scale;
     const charWidthMm = 2 * scale;
     const paddingMm = block.style?.background?.enabled ? block.style.background.paddingMm ?? 0.8 : 0;
+    const underlineExtraMm = block.style?.underline ? charHeightMm * 0.3 : 0;
     const widthMm = Math.max(1, (block.value || '').length) * charWidthMm + paddingMm * 2;
-    const heightMm = charHeightMm + paddingMm * 2;
+    const heightMm = charHeightMm + paddingMm * 2 + underlineExtraMm;
     return { widthMm, heightMm };
   };
 
   const computeBoundingBox = (text) => {
     const { widthMm, heightMm } = measureBlock(text);
-    const angle = snapAngle(text.angle || 0);
+    const angle = text.type === 'line' ? 0 : snapAngle(text.angle || 0);
     let minX = 0;
     let maxX = widthMm;
     let minY = 0;
@@ -162,6 +183,29 @@ const LabelPreview = ({
   const blockStyle = (block, selected = false) => {
     const angle = block.angle || 0;
     const pos = block.pos || { x: 0, y: 0 };
+    if (block.type === 'line') {
+      const style = block.style || {};
+      const snapped = snapAngle(angle);
+      const lengthMm = Math.max(0.1, Number(style.lengthMm ?? 20));
+      const thicknessMm = Math.max(0.1, Number(style.thicknessMm ?? 0.6));
+      const horizontal = snapped === 0 || snapped === 180;
+      const widthMm = horizontal ? lengthMm : thicknessMm;
+      const heightMm = horizontal ? thicknessMm : lengthMm;
+      const visible = style.visible !== false;
+      return {
+        position: 'absolute',
+        left: `${mmToPx(pos.x + offsetX)}px`,
+        top: `${mmToPx(pos.y + offsetY)}px`,
+        width: `${mmToPx(widthMm)}px`,
+        height: `${mmToPx(heightMm)}px`,
+        background: '#0f172a',
+        borderRadius: '2px',
+        opacity: visible ? 1 : 0.35,
+        cursor: visible ? 'move' : 'not-allowed',
+        outline: selected ? '1px dashed #818cf8' : 'none',
+        outlineOffset: '4px',
+      };
+    }
     if (block.type === 'barcode') {
       const { widthMm, heightMm } = measureBlock(block);
       return {
@@ -190,10 +234,17 @@ const LabelPreview = ({
     const style = block.style || {};
     const scale = getFontScale(style.size || dimensions.fontSize);
     const charHeightMm = 3 * scale; // TSPL font 3: 24 dots high -> 3mm @203dpi
+    const charWidthMm = 2 * scale;
     const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
     const paddingPx = mmToPx(paddingMm);
+    const textLen = Math.max(1, (block.value || '').length);
+    const safetyMm = style.background?.enabled ? 0.25 : 0; // +2 dots @203dpi
+    const underlineExtraMm = style.underline ? charHeightMm * 0.3 : 0;
+    const widthMm = textLen * charWidthMm + paddingMm * 2 + safetyMm;
+    const heightMm = charHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
     const backgroundColor = style.background?.enabled ? style.background.color || '#000000' : 'transparent';
     const textColor = style.background?.enabled ? style.background.textColor || '#ffffff' : '#0f172a';
+    const visualOpacity = style.visible === false ? 0.35 : clampNumber(style.opacity ?? 1, 0, 1);
     return {
       position: 'absolute',
       left: `${mmToPx(pos.x + offsetX)}px`,
@@ -202,6 +253,9 @@ const LabelPreview = ({
       transformOrigin: 'top left',
       whiteSpace: 'nowrap',
       display: 'inline-block',
+      boxSizing: 'border-box',
+      width: `${mmToPx(widthMm)}px`,
+      height: `${mmToPx(heightMm)}px`,
       fontSize: `${mmToPx(charHeightMm)}px`,
       lineHeight: `${mmToPx(charHeightMm * 1.05)}px`,
       letterSpacing: '0px', // mirror TSPL monospace font spacing
@@ -209,7 +263,7 @@ const LabelPreview = ({
       fontWeight: style.bold ? 700 : 500,
       fontStyle: style.italic ? 'italic' : 'normal',
       textDecoration: style.underline ? 'underline' : 'none',
-      opacity: style.visible === false ? 0.35 : 1,
+      opacity: visualOpacity,
       cursor: style.visible === false ? 'not-allowed' : 'move',
       outline: selected ? '1px dashed #818cf8' : 'none',
       outlineOffset: '4px',
@@ -395,6 +449,101 @@ const LabelPreview = ({
     dragMovedRef.current = false;
   };
 
+  const startElementResize = (id, clientX, clientY) => {
+    const target = (content.texts || []).find((t) => t.id === id);
+    if (!target || !['barcode', 'line'].includes(target.type)) return;
+    setSelectedIds([id]);
+    preResizeSnapshotRef.current = JSON.parse(JSON.stringify(content || {}));
+    resizeMovedRef.current = false;
+    if (target.type === 'barcode') {
+      const moduleMm = target.style?.moduleMm ?? 0.3;
+      const heightMm = target.style?.heightMm ?? 12;
+      const valueLength = Math.max(1, (target.value || '').length);
+      const modules = Math.max(30, valueLength * 11 + 35);
+      setResizing({
+        type: 'barcode',
+        id,
+        startX: clientX,
+        startY: clientY,
+        origin: { moduleMm, heightMm },
+        modules,
+      });
+      return;
+    }
+    const lengthMm = Number(target.style?.lengthMm ?? 20);
+    const thicknessMm = Number(target.style?.thicknessMm ?? 0.6);
+    setResizing({
+      type: 'line',
+      id,
+      startX: clientX,
+      startY: clientY,
+      origin: { lengthMm, thicknessMm },
+    });
+  };
+
+  const updateElementResize = (clientX, clientY) => {
+    if (!resizing?.id) return;
+    let dxMm = pxToMm(clientX - resizing.startX);
+    let dyMm = pxToMm(clientY - resizing.startY);
+
+    if (orientation === 'landscape') {
+      const mappedDx = dyMm;
+      const mappedDy = -dxMm;
+      dxMm = mappedDx;
+      dyMm = mappedDy;
+    }
+
+    if (dxMm !== 0 || dyMm !== 0) {
+      resizeMovedRef.current = true;
+    }
+
+    setContent((prev) => {
+      const allTexts = prev.texts || [];
+      const target = allTexts.find((t) => t.id === resizing.id);
+      if (!target) return prev;
+      if (resizing.type === 'barcode') {
+        const moduleMmBase = resizing.origin.moduleMm;
+        const heightMmBase = resizing.origin.heightMm;
+        const modules = Math.max(30, resizing.modules || 30);
+        const nextModuleMm = Math.min(2, Math.max(0.1, moduleMmBase + dxMm / modules));
+        const nextHeightMm = Math.min(80, Math.max(4, heightMmBase + dyMm));
+        return {
+          ...prev,
+          texts: allTexts.map((t) => {
+            if (t.id !== resizing.id) return t;
+            return { ...t, style: { ...(t.style || {}), moduleMm: nextModuleMm, heightMm: nextHeightMm } };
+          }),
+        };
+      }
+
+      if (resizing.type === 'line') {
+        const lengthBase = Number(resizing.origin.lengthMm);
+        const thicknessBase = Number(resizing.origin.thicknessMm);
+        const angle = snapAngle(target.angle || 0);
+        const horizontal = angle === 0 || angle === 180;
+        const nextLength = Math.min(200, Math.max(0.1, lengthBase + (horizontal ? dxMm : dyMm)));
+        const nextThickness = Math.min(10, Math.max(0.1, thicknessBase + (horizontal ? dyMm : dxMm)));
+        return {
+          ...prev,
+          texts: allTexts.map((t) => {
+            if (t.id !== resizing.id) return t;
+            return { ...t, style: { ...(t.style || {}), lengthMm: nextLength, thicknessMm: nextThickness } };
+          }),
+        };
+      }
+      return prev;
+    });
+  };
+
+  const stopElementResize = () => {
+    setResizing(null);
+    if (resizeMovedRef.current && preResizeSnapshotRef.current) {
+      pushHistory(preResizeSnapshotRef.current);
+    }
+    preResizeSnapshotRef.current = null;
+    resizeMovedRef.current = false;
+  };
+
   const cycleRotation = (id) => {
     setContent((prev) => {
       const texts = (prev.texts || []).map((t) => {
@@ -435,7 +584,7 @@ const LabelPreview = ({
           <div className="absolute inset-x-1 bottom-1 text-[10px] font-mono bg-white/80 px-1 rounded">
             {text.value || ''}
           </div>
-        ) : (
+        ) : text.type === 'line' ? null : (
           text.value || ''
         )}
         {isSelected && (
@@ -458,15 +607,48 @@ const LabelPreview = ({
             {angle}°
           </div>
         )}
+        {isSelected && ['barcode', 'line'].includes(text.type) && (
+          <div
+            className="absolute w-3 h-3 bg-white border border-slate-300 rounded-sm shadow-sm cursor-nwse-resize"
+            style={{ bottom: '-10px', right: '-10px' }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              startElementResize(text.id, e.clientX, e.clientY);
+            }}
+            onTouchStart={(e) => {
+              const t = e.touches[0];
+              if (!t) return;
+              e.preventDefault();
+              e.stopPropagation();
+              startElementResize(text.id, t.clientX, t.clientY);
+            }}
+          />
+        )}
       </div>
     );
   };
 
-  const handleMouseMove = (e) => updatePosition(e.clientX, e.clientY);
+  const handleMouseMove = (e) => {
+    if (resizing?.id) {
+      updateElementResize(e.clientX, e.clientY);
+      return;
+    }
+    updatePosition(e.clientX, e.clientY);
+  };
   const handleTouchMove = (e) => {
     const t = e.touches[0];
     if (!t) return;
+    if (resizing?.id) {
+      updateElementResize(t.clientX, t.clientY);
+      return;
+    }
     updatePosition(t.clientX, t.clientY);
+  };
+
+  const stopInteraction = () => {
+    stopElementResize();
+    stopDrag();
   };
 
   useEffect(() => {
@@ -551,10 +733,10 @@ const LabelPreview = ({
         className="bg-slate-100/80 border border-dashed border-slate-200 rounded-lg p-4 overflow-auto"
         style={{ minWidth: `${mmToPx(pageWidth)}px`, paddingTop: `${mmToPx(marginTop)}px` }}
         onMouseMove={handleMouseMove}
-        onMouseUp={stopDrag}
-        onMouseLeave={stopDrag}
+        onMouseUp={stopInteraction}
+        onMouseLeave={stopInteraction}
         onTouchMove={handleTouchMove}
-        onTouchEnd={stopDrag}
+        onTouchEnd={stopInteraction}
       >
         <div
           className="grid"
@@ -929,6 +1111,18 @@ const StickerTest = () => {
     setSelectedIds([base.id]);
   };
 
+  const addLineBlock = () => {
+    const base = normalizeTextBlock({
+      id: `line-${Date.now()}`,
+      type: 'line',
+      value: '',
+      pos: { x: 5, y: 5 },
+      style: { lengthMm: 20, thicknessMm: 0.6, visible: true },
+    });
+    setContentWithHistory((prev) => ({ ...prev, texts: [...(prev.texts || []), base] }));
+    setSelectedIds([base.id]);
+  };
+
   const updateTextValue = (id, value) => {
     setContentWithHistory((prev) => ({
       ...prev,
@@ -991,10 +1185,14 @@ const StickerTest = () => {
     });
   };
 
-  const updateTextStyle = (id, patch) => {
+  const updateTextStyle = (idOrIds, patch) => {
+    const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+    if (!ids.length) return;
     setContentWithHistory((prev) => ({
       ...prev,
-      texts: (prev.texts || []).map((t) => (t.id === id ? { ...t, style: { ...(t.style || {}), ...patch } } : t)),
+      texts: (prev.texts || []).map((t) =>
+        ids.includes(t.id) ? { ...t, style: { ...(t.style || {}), ...patch } } : t
+      ),
     }));
   };
 
@@ -1289,6 +1487,9 @@ const StickerTest = () => {
               <Button size="sm" variant="outline" onClick={addBarcodeBlock}>
                 + Add barcode
               </Button>
+              <Button size="sm" variant="outline" onClick={addLineBlock}>
+                + Add line
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -1296,77 +1497,102 @@ const StickerTest = () => {
               <div className="border border-dashed rounded-lg p-4 space-y-3">
                 {(() => {
                   const primarySelectedId = selectedIds[0];
-                  const text = (content.texts || []).find((t) => t.id === primarySelectedId);
+                  const allBlocks = content.texts || [];
+                  const selectedBlocks = allBlocks.filter((t) => selectedIds.includes(t.id));
+                  const text = allBlocks.find((t) => t.id === primarySelectedId);
                   if (!text) return <div className="text-sm text-muted-foreground">Select a text to edit.</div>;
                   const isBarcode = text.type === 'barcode';
+                  const isLine = text.type === 'line';
+                  const selectedTextIds = selectedBlocks
+                    .filter((t) => t.type !== 'barcode' && t.type !== 'line')
+                    .map((t) => t.id);
+                  const selectedTextSizes = selectedBlocks
+                    .filter((t) => t.type !== 'barcode' && t.type !== 'line')
+                    .map((t) => t.style?.size || dimensions.fontSize);
+                  const hasMixedFontSize =
+                    selectedTextSizes.length > 1 && new Set(selectedTextSizes.map((v) => String(v))).size > 1;
                   return (
                     <>
                       <div className="flex items-start gap-2">
-                        <div className="flex-1 relative">
-                          <Input
-                            ref={inputRef}
-                            value={text.value}
-                            onChange={(e) =>
-                              handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)
-                            }
-                            onSelect={(e) =>
-                              handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)
-                            }
-                            onKeyDown={(e) => {
-                              if (!mention.open) return;
-                              const filtered = stageVariables.filter((v) =>
-                                mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
-                              );
-                              if (filtered.length === 0) return;
-                              if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
-                                e.preventDefault();
+                        {isLine ? (
+                          <div className="flex-1 flex items-center h-10 px-3 text-sm text-muted-foreground">
+                            Line element
+                          </div>
+                        ) : (
+                          <div className="flex-1 relative">
+                            <Input
+                              ref={inputRef}
+                              value={text.value}
+                              onChange={(e) =>
+                                handleValueChange(
+                                  text.id,
+                                  e.target.value,
+                                  e.target.selectionStart || e.target.value.length
+                                )
                               }
-                              if (e.key === 'ArrowDown') {
-                                setMentionIndex((prev) => (prev + 1) % filtered.length);
-                              } else if (e.key === 'ArrowUp') {
-                                setMentionIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
-                              } else if (e.key === 'Enter' || e.key === 'Tab') {
-                                const pick = filtered[mentionIndex] || filtered[0];
-                                if (pick) applyMention(text.id, pick.key);
-                              } else if (e.key === 'Escape') {
-                                closeMention();
+                              onSelect={(e) =>
+                                handleValueChange(
+                                  text.id,
+                                  e.target.value,
+                                  e.target.selectionStart || e.target.value.length
+                                )
                               }
-                            }}
-                            placeholder="Enter text"
-                          />
-                          {mention.open && mention.targetId === text.id && (
-                            <div className="absolute z-10 mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg">
-                              <div className="max-h-48 overflow-auto text-sm">
-                                {stageVariables
-                                  .filter((v) =>
-                                    mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
-                                  )
-                                  .map((v, idx) => (
-                                    <button
-                                      key={v.key}
-                                      type="button"
-                                      className={`w-full text-left px-3 py-2 flex items-center justify-between ${
-                                        idx === mentionIndex ? 'bg-indigo-50' : ''
-                                      }`}
-                                      onMouseDown={(e) => {
-                                        e.preventDefault();
-                                        applyMention(text.id, v.key);
-                                      }}
-                                    >
-                                      <span className="font-mono text-xs">@{v.key}</span>
-                                      <span className="text-xs text-muted-foreground">{v.label}</span>
-                                    </button>
-                                  ))}
+                              onKeyDown={(e) => {
+                                if (!mention.open) return;
+                                const filtered = stageVariables.filter((v) =>
+                                  mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                );
+                                if (filtered.length === 0) return;
+                                if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
+                                  e.preventDefault();
+                                }
+                                if (e.key === 'ArrowDown') {
+                                  setMentionIndex((prev) => (prev + 1) % filtered.length);
+                                } else if (e.key === 'ArrowUp') {
+                                  setMentionIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+                                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                                  const pick = filtered[mentionIndex] || filtered[0];
+                                  if (pick) applyMention(text.id, pick.key);
+                                } else if (e.key === 'Escape') {
+                                  closeMention();
+                                }
+                              }}
+                              placeholder="Enter text"
+                            />
+                            {mention.open && mention.targetId === text.id && (
+                              <div className="absolute z-10 mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg">
+                                <div className="max-h-72 overflow-y-auto overscroll-contain text-sm" onWheel={(e) => e.stopPropagation()}>
+                                  {stageVariables
+                                    .filter((v) =>
+                                      mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                    )
+                                    .map((v, idx) => (
+                                      <button
+                                        key={v.key}
+                                        type="button"
+                                        className={`w-full text-left px-3 py-2 flex items-center justify-between ${
+                                          idx === mentionIndex ? 'bg-indigo-50' : ''
+                                        }`}
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          applyMention(text.id, v.key);
+                                        }}
+                                      >
+                                        <span className="font-mono text-xs">@{v.key}</span>
+                                        <span className="text-xs text-muted-foreground">{v.label}</span>
+                                      </button>
+                                    ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
+                            )}
+                          </div>
+                        )}
                         <Button size="sm" variant="destructive" onClick={() => removeText(text.id)}>
                           Remove
                         </Button>
-                        </div>
-                        <div className="max-h-[30vh] overflow-y-auto pr-1 space-y-3">
-                          {isBarcode ? (
+                      </div>
+                      <div className="max-h-[30vh] overflow-y-auto pr-1 space-y-3">
+                        {isBarcode ? (
                             <div className="space-y-2 text-xs text-muted-foreground">
                               <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
                               <div className="grid grid-cols-2 gap-3">
@@ -1443,20 +1669,100 @@ const StickerTest = () => {
                                 </div>
                               </div>
                             </div>
+                          ) : isLine ? (
+                            <div className="space-y-2 text-xs text-muted-foreground">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <Label className="text-xs">Length (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.5"
+                                    className="h-8"
+                                    value={text.style?.lengthMm ?? 20}
+                                    onChange={(e) =>
+                                      updateTextStyle(text.id, {
+                                        lengthMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
+                                      })
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Thickness (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.1"
+                                    className="h-8"
+                                    value={text.style?.thicknessMm ?? 0.6}
+                                    onChange={(e) =>
+                                      updateTextStyle(text.id, {
+                                        thicknessMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
+                                      })
+                                    }
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-xs">Angle</Label>
+                                  <select
+                                    value={text.angle || 0}
+                                    onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                    className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  >
+                                    {[0, 90, 180, 270].map((deg) => (
+                                      <option key={deg} value={deg}>{deg}°</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <Label className="text-xs">X (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    className="h-8"
+                                    value={text.pos?.x ?? 0}
+                                    onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Y (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    className="h-8"
+                                    value={text.pos?.y ?? 0}
+                                    onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                              </div>
+                            </div>
                           ) : (
                             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                               <div className="flex items-center gap-2">
-                                <Label className="text-xs">Font size (pt)</Label>
+                                <Label className="text-xs">
+                                  Font size (pt){hasMixedFontSize ? ' (mixed)' : ''}
+                                </Label>
                                 <Input
                                   type="number"
                                   min="6"
                                   className="h-8 w-20"
                                   value={text.style?.size || dimensions.fontSize}
                                   onChange={(e) =>
-                                    updateTextStyle(text.id, {
+                                    updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, {
                                       size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize),
                                     })
                                   }
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">Opacity (%)</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="5"
+                                  className="h-8 w-20"
+                                  value={Math.round((text.style?.opacity ?? 1) * 100)}
+                                  onChange={(e) => {
+                                    const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                    updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, { opacity: pct / 100 });
+                                  }}
                                 />
                               </div>
                               <div className="flex items-center gap-1">
@@ -1567,7 +1873,7 @@ const StickerTest = () => {
                               )}
                             </div>
                           )}
-                        </div>
+                      </div>
                     </>
                   );
                 })()}

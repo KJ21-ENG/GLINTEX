@@ -148,7 +148,16 @@ export const substitutePlaceholders = (value = '', data = {}) => {
   });
 };
 
-const getFontScale = (fontSize) => Math.max(1, Math.round(fontSize / 10) || 1);
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)));
+
+// Font size is stored as a "pt-like" number where 10 => scale 1.
+// Use fractional scale to avoid visible jumps (1-14 all mapping to 1, etc.).
+const getFontScale = (fontSize) => {
+  const numeric = Number(fontSize);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 1;
+  return clampNumber(numeric / 10, 0.1, 10);
+};
 
 export const normalizeBlock = (block = {}, fallbackId = 0) => {
   const baseStyle = block.style || {};
@@ -160,6 +169,11 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
     bold: false,
     italic: false,
     underline: false,
+  };
+  const defaultLineStyle = {
+    lengthMm: baseStyle.lengthMm ?? 20,
+    thicknessMm: baseStyle.thicknessMm ?? 0.6,
+    visible: baseStyle.visible ?? true,
   };
 
   return {
@@ -174,11 +188,14 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
     style:
       type === 'barcode'
         ? defaultBarcodeStyle
+        : type === 'line'
+          ? defaultLineStyle
         : {
             size: baseStyle.size ?? 10,
             bold: baseStyle.bold ?? false,
             italic: baseStyle.italic ?? false,
             underline: baseStyle.underline ?? false,
+            opacity: baseStyle.opacity ?? 1,
             background: {
               enabled: baseStyle.background?.enabled ?? false,
               color: baseStyle.background?.color ?? '#000000',
@@ -247,6 +264,7 @@ export const parseReceiveCrateIndex = (barcode) => {
 
 export const buildTspl = (dimensions, content, data = {}) => {
   const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
+  const baseDensity = clampInt(dims.density ?? 8, 0, 15);
   const {
     width,
     height,
@@ -264,7 +282,7 @@ export const buildTspl = (dimensions, content, data = {}) => {
   const lines = [
     `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
     `GAP ${verticalGap.toFixed(2)} mm,0`,
-    'DENSITY 8',
+    `DENSITY ${baseDensity}`,
     'SPEED 4',
     `DIRECTION ${orientation === 'landscape' ? 1 : 0}`,
     'REFERENCE 0,0',
@@ -285,6 +303,17 @@ export const buildTspl = (dimensions, content, data = {}) => {
     fields.forEach((field) => {
       if (field?.style?.visible === false) return;
       const angle = snapAngle(field.angle);
+      if (field.type === 'line') {
+        const lengthMm = Math.max(0.1, Number(field.style?.lengthMm ?? 20));
+        const thicknessMm = Math.max(0.1, Number(field.style?.thicknessMm ?? 0.6));
+        const horizontal = angle === 0 || angle === 180;
+        const x = mmToDots(columnOffset + (field.pos?.x || 0));
+        const y = mmToDots(baseY + (field.pos?.y || 0));
+        const barW = Math.max(1, mmToDots(horizontal ? lengthMm : thicknessMm));
+        const barH = Math.max(1, mmToDots(horizontal ? thicknessMm : lengthMm));
+        lines.push(`BAR ${x},${y},${barW},${barH}`);
+        return;
+      }
       const valueRaw = field.value ?? '';
       const substituted = substitutePlaceholders(valueRaw, data);
       const finalValue = field.type === 'barcode' ? substituted || data.barcode || '' : substituted;
@@ -308,9 +337,21 @@ export const buildTspl = (dimensions, content, data = {}) => {
 
       const style = field.style || {};
       const fieldScale = getFontScale(style.size || dims.fontSize);
-      const effectiveScale = fieldScale;
+      let tsplFont = field.font;
+      let tsplScale = fieldScale;
+      if (tsplScale < 1) {
+        tsplFont = '1'; // font 1 is half the size of font 3
+        tsplScale *= 2;
+      }
+      if (tsplScale < 1) tsplScale = 1;
       const x = mmToDots(columnOffset + (field.pos?.x || 0));
       const y = mmToDots(baseY + (field.pos?.y || 0));
+      const opacity = clampNumber(Number(style.opacity ?? 1), 0, 1);
+      if (opacity <= 0) return;
+      const elementDensity = opacity < 1 ? Math.max(1, clampInt(baseDensity * opacity, 0, 15)) : baseDensity;
+      if (elementDensity !== baseDensity) {
+        lines.push(`DENSITY ${elementDensity}`);
+      }
       const paddingMm = style.background?.paddingMm ?? 0.8;
       const charHeightMm = 3 * fieldScale;
       const charWidthMm = 2 * fieldScale;
@@ -341,21 +382,35 @@ export const buildTspl = (dimensions, content, data = {}) => {
         boxHmm = boxWidthMm;
       }
 
-      const boxX = mmToDots(boxLeftMm);
-      const boxY = mmToDots(boxTopMm);
-      const boxW = Math.max(1, mmToDots(boxWmm));
-      const boxH = Math.max(1, mmToDots(boxHmm));
+      let boxX = mmToDots(boxLeftMm);
+      let boxY = mmToDots(boxTopMm);
+      let boxW = Math.max(1, mmToDots(boxWmm));
+      let boxH = Math.max(1, mmToDots(boxHmm));
+      if (boxX < 0) {
+        boxW = Math.max(1, boxW + boxX);
+        boxX = 0;
+      }
+      if (boxY < 0) {
+        boxH = Math.max(1, boxH + boxY);
+        boxY = 0;
+      }
+      if (style.background?.enabled) {
+        boxW = Math.max(1, boxW + 2);
+        boxH = Math.max(1, boxH + 2);
+      }
 
       lines.push(`SETBOLD ${style.bold ? 3 : 0}`);
       lines.push(style.underline ? 'UNDERLINE ON' : 'UNDERLINE OFF');
-      const textLine = `TEXT ${x},${y},"${field.font}",${angle},${effectiveScale},${effectiveScale},"${sanitizeText(
+      const textLine = `TEXT ${x},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(
         finalValue,
       )}"`;
       lines.push(textLine);
       if (style.underline) {
         const textLen = Math.max(1, sanitizeText(finalValue).length);
-        const lineWidth = Math.max(16 * effectiveScale, Math.round(textLen * 16 * effectiveScale));
-        const underlineY = y + Math.round(24 * effectiveScale) + 4;
+        const charWidthDots = Math.max(1, Math.round(16 * fieldScale));
+        const charHeightDots = Math.max(1, Math.round(24 * fieldScale));
+        const lineWidth = Math.max(1, Math.round(textLen * charWidthDots));
+        const underlineY = y + charHeightDots + 4;
         lines.push(`BAR ${x},${underlineY},${lineWidth},2`);
       }
       if (style.background?.enabled) {
@@ -363,6 +418,9 @@ export const buildTspl = (dimensions, content, data = {}) => {
       }
       lines.push('UNDERLINE OFF');
       lines.push('SETBOLD 0');
+      if (elementDensity !== baseDensity) {
+        lines.push(`DENSITY ${baseDensity}`);
+      }
     });
   }
 
@@ -495,4 +553,3 @@ export default {
   deriveMaterialCodeFromItem,
   getStageVariables,
 };
-

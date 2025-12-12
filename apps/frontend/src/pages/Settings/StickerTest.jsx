@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Copy, FileCode2, Printer, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Copy, FileCode2, Info, Printer, RefreshCw } from 'lucide-react';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../../components/ui';
 import {
   DEFAULT_DIMENSIONS,
@@ -626,22 +626,140 @@ const LabelPreview = ({
   );
 };
 
+const VariablesPopover = ({ variables }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const closeTimeoutRef = useRef(null);
+
+  const handleMouseEnter = () => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    setIsOpen(true);
+  };
+
+  const handleMouseLeave = () => {
+    closeTimeoutRef.current = setTimeout(() => {
+      setIsOpen(false);
+    }, 150);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    };
+  }, []);
+
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 rounded-full hover:bg-muted"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isOpen) handleMouseEnter();
+          else setIsOpen(false);
+        }}
+      >
+        <Info className="h-4 w-4 text-primary" />
+      </Button>
+
+      {isOpen && (
+        <div
+          className="absolute left-0 top-full mt-2 z-50 w-64 rounded-md border bg-popover p-3 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="max-h-[200px] overflow-y-auto text-xs space-y-1">
+            {variables.length === 0 ? (
+              <div className="text-muted-foreground">No variables for this stage.</div>
+            ) : (
+              variables.map((v) => (
+                <div key={v.key} className="flex justify-between border-b last:border-0 py-1">
+                  <span className="font-mono text-[11px]">@{v.key}</span>
+                  <span className="text-muted-foreground">{v.label}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const HelpPopover = ({ text }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const closeTimeoutRef = useRef(null);
+
+  const handleMouseEnter = () => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    setIsOpen(true);
+  };
+
+  const handleMouseLeave = () => {
+    closeTimeoutRef.current = setTimeout(() => {
+      setIsOpen(false);
+    }, 150);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    };
+  }, []);
+
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 rounded-full hover:bg-muted"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isOpen) handleMouseEnter();
+          else setIsOpen(false);
+        }}
+      >
+        <Info className="h-4 w-4 text-primary" />
+      </Button>
+
+      {isOpen && (
+        <div
+          className="absolute left-0 top-full mt-2 z-50 w-72 rounded-md border bg-popover p-3 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="text-xs text-muted-foreground">{text}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const StickerTest = () => {
   const navigate = useNavigate();
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState(() => getPreferredPrinter() || '');
   const [serviceStatus, setServiceStatus] = useState({ state: 'idle', message: 'Idle', tone: 'muted' });
-  const [dimensions, setDimensions] = useState(() => {
-    const saved = localStorage.getItem('stickerDimensions');
-    return saved ? { ...DEFAULT_DIMENSIONS, ...JSON.parse(saved) } : { ...DEFAULT_DIMENSIONS };
-  });
-  const [content, setContent] = useState(() => {
-    const saved = localStorage.getItem('stickerContent');
-    return migrateContent(saved ? JSON.parse(saved) : null);
-  });
+  const defaultStage = LABEL_STAGE_KEYS.INBOUND;
+  const initialTemplate = loadTemplate(defaultStage);
+  const [dimensions, setDimensions] = useState(() => initialTemplate?.dimensions || { ...DEFAULT_DIMENSIONS });
+  const [content, setContent] = useState(() => initialTemplate?.content || { ...DEFAULT_CONTENT });
   const [selectedIds, setSelectedIds] = useState([]);
-  const [templateStage, setTemplateStage] = useState(LABEL_STAGE_KEYS.INBOUND);
+  const [templateStage, setTemplateStage] = useState(defaultStage);
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [tsplExpanded, setTsplExpanded] = useState(false);
   const [clipboard, setClipboard] = useState([]);
   const [lastCommand, setLastCommand] = useState('');
   const undoStack = useRef([]);
@@ -714,6 +832,20 @@ const StickerTest = () => {
   }, [performUndo, performRedo]);
 
   useEffect(() => {
+    const tpl = loadTemplate(templateStage);
+    if (tpl) {
+      setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
+      setContent(migrateContent(tpl.content || tpl));
+    } else {
+      setDimensions({ ...DEFAULT_DIMENSIONS });
+      setContent({ ...DEFAULT_CONTENT });
+    }
+    setSelectedIds([]);
+    undoStack.current = [];
+    redoStack.current = [];
+  }, [templateStage]);
+
+  useEffect(() => {
     const handleUndoRedo = (e) => {
       const targetTag = (e.target && e.target.tagName) || '';
       if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(targetTag) || e.target?.isContentEditable) return;
@@ -772,39 +904,6 @@ const StickerTest = () => {
   const handleSaveTemplateStage = () => {
     saveTemplate(templateStage, { dimensions, content });
     alert(`Template saved for ${templateStage}`);
-  };
-
-  const handleLoadTemplateStage = () => {
-    const tpl = loadTemplate(templateStage);
-    if (!tpl) {
-      alert('No template saved for this stage yet.');
-      return;
-    }
-    setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
-    setContent(migrateContent(tpl.content || tpl));
-    setSelectedIds([]);
-  };
-
-  const handleExportTemplate = async () => {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify({ dimensions, content }, null, 2));
-      alert('Template copied to clipboard');
-    } catch (e) {
-      alert('Unable to copy template JSON');
-    }
-  };
-
-  const handleImportTemplate = () => {
-    const raw = window.prompt('Paste template JSON');
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      setDimensions({ ...DEFAULT_DIMENSIONS, ...(parsed.dimensions || parsed?.layout || {}) });
-      setContent(migrateContent(parsed.content || parsed));
-      setSelectedIds([]);
-    } catch (e) {
-      alert('Invalid template JSON');
-    }
   };
 
   const addTextBlock = () => {
@@ -974,18 +1073,6 @@ const StickerTest = () => {
     }
   };
 
-  const handleReset = () => {
-    setDimensions({ ...DEFAULT_DIMENSIONS });
-    setContent({ ...DEFAULT_CONTENT });
-    setLastCommand('');
-  };
-
-  const statusToneClass = serviceStatus.tone === 'success'
-    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-    : serviceStatus.tone === 'error'
-      ? 'bg-red-50 text-red-700 border-red-200'
-      : 'bg-slate-50 text-slate-600 border-slate-200';
-
   const stageOptions = [
     { value: LABEL_STAGE_KEYS.INBOUND, label: 'Inbound' },
     { value: LABEL_STAGE_KEYS.CUTTER_ISSUE, label: 'Issue to machine (cutter)' },
@@ -1006,30 +1093,35 @@ const StickerTest = () => {
         <Badge variant="outline" className="ml-auto">Silent printing via local service</Badge>
       </div>
 
-      <div className={`rounded-lg border ${statusToneClass} px-4 py-3 flex items-center gap-3`}>
-        <Printer className="w-5 h-5" />
-        <div className="flex flex-col">
-          <span className="font-medium capitalize">{serviceStatus.state}</span>
-          <span className="text-sm">{serviceStatus.message}</span>
-        </div>
-        <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" onClick={fetchPrinters}>
-            <RefreshCw className="w-4 h-4 mr-1" /> Refresh printers
+      <Card className="shadow-sm">
+        <CardContent className="py-4 flex items-center gap-3 flex-wrap">
+          <Label className="text-sm font-medium">Stage</Label>
+          <select
+            value={templateStage}
+            onChange={(e) => setTemplateStage(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {stageOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" onClick={handleSaveTemplateStage}>
+            Save
           </Button>
-          <Button size="sm" variant="outline" onClick={handleReset}>
-            <SlidersHorizontal className="w-4 h-4 mr-1" /> Reset
-          </Button>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 xl:grid-cols-[360px,1fr] gap-4">
         <Card className="shadow-sm">
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg">Printer & Layout</CardTitle>
+            <CardTitle className="text-lg">Layout</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Target printer</Label>
+              <div className="flex items-center gap-1">
+                <Label className="text-sm font-medium">Target printer</Label>
+                <HelpPopover text="Local print service: http://localhost:9090 (apps/local-print-service/server.js)" />
+              </div>
               <div className="flex gap-2">
                 <select
                   value={selectedPrinter}
@@ -1045,7 +1137,6 @@ const StickerTest = () => {
                   <RefreshCw className="w-4 h-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">Local print service: http://localhost:9090 (apps/local-print-service/server.js)</p>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -1154,73 +1245,12 @@ const StickerTest = () => {
               </div>
             </div>
 
-            <div className="pt-2 border-t border-dashed space-y-2">
-              <Label className="text-sm font-medium">Stage template</Label>
-              <div className="flex flex-wrap gap-2">
-                <select
-                  value={templateStage}
-                  onChange={(e) => setTemplateStage(e.target.value)}
-                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {stageOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-                <Button size="sm" variant="outline" onClick={handleLoadTemplateStage}>Load</Button>
-                <Button size="sm" variant="outline" onClick={handleSaveTemplateStage}>Save</Button>
-                <Button size="sm" variant="ghost" onClick={handleExportTemplate}>Copy JSON</Button>
-                <Button size="sm" variant="ghost" onClick={handleImportTemplate}>Import</Button>
-              </div>
-              <p className="text-xs text-muted-foreground">Templates are saved locally per stage and reused by app flows.</p>
-            </div>
-
-            <div className="pt-2 border-t border-dashed space-y-1">
-              <div className="text-sm font-medium">Variables (read-only)</div>
-              <div className="text-xs text-muted-foreground">
-                {'Type @varName in text or {{varName}} inside text/barcode value. Barcode defaults to {{barcode}} and always shows the value underneath.'}
-              </div>
-              <div className="border rounded-md bg-slate-50 p-2 max-h-48 overflow-auto">
-                {stageVariables.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No variables for this stage.</div>
-                ) : (
-                  <ul className="text-xs space-y-1">
-                    {stageVariables.map((v) => (
-                      <li key={v.key} className="flex justify-between">
-                        <span className="font-mono text-[11px]">@{v.key}</span>
-                        <span className="text-muted-foreground">{v.label}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-
             <div className="pt-2 border-t border-dashed">
-              <Label>Copies</Label>
-              <Input
-                type="number"
-                min="1"
-                value={content.copies}
-                onChange={(e) => updateContent('copies', Math.max(1, parseInt(e.target.value, 10) || 1))}
-              />
-            </div>
-
-            <Button className="w-full" onClick={handlePrint}>
-              <Printer className="w-4 h-4 mr-2" /> Send to printer
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-lg">Content & Preview</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="text-xs text-muted-foreground">
-                Click a text in the preview to edit. Only the selected text is shown here.
-              </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1 text-sm font-medium">
+                  Variables (read-only)
+                  <VariablesPopover variables={stageVariables} />
+                </div>
                 <Button
                   size="sm"
                   variant={snapEnabled ? 'default' : 'outline'}
@@ -1229,26 +1259,39 @@ const StickerTest = () => {
                 >
                   Snap {snapEnabled ? 'On' : 'Off'}
                 </Button>
-                <Button size="sm" onClick={addTextBlock}>
-                  + Add text
-                </Button>
-                <Button size="sm" variant="outline" onClick={addBarcodeBlock}>
-                  + Add barcode
-                </Button>
-                {selectedIds.length > 0 && (
-                  <Badge variant="outline" className="text-xs">
-                    Selected: {selectedIds[0]}{selectedIds.length > 1 ? ` (+${selectedIds.length - 1})` : ''}
-                  </Badge>
-                )}
               </div>
             </div>
 
-            {(!content.texts || content.texts.length === 0) && (
-              <div className="border border-dashed rounded-lg p-4 text-sm text-muted-foreground">
-                No text yet. Click “Add text” then click it in the preview to edit.
+            <div className="pt-2 border-t border-dashed flex items-end gap-4">
+              <div className="flex-1">
+                <Label>Copies</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={content.copies}
+                  onChange={(e) => updateContent('copies', Math.max(1, parseInt(e.target.value, 10) || 1))}
+                />
               </div>
-            )}
+              <Button onClick={handlePrint}>
+                <Printer className="w-4 h-4 mr-2" /> Send to printer
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
+        <Card className="shadow-sm">
+          <CardHeader className="pb-4 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-lg">Content & Preview</CardTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={addTextBlock}>
+                + Add text
+              </Button>
+              <Button size="sm" variant="outline" onClick={addBarcodeBlock}>
+                + Add barcode
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
             {selectedIds.length > 0 && (
               <div className="border border-dashed rounded-lg p-4 space-y-3">
                 {(() => {
@@ -1258,240 +1301,273 @@ const StickerTest = () => {
                   const isBarcode = text.type === 'barcode';
                   return (
                     <>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold">Editing: {text.id}</p>
-                          <Badge variant="outline" className="text-[11px]">
-                            {isBarcode ? 'Barcode' : 'Text'}
-                          </Badge>
-                          <Badge variant="outline" className="text-[11px]">X: {text.pos?.x ?? 0}mm · Y: {text.pos?.y ?? 0}mm</Badge>
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 relative">
+                          <Input
+                            ref={inputRef}
+                            value={text.value}
+                            onChange={(e) =>
+                              handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)
+                            }
+                            onSelect={(e) =>
+                              handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)
+                            }
+                            onKeyDown={(e) => {
+                              if (!mention.open) return;
+                              const filtered = stageVariables.filter((v) =>
+                                mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                              );
+                              if (filtered.length === 0) return;
+                              if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
+                                e.preventDefault();
+                              }
+                              if (e.key === 'ArrowDown') {
+                                setMentionIndex((prev) => (prev + 1) % filtered.length);
+                              } else if (e.key === 'ArrowUp') {
+                                setMentionIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+                              } else if (e.key === 'Enter' || e.key === 'Tab') {
+                                const pick = filtered[mentionIndex] || filtered[0];
+                                if (pick) applyMention(text.id, pick.key);
+                              } else if (e.key === 'Escape') {
+                                closeMention();
+                              }
+                            }}
+                            placeholder="Enter text"
+                          />
+                          {mention.open && mention.targetId === text.id && (
+                            <div className="absolute z-10 mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg">
+                              <div className="max-h-48 overflow-auto text-sm">
+                                {stageVariables
+                                  .filter((v) =>
+                                    mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                  )
+                                  .map((v, idx) => (
+                                    <button
+                                      key={v.key}
+                                      type="button"
+                                      className={`w-full text-left px-3 py-2 flex items-center justify-between ${
+                                        idx === mentionIndex ? 'bg-indigo-50' : ''
+                                      }`}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        applyMention(text.id, v.key);
+                                      }}
+                                    >
+                                      <span className="font-mono text-xs">@{v.key}</span>
+                                      <span className="text-xs text-muted-foreground">{v.label}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <Button size="sm" variant="destructive" onClick={() => removeText(text.id)}>
                           Remove
                         </Button>
-                      </div>
-                      <Input
-                        ref={inputRef}
-                        value={text.value}
-                        onChange={(e) => handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)}
-                        onSelect={(e) => handleValueChange(text.id, e.target.value, e.target.selectionStart || e.target.value.length)}
-                        onKeyDown={(e) => {
-                          if (!mention.open) return;
-                          const filtered = stageVariables.filter((v) =>
-                            mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
-                          );
-                          if (filtered.length === 0) return;
-                          if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
-                            e.preventDefault();
-                          }
-                          if (e.key === 'ArrowDown') {
-                            setMentionIndex((prev) => (prev + 1) % filtered.length);
-                          } else if (e.key === 'ArrowUp') {
-                            setMentionIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
-                          } else if (e.key === 'Enter' || e.key === 'Tab') {
-                            const pick = filtered[mentionIndex] || filtered[0];
-                            if (pick) applyMention(text.id, pick.key);
-                          } else if (e.key === 'Escape') {
-                            closeMention();
-                          }
-                        }}
-                        placeholder="Enter text"
-                      />
-                      {mention.open && mention.targetId === text.id && (
-                        <div className="relative">
-                          <div className="absolute z-10 mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg">
-                            <div className="max-h-48 overflow-auto text-sm">
-                              {stageVariables
-                                .filter((v) =>
-                                  mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
-                                )
-                                .map((v, idx) => (
-                                  <button
-                                    key={v.key}
-                                    type="button"
-                                    className={`w-full text-left px-3 py-2 flex items-center justify-between ${
-                                      idx === mentionIndex ? 'bg-indigo-50' : ''
-                                    }`}
-                                    onMouseDown={(e) => {
-                                      e.preventDefault();
-                                      applyMention(text.id, v.key);
-                                    }}
+                        </div>
+                        <div className="max-h-[30vh] overflow-y-auto pr-1 space-y-3">
+                          {isBarcode ? (
+                            <div className="space-y-2 text-xs text-muted-foreground">
+                              <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <Label className="text-xs">Height (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.5"
+                                    className="h-8"
+                                    value={text.style?.heightMm ?? 12}
+                                    onChange={(e) =>
+                                      updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Module width (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.05"
+                                    className="h-8"
+                                    value={text.style?.moduleMm ?? 0.3}
+                                    onChange={(e) =>
+                                      updateTextStyle(text.id, {
+                                        moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3),
+                                      })
+                                    }
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-xs">Human readable</Label>
+                                  <Button
+                                    size="sm"
+                                    variant={text.style?.humanReadable === false ? 'outline' : 'default'}
+                                    className="h-8"
+                                    onClick={() =>
+                                      updateTextStyle(text.id, {
+                                        humanReadable: text.style?.humanReadable === false ? true : false,
+                                      })
+                                    }
                                   >
-                                    <span className="font-mono text-xs">@{v.key}</span>
-                                    <span className="text-xs text-muted-foreground">{v.label}</span>
-                                  </button>
-                                ))}
+                                    {text.style?.humanReadable === false ? 'Off' : 'On'}
+                                  </Button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-xs">Angle</Label>
+                                  <select
+                                    value={text.angle || 0}
+                                    onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                    className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  >
+                                    {[0, 90, 180, 270].map((deg) => (
+                                      <option key={deg} value={deg}>{deg}°</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <Label className="text-xs">X (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    className="h-8"
+                                    value={text.pos?.x ?? 0}
+                                    onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Y (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    className="h-8"
+                                    value={text.pos?.y ?? 0}
+                                    onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      )}
-                      {isBarcode ? (
-                        <div className="space-y-2 text-xs text-muted-foreground">
-                          <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <Label className="text-xs">Height (mm)</Label>
-                              <Input
-                                type="number"
-                                step="0.5"
-                                className="h-8"
-                                value={text.style?.heightMm ?? 12}
-                                onChange={(e) => updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })}
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs">Module width (mm)</Label>
-                              <Input
-                                type="number"
-                                step="0.05"
-                                className="h-8"
-                                value={text.style?.moduleMm ?? 0.3}
-                                onChange={(e) => updateTextStyle(text.id, { moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3) })}
-                              />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Label className="text-xs">Human readable</Label>
-                              <Button
-                                size="sm"
-                                variant={text.style?.humanReadable === false ? 'outline' : 'default'}
-                                className="h-8"
-                                onClick={() => updateTextStyle(text.id, { humanReadable: text.style?.humanReadable === false ? true : false })}
-                              >
-                                {text.style?.humanReadable === false ? 'Off' : 'On'}
-                              </Button>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Label className="text-xs">Angle</Label>
-                              <select
-                                value={text.angle || 0}
-                                onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
-                                className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              >
-                                {[0, 90, 180, 270].map((deg) => (
-                                  <option key={deg} value={deg}>{deg}°</option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                          <Label className="text-xs">Font size (pt)</Label>
-                          <Input
-                            type="number"
-                            min="6"
-                            className="h-8 w-20"
-                            value={text.style?.size || dimensions.fontSize}
-                            onChange={(e) => updateTextStyle(text.id, { size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize) })}
-                          />
-                          <div className="flex gap-1 ml-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={text.style?.bold ? 'default' : 'outline'}
-                              className="h-8"
-                              onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
-                            >
-                              B
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={text.style?.italic ? 'default' : 'outline'}
-                              className="h-8"
-                              onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
-                            >
-                              I
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={text.style?.underline ? 'default' : 'outline'}
-                              className="h-8"
-                              onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
-                            >
-                              U
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={text.style?.background?.enabled ? 'default' : 'outline'}
-                              className="h-8"
-                              onClick={() => {
-                                const nextEnabled = !text.style?.background?.enabled;
-                                updateTextBackground(text.id, {
-                                  enabled: nextEnabled,
-                                  color: text.style?.background?.color || '#000000',
-                                  textColor: text.style?.background?.textColor || '#ffffff',
-                                  paddingMm: text.style?.background?.paddingMm ?? 0.8,
-                                });
-                              }}
-                            >
-                              BG
-                            </Button>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            <Label className="text-xs">Angle</Label>
-                            <select
-                              value={text.angle || 0}
-                              onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
-                              className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            >
-                              {[0, 90, 180, 270].map((deg) => (
-                                <option key={deg} value={deg}>{deg}°</option>
-                              ))}
-                            </select>
-                          </div>
-                          {text.style?.background?.enabled && (
-                            <div className="flex flex-wrap items-center gap-2 mt-2">
-                              <Label className="text-xs">BG color</Label>
-                              <input
-                                type="color"
-                                value={text.style?.background?.color || '#000000'}
-                                onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
-                                className="h-8 w-10 border rounded cursor-pointer"
-                              />
-                              <Label className="text-xs ml-2">Text color</Label>
-                              <input
-                                type="color"
-                                value={text.style?.background?.textColor || '#ffffff'}
-                                onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
-                                className="h-8 w-10 border rounded cursor-pointer"
-                              />
-                              <Label className="text-xs ml-2">Padding (mm)</Label>
-                              <Input
-                                type="number"
-                                step="0.1"
-                                className="h-8 w-20"
-                                value={text.style?.background?.paddingMm ?? 0.8}
-                                onChange={(e) =>
-                                  updateTextBackground(text.id, {
-                                    paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
-                                  })
-                                }
-                              />
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">Font size (pt)</Label>
+                                <Input
+                                  type="number"
+                                  min="6"
+                                  className="h-8 w-20"
+                                  value={text.style?.size || dimensions.fontSize}
+                                  onChange={(e) =>
+                                    updateTextStyle(text.id, {
+                                      size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize),
+                                    })
+                                  }
+                                />
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={text.style?.bold ? 'default' : 'outline'}
+                                  className="h-8"
+                                  onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
+                                >
+                                  B
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={text.style?.italic ? 'default' : 'outline'}
+                                  className="h-8"
+                                  onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
+                                >
+                                  I
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={text.style?.underline ? 'default' : 'outline'}
+                                  className="h-8"
+                                  onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
+                                >
+                                  U
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={text.style?.background?.enabled ? 'default' : 'outline'}
+                                  className="h-8"
+                                  onClick={() => {
+                                    const nextEnabled = !text.style?.background?.enabled;
+                                    updateTextBackground(text.id, {
+                                      enabled: nextEnabled,
+                                      color: text.style?.background?.color || '#000000',
+                                      textColor: text.style?.background?.textColor || '#ffffff',
+                                      paddingMm: text.style?.background?.paddingMm ?? 0.8,
+                                    });
+                                  }}
+                                >
+                                  BG
+                                </Button>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">Angle</Label>
+                                <select
+                                  value={text.angle || 0}
+                                  onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                  className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  {[0, 90, 180, 270].map((deg) => (
+                                    <option key={deg} value={deg}>{deg}°</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">X (mm)</Label>
+                                <Input
+                                  type="number"
+                                  className="h-8 w-20"
+                                  value={text.pos?.x ?? 0}
+                                  onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">Y (mm)</Label>
+                                <Input
+                                  type="number"
+                                  className="h-8 w-20"
+                                  value={text.pos?.y ?? 0}
+                                  onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
+                                />
+                              </div>
+                              {text.style?.background?.enabled && (
+                                <div className="flex flex-wrap items-center gap-2 mt-2 w-full">
+                                  <Label className="text-xs">BG color</Label>
+                                  <input
+                                    type="color"
+                                    value={text.style?.background?.color || '#000000'}
+                                    onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
+                                    className="h-8 w-10 border rounded cursor-pointer"
+                                  />
+                                  <Label className="text-xs ml-2">Text color</Label>
+                                  <input
+                                    type="color"
+                                    value={text.style?.background?.textColor || '#ffffff'}
+                                    onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
+                                    className="h-8 w-10 border rounded cursor-pointer"
+                                  />
+                                  <Label className="text-xs ml-2">Padding (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.1"
+                                    className="h-8 w-20"
+                                    value={text.style?.background?.paddingMm ?? 0.8}
+                                    onChange={(e) =>
+                                      updateTextBackground(text.id, {
+                                        paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
+                                      })
+                                    }
+                                  />
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
-                      )}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label className="text-xs">X (mm)</Label>
-                          <Input
-                            type="number"
-                            value={text.pos?.x ?? 0}
-                            onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
-                          />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Y (mm)</Label>
-                          <Input
-                            type="number"
-                            value={text.pos?.y ?? 0}
-                            onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
-                          />
-                        </div>
-                      </div>
                     </>
                   );
                 })()}
@@ -1512,24 +1588,37 @@ const StickerTest = () => {
             />
 
             <div className="border rounded-lg bg-slate-50 p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-sm font-medium">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between text-sm font-medium"
+                onClick={() => setTsplExpanded((prev) => !prev)}
+              >
+                <div className="flex items-center gap-2">
                   <FileCode2 className="w-4 h-4" /> Generated TSPL (sent to local service)
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    navigator.clipboard.writeText(lastCommand || buildTspl(dimensions, content));
-                  }}
-                >
-                  <Copy className="w-4 h-4 mr-1" /> Copy
-                </Button>
-              </div>
-              <pre className="text-[11px] bg-white border rounded p-3 overflow-auto max-h-48 leading-relaxed">
-                {lastCommand || buildTspl(dimensions, content)}
-              </pre>
-              <p className="text-xs text-muted-foreground">This is sent as a raw job to http://localhost:9090/print for silent printing.</p>
+                <ChevronDown className={`w-4 h-4 transition-transform ${tsplExpanded ? 'rotate-180' : ''}`} />
+              </button>
+              {tsplExpanded && (
+                <>
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        navigator.clipboard.writeText(lastCommand || buildTspl(dimensions, content));
+                      }}
+                    >
+                      <Copy className="w-4 h-4 mr-1" /> Copy
+                    </Button>
+                  </div>
+                  <pre className="text-[11px] bg-white border rounded p-3 overflow-auto max-h-48 leading-relaxed">
+                    {lastCommand || buildTspl(dimensions, content)}
+                  </pre>
+                  <p className="text-xs text-muted-foreground">
+                    This is sent as a raw job to http://localhost:9090/print for silent printing.
+                  </p>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>

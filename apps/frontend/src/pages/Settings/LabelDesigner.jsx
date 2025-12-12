@@ -1902,7 +1902,7 @@ const LabelDesigner = () => {
               setClipboard={setClipboard}
             />
 
-            <div className="border rounded-lg bg-slate-50 p-4 space-y-2">
+            <div className="border rounded-lg bg-card p-4 space-y-2">
               <button
                 type="button"
                 className="w-full flex items-center justify-between text-sm font-medium"
@@ -1926,7 +1926,7 @@ const LabelDesigner = () => {
                       <Copy className="w-4 h-4 mr-1" /> Copy
                     </Button>
                   </div>
-                  <pre className="text-[11px] bg-white border rounded p-3 overflow-auto max-h-48 leading-relaxed">
+                  <pre className="text-[11px] bg-muted border rounded p-3 overflow-auto max-h-48 leading-relaxed">
                     {lastCommand || buildTspl(dimensions, content)}
                   </pre>
                   <p className="text-xs text-muted-foreground">

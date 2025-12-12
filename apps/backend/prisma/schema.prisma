@@ -177,6 +177,15 @@ model Wrapper {
   createdAt DateTime @default(now())
 }
 
+model StickerTemplate {
+  id         String   @id @default(cuid())
+  stageKey   String   @unique
+  dimensions Json
+  content    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 model IssueToConingMachine {
   id              String   @id @default(cuid())
   date            String

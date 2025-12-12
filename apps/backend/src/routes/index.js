@@ -672,6 +672,50 @@ router.get('/api/whatsapp/templates', async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
+// Sticker template endpoints (shared across all users)
+router.get('/api/sticker_templates', async (req, res) => {
+  try {
+    const templates = await prisma.stickerTemplate.findMany({ orderBy: { stageKey: 'asc' } });
+    res.json({ templates });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.get('/api/sticker_templates/:stageKey', async (req, res) => {
+  try {
+    const stageKey = String(req.params.stageKey || '').trim();
+    if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });
+    const template = await prisma.stickerTemplate.findUnique({ where: { stageKey } });
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+    res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.put('/api/sticker_templates/:stageKey', async (req, res) => {
+  try {
+    const stageKey = String(req.params.stageKey || '').trim();
+    if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });
+    const dimensions = req.body?.dimensions;
+    const content = req.body?.content;
+    if (!dimensions || typeof dimensions !== 'object') return res.status(400).json({ error: 'dimensions must be an object' });
+    if (!content || typeof content !== 'object') return res.status(400).json({ error: 'content must be an object' });
+
+    const template = await prisma.stickerTemplate.upsert({
+      where: { stageKey },
+      update: { dimensions, content },
+      create: { stageKey, dimensions, content },
+    });
+
+    await logCrud({ entityType: 'StickerTemplate', entityId: template.id, action: 'upsert', payload: { stageKey } });
+    res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 router.put('/api/whatsapp/templates/:event', async (req, res) => {
   try {
     const { event } = req.params;

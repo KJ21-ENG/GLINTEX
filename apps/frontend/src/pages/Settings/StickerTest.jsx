@@ -935,9 +935,8 @@ const StickerTest = () => {
   const [selectedPrinter, setSelectedPrinter] = useState(() => getPreferredPrinter() || '');
   const [serviceStatus, setServiceStatus] = useState({ state: 'idle', message: 'Idle', tone: 'muted' });
   const defaultStage = LABEL_STAGE_KEYS.INBOUND;
-  const initialTemplate = loadTemplate(defaultStage);
-  const [dimensions, setDimensions] = useState(() => initialTemplate?.dimensions || { ...DEFAULT_DIMENSIONS });
-  const [content, setContent] = useState(() => initialTemplate?.content || { ...DEFAULT_CONTENT });
+  const [dimensions, setDimensions] = useState(() => ({ ...DEFAULT_DIMENSIONS }));
+  const [content, setContent] = useState(() => ({ ...DEFAULT_CONTENT }));
   const [selectedIds, setSelectedIds] = useState([]);
   const [templateStage, setTemplateStage] = useState(defaultStage);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -998,14 +997,6 @@ const StickerTest = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('stickerDimensions', JSON.stringify(dimensions));
-  }, [dimensions]);
-
-  useEffect(() => {
-    localStorage.setItem('stickerContent', JSON.stringify(content));
-  }, [content]);
-
-  useEffect(() => {
     setPreferredPrinter(selectedPrinter || '');
   }, [selectedPrinter]);
 
@@ -1014,17 +1005,22 @@ const StickerTest = () => {
   }, [performUndo, performRedo]);
 
   useEffect(() => {
-    const tpl = loadTemplate(templateStage);
-    if (tpl) {
-      setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
-      setContent(migrateContent(tpl.content || tpl));
-    } else {
-      setDimensions({ ...DEFAULT_DIMENSIONS });
-      setContent({ ...DEFAULT_CONTENT });
-    }
-    setSelectedIds([]);
-    undoStack.current = [];
-    redoStack.current = [];
+    let cancelled = false;
+    (async () => {
+      const tpl = await loadTemplate(templateStage);
+      if (cancelled) return;
+      if (tpl) {
+        setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
+        setContent(migrateContent(tpl.content || tpl));
+      } else {
+        setDimensions({ ...DEFAULT_DIMENSIONS });
+        setContent({ ...DEFAULT_CONTENT });
+      }
+      setSelectedIds([]);
+      undoStack.current = [];
+      redoStack.current = [];
+    })();
+    return () => { cancelled = true; };
   }, [templateStage]);
 
   useEffect(() => {
@@ -1083,9 +1079,10 @@ const StickerTest = () => {
     setContentWithHistory((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSaveTemplateStage = () => {
-    saveTemplate(templateStage, { dimensions, content });
-    alert(`Template saved for ${templateStage}`);
+  const handleSaveTemplateStage = async () => {
+    const result = await saveTemplate(templateStage, { dimensions, content });
+    if (result?.success) alert(`Template saved for ${templateStage}`);
+    else alert(result?.error || 'Failed to save template');
   };
 
   const addTextBlock = () => {

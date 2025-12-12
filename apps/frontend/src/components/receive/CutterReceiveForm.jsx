@@ -128,7 +128,7 @@ export function CutterReceiveForm() {
             boxName: selectedBox?.name
         }]);
 
-        const template = loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+        const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
         if (template && receiveBarcode) {
             const confirmPrint = window.confirm('Print sticker for this crate?');
             if (confirmPrint) {

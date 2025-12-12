@@ -102,9 +102,28 @@ export const STAGE_VARIABLES = {
 
 export const getStageVariables = (stage) => STAGE_VARIABLES[stage] || [];
 
-const TEMPLATE_KEY = (stage) => `stickerTemplate:${stage}`;
-const LEGACY_DIM_KEY = 'stickerDimensions';
-const LEGACY_CONTENT_KEY = 'stickerContent';
+const getApiOrigin = () => {
+  if (import.meta?.env?.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
+  if (typeof window !== 'undefined' && window.location) {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+  return 'http://localhost:4000';
+};
+
+const API_BASE_DEFAULT = `${getApiOrigin()}/api`;
+
+const safeReadJson = async (response) => {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const err = new Error('Invalid JSON response');
+    err.cause = e;
+    err.raw = raw;
+    throw err;
+  }
+};
 
 export const DEFAULT_DIMENSIONS = {
   width: 48,
@@ -434,45 +453,46 @@ export const buildTsplFromTemplate = (template = {}, data = {}) => {
   return buildTspl(dimensions, content, data);
 };
 
-export const loadTemplate = (stageKey) => {
-  if (!stageKey || typeof window === 'undefined') return null;
+export const loadTemplate = async (stageKey, options = {}) => {
+  const apiBase = options.apiBase || API_BASE_DEFAULT;
+  if (!stageKey) return null;
   try {
-    const raw = window.localStorage.getItem(TEMPLATE_KEY(stageKey));
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        dimensions: { ...DEFAULT_DIMENSIONS, ...(parsed.dimensions || {}) },
-        content: migrateContent(parsed.content || parsed),
-      };
-    }
+    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`);
+    if (response.status === 404) return null;
+    const payload = await safeReadJson(response);
+    const tpl = payload?.template;
+    if (!tpl) return null;
+    return {
+      dimensions: { ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) },
+      content: migrateContent(tpl.content || {}),
+    };
   } catch (err) {
     console.error('Failed to load template', stageKey, err);
+    return null;
   }
-  try {
-    const legacyDims = window.localStorage.getItem(LEGACY_DIM_KEY);
-    const legacyContent = window.localStorage.getItem(LEGACY_CONTENT_KEY);
-    if (legacyDims && legacyContent) {
-      return {
-        dimensions: { ...DEFAULT_DIMENSIONS, ...JSON.parse(legacyDims) },
-        content: migrateContent(JSON.parse(legacyContent)),
-      };
-    }
-  } catch (e) {
-    // ignore
-  }
-  return null;
 };
 
-export const saveTemplate = (stageKey, template) => {
-  if (!stageKey || typeof window === 'undefined') return;
+export const saveTemplate = async (stageKey, template, options = {}) => {
+  const apiBase = options.apiBase || API_BASE_DEFAULT;
+  if (!stageKey) return { success: false, error: 'Missing stageKey' };
   try {
     const payload = {
       dimensions: { ...DEFAULT_DIMENSIONS, ...(template?.dimensions || {}) },
       content: migrateContent(template?.content || template),
     };
-    window.localStorage.setItem(TEMPLATE_KEY(stageKey), JSON.stringify(payload));
+    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dimensions: payload.dimensions, content: payload.content }),
+    });
+    const result = await safeReadJson(response);
+    if (!response.ok) {
+      return { success: false, error: result?.error || 'Failed to save template', result };
+    }
+    return { success: true, template: result?.template || null, result };
   } catch (err) {
     console.error('Failed to save template', stageKey, err);
+    return { success: false, error: err.message || 'Failed to save template' };
   }
 };
 
@@ -520,7 +540,7 @@ export const sendToLocalPrinter = async ({
 };
 
 export const printStageTemplate = async (stageKey, data = {}, options = {}) => {
-  const template = options.template || loadTemplate(stageKey);
+  const template = options.template || (await loadTemplate(stageKey, { apiBase: options.apiBase }));
   if (!template) {
     return { success: false, skipped: true, reason: 'Template not found' };
   }

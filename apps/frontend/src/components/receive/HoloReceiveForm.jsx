@@ -88,7 +88,7 @@ export function HoloReceiveForm() {
               operatorId: form.operatorId,
               notes: form.notes
           });
-          const template = loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
+          const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
           if (template && result?.row) {
             const confirmPrint = window.confirm('Print sticker for this receive?');
             if (confirmPrint) {

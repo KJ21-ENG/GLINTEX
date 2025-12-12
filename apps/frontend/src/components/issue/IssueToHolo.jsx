@@ -127,7 +127,7 @@ export function IssueToHolo() {
                   issuedBobbinWeight: Number(c.issuedBobbinWeight)
               }))
           });
-          const template = loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
+          const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
           if (template && created?.issueToHoloMachine) {
             const confirmPrint = window.confirm('Print sticker for this issue?');
             if (confirmPrint) {

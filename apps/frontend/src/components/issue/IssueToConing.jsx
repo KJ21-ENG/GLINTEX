@@ -125,7 +125,7 @@ export function IssueToConing() {
                   issueWeight: Number(c.issueWeight)
               }))
           });
-          const template = loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
+          const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
           if (template && created?.issueToConingMachine) {
             const confirmPrint = window.confirm('Print sticker for this issue?');
             if (confirmPrint) {

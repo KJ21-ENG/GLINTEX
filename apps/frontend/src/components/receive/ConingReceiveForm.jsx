@@ -81,7 +81,7 @@ export function ConingReceiveForm() {
       if (!issue || cart.length === 0) return;
       setSubmitting(true);
       try {
-          const template = loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+          const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
           const confirmPrint = template ? window.confirm('Print stickers for these receives?') : false;
           const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
           const baseCount = existingRows.length;

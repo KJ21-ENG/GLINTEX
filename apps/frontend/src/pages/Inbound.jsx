@@ -76,7 +76,7 @@ export function Inbound() {
             const lotNo = result?.res?.lot?.lotNo || savedLotNo;
             const piecesForLot = (refreshedDb?.inbound_items || []).filter((p) => p.lotNo === lotNo);
             const itemName = refreshedDb?.items?.find((i) => i.id === itemId)?.name;
-            const inboundTemplate = loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+            const inboundTemplate = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
             if (inboundTemplate && piecesForLot.length > 0) {
                 const confirmPrint = window.confirm(`Print ${piecesForLot.length} stickers for lot ${lotNo}?`);
                 if (confirmPrint) {

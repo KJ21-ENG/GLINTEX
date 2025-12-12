@@ -79,7 +79,7 @@ export function IssueToCutter() {
           const payload = { date, itemId, lotNo, pieceIds: selected, note, machineId, operatorId };
           const result = await createIssueToMachine(payload);
           const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
-          const template = loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
+          const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
           if (template && issueRecord) {
             const confirmPrint = window.confirm('Print sticker for this issue?');
             if (confirmPrint) {

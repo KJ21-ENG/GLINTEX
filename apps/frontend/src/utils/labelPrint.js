@@ -137,8 +137,9 @@ const sanitizeText = (text = '') => text.replace(/"/g, "'");
 
 export const substitutePlaceholders = (value = '', data = {}) => {
   if (!value || typeof value !== 'string') return value;
-  return value.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key) => {
-    if (data && Object.prototype.hasOwnProperty.call(data, key)) {
+  return value.replace(/(\{\{\s*([\w.]+)\s*\}\})|(@([\w.]+))/g, (match, p1, p2, p3, p4) => {
+    const key = p2 || p4;
+    if (key && data && Object.prototype.hasOwnProperty.call(data, key)) {
       const val = data[key];
       if (val === null || val === undefined) return '';
       return String(val);

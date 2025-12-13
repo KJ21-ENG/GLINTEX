@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY } from '../utils';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button, Badge } from '../components/ui';
-import { Trash2 } from 'lucide-react';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../components/ui';
+import { Trash2, Printer } from 'lucide-react';
 import * as api from '../api';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 
 export function IssueHistory({ db, refreshDb }) {
   const { process } = useInventory();
@@ -22,6 +23,193 @@ export function IssueHistory({ db, refreshDb }) {
       alert(err.message || 'Failed to delete issue record');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleReprint = async (row) => {
+    try {
+      let stageKey, data;
+
+      if (process === 'cutter') {
+        stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE;
+        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
+        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
+        const cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
+
+        // Get inbound date from first piece
+        const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
+        const firstPiece = db.inbound_items?.find(p => p.id === pieceList[0]);
+        const lot = db.lots?.find(l => l.lotNo === row.lotNo);
+        const inboundDate = lot?.date || firstPiece?.date || '';
+
+        data = {
+          lotNo: row.lotNo,
+          itemName,
+          pieceId: row.pieceIds,
+          seq: firstPiece?.seq || '',
+          count: row.count,
+          totalWeight: row.totalWeight,
+          machineName,
+          operatorName,
+          cut,
+          inboundDate,
+          date: row.date,
+          barcode: row.barcode,
+        };
+      } else if (process === 'holo') {
+        stageKey = LABEL_STAGE_KEYS.HOLO_ISSUE;
+        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
+        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
+        const yarnName = db.yarns?.find(y => y.id === row.yarnId)?.name || '';
+        const twistName = db.twists?.find(t => t.id === row.twistId)?.name || '';
+
+        // Get bobbin info and cut from receivedRowRefs
+        let bobbinType = '';
+        let bobbinQty = 0;
+        let cut = '';
+        let netWeight = 0;
+        let totalRolls = row.metallicBobbins || 0;
+        let totalWeight = row.metallicBobbinsWeight || 0;
+
+        try {
+          const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
+          if (Array.isArray(refs) && refs.length > 0) {
+            // Sum up bobbins from all refs
+            refs.forEach(ref => {
+              bobbinQty += Number(ref.issuedBobbins || 0);
+            });
+
+            // Get cut and bobbin type from first ref's source row
+            const firstRef = refs[0];
+            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === firstRef.rowId);
+            if (cutterRow) {
+              cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+              bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
+              netWeight += Number(cutterRow.netWt || 0);
+            }
+          }
+        } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+
+        data = {
+          lotNo: row.lotNo,
+          itemName,
+          machineName,
+          operatorName,
+          yarnName,
+          twistName,
+          bobbinType,
+          bobbinQty,
+          totalRolls,
+          totalWeight,
+          netWeight: netWeight || totalWeight,
+          metallicBobbins: row.metallicBobbins,
+          metallicBobbinsWeight: row.metallicBobbinsWeight,
+          yarnKg: row.yarnKg,
+          cut,
+          shift: row.shift,
+          date: row.date,
+          barcode: row.barcode,
+        };
+      } else if (process === 'coning') {
+        stageKey = LABEL_STAGE_KEYS.CONING_ISSUE;
+        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
+        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
+
+        // Get coneType, wrapperName, and trace back to get cut, yarnName, rollType
+        let coneType = '';
+        let wrapperName = '';
+        let cut = '';
+        let yarnName = '';
+        let rollType = '';
+        let rollCount = 0;
+        let totalRolls = 0;
+        let totalWeight = 0;
+        let netWeight = 0;
+        let grossWeight = 0;
+        let tareWeight = 0;
+
+        try {
+          const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
+          if (Array.isArray(refs) && refs.length > 0) {
+            const firstRef = refs[0];
+
+            // Get cone type and wrapper from refs or form data stored in issue
+            if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
+            if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
+
+            // Sum up rolls
+            refs.forEach(ref => {
+              rollCount += Number(ref.issueRolls || 0);
+              totalRolls += Number(ref.issueRolls || 0);
+              totalWeight += Number(ref.issueWeight || 0);
+            });
+            netWeight = totalWeight;
+
+            // Trace back through holo receive -> holo issue -> cutter receive for cut, yarnName, rollType
+            const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === firstRef.rowId);
+            if (holoRow) {
+              rollType = db.rollTypes?.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
+
+              const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
+              if (holoIssue) {
+                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
+
+                // Get cut from cutter receive row
+                const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                if (Array.isArray(holoRefs) && holoRefs.length > 0) {
+                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === holoRefs[0].rowId);
+                  if (cutterRow) {
+                    cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+
+        data = {
+          lotNo: row.lotNo,
+          itemName,
+          machineName,
+          operatorName,
+          cut,
+          yarnName,
+          rollType,
+          coneType,
+          wrapperName,
+          rollCount,
+          totalRolls,
+          totalWeight,
+          grossWeight,
+          tareWeight,
+          netWeight,
+          expectedCones: row.expectedCones,
+          perConeTargetG: row.requiredPerConeNetWeight,
+          shift: row.shift,
+          date: row.date,
+          barcode: row.barcode,
+        };
+      }
+
+
+      if (!stageKey) {
+        alert('Unknown process type');
+        return;
+      }
+
+      const template = await loadTemplate(stageKey);
+      if (!template) {
+        alert('No sticker template found for this stage. Please configure it in Label Designer.');
+        return;
+      }
+
+      await printStageTemplate(stageKey, data, { template });
+      // Silent success - printer handles feedback
+    } catch (err) {
+      alert(err.message || 'Failed to reprint sticker');
     }
   };
 
@@ -66,6 +254,21 @@ export function IssueHistory({ db, refreshDb }) {
     (db.yarns || []).forEach(y => map.set(y.id, y.name || '—'));
     return map;
   }, [db.yarns]);
+
+  const getActions = (row) => [
+    {
+      label: 'Reprint',
+      icon: <Printer className="w-4 h-4" />,
+      onClick: () => handleReprint(row),
+    },
+    {
+      label: 'Delete',
+      icon: <Trash2 className="w-4 h-4" />,
+      onClick: () => handleDelete(row.id),
+      variant: 'destructive',
+      disabled: deletingId === row.id,
+    },
+  ];
 
   return (
     <div className="space-y-4">
@@ -171,15 +374,7 @@ export function IssueHistory({ db, refreshDb }) {
                     </>
                   )}
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleDelete(r.id)}
-                      disabled={deletingId === r.id}
-                      className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                    >
-                      {deletingId === r.id ? '...' : <Trash2 className="w-4 h-4" />}
-                    </Button>
+                    <ActionMenu actions={getActions(r)} />
                   </TableCell>
                 </TableRow>
               ))

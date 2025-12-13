@@ -30,6 +30,10 @@ export const STAGE_VARIABLES = {
   [LABEL_STAGE_KEYS.CUTTER_ISSUE]: [
     { key: 'lotNo', label: 'Lot No' },
     { key: 'itemName', label: 'Item Name' },
+    { key: 'pieceId', label: 'Piece ID' },
+    { key: 'seq', label: 'Sequence' },
+    { key: 'inboundDate', label: 'Lot Inbound Date' },
+    { key: 'cut', label: 'Cut' },
     { key: 'count', label: 'Pieces Count' },
     { key: 'totalWeight', label: 'Total Weight' },
     { key: 'machineName', label: 'Machine' },
@@ -424,6 +428,12 @@ export const buildTspl = (dimensions, content, data = {}) => {
         finalValue,
       )}"`;
       lines.push(textLine);
+      // Many thermal printers ignore TSPL bold settings; emulate bold by overprinting with a 1-dot offset.
+      if (style.bold) {
+        lines.push(
+          `TEXT ${x + 1},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(finalValue)}"`,
+        );
+      }
       if (style.underline) {
         const textLen = Math.max(1, sanitizeText(finalValue).length);
         const charWidthDots = Math.max(1, Math.round(16 * fieldScale));

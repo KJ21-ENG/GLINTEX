@@ -14,6 +14,7 @@ export function IssueToCutter() {
   const [lotNo, setLotNo] = useState("");
   const [machineId, setMachineId] = useState("");
   const [operatorId, setOperatorId] = useState("");
+  const [cutId, setCutId] = useState("");
   const [note, setNote] = useState("");
   const [selected, setSelected] = useState([]);
   const [barcodeScan, setBarcodeScan] = useState('');
@@ -73,10 +74,10 @@ export function IssueToCutter() {
   }
 
   async function handleIssue() {
-      if (!date || !itemId || !lotNo || !machineId || !operatorId || selected.length===0) return;
+      if (!date || !itemId || !lotNo || !machineId || !operatorId || !cutId || selected.length===0) return;
       setIssuing(true);
       try {
-          const payload = { date, itemId, lotNo, pieceIds: selected, note, machineId, operatorId };
+          const payload = { date, itemId, lotNo, pieceIds: selected, note, machineId, operatorId, cutId };
           const result = await createIssueToMachine(payload);
           const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
           const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
@@ -86,17 +87,28 @@ export function IssueToCutter() {
               const itemName = db?.items?.find((i) => i.id === itemId)?.name;
               const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
               const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+              const inboundDate = candidateLots.find((l) => l.lotNo === lotNo)?.date || '';
+              const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
+              const selectedPieces = (inboundItems || []).filter((p) => selected.includes(p.id));
+              const primaryPiece =
+                selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
+              const pieceId = primaryPiece?.id || selected[0] || '';
+              const seq = primaryPiece?.seq ?? '';
               await printStageTemplate(
                 LABEL_STAGE_KEYS.CUTTER_ISSUE,
                 {
                   lotNo: issueRecord.lotNo,
                   itemName,
+                  pieceId,
+                  seq,
                   barcode: issueRecord.barcode,
                   count: issueRecord.count || selected.length,
                   totalWeight: issueRecord.totalWeight,
                   pieceIds: selected,
                   machineName,
                   operatorName,
+                  inboundDate,
+                  cut,
                   date,
                 },
                 { template },
@@ -104,6 +116,7 @@ export function IssueToCutter() {
             }
           }
           setSelected([]);
+          setCutId("");
           setNote("");
           alert(`Issued ${selected.length} pieces successfully.`);
       } catch (e) {
@@ -150,7 +163,7 @@ export function IssueToCutter() {
                         </Select>
                     </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                         <Label>Machine</Label>
                         <Select value={machineId} onChange={e=>setMachineId(e.target.value)}>
@@ -163,6 +176,13 @@ export function IssueToCutter() {
                         <Select value={operatorId} onChange={e=>setOperatorId(e.target.value)}>
                             <option value="">Select Operator</option>
                             {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </Select>
+                    </div>
+                    <div>
+                        <Label>Cut</Label>
+                        <Select value={cutId} onChange={e=>setCutId(e.target.value)}>
+                            <option value="">Select Cut</option>
+                            {db.cuts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </Select>
                     </div>
                     <div>

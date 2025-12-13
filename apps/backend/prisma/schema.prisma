@@ -24,6 +24,7 @@ model Cut {
   id    String @id @default(cuid())
   name  String @unique
   receiveRows ReceiveFromCutterMachineRow[]
+  cutterIssues IssueToCutterMachine[]
 }
 
 model Twist {
@@ -241,6 +242,7 @@ model IssueToCutterMachine {
   date        String
   itemId      String
   lotNo       String
+  cutId       String?
   count       Int
   totalWeight Float
   pieceIds    String
@@ -249,6 +251,7 @@ model IssueToCutterMachine {
   machineId   String?
   operatorId  String?
   barcode     String  @unique
+  cut         Cut?      @relation(fields: [cutId], references: [id])
   machine     Machine?  @relation(fields: [machineId], references: [id])
   operator    Operator? @relation(fields: [operatorId], references: [id])
 }

@@ -193,7 +193,15 @@ export function Stock() {
 
   const [markingPieces, setMarkingPieces] = useState(() => new Set());
   const [issueModalOpen, setIssueModalOpen] = useState(false);
-  const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
+  const [issueModalData, setIssueModalData] = useState({
+    lotNo: '',
+    pieceIds: [],
+    date: todayISO(),
+    machineId: '',
+    operatorId: '',
+    cutId: '',
+    note: '',
+  });
   const [issuing, setIssuing] = useState(false);
 
   // Keep view aligned with process (match main-branch behaviour)
@@ -261,14 +269,18 @@ export function Stock() {
   function openIssueModal(lotNo) {
     const pieceIds = (selectedByLot[lotNo] || []).slice();
     if (!pieceIds.length) { alert('Select pieces to issue'); return; }
-    setIssueModalData({ lotNo, pieceIds, date: todayISO(), machineId: '', operatorId: '', note: '' });
+    setIssueModalData({ lotNo, pieceIds, date: todayISO(), machineId: '', operatorId: '', cutId: '', note: '' });
     setIssueModalOpen(true);
   }
 
   async function doIssue() {
     setIssuing(true);
     try {
-      const { lotNo, pieceIds, date, machineId, operatorId, note } = issueModalData;
+      const { lotNo, pieceIds, date, machineId, operatorId, cutId, note } = issueModalData;
+      if (!cutId) {
+        alert('Select a cut before issuing.');
+        return;
+      }
       const payload = {
         date,
         itemId: lotsMap[lotNo].itemId,
@@ -276,7 +288,8 @@ export function Stock() {
         pieceIds,
         note,
         machineId,
-        operatorId
+        operatorId,
+        cutId,
       };
       const result = await createIssueToMachine(payload);
       const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
@@ -287,17 +300,28 @@ export function Stock() {
           const itemName = lotsMap[lotNo]?.itemName;
           const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
           const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+          const inboundDate = lotsMap[lotNo]?.date || '';
+          const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
+          const selectedPieces = (db?.inbound_items || []).filter((p) => pieceIds.includes(p.id));
+          const primaryPiece =
+            selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
+          const pieceId = primaryPiece?.id || pieceIds[0] || '';
+          const seq = primaryPiece?.seq ?? '';
           await printStageTemplate(
             LABEL_STAGE_KEYS.CUTTER_ISSUE,
             {
               lotNo: issueRecord.lotNo,
               itemName,
+              pieceId,
+              seq,
               barcode: issueRecord.barcode,
               count: issueRecord.count || pieceIds.length,
               totalWeight: issueRecord.totalWeight,
               pieceIds,
               machineName,
               operatorName,
+              inboundDate,
+              cut,
               date,
             },
             { template },
@@ -545,7 +569,7 @@ export function Stock() {
       <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>
         <DialogContent title="Issue Pieces to Machine" onOpenChange={setIssueModalOpen}>
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <Label>Date</Label>
                 <Input type="date" value={issueModalData.date} onChange={e => setIssueModalData({ ...issueModalData, date: e.target.value })} />
@@ -555,6 +579,13 @@ export function Stock() {
                 <Select value={issueModalData.machineId} onChange={e => setIssueModalData({ ...issueModalData, machineId: e.target.value })}>
                   <option value="">Select Machine</option>
                   {db?.machines?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label>Cut</Label>
+                <Select value={issueModalData.cutId} onChange={e => setIssueModalData({ ...issueModalData, cutId: e.target.value })}>
+                  <option value="">Select Cut</option>
+                  {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
             </div>
@@ -571,7 +602,7 @@ export function Stock() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setIssueModalOpen(false)}>Cancel</Button>
-              <Button onClick={doIssue} disabled={issuing}>
+              <Button onClick={doIssue} disabled={issuing || !issueModalData.machineId || !issueModalData.operatorId || !issueModalData.cutId}>
                 {issuing ? 'Issuing...' : 'Confirm Issue'}
               </Button>
             </div>

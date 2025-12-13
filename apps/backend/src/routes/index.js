@@ -898,17 +898,23 @@ router.post('/api/lots', async (req, res) => {
 
 router.post('/api/issue_to_cutter_machine', async (req, res) => {
   try {
-    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
+    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId, cutId } = req.body;
     if (!date || !itemId || !lotNo) {
       return res.status(400).json({ error: 'Missing required issue_to_cutter_machine fields' });
     }
     if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
     }
+    if (!cutId) {
+      return res.status(400).json({ error: 'cutId is required' });
+    }
 
     const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
     const materialCode = deriveMaterialCodeFromItem(itemRecord);
+
+    const cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
+    if (!cutRecord) return res.status(404).json({ error: 'Cut not found' });
 
     const { issueRecord } = await prisma.$transaction(async (tx) => {
       const pieces = await tx.inboundItem.findMany({
@@ -947,6 +953,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
           date,
           itemId,
             lotNo,
+            cutId,
             count: pieceIds.length,
             totalWeight,
             pieceIds: pieceIdsCsv,
@@ -969,6 +976,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
         lotNo: issueRecord.lotNo,
         date: issueRecord.date,
         itemId: issueRecord.itemId,
+        cutId: issueRecord.cutId,
         count: issueRecord.count,
         totalWeight: issueRecord.totalWeight,
         pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [],
@@ -983,9 +991,10 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
       const itemName = (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name || '';
       const machineName = issueRecord.machineId ? (await prisma.machine.findUnique({ where: { id: issueRecord.machineId } })).name : '';
       const operatorName = issueRecord.operatorId ? (await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } })).name : '';
+      const cutName = issueRecord.cutId ? (await prisma.cut.findUnique({ where: { id: issueRecord.cutId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
+      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
       // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });

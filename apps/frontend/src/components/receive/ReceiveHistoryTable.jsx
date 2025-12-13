@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useInventory } from '../../context/InventoryContext';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button, Card, CardHeader, CardTitle, CardContent, Badge } from '../ui';
 import { Trash2 } from 'lucide-react';
 import * as api from '../../api';
@@ -104,7 +104,7 @@ export function ReceiveHistoryTable() {
                                             </TableRow>
                                         );
                                     } else if (process === 'holo') {
-                                        const dateDisplay = r.date ? new Date(r.date).toLocaleDateString() : (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—');
+                                        const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                         return (
                                             <TableRow key={r.id}>
                                                 <TableCell>{dateDisplay}</TableCell>
@@ -119,7 +119,7 @@ export function ReceiveHistoryTable() {
                                             </TableRow>
                                         );
                                     } else if (process === 'coning') {
-                                        const dateDisplay = r.date ? new Date(r.date).toLocaleDateString() : (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '—');
+                                        const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                         return (
                                             <TableRow key={r.id}>
                                                 <TableCell>{dateDisplay}</TableCell>

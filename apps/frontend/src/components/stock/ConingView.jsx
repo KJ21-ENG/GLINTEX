@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { LotPopover } from './LotPopover';
 
@@ -203,7 +203,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                               {lot.rows.map((row) => (
                                 <TableRow key={row.id}>
                                   <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                                  <TableCell>{row.date || '—'}</TableCell>
+                                  <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
                                   <TableCell>{row.boxName}</TableCell>
                                   <TableCell>{row.coneType}</TableCell>
                                   <TableCell className="">{row.coneCount}</TableCell>

@@ -2,6 +2,8 @@
 // Handles template storage (localStorage), TSPL generation for text + Code128 barcodes,
 // placeholder substitution, and posting jobs to the local print service.
 
+import { formatDateDDMMYYYY } from './formatting';
+
 const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
 const DEFAULT_MATERIAL_CODE = (import.meta.env.VITE_BARCODE_MATERIAL_CODE || 'MET').toUpperCase();
 
@@ -160,11 +162,17 @@ const sanitizeText = (text = '') => text.replace(/"/g, "'");
 
 export const substitutePlaceholders = (value = '', data = {}) => {
   if (!value || typeof value !== 'string') return value;
+  // Keys that should be formatted as DD/MM/YYYY dates
+  const dateKeys = ['date', 'inboundDate'];
   return value.replace(/(\{\{\s*([\w.]+)\s*\}\})|(@([\w.]+))/g, (match, p1, p2, p3, p4) => {
     const key = p2 || p4;
     if (key && data && Object.prototype.hasOwnProperty.call(data, key)) {
       const val = data[key];
       if (val === null || val === undefined) return '';
+      // Format date values to DD/MM/YYYY
+      if (dateKeys.includes(key) && val) {
+        return formatDateDDMMYYYY(val) || String(val);
+      }
       return String(val);
     }
     return match;
@@ -213,7 +221,7 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
         ? defaultBarcodeStyle
         : type === 'line'
           ? defaultLineStyle
-        : {
+          : {
             size: baseStyle.size ?? 10,
             bold: baseStyle.bold ?? false,
             italic: baseStyle.italic ?? false,

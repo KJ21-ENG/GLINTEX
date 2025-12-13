@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label } from '../components/ui';
-import { formatKg, uid, todayISO } from '../utils';
+import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search } from 'lucide-react';
 
@@ -311,7 +311,7 @@ function RecentLotsTable({ db }) {
                                 paged.map(l => (
                                     <TableRow key={l.lotNo}>
                                         <TableCell className="font-medium">{l.lotNo}</TableCell>
-                                        <TableCell>{l.date}</TableCell>
+                                        <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
                                         <TableCell>{l.itemName}</TableCell>
                                         <TableCell>{l.firmName}</TableCell>
                                         <TableCell>{l.supplierName}</TableCell>

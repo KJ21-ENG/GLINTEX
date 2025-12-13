@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { LotPopover } from './LotPopover';
 
@@ -200,7 +200,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                               {l.rows.map(r => (
                                 <TableRow key={r.id}>
                                   <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                  <TableCell>{r.date}</TableCell>
+                                  <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                   <TableCell>{r.rollType?.name || '—'}</TableCell>
                                   <TableCell className="">{r.rollCount}</TableCell>
                                   <TableCell className="">{formatKg(r.rollWeight)}</TableCell>

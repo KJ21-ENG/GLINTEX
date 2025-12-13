@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { formatKg } from '../utils';
+import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button, Badge } from '../components/ui';
 import { Trash2 } from 'lucide-react';
 import * as api from '../api';
@@ -129,7 +129,7 @@ export function IssueHistory({ db, refreshDb }) {
                 <TableRow key={r.id}>
                   {process === 'cutter' && (
                     <>
-                      <TableCell className="whitespace-nowrap">{r.date}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
                       <TableCell>{r.lotNo}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
@@ -143,7 +143,7 @@ export function IssueHistory({ db, refreshDb }) {
                   )}
                   {process === 'holo' && (
                     <>
-                      <TableCell className="whitespace-nowrap">{r.date}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
                       <TableCell>{r.lotNo}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
@@ -160,7 +160,7 @@ export function IssueHistory({ db, refreshDb }) {
                   )}
                   {process === 'coning' && (
                     <>
-                      <TableCell className="whitespace-nowrap">{r.date}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
                       <TableCell>{r.lotNo}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>

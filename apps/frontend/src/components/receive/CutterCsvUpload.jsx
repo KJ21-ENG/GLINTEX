@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useInventory } from '../../context/InventoryContext';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import * as api from '../../api';
 import {
   Card,
@@ -18,12 +18,7 @@ import {
 } from '../ui';
 import { Upload, FileUp, RefreshCw, FileWarning } from 'lucide-react';
 
-const formatDateTime = (value) => {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-};
+const formatDateTime = (value) => formatDateTimeDDMMYYYY(value);
 
 function IssuesList({ issues }) {
   if (!issues?.length) return null;
@@ -432,7 +427,7 @@ export function CutterCsvUpload() {
                       <TableCell className="text-right">{row.netWt == null ? '—' : formatKg(row.netWt)}</TableCell>
                       <TableCell className="text-right">{row.bobbinQuantity == null ? '—' : row.bobbinQuantity}</TableCell>
                       <TableCell>{bobbinName}</TableCell>
-                      <TableCell>{row.date || '—'}</TableCell>
+                      <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
                       <TableCell>{formatDateTime(row.createdAt)}</TableCell>
                     </TableRow>
                   );

@@ -6,7 +6,7 @@ import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, aggregateLots } from '../utils';
+import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 import { getProcessDefinition } from '../constants/processes';
@@ -484,7 +484,7 @@ export function Stock() {
                             <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
                           ) : (l.lotNo || '—')}
                         </TableCell>
-                        <TableCell>{l.date}</TableCell>
+                        <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
                         <TableCell>{l.itemName}</TableCell>
                         <TableCell>{l.firmName}</TableCell>
                         <TableCell>{l.supplierName}</TableCell>

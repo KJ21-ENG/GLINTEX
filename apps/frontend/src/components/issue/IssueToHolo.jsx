@@ -138,6 +138,12 @@ export function IssueToHolo() {
                     const itemName = db.items.find((i) => i.id === meta.itemId)?.name;
                     const twistName = db.twists?.find((t) => t.id === form.twistId)?.name;
                     const yarnName = db.yarns?.find((y) => y.id === form.yarnId)?.name;
+
+                    // Get bobbin info from the first crate's source row
+                    const firstCrateRow = crates[0] ? (db.receive_from_cutter_machine_rows || []).find(r => r.id === crates[0].rowId) : null;
+                    const bobbinType = firstCrateRow?.bobbin?.name || firstCrateRow?.pcsTypeName || '';
+                    const cut = firstCrateRow?.cut || firstCrateRow?.cutMaster?.name || '';
+
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_ISSUE,
                         {
@@ -146,8 +152,13 @@ export function IssueToHolo() {
                             itemName,
                             machineName,
                             operatorName,
+                            shift: form.shift || '',
                             totalRolls: holoTotals.rolls,
                             totalWeight: holoTotals.weight,
+                            netWeight: holoTotals.weight,
+                            bobbinQty: holoTotals.rolls,
+                            bobbinType,
+                            cut,
                             yarnKg: created.issueToHoloMachine.yarnKg,
                             twistName,
                             yarnName,

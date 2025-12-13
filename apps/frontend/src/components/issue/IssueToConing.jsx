@@ -133,17 +133,61 @@ export function IssueToConing() {
                 if (confirmPrint) {
                     const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
                     const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
+                    const coneType = db.cone_types?.find(x => x.id === form.coneTypeId)?.name;
+                    const wrapperName = db.wrappers?.find(x => x.id === form.wrapperId)?.name;
+
+                    // Resolve info from first crate source
+                    let itemName = '';
+                    let yarnName = '';
+                    let cutName = '';
+                    let rollType = '';
+
+                    if (crates.length > 0) {
+                        const firstRow = db.receive_from_holo_machine_rows?.find(r => r.id === crates[0].rowId);
+                        if (firstRow) {
+                            rollType = db.rollTypes?.find(rt => rt.id === firstRow.rollTypeId)?.name || '';
+                            const holoIssue = db.issue_to_holo_machine?.find(i => i.id === firstRow.issueId);
+                            if (holoIssue) {
+                                itemName = db.items?.find(i => i.id === holoIssue.itemId)?.name || '';
+                                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
+
+                                // Resolve cut from holo issue refs
+                                try {
+                                    const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                                    if (Array.isArray(refs) && refs.length > 0) {
+                                        const cutterRowId = refs[0].rowId;
+                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === cutterRowId);
+                                        if (cutterRow) {
+                                            cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                        }
+                                    }
+                                } catch (e) { }
+                            }
+                        }
+                    }
+
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.CONING_ISSUE,
                         {
                             lotNo: created.issueToConingMachine.lotNo,
                             barcode: created.issueToConingMachine.barcode,
                             totalRolls: coningMeta.totalRolls,
+                            rollCount: coningMeta.totalRolls,
                             totalWeight: coningMeta.totalNet,
+                            grossWeight: coningMeta.totalNet,
+                            tareWeight: 0,
+                            netWeight: coningMeta.totalNet,
                             expectedCones: created.issueToConingMachine.expectedCones,
                             perConeTargetG: form.targetWeight,
                             machineName,
                             operatorName,
+                            shift: form.shift || '',
+                            itemName,
+                            cut: cutName,
+                            yarnName,
+                            rollType,
+                            coneType,
+                            wrapperName,
                             date: form.date,
                         },
                         { template },

@@ -241,7 +241,7 @@ export function ConingReceiveForm() {
                                             <TableCell>
                                                 <Select value={row.boxId} onChange={e => updateRow(row.id, 'boxId', e.target.value)}>
                                                     <option value="">Select</option>
-                                                    {db.boxes.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                                    {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                                                 </Select>
                                             </TableCell>
                                             <TableCell>
@@ -256,7 +256,7 @@ export function ConingReceiveForm() {
                                             <TableCell>
                                                 <Select value={row.operatorId} onChange={e => updateRow(row.id, 'operatorId', e.target.value)} className="h-8">
                                                     <option value="">Select</option>
-                                                    {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                                    {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                                 </Select>
                                             </TableCell>
                                             <TableCell>

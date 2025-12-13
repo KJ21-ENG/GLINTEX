@@ -153,13 +153,13 @@ export const InventoryProvider = ({ children }) => {
     deleteSupplier: async (id) => { await api.deleteSupplier(id); await refreshDb(); },
 
     // Masters - Machines
-    createMachine: async (name) => { await api.createMachine(name); await refreshDb(); },
-    updateMachine: async (id, name) => { await api.updateMachine(id, name); await refreshDb(); },
+    createMachine: async (name, processType) => { await api.createMachine(name, processType); await refreshDb(); },
+    updateMachine: async (id, name, processType) => { await api.updateMachine(id, name, processType); await refreshDb(); },
     deleteMachine: async (id) => { await api.deleteMachine(id); await refreshDb(); },
 
     // Masters - Operators/Workers
-    createOperator: async (name, role) => { await api.createOperator(name, role); await refreshDb(); },
-    updateOperator: async (id, name, role) => { await api.updateOperator(id, name, role); await refreshDb(); },
+    createOperator: async (name, role, processType) => { await api.createOperator(name, role, processType); await refreshDb(); },
+    updateOperator: async (id, name, role, processType) => { await api.updateOperator(id, name, role, processType); await refreshDb(); },
     deleteOperator: async (id) => { await api.deleteOperator(id); await refreshDb(); },
 
     // Masters - Bobbins
@@ -183,8 +183,8 @@ export const InventoryProvider = ({ children }) => {
     deleteWrapper: async (id) => { await api.deleteWrapper(id); await refreshDb(); },
 
     // Masters - Boxes
-    createBox: async (name, weight) => { await api.createBox(name, weight); await refreshDb(); },
-    updateBox: async (id, name, weight) => { await api.updateBox(id, name, weight); await refreshDb(); },
+    createBox: async (name, weight, processType) => { await api.createBox(name, weight, processType); await refreshDb(); },
+    updateBox: async (id, name, weight, processType) => { await api.updateBox(id, name, weight, processType); await refreshDb(); },
     deleteBox: async (id) => { await api.deleteBox(id); await refreshDb(); },
 
     // Settings

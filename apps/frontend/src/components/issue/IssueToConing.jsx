@@ -215,14 +215,14 @@ export function IssueToConing() {
                             <Label>Machine</Label>
                             <Select value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })}>
                                 <option value="">Select Machine</option>
-                                {db.machines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                {(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'coning').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                             </Select>
                         </div>
                         <div>
                             <Label>Operator</Label>
                             <Select value={form.operatorId} onChange={e => setForm({ ...form, operatorId: e.target.value })}>
                                 <option value="">Select Operator</option>
-                                {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                             </Select>
                         </div>
                         <div>

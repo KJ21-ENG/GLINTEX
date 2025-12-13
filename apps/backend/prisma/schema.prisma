@@ -74,6 +74,7 @@ model InboundItem {
 model Machine {
   id                    String                  @id @default(cuid())
   name                  String
+  processType           String                  @default("all")
   issueToCutterMachines IssueToCutterMachine[]
   issueToHoloMachines   IssueToHoloMachine[]
   issueToConingMachines IssueToConingMachine[]
@@ -83,6 +84,7 @@ model Operator {
   id                    String                              @id @default(cuid())
   name                  String
   role                  String                              @default("operator")
+  processType           String                              @default("all")
   issueToCutterMachines IssueToCutterMachine[]
   receiveRows           ReceiveFromCutterMachineRow[]      @relation("OperatorReceiveRows")
   helperRows            ReceiveFromCutterMachineRow[]      @relation("HelperReceiveRows")
@@ -348,6 +350,7 @@ model Box {
   id          String                          @id @default(cuid())
   name        String
   weight      Float
+  processType String                          @default("all")
   receiveRows ReceiveFromCutterMachineRow[]
   holoReceiveRows ReceiveFromHoloMachineRow[]
   coningReceiveRows ReceiveFromConingMachineRow[]

@@ -4,12 +4,12 @@ const getApiBase = () => {
   if (import.meta.env.VITE_API_BASE) {
     return import.meta.env.VITE_API_BASE;
   }
-  
+
   // Auto-detect from current window location
   if (typeof window !== 'undefined') {
     return `${window.location.protocol}//${window.location.hostname}:4000`;
   }
-  
+
   // Fallback for SSR or when window is not available
   return 'http://localhost:4000';
 };
@@ -90,13 +90,13 @@ export async function createSupplier(name) { return await request('/api/supplier
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
 export async function updateSupplier(id, name) { return await request(`/api/suppliers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listMachines() { return await request('/api/machines'); }
-export async function createMachine(name) { return await request('/api/machines', { method: 'POST', body: { name } }); }
+export async function createMachine(name, processType = 'all') { return await request('/api/machines', { method: 'POST', body: { name, processType } }); }
 export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
-export async function updateMachine(id, name) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateMachine(id, name, processType) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name, processType } }); }
 export async function listOperators() { return await request('/api/operators'); }
-export async function createOperator(name, role = 'operator') { return await request('/api/operators', { method: 'POST', body: { name, role } }); }
+export async function createOperator(name, role = 'operator', processType = 'all') { return await request('/api/operators', { method: 'POST', body: { name, role, processType } }); }
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
-export async function updateOperator(id, name, role) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name, role } }); }
+export async function updateOperator(id, name, role, processType) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name, role, processType } }); }
 export async function listBobbins() { return await request('/api/bobbins'); }
 export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
@@ -114,9 +114,9 @@ export async function createWrapper(name) { return await request('/api/wrappers'
 export async function deleteWrapper(id) { return await request(`/api/wrappers/${id}`, { method: 'DELETE' }); }
 export async function updateWrapper(id, name) { return await request(`/api/wrappers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listBoxes() { return await request('/api/boxes'); }
-export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
+export async function createBox(name, weight, processType = 'all') { return await request('/api/boxes', { method: 'POST', body: { name, weight, processType } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
-export async function updateBox(id, name, weight) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function updateBox(id, name, weight, processType) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight, processType } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToCutterMachine(id) { return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'DELETE' }); }

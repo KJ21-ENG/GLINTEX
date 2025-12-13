@@ -168,14 +168,14 @@ export function IssueToCutter() {
                             <Label>Machine</Label>
                             <Select value={machineId} onChange={e => setMachineId(e.target.value)}>
                                 <option value="">Select Machine</option>
-                                {db.machines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                {(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                             </Select>
                         </div>
                         <div>
                             <Label>Operator</Label>
                             <Select value={operatorId} onChange={e => setOperatorId(e.target.value)}>
                                 <option value="">Select Operator</option>
-                                {db.operators.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                             </Select>
                         </div>
                         <div>

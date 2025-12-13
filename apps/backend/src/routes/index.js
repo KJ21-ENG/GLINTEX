@@ -2532,8 +2532,8 @@ router.put('/api/suppliers/:id', async (req, res) => {
 
 router.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
 router.post('/api/machines', async (req, res) => {
-  const { name } = req.body;
-  const machine = await prisma.machine.create({ data: { name } });
+  const { name, processType = 'all' } = req.body;
+  const machine = await prisma.machine.create({ data: { name, processType } });
   await logCrud({ entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
   res.json(machine);
 });
@@ -2549,15 +2549,17 @@ router.delete('/api/machines/:id', async (req, res) => {
   await logCrud({ entityType: 'machine', entityId: id, action: 'delete', payload: existingMachine });
   res.json({ ok: true });
 });
-// Update machine name
+// Update machine name and processType
 router.put('/api/machines/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
-    const updated = await prisma.machine.update({ where: { id }, data: { name } });
+    const data = { name };
+    if (processType !== undefined) data.processType = processType;
+    const updated = await prisma.machine.update({ where: { id }, data });
     await logCrud({
       entityType: 'machine',
       entityId: id,
@@ -2567,6 +2569,8 @@ router.put('/api/machines/:id', async (req, res) => {
       payload: {
         oldName: existing.name,
         newName: updated.name,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);
@@ -2578,10 +2582,10 @@ router.put('/api/machines/:id', async (req, res) => {
 
 router.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
 router.post('/api/operators', async (req, res) => {
-  const { name, role } = req.body;
+  const { name, role, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const workerRole = normalizeWorkerRole(role);
-  const worker = await prisma.operator.create({ data: { name, role: workerRole } });
+  const worker = await prisma.operator.create({ data: { name, role: workerRole, processType } });
   await logCrud({ entityType: 'operator', entityId: worker.id, action: 'create', payload: worker });
   res.json(worker);
 });
@@ -2606,16 +2610,17 @@ router.delete('/api/operators/:id', async (req, res) => {
   await logCrud({ entityType: 'operator', entityId: id, action: 'delete', payload: existingOperator });
   res.json({ ok: true });
 });
-// Update operator name
+// Update operator name, role, and processType
 router.put('/api/operators/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, role } = req.body;
+    const { name, role, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.operator.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Operator not found' });
     const data = { name };
     if (role !== undefined) data.role = normalizeWorkerRole(role);
+    if (processType !== undefined) data.processType = processType;
     const updated = await prisma.operator.update({ where: { id }, data });
     await logCrud({
       entityType: 'operator',
@@ -2628,6 +2633,8 @@ router.put('/api/operators/:id', async (req, res) => {
         newName: updated.name,
         oldRole: existing.role,
         newRole: updated.role,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);
@@ -2765,7 +2772,7 @@ router.delete('/api/roll_types/:id', async (req, res) => {
 
 router.get('/api/boxes', async (req, res) => { res.json(await prisma.box.findMany()); });
 router.post('/api/boxes', async (req, res) => {
-  const { name, weight } = req.body;
+  const { name, weight, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const weightNum = Number(weight);
   if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
@@ -2773,6 +2780,7 @@ router.post('/api/boxes', async (req, res) => {
     data: {
       name,
       weight: weightNum,
+      processType,
     },
   });
   await logCrud({ entityType: 'box', entityId: box.id, action: 'create', payload: box });
@@ -2909,18 +2917,17 @@ router.delete('/api/wrappers/:id', async (req, res) => {
 router.put('/api/boxes/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, weight } = req.body;
+    const { name, weight, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const weightNum = Number(weight);
     if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
     const existing = await prisma.box.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Box not found' });
+    const data = { name, weight: weightNum };
+    if (processType !== undefined) data.processType = processType;
     const updated = await prisma.box.update({
       where: { id },
-      data: {
-        name,
-        weight: weightNum,
-      },
+      data,
     });
     await logCrud({
       entityType: 'box',
@@ -2933,6 +2940,8 @@ router.put('/api/boxes/:id', async (req, res) => {
         newName: updated.name,
         oldWeight: existing.weight,
         newWeight: updated.weight,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);

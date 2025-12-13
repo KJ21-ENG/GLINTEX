@@ -361,7 +361,7 @@ export function CutterReceiveForm() {
                                 <Label>Box Type</Label>
                                 <Select value={boxId} onChange={e => setBoxId(e.target.value)}>
                                     <option value="">Select Box</option>
-                                    {db.boxes?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                                    {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>

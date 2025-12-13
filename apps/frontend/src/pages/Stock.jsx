@@ -578,7 +578,7 @@ export function Stock() {
                 <Label>Machine</Label>
                 <Select value={issueModalData.machineId} onChange={e => setIssueModalData({ ...issueModalData, machineId: e.target.value })}>
                   <option value="">Select Machine</option>
-                  {db?.machines?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {(db?.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </Select>
               </div>
               <div>
@@ -593,7 +593,7 @@ export function Stock() {
               <Label>Operator</Label>
               <Select value={issueModalData.operatorId} onChange={e => setIssueModalData({ ...issueModalData, operatorId: e.target.value })}>
                 <option value="">Select Operator</option>
-                {db?.operators?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                {(db?.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </Select>
             </div>
             <div>

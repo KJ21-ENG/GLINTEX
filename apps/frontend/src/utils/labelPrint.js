@@ -190,6 +190,25 @@ export const substitutePlaceholders = (value = '', data = {}) => {
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)));
 
+const wrapTextByChars = (text = '', maxChars = 0) => {
+  const max = Math.max(1, Math.floor(maxChars || 0));
+  const inputLines = String(text ?? '').split(/\r?\n/);
+  const out = [];
+
+  inputLines.forEach((lineRaw) => {
+    let line = String(lineRaw ?? '');
+    while (line.length > max) {
+      let breakAt = line.lastIndexOf(' ', max);
+      if (breakAt <= 0) breakAt = max;
+      out.push(line.slice(0, breakAt).trimEnd());
+      line = line.slice(breakAt).trimStart();
+    }
+    if (line.length) out.push(line);
+  });
+
+  return out.length ? out : [''];
+};
+
 // Font size is stored as a "pt-like" number where 10 => scale 1.
 // Use fractional scale to avoid visible jumps (1-14 all mapping to 1, etc.).
 const getFontScale = (fontSize) => {
@@ -235,6 +254,7 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
             italic: baseStyle.italic ?? false,
             underline: baseStyle.underline ?? false,
             opacity: baseStyle.opacity ?? 1,
+            wrapAtCenter: baseStyle.wrapAtCenter ?? false,
             background: {
               enabled: baseStyle.background?.enabled ?? false,
               color: baseStyle.background?.color ?? '#000000',
@@ -330,14 +350,139 @@ export const buildTspl = (dimensions, content, data = {}) => {
 
   const fontName = '3';
   const mergedContent = migrateContent(content);
-  const fields = (mergedContent.texts || []).map((t, idx) => ({
+  const baseFields = (mergedContent.texts || []).map((t, idx) => ({
     ...normalizeBlock(t, idx),
     font: fontName,
   }));
 
+  const getHalfWrapMaxChars = (field, fieldScale) => {
+    if (!field || field.type !== 'text') return null;
+    if (field.style?.wrapAtCenter !== true) return null;
+    const angle = snapAngle(field.angle);
+    const charWidthMm = 2 * fieldScale;
+
+    const originX = offsetX + (field.pos?.x || 0);
+    const originY = offsetY + (field.pos?.y || 0);
+    const left = offsetX;
+    const right = offsetX + width;
+    const top = offsetY;
+    const bottom = offsetY + height;
+    const centerX = (left + right) / 2;
+    const centerY = (top + bottom) / 2;
+
+    let axisMaxMm = null;
+    if (angle === 0) axisMaxMm = (originX < centerX ? centerX : right) - originX;
+    else if (angle === 180) axisMaxMm = originX - (originX > centerX ? centerX : left);
+    else if (angle === 90) axisMaxMm = (originY < centerY ? centerY : bottom) - originY;
+    else if (angle === 270) axisMaxMm = originY - (originY > centerY ? centerY : top);
+
+    if (!axisMaxMm || axisMaxMm <= 0) return null;
+    const maxChars = Math.floor(axisMaxMm / Math.max(0.1, charWidthMm));
+    return maxChars >= 1 ? maxChars : 1;
+  };
+
+  const applyFlowLayout = (fields) => {
+    const AFTER_WRAP_GAP_LINES = 1;
+    const groups = new Map();
+    const keyFor = (f) => {
+      const angle = snapAngle(f.angle);
+      const pos = f.pos || { x: 0, y: 0 };
+      const originX = offsetX + (pos.x || 0);
+      const originY = offsetY + (pos.y || 0);
+      const centerX = (offsetX + offsetX + width) / 2;
+      const centerY = (offsetY + offsetY + height) / 2;
+      const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
+      const laneRaw = angle === 0 || angle === 180 ? originX : originY;
+      const lane = Math.round(laneRaw * 2) / 2;
+      return `${angle}:${half}:${lane}`;
+    };
+
+    (fields || []).forEach((f) => {
+      if (f?.style?.visible === false) return;
+      const k = keyFor(f);
+      const arr = groups.get(k) || [];
+      arr.push(f);
+      groups.set(k, arr);
+    });
+
+    const shifts = new Map();
+    const getAxis = (f) => {
+      const pos = f.pos || { x: 0, y: 0 };
+      const angle = snapAngle(f.angle);
+      return angle === 0 || angle === 180 ? (pos.y || 0) : (pos.x || 0);
+    };
+    const setShiftAlongAxis = (f, delta) => {
+      if (!delta) return;
+      const angle = snapAngle(f.angle);
+      const cur = shifts.get(f.id) || { dx: 0, dy: 0 };
+      if (angle === 0 || angle === 180) shifts.set(f.id, { ...cur, dy: (cur.dy || 0) + delta });
+      else shifts.set(f.id, { ...cur, dx: (cur.dx || 0) + delta });
+    };
+    const dirSign = (angle) => {
+      if (angle === 0) return 1;
+      if (angle === 180) return -1;
+      if (angle === 270) return 1;
+      if (angle === 90) return -1;
+      return 1;
+    };
+
+    for (const [_, list] of groups.entries()) {
+      if (!list || list.length < 2) continue;
+      const angle = snapAngle(list[0]?.angle);
+      const sign = dirSign(angle);
+      const sorted = [...list].sort((a, b) => (sign >= 0 ? getAxis(a) - getAxis(b) : getAxis(b) - getAxis(a)));
+      let cursor = null;
+      sorted.forEach((f) => {
+        const baseAxis = getAxis(f);
+        const currentShift = shifts.get(f.id);
+        const axis = baseAxis + (angle === 0 || angle === 180 ? currentShift?.dy || 0 : currentShift?.dx || 0);
+        if (cursor !== null) {
+          if (sign >= 0 && axis < cursor) setShiftAlongAxis(f, cursor - axis);
+          if (sign < 0 && axis > cursor) setShiftAlongAxis(f, cursor - axis);
+        }
+
+        const style = f.style || {};
+        const fieldScale = getFontScale(style.size || dims.fontSize);
+        const charHeightMm = 3 * fieldScale;
+        const stepMm = charHeightMm * 1.05;
+
+        const maxChars = getHalfWrapMaxChars(f, fieldScale);
+        const raw = f._computedValue ?? f.value ?? '';
+        const effectiveLines =
+          f.type === 'text' && maxChars && sanitizeText(raw).length > maxChars ? wrapTextByChars(raw, maxChars) : [raw];
+        const lineCount = Math.max(1, effectiveLines.length);
+        const extraGap = f.type === 'text' && style.wrapAtCenter === true && lineCount > 1 ? AFTER_WRAP_GAP_LINES : 0;
+        const advanceLines = f.type === 'text' && style.wrapAtCenter === true ? lineCount + extraGap : 1;
+
+        const newShift = shifts.get(f.id);
+        const axisAfterShift = baseAxis + (angle === 0 || angle === 180 ? newShift?.dy || 0 : newShift?.dx || 0);
+        cursor = axisAfterShift + sign * stepMm * advanceLines;
+      });
+    }
+
+    return (fields || []).map((f) => {
+      const delta = shifts.get(f.id);
+      if (!delta) return f;
+      return {
+        ...f,
+        pos: { ...(f.pos || {}), x: (f.pos?.x || 0) + (delta.dx || 0), y: (f.pos?.y || 0) + (delta.dy || 0) },
+      };
+    });
+  };
+
   for (let col = 0; col < columns; col += 1) {
     const columnOffset = marginLeft + (width + horizontalGap) * col + offsetX;
     const baseY = marginTop + offsetY;
+
+    const fields = applyFlowLayout(
+      baseFields.map((field) => {
+        if (field?.style?.visible === false) return field;
+        const valueRaw = field.value ?? '';
+        const substituted = substitutePlaceholders(valueRaw, data);
+        const finalValue = field.type === 'barcode' ? substituted || data.barcode || '' : substituted;
+        return { ...field, _computedValue: finalValue };
+      }),
+    );
 
     fields.forEach((field) => {
       if (field?.style?.visible === false) return;
@@ -353,9 +498,7 @@ export const buildTspl = (dimensions, content, data = {}) => {
         lines.push(`BAR ${x},${y},${barW},${barH}`);
         return;
       }
-      const valueRaw = field.value ?? '';
-      const substituted = substitutePlaceholders(valueRaw, data);
-      const finalValue = field.type === 'barcode' ? substituted || data.barcode || '' : substituted;
+      const finalValue = field._computedValue ?? '';
       if (!finalValue) return;
 
       if (field.type === 'barcode') {
@@ -383,8 +526,6 @@ export const buildTspl = (dimensions, content, data = {}) => {
         tsplScale *= 2;
       }
       if (tsplScale < 1) tsplScale = 1;
-      const x = mmToDots(columnOffset + (field.pos?.x || 0));
-      const y = mmToDots(baseY + (field.pos?.y || 0));
       const opacity = clampNumber(Number(style.opacity ?? 1), 0, 1);
       if (opacity <= 0) return;
       const elementDensity = opacity < 1 ? Math.max(1, clampInt(baseDensity * opacity, 0, 15)) : baseDensity;
@@ -394,75 +535,97 @@ export const buildTspl = (dimensions, content, data = {}) => {
       const paddingMm = style.background?.paddingMm ?? 0.8;
       const charHeightMm = 3 * fieldScale;
       const charWidthMm = 2 * fieldScale;
-      const textWidthMm = Math.max(1, sanitizeText(finalValue).length) * charWidthMm;
-      const textHeightMm = charHeightMm;
-      const boxWidthMm = textWidthMm + (style.background?.enabled ? paddingMm * 2 : 0);
-      const boxHeightMm = textHeightMm + (style.background?.enabled ? paddingMm * 2 : 0);
-      const underlineExtraMm = style.underline ? charHeightMm * 0.3 : 0;
-      const totalBoxHeightMm = boxHeightMm + underlineExtraMm;
+      const wrapMaxChars = getHalfWrapMaxChars(field, fieldScale);
+      const valueLines =
+        wrapMaxChars && sanitizeText(finalValue).length > wrapMaxChars
+          ? wrapTextByChars(finalValue, wrapMaxChars)
+          : [finalValue];
 
-      let boxLeftMm = columnOffset + (field.pos?.x || 0) - paddingMm;
-      let boxTopMm = baseY + (field.pos?.y || 0) - paddingMm;
-      let boxWmm = boxWidthMm;
-      let boxHmm = totalBoxHeightMm;
+      const lineStepMm = charHeightMm * 1.05;
+      const lineOffset = (i) => {
+        const step = lineStepMm * i;
+        if (angle === 0) return { dx: 0, dy: step };
+        if (angle === 90) return { dx: -step, dy: 0 };
+        if (angle === 180) return { dx: 0, dy: -step };
+        if (angle === 270) return { dx: step, dy: 0 };
+        return { dx: 0, dy: step };
+      };
 
-      if (angle === 90) {
-        boxLeftMm = columnOffset + (field.pos?.x || 0) - paddingMm - totalBoxHeightMm;
-        boxTopMm = baseY + (field.pos?.y || 0) - paddingMm;
-        boxWmm = totalBoxHeightMm;
-        boxHmm = boxWidthMm;
-      } else if (angle === 180) {
-        boxLeftMm = columnOffset + (field.pos?.x || 0) - paddingMm - boxWidthMm;
-        boxTopMm = baseY + (field.pos?.y || 0) - paddingMm - totalBoxHeightMm;
-      } else if (angle === 270) {
-        boxLeftMm = columnOffset + (field.pos?.x || 0) - paddingMm;
-        boxTopMm = baseY + (field.pos?.y || 0) - paddingMm - boxWidthMm;
-        boxWmm = totalBoxHeightMm;
-        boxHmm = boxWidthMm;
-      }
+      valueLines.forEach((lineValueRaw, i) => {
+        const lineValue = lineValueRaw ?? '';
+        if (!lineValue) return;
 
-      let boxX = mmToDots(boxLeftMm);
-      let boxY = mmToDots(boxTopMm);
-      let boxW = Math.max(1, mmToDots(boxWmm));
-      let boxH = Math.max(1, mmToDots(boxHmm));
-      if (boxX < 0) {
-        boxW = Math.max(1, boxW + boxX);
-        boxX = 0;
-      }
-      if (boxY < 0) {
-        boxH = Math.max(1, boxH + boxY);
-        boxY = 0;
-      }
-      if (style.background?.enabled) {
-        boxW = Math.max(1, boxW + 2);
-        boxH = Math.max(1, boxH + 2);
-      }
+        const { dx, dy } = lineOffset(i);
+        const x = mmToDots(columnOffset + (field.pos?.x || 0) + dx);
+        const y = mmToDots(baseY + (field.pos?.y || 0) + dy);
 
-      lines.push(`SETBOLD ${style.bold ? 3 : 0}`);
-      lines.push(style.underline ? 'UNDERLINE ON' : 'UNDERLINE OFF');
-      const textLine = `TEXT ${x},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(
-        finalValue,
-      )}"`;
-      lines.push(textLine);
-      // Many thermal printers ignore TSPL bold settings; emulate bold by overprinting with a 1-dot offset.
-      if (style.bold) {
-        lines.push(
-          `TEXT ${x + 1},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(finalValue)}"`,
-        );
-      }
-      if (style.underline) {
-        const textLen = Math.max(1, sanitizeText(finalValue).length);
-        const charWidthDots = Math.max(1, Math.round(16 * fieldScale));
-        const charHeightDots = Math.max(1, Math.round(24 * fieldScale));
-        const lineWidth = Math.max(1, Math.round(textLen * charWidthDots));
-        const underlineY = y + charHeightDots + 4;
-        lines.push(`BAR ${x},${underlineY},${lineWidth},2`);
-      }
-      if (style.background?.enabled) {
-        lines.push(`REVERSE ${boxX},${boxY},${boxW},${boxH}`);
-      }
-      lines.push('UNDERLINE OFF');
-      lines.push('SETBOLD 0');
+        const textWidthMm = Math.max(1, sanitizeText(lineValue).length) * charWidthMm;
+        const textHeightMm = charHeightMm;
+        const boxWidthMm = textWidthMm + (style.background?.enabled ? paddingMm * 2 : 0);
+        const boxHeightMm = textHeightMm + (style.background?.enabled ? paddingMm * 2 : 0);
+        const underlineExtraMm = style.underline ? charHeightMm * 0.3 : 0;
+        const totalBoxHeightMm = boxHeightMm + underlineExtraMm;
+
+        let boxLeftMm = columnOffset + (field.pos?.x || 0) + dx - paddingMm;
+        let boxTopMm = baseY + (field.pos?.y || 0) + dy - paddingMm;
+        let boxWmm = boxWidthMm;
+        let boxHmm = totalBoxHeightMm;
+
+        if (angle === 90) {
+          boxLeftMm = columnOffset + (field.pos?.x || 0) + dx - paddingMm - totalBoxHeightMm;
+          boxTopMm = baseY + (field.pos?.y || 0) + dy - paddingMm;
+          boxWmm = totalBoxHeightMm;
+          boxHmm = boxWidthMm;
+        } else if (angle === 180) {
+          boxLeftMm = columnOffset + (field.pos?.x || 0) + dx - paddingMm - boxWidthMm;
+          boxTopMm = baseY + (field.pos?.y || 0) + dy - paddingMm - totalBoxHeightMm;
+        } else if (angle === 270) {
+          boxLeftMm = columnOffset + (field.pos?.x || 0) + dx - paddingMm;
+          boxTopMm = baseY + (field.pos?.y || 0) + dy - paddingMm - boxWidthMm;
+          boxWmm = totalBoxHeightMm;
+          boxHmm = boxWidthMm;
+        }
+
+        let boxX = mmToDots(boxLeftMm);
+        let boxY = mmToDots(boxTopMm);
+        let boxW = Math.max(1, mmToDots(boxWmm));
+        let boxH = Math.max(1, mmToDots(boxHmm));
+        if (boxX < 0) {
+          boxW = Math.max(1, boxW + boxX);
+          boxX = 0;
+        }
+        if (boxY < 0) {
+          boxH = Math.max(1, boxH + boxY);
+          boxY = 0;
+        }
+        if (style.background?.enabled) {
+          boxW = Math.max(1, boxW + 2);
+          boxH = Math.max(1, boxH + 2);
+        }
+
+        lines.push(`SETBOLD ${style.bold ? 3 : 0}`);
+        lines.push(style.underline ? 'UNDERLINE ON' : 'UNDERLINE OFF');
+        lines.push(`TEXT ${x},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(lineValue)}"`);
+        // Many thermal printers ignore TSPL bold settings; emulate bold by overprinting with a 1-dot offset.
+        if (style.bold) {
+          lines.push(
+            `TEXT ${x + 1},${y},"${tsplFont}",${angle},${tsplScale},${tsplScale},"${sanitizeText(lineValue)}"`,
+          );
+        }
+        if (style.underline) {
+          const textLen = Math.max(1, sanitizeText(lineValue).length);
+          const charWidthDots = Math.max(1, Math.round(16 * fieldScale));
+          const charHeightDots = Math.max(1, Math.round(24 * fieldScale));
+          const lineWidth = Math.max(1, Math.round(textLen * charWidthDots));
+          const underlineY = y + charHeightDots + 4;
+          lines.push(`BAR ${x},${underlineY},${lineWidth},2`);
+        }
+        if (style.background?.enabled) {
+          lines.push(`REVERSE ${boxX},${boxY},${boxW},${boxH}`);
+        }
+        lines.push('UNDERLINE OFF');
+        lines.push('SETBOLD 0');
+      });
       if (elementDensity !== baseDensity) {
         lines.push(`DENSITY ${baseDensity}`);
       }

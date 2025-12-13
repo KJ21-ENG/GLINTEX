@@ -73,6 +73,143 @@ const LabelPreview = ({
   const pagePadding = Math.max(0, (pageWidth - totalLabelsWidth) / 2);
   const pxToMm = (px) => px / PX_PER_MM;
 
+  // Constrain long text so it doesn't cross into the other half of the label.
+  // This prevents long single-line fields from visually "overwriting" content placed on the opposite half.
+  const getHalfWrapMaxWidthMm = (block) => {
+    if (!block || block.type !== 'text') return null;
+    if (block.style?.wrapAtCenter !== true) return null;
+    const angle = snapAngle(block.angle || 0);
+    const pos = block.pos || { x: 0, y: 0 };
+    const originX = (pos.x || 0) + offsetX;
+    const originY = (pos.y || 0) + offsetY;
+    const left = offsetX;
+    const right = offsetX + width;
+    const top = offsetY;
+    const bottom = offsetY + height;
+    const centerX = (left + right) / 2;
+    const centerY = (top + bottom) / 2;
+
+    if (angle === 0) return (originX < centerX ? centerX : right) - originX;
+    if (angle === 180) return originX - (originX > centerX ? centerX : left);
+    if (angle === 90) return (originY < centerY ? centerY : bottom) - originY;
+    if (angle === 270) return originY - (originY > centerY ? centerY : top);
+    return null;
+  };
+
+  const wrapTextByChars = (text = '', maxChars = 0) => {
+    const max = Math.max(1, Math.floor(maxChars || 0));
+    const inputLines = String(text ?? '').split(/\r?\n/);
+    const out = [];
+
+    inputLines.forEach((lineRaw) => {
+      let line = String(lineRaw ?? '');
+      while (line.length > max) {
+        let breakAt = line.lastIndexOf(' ', max);
+        if (breakAt <= 0) breakAt = max;
+        out.push(line.slice(0, breakAt).trimEnd());
+        line = line.slice(breakAt).trimStart();
+      }
+      if (line.length) out.push(line);
+    });
+
+    return out.length ? out : [''];
+  };
+
+  const applyFlowLayout = (blocks) => {
+    const AFTER_WRAP_GAP_LINES = 1;
+    const groups = new Map();
+    const keyFor = (b) => {
+      const angle = snapAngle(b.angle || 0);
+      const pos = b.pos || { x: 0, y: 0 };
+      const originX = (pos.x || 0) + offsetX;
+      const originY = (pos.y || 0) + offsetY;
+      const centerX = (offsetX + offsetX + width) / 2;
+      const centerY = (offsetY + offsetY + height) / 2;
+      const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
+      const laneRaw = angle === 0 || angle === 180 ? originX : originY;
+      const lane = Math.round(laneRaw * 2) / 2;
+      return `${angle}:${half}:${lane}`;
+    };
+
+    (blocks || []).forEach((b) => {
+      if (!b || b.style?.visible === false) return;
+      const k = keyFor(b);
+      const arr = groups.get(k) || [];
+      arr.push(b);
+      groups.set(k, arr);
+    });
+
+    const shifts = new Map();
+    const getAxis = (b) => {
+      const pos = b.pos || { x: 0, y: 0 };
+      const angle = snapAngle(b.angle || 0);
+      return angle === 0 || angle === 180 ? (pos.y || 0) : (pos.x || 0);
+    };
+    const setShiftAlongAxis = (b, delta) => {
+      if (!delta) return;
+      const angle = snapAngle(b.angle || 0);
+      const cur = shifts.get(b.id) || { dx: 0, dy: 0 };
+      if (angle === 0 || angle === 180) shifts.set(b.id, { ...cur, dy: (cur.dy || 0) + delta });
+      else shifts.set(b.id, { ...cur, dx: (cur.dx || 0) + delta });
+    };
+    const dirSign = (angle) => {
+      if (angle === 0) return 1;
+      if (angle === 180) return -1;
+      if (angle === 270) return 1;
+      if (angle === 90) return -1;
+      return 1;
+    };
+
+    for (const [_, list] of groups.entries()) {
+      if (!list || list.length < 2) continue;
+      const angle = snapAngle(list[0]?.angle || 0);
+      const sign = dirSign(angle);
+      const sorted = [...list].sort((a, b) => (sign >= 0 ? getAxis(a) - getAxis(b) : getAxis(b) - getAxis(a)));
+      let cursor = null;
+      sorted.forEach((b) => {
+        const baseAxis = getAxis(b);
+        const currentShift = shifts.get(b.id);
+        const axis = baseAxis + (angle === 0 || angle === 180 ? currentShift?.dy || 0 : currentShift?.dx || 0);
+        if (cursor !== null) {
+          if (sign >= 0 && axis < cursor) setShiftAlongAxis(b, cursor - axis);
+          if (sign < 0 && axis > cursor) setShiftAlongAxis(b, cursor - axis);
+        }
+
+        const style = b.style || {};
+        const scale = getFontScale(style.size || dimensions.fontSize);
+        const charHeightMm = 3 * scale;
+        const stepMm = charHeightMm * 1.05;
+        const charWidthMm = 2 * scale;
+        const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
+        const safetyMm = style.background?.enabled ? 0.25 : 0;
+        const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(b);
+        const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
+        const availableTextWidthMm = wrapMaxWidthMm
+          ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
+          : null;
+        const maxChars = availableTextWidthMm ? Math.max(1, Math.floor(availableTextWidthMm / charWidthMm)) : null;
+        const raw = b.value || '';
+        const effectiveLines = maxChars && raw.length > maxChars ? wrapTextByChars(raw, maxChars) : [raw];
+        const lineCount = Math.max(1, effectiveLines.length);
+        const extraGap = b.type === 'text' && style.wrapAtCenter === true && lineCount > 1 ? AFTER_WRAP_GAP_LINES : 0;
+        const advanceLines = b.type === 'text' && style.wrapAtCenter === true ? lineCount + extraGap : 1;
+
+        const newShift = shifts.get(b.id);
+        const axisAfterShift = baseAxis + (angle === 0 || angle === 180 ? newShift?.dy || 0 : newShift?.dx || 0);
+        cursor = axisAfterShift + sign * stepMm * advanceLines;
+      });
+    }
+
+    return (blocks || []).map((b) => {
+      const delta = shifts.get(b.id);
+      if (!delta) return b;
+      return {
+        ...b,
+        pos: { ...(b.pos || {}), x: (b.pos?.x || 0) + (delta.dx || 0), y: (b.pos?.y || 0) + (delta.dy || 0) },
+      };
+    });
+  };
+
   const labelBoxStyle = useMemo(() => {
     const base = {
       width: `${mmToPx(width)}px`,
@@ -132,8 +269,21 @@ const LabelPreview = ({
     const charWidthMm = 2 * scale;
     const paddingMm = block.style?.background?.enabled ? block.style.background.paddingMm ?? 0.8 : 0;
     const underlineExtraMm = block.style?.underline ? charHeightMm * 0.3 : 0;
-    const widthMm = Math.max(1, (block.value || '').length) * charWidthMm + paddingMm * 2;
-    const heightMm = charHeightMm + paddingMm * 2 + underlineExtraMm;
+    const textLen = Math.max(1, (block.value || '').length);
+    const safetyMm = block.style?.background?.enabled ? 0.25 : 0; // +2 dots @203dpi
+    const naturalTextWidthMm = textLen * charWidthMm;
+    const naturalBlockWidthMm = naturalTextWidthMm + paddingMm * 2 + safetyMm;
+
+    const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(block);
+    const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
+    const availableTextWidthMm = wrapMaxWidthMm
+      ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
+      : null;
+    const lineCount = availableTextWidthMm ? Math.max(1, Math.ceil(naturalTextWidthMm / availableTextWidthMm)) : 1;
+    const lineStepMm = charHeightMm * 1.05;
+    const totalLineHeightMm = charHeightMm + lineStepMm * Math.max(0, lineCount - 1);
+    const widthMm = wrapMaxWidthMm ? Math.min(naturalBlockWidthMm, wrapMaxWidthMm) : naturalBlockWidthMm;
+    const heightMm = totalLineHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
     return { widthMm, heightMm };
   };
 
@@ -245,17 +395,28 @@ const LabelPreview = ({
     const backgroundColor = style.background?.enabled ? style.background.color || '#000000' : 'transparent';
     const textColor = style.background?.enabled ? style.background.textColor || '#ffffff' : '#0f172a';
     const visualOpacity = style.visible === false ? 0.35 : clampNumber(style.opacity ?? 1, 0, 1);
+    const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(block);
+    const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
+    const shouldWrap = wrapMaxWidthMm && widthMm > wrapMaxWidthMm;
+    const effectiveWidthMm = shouldWrap ? Math.min(widthMm, wrapMaxWidthMm) : widthMm;
+    const availableTextWidthMm = shouldWrap ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm) : null;
+    const lineCount = availableTextWidthMm ? Math.max(1, Math.ceil((textLen * charWidthMm) / availableTextWidthMm)) : 1;
+    const lineStepMm = charHeightMm * 1.05;
+    const totalLineHeightMm = charHeightMm + lineStepMm * Math.max(0, lineCount - 1);
+    const effectiveHeightMm = totalLineHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
     return {
       position: 'absolute',
       left: `${mmToPx(pos.x + offsetX)}px`,
       top: `${mmToPx(pos.y + offsetY)}px`,
       transform: `rotate(${snapAngle(angle)}deg)`,
       transformOrigin: 'top left',
-      whiteSpace: 'nowrap',
+      whiteSpace: shouldWrap ? 'normal' : 'nowrap',
+      overflowWrap: shouldWrap ? 'anywhere' : undefined,
+      wordBreak: shouldWrap ? 'break-word' : undefined,
       display: 'inline-block',
       boxSizing: 'border-box',
-      width: `${mmToPx(widthMm)}px`,
-      height: `${mmToPx(heightMm)}px`,
+      width: `${mmToPx(effectiveWidthMm)}px`,
+      height: `${mmToPx(effectiveHeightMm)}px`,
       fontSize: `${mmToPx(charHeightMm)}px`,
       lineHeight: `${mmToPx(charHeightMm * 1.05)}px`,
       letterSpacing: '0px', // mirror TSPL monospace font spacing
@@ -584,6 +745,77 @@ const LabelPreview = ({
       startDrag(text.id, touch.clientX, touch.clientY, false);
     };
 
+    if (text.type !== 'barcode' && text.type !== 'line' && style.wrapAtCenter === true) {
+      const scale = getFontScale(style.size || dimensions.fontSize);
+      const charHeightMm = 3 * scale;
+      const charWidthMm = 2 * scale;
+      const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
+      const safetyMm = style.background?.enabled ? 0.25 : 0;
+      const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(text);
+      const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
+      const availableTextWidthMm = wrapMaxWidthMm
+        ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
+        : null;
+      const maxChars = availableTextWidthMm ? Math.max(1, Math.floor(availableTextWidthMm / charWidthMm)) : null;
+      const rawValue = text.value || '';
+      const lines = maxChars && rawValue.length > maxChars ? wrapTextByChars(rawValue, maxChars) : [rawValue];
+      const stepMm = charHeightMm * 1.05;
+      const lineOffset = (i) => {
+        const step = stepMm * i;
+        if (angle === 0) return { dx: 0, dy: step };
+        if (angle === 90) return { dx: -step, dy: 0 };
+        if (angle === 180) return { dx: 0, dy: -step };
+        if (angle === 270) return { dx: step, dy: 0 };
+        return { dx: 0, dy: step };
+      };
+
+      return (
+        <>
+          {lines.map((lineValue, i) => {
+            const { dx, dy } = lineOffset(i);
+            const lineBlock = {
+              ...text,
+              value: lineValue,
+              pos: { x: (pos.x || 0) + dx, y: (pos.y || 0) + dy },
+              style: { ...style, wrapAtCenter: false },
+            };
+            return (
+              <div
+                key={`${text.id}-line-${i}`}
+                style={blockStyle(lineBlock, isSelected)}
+                className={`${className} select-none`}
+                onMouseDown={onMouseDown}
+                onTouchStart={onTouchStart}
+                onClick={() => {}}
+              >
+                {lineValue || ''}
+                {isSelected && i === 0 && (
+                  <div
+                    className="absolute w-7 h-7 bg-white border border-slate-300 rounded-full flex items-center justify-center text-[10px] text-slate-600 shadow-sm cursor-pointer"
+                    style={{ top: '-18px', right: '-18px' }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      cycleRotation(text.id);
+                    }}
+                    onTouchStart={(e) => {
+                      const t = e.touches[0];
+                      if (!t) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      cycleRotation(text.id);
+                    }}
+                  >
+                    {angle}°
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      );
+    }
+
     return (
       <div
         style={blockStyle(text, isSelected)}
@@ -801,7 +1033,7 @@ const LabelPreview = ({
                     </div>
                   </div>
                 )}
-                {(content.texts || []).map((text) => (
+                {applyFlowLayout(content.texts || []).map((text) => (
                   <React.Fragment key={text.id}>
                     {renderTextBlock(text, 'text-slate-900', selectedIds, setSelectedIds)}
                   </React.Fragment>
@@ -1849,6 +2081,28 @@ const LabelDesigner = () => {
                                   value={text.pos?.y ?? 0}
                                   onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
                                 />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {(() => {
+                                  const allSelectedTexts = selectedBlocks.filter((t) => t.type !== 'barcode' && t.type !== 'line');
+                                  const wrapAllOn = allSelectedTexts.length > 0 && allSelectedTexts.every((t) => t.style?.wrapAtCenter === true);
+                                  const wrapSomeOn = allSelectedTexts.some((t) => t.style?.wrapAtCenter === true);
+                                  return (
+                                    <>
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4"
+                                        checked={wrapAllOn}
+                                        ref={(el) => {
+                                          if (!el) return;
+                                          el.indeterminate = wrapSomeOn && !wrapAllOn;
+                                        }}
+                                        onChange={(e) => updateTextStyle(selectedTextIds, { wrapAtCenter: e.target.checked })}
+                                      />
+                                      <Label className="text-xs">Wrap within half label</Label>
+                                    </>
+                                  );
+                                })()}
                               </div>
                               {text.style?.background?.enabled && (
                                 <div className="flex flex-wrap items-center gap-2 mt-2 w-full">

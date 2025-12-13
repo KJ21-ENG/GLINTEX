@@ -1466,7 +1466,7 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
 
 router.post('/api/issue_to_holo_machine', async (req, res) => {
   try {
-    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId } = req.body || {};
+    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId, shift } = req.body || {};
     if (!date) {
       return res.status(400).json({ error: 'Missing date' });
     }
@@ -1565,6 +1565,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           operatorId: operatorId || null,
           barcode: `HLO-${lotNo}-${Date.now()}`,
           note: note || null,
+          shift: shift || null,
           metallicBobbins: totalBobbins,
           metallicBobbinsWeight: totalWeight,
           yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
@@ -1691,7 +1692,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
 
 router.post('/api/issue_to_coning_machine', async (req, res) => {
   try {
-    const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt } = req.body || {};
+    const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt, shift } = req.body || {};
     if (!date) return res.status(400).json({ error: 'Missing date' });
     const crateRows = Array.isArray(crates) ? crates : [];
     if (crateRows.length === 0) return res.status(400).json({ error: 'Scan at least one crate to issue' });
@@ -1899,6 +1900,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
         operatorId: operatorId || null,
         barcode: `CN-${lotNo}-${Date.now()}`,
         note: note || null,
+        shift: shift || null,
         rollsIssued: Number(totalRolls || 0),
         requiredPerConeNetWeight,
         expectedCones,

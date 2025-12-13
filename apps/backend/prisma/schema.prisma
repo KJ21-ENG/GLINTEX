@@ -112,6 +112,7 @@ model IssueToHoloMachine {
   operatorId          String?
   barcode             String   @unique
   note                String?
+  shift               String?
   metallicBobbins     Int      @default(0)
   metallicBobbinsWeight Float  @default(0)
   yarnKg              Float    @default(0)
@@ -196,6 +197,7 @@ model IssueToConingMachine {
   operatorId      String?
   barcode         String   @unique
   note            String?
+  shift           String?
   rollsIssued     Int      @default(0)
   requiredPerConeNetWeight Float   @default(0)
   expectedCones  Float     @default(0)

@@ -69,7 +69,7 @@ async function getOrCreateBobbin(pcsTypeName) {
     pcsTypeName = 'Bobbin';
   }
   const normalizedName = String(pcsTypeName).trim();
-  
+
   // Try to find existing bobbin (case-insensitive)
   const existing = await prisma.bobbin.findFirst({
     where: {
@@ -79,16 +79,16 @@ async function getOrCreateBobbin(pcsTypeName) {
       },
     },
   });
-  
+
   if (existing) {
     return existing.id;
   }
-  
+
   // Create new bobbin
   const newBobbin = await prisma.bobbin.create({
     data: { name: normalizedName },
   });
-  
+
   return newBobbin.id;
 }
 
@@ -532,26 +532,26 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
     const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
     const rows = rowIds.length > 0
       ? await prisma.receiveFromCutterMachineRow.findMany({
-          where: { id: { in: rowIds } },
-          select: {
-            id: true,
-            pieceId: true,
-            barcode: true,
-            netWt: true,
-            tareWt: true,
-            pktBoxWt: true,
-            pcsBoxWt: true,
-            grossWt: true,
-            bobbinQuantity: true,
-          },
-        })
+        where: { id: { in: rowIds } },
+        select: {
+          id: true,
+          pieceId: true,
+          barcode: true,
+          netWt: true,
+          tareWt: true,
+          pktBoxWt: true,
+          pcsBoxWt: true,
+          grossWt: true,
+          bobbinQuantity: true,
+        },
+      })
       : [];
     const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
     const pieces = pieceIds.length
       ? await prisma.inboundItem.findMany({
-          where: { id: { in: pieceIds } },
-          select: { id: true, lotNo: true, itemId: true, seq: true },
-        })
+        where: { id: { in: pieceIds } },
+        select: { id: true, lotNo: true, itemId: true, seq: true },
+      })
       : [];
     const pieceMap = new Map(pieces.map((p) => [p.id, p]));
     const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
@@ -742,7 +742,7 @@ router.post('/api/whatsapp/send-event', async (req, res) => {
     if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
     const seen = new Set();
     const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
-    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(()=>{}); else whatsapp.sendToChatIdSafe(r.value, msg).catch(()=>{}); });
+    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(() => { }); else whatsapp.sendToChatIdSafe(r.value, msg).catch(() => { }); });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -814,9 +814,9 @@ router.post('/api/lots', async (req, res) => {
       };
     });
 
-      const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
-      if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-      const materialCode = deriveMaterialCodeFromItem(itemRecord);
+    const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    const materialCode = deriveMaterialCodeFromItem(itemRecord);
 
     const totalPieces = preparedPieces.length;
     const totalWeight = preparedPieces.reduce((sum, piece) => sum + piece.weight, 0);
@@ -831,7 +831,7 @@ router.post('/api/lots', async (req, res) => {
 
       // Use the sequence value directly as the lot number (e.g. "001", "002")
       const lotNo = String(sequence.nextValue).padStart(3, "0");
-      
+
       // Update piece IDs with the actual lot number
       const updatedPieces = preparedPieces.map((piece, idx) => {
         const seq = idx + 1;
@@ -952,21 +952,21 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
           id: randomUUID(),
           date,
           itemId,
-            lotNo,
-            cutId,
-            count: pieceIds.length,
-            totalWeight,
-            pieceIds: pieceIdsCsv,
-            reason: 'internal',
-            note: note || null,
-            machineId: machineId || null,
+          lotNo,
+          cutId,
+          count: pieceIds.length,
+          totalWeight,
+          pieceIds: pieceIdsCsv,
+          reason: 'internal',
+          note: note || null,
+          machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeIssueBarcode({ materialCode, lotNo, seq: firstSeq }),
         },
       });
 
-        return { issueRecord: issueRow };
-      });
+      return { issueRecord: issueRow };
+    });
 
     await logCrud({
       entityType: 'issue_to_cutter_machine',
@@ -1041,7 +1041,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
 
     const pieceIncrements = aggregateNetByPiece(rows);
     const pieceCountIncrements = aggregatePieceCounts(rows);
-    
+
     const pieceIds = Array.from(pieceIncrements.keys());
     const inboundAndTotals = await fetchInboundAndTotals(pieceIds);
     const pieceMeta = buildPieceSummaries(pieceIds, inboundAndTotals, pieceIncrements);
@@ -1051,7 +1051,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
       // Normalize PcsTypeName to bobbin IDs (create bobbins if they don't exist)
       const uniquePcsTypeNames = [...new Set(rows.map(r => r.pcsTypeName).filter(Boolean))];
       const bobbinIdMap = new Map();
-      
+
       for (const pcsTypeName of uniquePcsTypeNames) {
         const normalizedName = pcsTypeName.trim() || 'Bobbin';
         // Find or create bobbin (case-insensitive)
@@ -1063,16 +1063,16 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
             },
           },
         });
-        
+
         if (!bobbin) {
           bobbin = await tx.bobbin.create({
             data: { name: normalizedName },
           });
         }
-        
+
         bobbinIdMap.set(pcsTypeName, bobbin.id);
       }
-      
+
       // Also ensure "Bobbin" exists for empty/null values
       if (!bobbinIdMap.has(null) && !bobbinIdMap.has('')) {
         let defaultBobbin = await tx.bobbin.findFirst({
@@ -1083,13 +1083,13 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
             },
           },
         });
-        
+
         if (!defaultBobbin) {
           defaultBobbin = await tx.bobbin.create({
             data: { name: 'Bobbin' },
           });
         }
-        
+
         bobbinIdMap.set(null, defaultBobbin.id);
         bobbinIdMap.set('', defaultBobbin.id);
       }
@@ -1107,7 +1107,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
         bobbinQuantity: row.bobbinQuantity,
         bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
       }));
-      
+
       if (createPayload.length > 0) {
         await tx.receiveFromCutterMachineRow.createMany({ data: createPayload });
       }
@@ -1232,6 +1232,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       receiveDate,
       issueBarcode,
       cutId,
+      shift,
     } = req.body || {};
 
     if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
@@ -1358,7 +1359,8 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
           helperId: helperRec ? helperRec.id : null,
           bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
-          shift: helperRec ? helperRec.name : null,
+          shift: shift || null,
+          helperName: helperRec ? helperRec.name : null,
           cutId: cutRecord ? cutRecord.id : null,
           cut: cutRecord ? cutRecord.name : null,
           narration: 'Manual entry',
@@ -1634,7 +1636,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     })();
 
     if (tareWeight == null) {
-       return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
+      return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
     }
 
     const netWeight = grossNum - tareWeight;
@@ -1665,7 +1667,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
         createdBy: createdBy || 'manual',
       },
     });
-    
+
     const netIncrement = Number(netWeight);
     await prisma.receiveFromHoloMachinePieceTotal.upsert({
       where: { pieceId },
@@ -1717,9 +1719,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
     const coningRows = rowIds.length
       ? await prisma.receiveFromConingMachineRow.findMany({
-          where: { id: { in: rowIds } },
-          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
-        })
+        where: { id: { in: rowIds } },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+      })
       : [];
 
     const matchedConingRowIds = new Set(coningRows.map((row) => row.id));
@@ -1735,9 +1737,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
     const holoRows = holoWhere.length
       ? await prisma.receiveFromHoloMachineRow.findMany({
-          where: { OR: holoWhere },
-          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
-        })
+        where: { OR: holoWhere },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+      })
       : [];
 
     const rows = [...coningRows, ...holoRows];
@@ -2941,7 +2943,7 @@ router.put('/api/boxes/:id', async (req, res) => {
 router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Find the issue_to_cutter_machine record
     const issueRecord = await prisma.issueToCutterMachine.findUnique({ where: { id } });
     if (!issueRecord) {
@@ -2957,12 +2959,12 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
         return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
       }
     }
-    
+
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
       // Delete the issue_to_cutter_machine record
       await tx.issueToCutterMachine.delete({ where: { id } });
-      
+
       // Mark pieces as available again
       if (cleanPieceIds.length > 0) {
         await tx.inboundItem.updateMany({
@@ -3021,18 +3023,18 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
     try {
       const itemName = existing.itemId ? (await prisma.item.findUnique({ where: { id: existing.itemId } })).name : '';
       sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id });
-       // If deleting this piece caused available count to become zero, notify
-       try {
-         const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
-         console.log(`Available pieces after inbound piece delete for ${itemName}: ${availableAfter}`);
-         if (availableAfter === 0) {
-           console.log(`Triggering out_of_stock notification for ${itemName}`);
-           // Add small delay to ensure first message is queued before second
-           setTimeout(() => {
-             sendNotification('item_out_of_stock', { itemName, available: 0 });
-           }, 1000);
-         }
-       } catch (e) { console.error('failed to check/send out_of_stock after inbound piece delete', e); }
+      // If deleting this piece caused available count to become zero, notify
+      try {
+        const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
+        console.log(`Available pieces after inbound piece delete for ${itemName}: ${availableAfter}`);
+        if (availableAfter === 0) {
+          console.log(`Triggering out_of_stock notification for ${itemName}`);
+          // Add small delay to ensure first message is queued before second
+          setTimeout(() => {
+            sendNotification('item_out_of_stock', { itemName, available: 0 });
+          }, 1000);
+        }
+      } catch (e) { console.error('failed to check/send out_of_stock after inbound piece delete', e); }
     } catch (e) { console.error('notify inbound piece deleted error', e); }
   } catch (err) {
     console.error('Failed to delete inbound piece', err);
@@ -3081,14 +3083,14 @@ router.put('/api/settings', async (req, res) => {
         update: updateData,
         create: createData,
       });
-    await logCrud({
-      entityType: 'settings',
-      entityId: '1',
-      action: 'update',
-      before: previousSettings,
-      after: settings,
-      payload: settings,
-    });
+      await logCrud({
+        entityType: 'settings',
+        entityId: '1',
+        action: 'update',
+        before: previousSettings,
+        after: settings,
+        payload: settings,
+      });
       return res.json(settings);
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
@@ -3208,17 +3210,17 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
       try {
         const itemIdentifier = lotRec ? lotRec.itemId : null;
         const itemNameForCheck = itemRec ? itemRec.name : (lotRec ? (await prisma.item.findUnique({ where: { id: lotRec.itemId } })).name : '');
-         if (itemIdentifier) {
-           const availableAfter = await prisma.inboundItem.count({ where: { itemId: itemIdentifier, status: 'available' } });
-           console.log(`Available pieces after lot delete for ${itemNameForCheck}: ${availableAfter}`);
-           if (availableAfter === 0) {
-             console.log(`Triggering out_of_stock notification for ${itemNameForCheck}`);
-             // Add small delay to ensure first message is queued before second
-             setTimeout(() => {
-               sendNotification('item_out_of_stock', { itemName: itemNameForCheck || '', available: 0 });
-             }, 1000);
-           }
-         }
+        if (itemIdentifier) {
+          const availableAfter = await prisma.inboundItem.count({ where: { itemId: itemIdentifier, status: 'available' } });
+          console.log(`Available pieces after lot delete for ${itemNameForCheck}: ${availableAfter}`);
+          if (availableAfter === 0) {
+            console.log(`Triggering out_of_stock notification for ${itemNameForCheck}`);
+            // Add small delay to ensure first message is queued before second
+            setTimeout(() => {
+              sendNotification('item_out_of_stock', { itemName: itemNameForCheck || '', available: 0 });
+            }, 1000);
+          }
+        }
       } catch (e) { console.error('failed to check/send out_of_stock after lot delete', e); }
     } catch (e) { console.error('notify lot deleted error', e); }
   } catch (err) {

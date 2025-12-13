@@ -288,6 +288,7 @@ model ReceiveFromCutterMachineRow {
   boxId         String?
   operatorId    String?
   helperId      String?
+  helperName    String?
   bobbinQuantity Int? @map("bobbin_quantity")
   issuedBobbins  Int   @default(0)
   issuedBobbinWeight Float @default(0)

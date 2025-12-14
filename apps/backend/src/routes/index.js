@@ -51,6 +51,13 @@ function toInt(val) {
   return Number.isFinite(rounded) ? rounded : null;
 }
 
+// Round weight value to 3 decimal places for consistent storage
+function roundTo3Decimals(val) {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 1000) / 1000;
+}
+
 function toOptionalString(val) {
   if (val === undefined || val === null) return null;
   const str = String(val).trim();
@@ -804,8 +811,8 @@ router.post('/api/lots', async (req, res) => {
 
     const preparedPieces = pieces.map((piece, idx) => {
       const seq = piece.seq || idx + 1;
-      const weight = Number(piece.weight);
-      if (!Number.isFinite(weight) || weight <= 0) {
+      const weight = roundTo3Decimals(piece.weight);
+      if (weight <= 0) {
         throw new Error(`Invalid weight for piece ${idx + 1}`);
       }
       return {
@@ -819,7 +826,7 @@ router.post('/api/lots', async (req, res) => {
     const materialCode = deriveMaterialCodeFromItem(itemRecord);
 
     const totalPieces = preparedPieces.length;
-    const totalWeight = preparedPieces.reduce((sum, piece) => sum + piece.weight, 0);
+    const totalWeight = roundTo3Decimals(preparedPieces.reduce((sum, piece) => sum + piece.weight, 0));
 
     const result = await prisma.$transaction(async (tx) => {
       // Get next lot number from sequence

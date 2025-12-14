@@ -197,6 +197,12 @@ export const substitutePlaceholders = (value = '', data = {}) => {
   if (!value || typeof value !== 'string') return value;
   // Keys that should be formatted as DD/MM/YYYY dates
   const dateKeys = ['date', 'inboundDate'];
+  // Keys that should be formatted with 3 decimals (weight values)
+  const weightKeys = [
+    'weight', 'totalWeight', 'netWeight', 'grossWeight', 'tareWeight',
+    'rollWeight', 'coneWeight', 'yarnKg', 'metallicBobbinsWeight',
+    'perConeTargetG', 'issuedBobbinWeight'
+  ];
   return value.replace(/(\{\{\s*([\w.]+)\s*\}\})|(@([\w.]+))/g, (match, p1, p2, p3, p4) => {
     const key = p2 || p4;
     if (key && data && Object.prototype.hasOwnProperty.call(data, key)) {
@@ -205,6 +211,11 @@ export const substitutePlaceholders = (value = '', data = {}) => {
       // Format date values to DD/MM/YYYY
       if (dateKeys.includes(key) && val) {
         return formatDateDDMMYYYY(val) || String(val);
+      }
+      // Format weight values to 3 decimals
+      if (weightKeys.includes(key)) {
+        const num = Number(val);
+        return Number.isFinite(num) ? num.toFixed(3) : String(val);
       }
       return String(val);
     }

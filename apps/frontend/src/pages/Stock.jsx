@@ -41,7 +41,7 @@ export function Stock() {
   const [view, setView] = useState(() => (isHolo ? 'holo' : 'jumbo')); // 'jumbo' | 'bobbins' | 'holo'
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
-  const [groupByItemFirm, setGroupByItemFirm] = useState(false);
+  const [groupByItem, setGroupByItem] = useState(false);
 
   // --- Filters ---
   const [search, setSearch] = useState("");
@@ -158,10 +158,10 @@ export function Stock() {
   }, [allLots, search, filters]);
 
   const displayedLots = useMemo(() => {
-    if (!groupByItemFirm) return filteredLots;
+    if (!groupByItem) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+      const key = `${lot.itemId || ''}`;
       const existing = map.get(key) || {
         lotNo: `Group-${key}`,
         itemId: lot.itemId,
@@ -187,7 +187,7 @@ export function Stock() {
       map.set(key, existing);
     });
     return Array.from(map.values());
-  }, [filteredLots, groupByItemFirm]);
+  }, [filteredLots, groupByItem]);
 
   // --- Handlers ---
 
@@ -220,7 +220,7 @@ export function Stock() {
     }
   }, [isCutter, isHolo, view]);
 
-  useEffect(() => { setExpandedLot(null); }, [groupByItemFirm, view, processId]);
+  useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
 
   async function handleMarkWastage(pieceId) {
     if (!pieceId) return;
@@ -339,7 +339,7 @@ export function Stock() {
 
   function handleApplyLotFilter(lots) {
     setSearch(lots.join(" "));
-    setGroupByItemFirm(false); // Optionally disable grouping to see the individual lots
+    setGroupByItem(false); // Optionally disable grouping to see the individual lots
   }
 
   // --- Render Helper ---
@@ -431,8 +431,8 @@ export function Stock() {
             </div>
             <div className="flex items-center gap-2 ml-auto pb-1">
               <Label className="text-xs cursor-pointer flex items-center gap-2">
-                <input type="checkbox" checked={groupByItemFirm} onChange={e => setGroupByItemFirm(e.target.checked)} className="rounded border-gray-300" />
-                Group by Item / Firm
+                <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
+                Group by Item
               </Label>
             </div>
           </CardContent>
@@ -441,11 +441,11 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {processId === 'coning' ? (
-        <ConingView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : isHolo ? (
-        <HoloView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : showBobbins ? (
-        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : (
         <div className="rounded-md border bg-card">
           <Table>
@@ -455,8 +455,8 @@ export function Stock() {
                 <TableHead>Lot No</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
-                <TableHead>Firm</TableHead>
-                <TableHead>Supplier</TableHead>
+                {!groupByItem ? <TableHead>Firm</TableHead> : null}
+                <TableHead className={groupByItem ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
                 <TableHead className="">Pieces</TableHead>
                 <TableHead className="">Total Wt</TableHead>
                 <TableHead className="">Pending Wt</TableHead>
@@ -464,30 +464,30 @@ export function Stock() {
             </TableHeader>
             <TableBody>
               {displayedLots.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={groupByItem ? 8 : 9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
               ) : (
                 displayedLots.map((l, idx) => {
-                  const isExpanded = !groupByItemFirm && expandedLot === l.lotNo;
+                  const isExpanded = !groupByItem && expandedLot === l.lotNo;
                   return (
                     <React.Fragment key={l.lotNo || idx}>
                       <TableRow
                         className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => !groupByItemFirm && toggleExpand(l.lotNo)}
+                        onClick={() => !groupByItem && toggleExpand(l.lotNo)}
                       >
                         <TableCell>
-                          {!groupByItemFirm && (
+                          {!groupByItem && (
                             isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />
                           )}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {groupByItemFirm ? (
+                          {groupByItem ? (
                             <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
                           ) : (l.lotNo || '—')}
                         </TableCell>
                         <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
                         <TableCell>{l.itemName}</TableCell>
-                        <TableCell>{l.firmName}</TableCell>
-                        <TableCell>{l.supplierName}</TableCell>
+                        {!groupByItem ? <TableCell>{l.firmName}</TableCell> : null}
+                        <TableCell className={groupByItem ? "bg-primary/5 font-medium" : ""}>{l.supplierName}</TableCell>
                         <TableCell className="">
                           {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
                         </TableCell>
@@ -496,7 +496,7 @@ export function Stock() {
                           {formatKg(l.pendingWeight)}
                         </TableCell>
                       </TableRow>
-                      {isExpanded && !groupByItemFirm && (
+                      {isExpanded && !groupByItem && (
                         <TableRow className="bg-muted/30 hover:bg-muted/30">
                           <TableCell colSpan={9} className="p-4">
                             <div className="bg-background border rounded-lg p-4 shadow-sm">

@@ -118,7 +118,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+      const key = `${lot.itemId || ''}`;
       const existing = map.get(key) || {
         lotNo: '', // grouped rows show dash for lot
         itemId: lot.itemId,
@@ -143,6 +143,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
 
+  const tableColumnCount = groupBy ? 7 : 8;
+
   return (
     <div className="rounded-md border bg-card">
       <Table>
@@ -150,20 +152,23 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           <TableRow>
             <TableHead className="w-[30px]"></TableHead>
             <TableHead>Lot No</TableHead>
+            <TableHead>Date</TableHead>
             <TableHead>Item</TableHead>
-            <TableHead>Firm / Supplier</TableHead>
+            {!groupBy ? <TableHead>Firm</TableHead> : null}
+            <TableHead className={groupBy ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
             <TableHead className="">Cones</TableHead>
             <TableHead className="">Net Weight</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {displayLots.length === 0 ? (
-            <TableRow><TableCell colSpan={6} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
           ) : (
-            displayLots.map((lot) => {
+            displayLots.map((lot, idx) => {
+              const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
               const isExpanded = !groupBy && expandedLot === lot.lotNo;
               return (
-                <React.Fragment key={lot.lotNo}>
+                <React.Fragment key={rowKey}>
                   <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
                     <TableCell>
                       {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
@@ -173,17 +178,16 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                         <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
                       ) : (lot.lotNo || '—')}
                     </TableCell>
+                    <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
                     <TableCell>{lot.itemName}</TableCell>
-                    <TableCell>
-                      {lot.firmName}
-                      <div className="text-xs text-muted-foreground">{lot.supplierName}</div>
-                    </TableCell>
+                    {!groupBy ? <TableCell>{lot.firmName}</TableCell> : null}
+                    <TableCell className={groupBy ? "bg-primary/5 font-medium" : ""}>{lot.supplierName}</TableCell>
                     <TableCell className="">{lot.totalCones}</TableCell>
                     <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
                   </TableRow>
                   {isExpanded && (
                     <TableRow className="bg-muted/30">
-                      <TableCell colSpan={6} className="p-4">
+                      <TableCell colSpan={8} className="p-4">
                         <div className="border rounded-md bg-background">
                           <Table>
                             <TableHeader>

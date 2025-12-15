@@ -456,7 +456,7 @@ export function Stock() {
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
                 {!groupByItem ? <TableHead>Firm</TableHead> : null}
-                <TableHead className={groupByItem ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
+                <TableHead>Supplier</TableHead>
                 <TableHead className="">Pieces</TableHead>
                 <TableHead className="">Total Wt</TableHead>
                 <TableHead className="">Pending Wt</TableHead>
@@ -487,7 +487,7 @@ export function Stock() {
                         <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
                         <TableCell>{l.itemName}</TableCell>
                         {!groupByItem ? <TableCell>{l.firmName}</TableCell> : null}
-                        <TableCell className={groupByItem ? "bg-primary/5 font-medium" : ""}>{l.supplierName}</TableCell>
+                        <TableCell>{l.supplierName}</TableCell>
                         <TableCell className="">
                           {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
                         </TableCell>

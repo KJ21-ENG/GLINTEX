@@ -156,7 +156,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
             <TableHead>Item</TableHead>
             <TableHead>Yarn / Twist</TableHead>
             {!groupBy ? <TableHead>Firm</TableHead> : null}
-            <TableHead className={groupBy ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
+            <TableHead>Supplier</TableHead>
             <TableHead className="">Total Rolls</TableHead>
             <TableHead className="">Net Weight</TableHead>
           </TableRow>
@@ -185,7 +185,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                     <TableCell>{l.itemName}</TableCell>
                     <TableCell>{l.yarnName} / {l.twistName}</TableCell>
                     {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
-                    <TableCell className={groupBy ? "bg-primary/5 font-medium" : ""}>{l.supplierName}</TableCell>
+                    <TableCell>{l.supplierName}</TableCell>
                     <TableCell className="">{l.totalRolls}</TableCell>
                     <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                   </TableRow>

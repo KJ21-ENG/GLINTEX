@@ -171,7 +171,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                         <TableHead>Date</TableHead>
                         <TableHead>Item</TableHead>
                         {!groupBy ? <TableHead>Firm</TableHead> : null}
-                        <TableHead className={groupBy ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
+                        <TableHead>Supplier</TableHead>
                         <TableHead className="">Bobbins (Avail/Total)</TableHead>
                         <TableHead className="">Weight (Avail/Total)</TableHead>
                         <TableHead className="">Crates</TableHead>
@@ -194,7 +194,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                                         <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
                                         <TableCell>{l.itemName}</TableCell>
                                         {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
-                                        <TableCell className={groupBy ? "bg-primary/5 font-medium" : ""}>{l.supplierName}</TableCell>
+                                        <TableCell>{l.supplierName}</TableCell>
                                         <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
                                         <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
                                         <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>

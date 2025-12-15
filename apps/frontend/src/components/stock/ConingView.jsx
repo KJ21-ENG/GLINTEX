@@ -155,7 +155,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
             <TableHead>Date</TableHead>
             <TableHead>Item</TableHead>
             {!groupBy ? <TableHead>Firm</TableHead> : null}
-            <TableHead className={groupBy ? "bg-primary/10 text-primary" : ""}>Supplier</TableHead>
+            <TableHead>Supplier</TableHead>
             <TableHead className="">Cones</TableHead>
             <TableHead className="">Net Weight</TableHead>
           </TableRow>
@@ -181,7 +181,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                     <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
                     <TableCell>{lot.itemName}</TableCell>
                     {!groupBy ? <TableCell>{lot.firmName}</TableCell> : null}
-                    <TableCell className={groupBy ? "bg-primary/5 font-medium" : ""}>{lot.supplierName}</TableCell>
+                    <TableCell>{lot.supplierName}</TableCell>
                     <TableCell className="">{lot.totalCones}</TableCell>
                     <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
                   </TableRow>

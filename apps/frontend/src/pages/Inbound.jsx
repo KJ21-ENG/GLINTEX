@@ -122,9 +122,6 @@ export function Inbound() {
         <div className="space-y-6 fade-in">
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                 <h1 className="text-2xl font-bold tracking-tight">Inbound Receiving</h1>
-                <div className="text-sm text-muted-foreground bg-secondary/50 px-3 py-1 rounded-full border border-secondary">
-                    Sequence is auto-generated
-                </div>
             </div>
 
             <Card>

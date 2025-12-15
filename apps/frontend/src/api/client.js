@@ -16,13 +16,17 @@ const getApiBase = () => {
 
 const BASE = getApiBase();
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, headers } = {}) {
   const res = await fetch(BASE + path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(headers || {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    }
     const raw = await res.text();
     let message = raw;
     let parsed = null;
@@ -46,6 +50,35 @@ async function request(path, { method = 'GET', body } = {}) {
 
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
+export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
+
+// Auth
+export async function authStatus() { return await request('/api/auth/status'); }
+export async function authMe() { return await request('/api/auth/me'); }
+export async function authLogin(username, password) { return await request('/api/auth/login', { method: 'POST', body: { username, password } }); }
+export async function authBootstrap({ bootstrapToken, username, password, displayName }) {
+  return await request('/api/auth/bootstrap', { method: 'POST', body: { bootstrapToken, username, password, displayName } });
+}
+export async function authLogout() { return await request('/api/auth/logout', { method: 'POST' }); }
+
+// Admin (roles/users)
+export async function listAdminRoles() { return await request('/api/admin/roles'); }
+export async function createAdminRole({ key, name, description }) {
+  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description } });
+}
+export async function updateAdminRole(id, { name, description }) {
+  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description } });
+}
+export async function listAdminUsers() { return await request('/api/admin/users'); }
+export async function createAdminUser({ username, displayName, password, roleId, isActive }) {
+  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleId, isActive } });
+}
+export async function updateAdminUser(id, { displayName, roleId, isActive }) {
+  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleId, isActive } });
+}
+export async function resetAdminUserPassword(id, password) {
+  return await request(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });
+}
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
@@ -147,6 +180,19 @@ export async function whatsappGroups() { return await request('/api/whatsapp/gro
 export default {
   health,
   getDB,
+  getLotSequenceNext,
+  authStatus,
+  authMe,
+  authLogin,
+  authBootstrap,
+  authLogout,
+  listAdminRoles,
+  createAdminRole,
+  updateAdminRole,
+  listAdminUsers,
+  createAdminUser,
+  updateAdminUser,
+  resetAdminUserPassword,
   createLot,
   createIssueToMachine,
   createIssueToCutterMachine,

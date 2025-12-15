@@ -179,6 +179,12 @@ const safeReadJson = async (response) => {
   }
 };
 
+const notifyUnauthorized = (response) => {
+  if (!response || response.status !== 401) return;
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+};
+
 export const DEFAULT_DIMENSIONS = {
   width: 48,
   height: 25,
@@ -737,7 +743,10 @@ export const loadTemplate = async (stageKey, options = {}) => {
   const apiBase = options.apiBase || API_BASE_DEFAULT;
   if (!stageKey) return null;
   try {
-    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`);
+    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, {
+      credentials: 'include',
+    });
+    notifyUnauthorized(response);
     if (response.status === 404) return null;
     const payload = await safeReadJson(response);
     const tpl = payload?.template;
@@ -763,8 +772,10 @@ export const saveTemplate = async (stageKey, template, options = {}) => {
     const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ dimensions: payload.dimensions, content: payload.content }),
     });
+    notifyUnauthorized(response);
     const result = await safeReadJson(response);
     if (!response.ok) {
       return { success: false, error: result?.error || 'Failed to save template', result };

@@ -1,11 +1,10 @@
 import app from './app.js';
 import whatsapp from '../whatsapp/service.js';
+import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 
 const PORT = process.env.PORT || 4000;
 
-const server = app.listen(PORT, () => {
-  console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
-});
+let server = null;
 
 async function startWhatsapp() {
   try {
@@ -16,6 +15,31 @@ async function startWhatsapp() {
   }
 }
 
-startWhatsapp();
+async function start() {
+  try {
+    const result = await ensureDefaultAdminUser();
+    if (result?.created) {
+      console.log('============================================================');
+      console.log('GLINTEX DEFAULT ADMIN CREATED');
+      console.log('Username:', result.username);
+      if (result.passwordSource === 'default') {
+        console.log('Password:', result.password);
+      } else {
+        console.log('Password: (set via DEFAULT_ADMIN_PASSWORD)');
+      }
+      console.log('============================================================');
+    }
+  } catch (err) {
+    console.error('Failed to ensure default admin user', err);
+  }
+
+  server = app.listen(PORT, () => {
+    console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
+  });
+
+  startWhatsapp();
+}
+
+start();
 
 export default server;

@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
+import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users } from 'lucide-react';
 import * as api from '../api';
+import UserManagement from './Settings/UserManagement';
 
 export function Settings() {
     const { db, brand, refreshing, refreshDb, updateSettings } = useInventory();
+    const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('whatsapp');
+    const isAdmin = user?.roleKey === 'admin';
 
     return (
         <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
@@ -36,15 +40,38 @@ export function Settings() {
                         >
                             <Printer className="w-4 h-4" /> Label Designer
                         </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => setActiveTab('users')}
+                            className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'users' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
+                          >
+                            <Users className="w-4 h-4" /> Users & Roles
+                          </button>
+                        )}
                     </nav>
                 </CardContent>
             </Card>
 
             <div className="flex-1 w-full space-y-6">
+                <Card>
+                  <CardContent className="pt-6 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Signed in as </span>
+                      <span className="font-medium">{user?.displayName || user?.username || '—'}</span>
+                      {user?.roleKey && (
+                        <Badge className="ml-2">{user.roleKey}</Badge>
+                      )}
+                    </div>
+                    <Button variant="outline" onClick={logout}>
+                      <LogOut className="w-4 h-4 mr-2" /> Logout
+                    </Button>
+                  </CardContent>
+                </Card>
                 {activeTab === 'whatsapp' && <WhatsAppSettings db={db} refreshDb={refreshDb} updateSettings={updateSettings} />}
                 {activeTab === 'templates' && <MessageTemplates />}
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
+                {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
     );

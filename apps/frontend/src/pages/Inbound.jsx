@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
+import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
@@ -24,11 +25,8 @@ export function Inbound() {
     // Load Preview Sequence
     const fetchSequence = async () => {
         try {
-            // Using direct fetch as this isn't in the context actions yet, or we can move it there.
-            // Keeping it here as per original implementation.
-            const res = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
-            const j = await res.json();
-            setPreviewLotNo(j.next);
+            const res = await api.getLotSequenceNext();
+            setPreviewLotNo(res?.next || "");
         } catch (e) {
             console.error("Failed to fetch sequence", e);
         }
@@ -490,4 +488,3 @@ function RecentLotsTable({ db }) {
         </Card>
     );
 }
-

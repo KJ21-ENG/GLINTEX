@@ -119,11 +119,10 @@ export function ConingReceiveForm() {
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
     const isReceivedOverIssued = totalIssuedWeight > 0 && totalReceivedWeight > totalIssuedWeight + 0.001;
 
-    const receiveRowsForLot = useMemo(() => {
-        const lotNo = issue?.lotNo;
-        if (!lotNo) return [];
-        return (db.receive_from_coning_machine_rows || []).filter((row) => (row.issue?.lotNo || '') === lotNo);
-    }, [db.receive_from_coning_machine_rows, issue?.lotNo]);
+    const receiveRowsForIssue = useMemo(() => {
+        if (!issue?.id) return [];
+        return (db.receive_from_coning_machine_rows || []).filter((row) => row.issueId === issue.id);
+    }, [db.receive_from_coning_machine_rows, issue?.id]);
 
     async function handleSubmit() {
         if (!issue || cart.length === 0) return;
@@ -277,7 +276,7 @@ export function ConingReceiveForm() {
                                     </div>
                                     <InfoPopover
                                         title={`Coning Receives (${issue.lotNo})`}
-                                        items={receiveRowsForLot}
+                                        items={receiveRowsForIssue}
                                         emptyText="No receives yet for this lot."
                                         widthClassName="w-[560px]"
                                         bodyClassName="max-h-[240px] overflow-auto"

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
-import { Button, Input, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
+import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
 import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
@@ -58,9 +58,7 @@ export function Settings() {
                     <div className="text-sm">
                       <span className="text-muted-foreground">Signed in as </span>
                       <span className="font-medium">{user?.displayName || user?.username || '—'}</span>
-                      {user?.roleKey && (
-                        <Badge className="ml-2">{user.roleKey}</Badge>
-                      )}
+                      {/* role is shown elsewhere; avoid duplicating it here */}
                     </div>
                     <Button variant="outline" onClick={logout}>
                       <LogOut className="w-4 h-4 mr-2" /> Logout

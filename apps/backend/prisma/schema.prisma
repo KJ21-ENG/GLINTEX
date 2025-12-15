@@ -9,40 +9,52 @@ datasource db {
 }
 
 model Item {
-  id    String @id @default(cuid())
-  name  String
-  lots  Lot[]
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lots      Lot[]
 }
 
 model Yarn {
-  id    String @id @default(cuid())
-  name  String @unique
-  issues IssueToHoloMachine[]
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  issues    IssueToHoloMachine[]
 }
 
 model Cut {
-  id    String @id @default(cuid())
-  name  String @unique
-  receiveRows ReceiveFromCutterMachineRow[]
+  id           String   @id @default(cuid())
+  name         String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  receiveRows  ReceiveFromCutterMachineRow[]
   cutterIssues IssueToCutterMachine[]
 }
 
 model Twist {
-  id    String @id @default(cuid())
-  name  String @unique
+  id         String   @id @default(cuid())
+  name       String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
   holoIssues IssueToHoloMachine[]
 }
 
 model Firm {
-  id   String @id @default(cuid())
-  name String
-  lots Lot[]
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lots      Lot[]
 }
 
 model Supplier {
-  id   String @id @default(cuid())
-  name String
-  lots Lot[]
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lots      Lot[]
 }
 
 model Lot {
@@ -55,6 +67,7 @@ model Lot {
   totalPieces Int
   totalWeight Float
   createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
   item        Item       @relation(fields: [itemId], references: [id])
   firm        Firm       @relation(fields: [firmId], references: [id])
   supplier    Supplier?  @relation(fields: [supplierId], references: [id])
@@ -69,12 +82,15 @@ model InboundItem {
   seq       Int
   barcode   String  @unique
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Machine {
   id                    String                  @id @default(cuid())
   name                  String
   processType           String                  @default("all")
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
   issueToCutterMachines IssueToCutterMachine[]
   issueToHoloMachines   IssueToHoloMachine[]
   issueToConingMachines IssueToConingMachine[]
@@ -85,6 +101,8 @@ model Operator {
   name                  String
   role                  String                              @default("operator")
   processType           String                              @default("all")
+  createdAt             DateTime                            @default(now())
+  updatedAt             DateTime                            @updatedAt
   issueToCutterMachines IssueToCutterMachine[]
   receiveRows           ReceiveFromCutterMachineRow[]      @relation("OperatorReceiveRows")
   helperRows            ReceiveFromCutterMachineRow[]      @relation("HelperReceiveRows")
@@ -100,6 +118,8 @@ model Bobbin {
   id          String                          @id @default(cuid())
   name        String
   weight      Float?                          // Weight in kg (BoxWt)
+  createdAt   DateTime                        @default(now())
+  updatedAt   DateTime                        @updatedAt
   receiveRows ReceiveFromCutterMachineRow[]
 }
 
@@ -121,6 +141,7 @@ model IssueToHoloMachine {
   receivedRowRefs     Json     @default("[]")
   rollsProducedEstimate Int?
   createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
   machine             Machine?  @relation(fields: [machineId], references: [id])
   operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
   yarn                Yarn?      @relation(fields: [yarnId], references: [id])
@@ -145,6 +166,7 @@ model ReceiveFromHoloMachineRow {
   notes       String?
   createdBy   String?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
   rollType    RollType?          @relation(fields: [rollTypeId], references: [id])
   box         Box?               @relation(fields: [boxId], references: [id])
@@ -157,6 +179,7 @@ model ReceiveFromHoloMachinePieceTotal {
   totalRolls      Int      @default(0)
   totalNetWeight  Float    @default(0)
   wastageNetWeight Float   @default(0)
+  createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
@@ -165,6 +188,7 @@ model RollType {
   name      String   @unique
   weight    Float?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   receiveRows ReceiveFromHoloMachineRow[]
 }
 
@@ -173,12 +197,14 @@ model ConeType {
   name      String   @unique
   weight    Float?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Wrapper {
   id        String   @id @default(cuid())
   name      String   @unique
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model StickerTemplate {
@@ -205,6 +231,7 @@ model IssueToConingMachine {
   expectedCones  Float     @default(0)
   receivedRowRefs Json     @default("[]")
   createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
   machine         Machine?  @relation(fields: [machineId], references: [id])
   operator        Operator? @relation("IssueToConingOperator", fields: [operatorId], references: [id])
   receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
@@ -227,6 +254,7 @@ model ReceiveFromConingMachineRow {
   notes       String?
   createdBy   String?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   issue       IssueToConingMachine @relation("IssueConingRelation", fields: [issueId], references: [id])
   operator    Operator?            @relation("OperatorConingReceive", fields: [operatorId], references: [id])
   helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
@@ -238,6 +266,7 @@ model ReceiveFromConingMachinePieceTotal {
   totalCones      Int      @default(0)
   totalNetWeight  Float    @default(0)
   wastageNetWeight Float   @default(0)
+  createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
@@ -255,6 +284,8 @@ model IssueToCutterMachine {
   machineId   String?
   operatorId  String?
   barcode     String  @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   cut         Cut?      @relation(fields: [cutId], references: [id])
   machine     Machine?  @relation(fields: [machineId], references: [id])
   operator    Operator? @relation(fields: [operatorId], references: [id])
@@ -264,6 +295,8 @@ model ReceiveFromCutterMachineUpload {
   id               String                              @id @default(cuid())
   originalFilename String
   uploadedAt       DateTime                            @default(now())
+  createdAt        DateTime                            @default(now())
+  updatedAt        DateTime                            @updatedAt
   rowCount         Int                                 @default(0)
   rows             ReceiveFromCutterMachineRow[]
 }
@@ -306,6 +339,7 @@ model ReceiveFromCutterMachineRow {
   createdBy     String?
   modifiedBy    String?
   createdAt     DateTime                            @default(now())
+  updatedAt     DateTime                            @updatedAt
   upload        ReceiveFromCutterMachineUpload      @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   bobbin        Bobbin?                              @relation(fields: [bobbinId], references: [id])
   box           Box?                                 @relation(fields: [boxId], references: [id])
@@ -320,6 +354,7 @@ model ReceiveFromCutterMachinePieceTotal {
   totalNetWeight Float    @default(0)
   totalBob       Int      @default(0)
   wastageNetWeight Float  @default(0)
+  createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
 
@@ -330,21 +365,29 @@ model Settings {
   logoDataUrl  String?
   whatsappNumber String?
   whatsappGroupIds String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 model Sequence {
   id        String @id @default("lot_sequence")
   nextValue Int    @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model HoloIssueSequence {
   id        String @id @default("holo_issue_seq")
   nextValue Int    @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model ConingIssueSequence {
   id        String @id @default("coning_issue_seq")
   nextValue Int    @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model WhatsappTemplate {
@@ -354,6 +397,8 @@ model WhatsappTemplate {
   template String
   sendToPrimary Boolean @default(true)
   groupIds String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Box {
@@ -361,6 +406,8 @@ model Box {
   name        String
   weight      Float
   processType String                          @default("all")
+  createdAt   DateTime                        @default(now())
+  updatedAt   DateTime                        @updatedAt
   receiveRows ReceiveFromCutterMachineRow[]
   holoReceiveRows ReceiveFromHoloMachineRow[]
   coningReceiveRows ReceiveFromConingMachineRow[]

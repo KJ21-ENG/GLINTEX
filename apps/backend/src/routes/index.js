@@ -6,7 +6,7 @@ import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { logCrud } from '../utils/auditLogger.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries } from '../utils/barcodeHelpers.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -849,7 +849,7 @@ router.post('/api/lots', async (req, res) => {
           itemId,
           seq,
           status: 'available',
-          barcode: makeInboundBarcode({ materialCode, lotNo, seq }),
+          barcode: makeInboundBarcode({ lotNo, seq }),
         };
       });
 
@@ -968,7 +968,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
           note: note || null,
           machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: makeIssueBarcode({ materialCode, lotNo, seq: firstSeq }),
+          barcode: makeIssueBarcode({ lotNo, seq: firstSeq }),
         },
       });
 
@@ -1561,6 +1561,14 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     const normalizedYarnKg = Number(yarnKg || 0);
 
     const created = await prisma.$transaction(async (tx) => {
+      // Get next Holo issue series number
+      const holoSeq = await tx.holoIssueSequence.upsert({
+        where: { id: 'holo_issue_seq' },
+        update: { nextValue: { increment: 1 } },
+        create: { id: 'holo_issue_seq', nextValue: 2 },
+      });
+      const seriesNumber = holoSeq.nextValue - 1; // Use value before increment
+
       const issue = await tx.issueToHoloMachine.create({
         data: {
           date,
@@ -1570,7 +1578,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           twistId: twistRecord.id,
           machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: `HLO-${lotNo}-${Date.now()}`,
+          barcode: makeHoloIssueBarcode({ series: seriesNumber }),
           note: note || null,
           shift: shift || null,
           metallicBobbins: totalBobbins,
@@ -1652,10 +1660,11 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
 
-    const tsPart = Date.now().toString().slice(-6);
-    const randPart = Math.random().toString(36).slice(-4).toUpperCase();
-    const lotPart = (issue?.lotNo || 'HLO').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'HLO';
-    const barcode = `RHO-${lotPart}-${tsPart}${randPart}`;
+    // Extract series from issue barcode and count existing crates
+    const issueSeriesNumber = parseHoloSeries(issue?.barcode) || 1;
+    const existingCrates = await prisma.receiveFromHoloMachineRow.count({ where: { issueId } });
+    const crateIndex = existingCrates + 1;
+    const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
     const createdRow = await prisma.receiveFromHoloMachineRow.create({
       data: {
@@ -1898,21 +1907,32 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     const expectedCones = requiredPerConeNetWeight > 0
       ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
       : 0;
-    const created = await prisma.issueToConingMachine.create({
-      data: {
-        date,
-        itemId,
-        lotNo,
-        machineId: machineId || null,
-        operatorId: operatorId || null,
-        barcode: `CN-${lotNo}-${Date.now()}`,
-        note: note || null,
-        shift: shift || null,
-        rollsIssued: Number(totalRolls || 0),
-        requiredPerConeNetWeight,
-        expectedCones,
-        receivedRowRefs: preparedCrates,
-      },
+
+    const created = await prisma.$transaction(async (tx) => {
+      // Get next Coning issue series number
+      const coningSeq = await tx.coningIssueSequence.upsert({
+        where: { id: 'coning_issue_seq' },
+        update: { nextValue: { increment: 1 } },
+        create: { id: 'coning_issue_seq', nextValue: 2 },
+      });
+      const seriesNumber = coningSeq.nextValue - 1; // Use value before increment
+
+      return tx.issueToConingMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: makeConingIssueBarcode({ series: seriesNumber }),
+          note: note || null,
+          shift: shift || null,
+          rollsIssued: Number(totalRolls || 0),
+          requiredPerConeNetWeight,
+          expectedCones,
+          receivedRowRefs: preparedCrates,
+        },
+      });
     });
     res.json({ ok: true, issueToConingMachine: created });
   } catch (err) {
@@ -1965,9 +1985,10 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
 
     const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
     const crateIndex = existingCount + 1;
-    const paddedIndex = String(crateIndex).padStart(3, '0');
-    const baseCode = issue.barcode || issue.lotNo || issue.id;
-    const barcode = `RCN-${baseCode}-${paddedIndex}`;
+    // Extract series from issue barcode (e.g., ICO-001 -> 1)
+    const issueSeriesMatch = issue.barcode?.match(/^ICO-(\d+)/i);
+    const issueSeriesNumber = issueSeriesMatch ? Number(issueSeriesMatch[1]) : 1;
+    const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
     const createdRow = await prisma.receiveFromConingMachineRow.create({
       data: {

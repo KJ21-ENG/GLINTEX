@@ -347,23 +347,48 @@ export const migrateContent = (raw) => {
   };
 };
 
-export const deriveMaterialCodeFromItem = (item) => {
-  if (!item) return DEFAULT_MATERIAL_CODE;
-  if (item.barcodeMaterialCode) {
-    return String(item.barcodeMaterialCode).trim().toUpperCase() || DEFAULT_MATERIAL_CODE;
-  }
-  return DEFAULT_MATERIAL_CODE;
+// ===== Standardized Barcode Helpers =====
+// Format: {PREFIX}-{SERIES/LOT}-{SEQ}[-C{CRATE}]
+// Approved Prefixes: INB, ICU, RCU, IHO, RHO, ICO, RCO
+
+const padSeq = (seq, length = 3) => {
+  const num = Number(seq);
+  if (!Number.isFinite(num)) return String(seq || '').padStart(length, '0');
+  return String(num).padStart(length, '0');
 };
 
-export const makeInboundBarcode = ({ materialCode = DEFAULT_MATERIAL_CODE, lotNo, seq }) =>
-  `INB-${String(materialCode || DEFAULT_MATERIAL_CODE).toUpperCase()}-${lotNo}-${String(seq).padStart(3, '0')}`;
+// Material code deprecated but kept for backward compatibility
+export const deriveMaterialCodeFromItem = (item) => 'MET';
 
-export const makeIssueBarcode = ({ materialCode = DEFAULT_MATERIAL_CODE, lotNo, seq }) =>
-  `ISM-${String(materialCode || DEFAULT_MATERIAL_CODE).toUpperCase()}-${lotNo}-${seq == null ? '000' : String(seq).padStart(3, '0')}`;
+// INBOUND: INB-{LOT}-{SEQ}
+export const makeInboundBarcode = ({ lotNo, seq }) =>
+  `INB-${padSeq(lotNo)}-${padSeq(seq)}`;
 
+// CUTTER ISSUE: ICU-{LOT}-{SEQ}
+export const makeIssueBarcode = ({ lotNo, seq }) =>
+  `ICU-${padSeq(lotNo)}-${seq == null ? '000' : padSeq(seq)}`;
+
+// CUTTER RECEIVE: RCU-{LOT}-{SEQ}-C{CRATE}
 export const makeReceiveBarcode = ({ lotNo, seq, crateIndex = 1 }) =>
-  `REC-${lotNo}-${String(seq).padStart(3, '0')}-C${String(crateIndex).padStart(3, '0')}`;
+  `RCU-${padSeq(lotNo)}-${padSeq(seq)}-C${padSeq(crateIndex)}`;
 
+// HOLO ISSUE: IHO-{SERIES}
+export const makeHoloIssueBarcode = ({ series }) =>
+  `IHO-${padSeq(series)}`;
+
+// HOLO RECEIVE: RHO-{SERIES}-C{CRATE}
+export const makeHoloReceiveBarcode = ({ series, crateIndex = 1 }) =>
+  `RHO-${padSeq(series)}-C${padSeq(crateIndex)}`;
+
+// CONING ISSUE: ICO-{SERIES}
+export const makeConingIssueBarcode = ({ series }) =>
+  `ICO-${padSeq(series)}`;
+
+// CONING RECEIVE: RCO-{SERIES}-C{CRATE}
+export const makeConingReceiveBarcode = ({ series, crateIndex = 1 }) =>
+  `RCO-${padSeq(series)}-C${padSeq(crateIndex)}`;
+
+// Parse crate index from receive barcodes
 export const parseReceiveCrateIndex = (barcode) => {
   if (typeof barcode !== 'string') return null;
   const match = barcode.trim().match(/-C(\d+)$/i);

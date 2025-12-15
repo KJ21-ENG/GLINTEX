@@ -337,6 +337,16 @@ model Sequence {
   nextValue Int    @default(1)
 }
 
+model HoloIssueSequence {
+  id        String @id @default("holo_issue_seq")
+  nextValue Int    @default(1)
+}
+
+model ConingIssueSequence {
+  id        String @id @default("coning_issue_seq")
+  nextValue Int    @default(1)
+}
+
 model WhatsappTemplate {
   id       Int    @id @default(autoincrement())
   event    String @unique

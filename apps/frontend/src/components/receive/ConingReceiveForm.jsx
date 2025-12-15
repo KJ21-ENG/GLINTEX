@@ -377,7 +377,15 @@ export function ConingReceiveForm() {
                             </Table>
                         </div>
 
-                        <div className="flex justify-end">
+                        <div className="flex justify-between items-center pt-4 border-t">
+                            <div className="text-sm">
+                                {cart.length > 0 && (
+                                    <>
+                                        Tare: {formatKg(cart.reduce((sum, row) => sum + (Number(row.grossWeight || 0) - calcRowNet(row)), 0))} | {' '}
+                                        <span className="font-bold">Net: {formatKg(cartTotals.totalNetWeight)}</span>
+                                    </>
+                                )}
+                            </div>
                             <Button onClick={handleSubmit} disabled={submitting || cart.length === 0}>Save Receive</Button>
                         </div>
                     </CardContent>

@@ -9,8 +9,17 @@ const os = require('os');
 const app = express();
 const PORT = 9090;
 
-// Enable CORS for all routes
-app.use(cors());
+// Middleware to set Chrome PNA header for all responses
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    next();
+});
+
+// Enable CORS for all routes with PNA compatible options
+app.use(cors({
+    origin: true, // Reflects the request origin to allow any cloud domain
+    credentials: true // often required specifically for PNA
+}));
 
 // Parse JSON bodies
 app.use(bodyParser.json());

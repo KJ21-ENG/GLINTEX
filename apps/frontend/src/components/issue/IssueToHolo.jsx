@@ -191,41 +191,64 @@ export function IssueToHolo() {
                         </div>
                         <div>
                             <Label>Machine</Label>
-                            <Select value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })}>
-                                <option value="">Select Machine</option>
-                                {(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'holo').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.machineId}
+                                onChange={e => setForm({ ...form, machineId: e.target.value })}
+                                options={(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'holo').map(m => ({ id: m.id, name: m.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Machine"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Operator</Label>
-                            <Select value={form.operatorId} onChange={e => setForm({ ...form, operatorId: e.target.value })}>
-                                <option value="">Select Operator</option>
-                                {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'holo').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.operatorId}
+                                onChange={e => setForm({ ...form, operatorId: e.target.value })}
+                                options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'holo').map(o => ({ id: o.id, name: o.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Operator"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Shift (Optional)</Label>
-                            <Select value={form.shift} onChange={e => setForm({ ...form, shift: e.target.value })}>
-                                <option value="">Select Shift</option>
-                                <option value="Day">Day</option>
-                                <option value="Night">Night</option>
-                            </Select>
+                            <Select
+                                value={form.shift}
+                                onChange={e => setForm({ ...form, shift: e.target.value })}
+                                options={[{ value: 'Day', label: 'Day' }, { value: 'Night', label: 'Night' }]}
+                                placeholder="Select Shift"
+                                clearable
+                                searchable={false}
+                            />
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <Label>Yarn</Label>
-                            <Select value={form.yarnId} onChange={e => setForm({ ...form, yarnId: e.target.value })}>
-                                <option value="">Select Yarn</option>
-                                {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.yarnId}
+                                onChange={e => setForm({ ...form, yarnId: e.target.value })}
+                                options={(db.yarns || []).map(y => ({ id: y.id, name: y.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Yarn"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Twist</Label>
-                            <Select value={form.twistId} onChange={e => setForm({ ...form, twistId: e.target.value })}>
-                                <option value="">Select Twist</option>
-                                {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.twistId}
+                                onChange={e => setForm({ ...form, twistId: e.target.value })}
+                                options={(db.twists || []).map(t => ({ id: t.id, name: t.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Twist"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Total Yarn Kg</Label>

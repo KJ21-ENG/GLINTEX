@@ -9,6 +9,7 @@ export { Input } from './Input.jsx';
 export { SearchableInput } from './SearchableInput.jsx';
 export { BobbinEditor } from './BobbinEditor.jsx';
 export { Select } from './Select.jsx';
+export { SearchableSelect } from './SearchableSelect.jsx';
 export { Pill } from './Pill.jsx';
 export { Pagination } from './Pagination.jsx';
 export { Popover } from './Popover.jsx';

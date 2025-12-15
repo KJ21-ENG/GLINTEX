@@ -175,34 +175,54 @@ export function HoloReceiveForm() {
                             <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
                             <div>
                                 <Label>Machine</Label>
-                                <Select value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })}>
-                                    <option value="">Select</option>
-                                    {db?.machines?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                </Select>
+                                <Select
+                                    value={form.machineId}
+                                    onChange={e => setForm({ ...form, machineId: e.target.value })}
+                                    options={(db?.machines || []).map(m => ({ id: m.id, name: m.name }))}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Machine"
+                                    clearable
+                                />
                             </div>
                             <div>
                                 <Label>Operator</Label>
-                                <Select value={form.operatorId} onChange={e => setForm({ ...form, operatorId: e.target.value })}>
-                                    <option value="">Select</option>
-                                    {db?.operators?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                </Select>
+                                <Select
+                                    value={form.operatorId}
+                                    onChange={e => setForm({ ...form, operatorId: e.target.value })}
+                                    options={(db?.operators || []).map(o => ({ id: o.id, name: o.name }))}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Operator"
+                                    clearable
+                                />
                             </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
                                 <Label>Roll Type</Label>
-                                <Select value={form.rollTypeId} onChange={e => setForm({ ...form, rollTypeId: e.target.value })}>
-                                    <option value="">Select</option>
-                                    {db?.rollTypes?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                </Select>
+                                <Select
+                                    value={form.rollTypeId}
+                                    onChange={e => setForm({ ...form, rollTypeId: e.target.value })}
+                                    options={(db?.rollTypes || []).map(r => ({ id: r.id, name: r.name }))}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Roll Type"
+                                    clearable
+                                />
                             </div>
                             <div>
                                 <Label>Box</Label>
-                                <Select value={form.boxId} onChange={e => setForm({ ...form, boxId: e.target.value })}>
-                                    <option value="">Select</option>
-                                    {db?.boxes?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                </Select>
+                                <Select
+                                    value={form.boxId}
+                                    onChange={e => setForm({ ...form, boxId: e.target.value })}
+                                    options={(db?.boxes || []).map(b => ({ id: b.id, name: b.name }))}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Box"
+                                    clearable
+                                />
                             </div>
                             <div>
                                 <Label>Roll Count</Label>

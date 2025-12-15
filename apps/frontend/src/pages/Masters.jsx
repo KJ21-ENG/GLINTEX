@@ -312,11 +312,13 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
                     <Input placeholder="Machine Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" />
-                    <Select value={newProcessType} onChange={e => setNewProcessType(e.target.value)} className="w-40">
-                        {PROCESS_OPTIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </Select>
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-40"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -339,11 +341,13 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} className="h-8">
-                                                {PROCESS_OPTIONS.map(opt => (
-                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                                ))}
-                                            </Select>
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
@@ -413,15 +417,20 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
             <CardContent className="space-y-4">
                 <div className="flex gap-2 flex-wrap">
                     <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[150px]" />
-                    <Select value={newRole} onChange={e => setNewRole(e.target.value)} className="w-32">
-                        <option value="operator">Operator</option>
-                        <option value="helper">Helper</option>
-                    </Select>
-                    <Select value={newProcessType} onChange={e => setNewProcessType(e.target.value)} className="w-40">
-                        {PROCESS_OPTIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </Select>
+                    <Select
+                        value={newRole}
+                        onChange={e => setNewRole(e.target.value)}
+                        className="w-32"
+                        options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
+                        searchable={false}
+                    />
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-40"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -445,19 +454,24 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Select value={editRole} onChange={e => setEditRole(e.target.value)} className="h-8">
-                                                <option value="operator">Operator</option>
-                                                <option value="helper">Helper</option>
-                                            </Select>
+                                            <Select
+                                                value={editRole}
+                                                onChange={e => setEditRole(e.target.value)}
+                                                className="h-8"
+                                                options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
+                                                searchable={false}
+                                            />
                                         ) : <span className="text-sm text-muted-foreground capitalize">{item.role || 'operator'}</span>}
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} className="h-8">
-                                                {PROCESS_OPTIONS.map(opt => (
-                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                                ))}
-                                            </Select>
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
@@ -527,11 +541,13 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                 <div className="flex gap-2 flex-wrap">
                     <Input placeholder="Box Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[120px]" />
                     <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-28" />
-                    <Select value={newProcessType} onChange={e => setNewProcessType(e.target.value)} className="w-36">
-                        {PROCESS_OPTIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </Select>
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-36"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -558,11 +574,13 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} className="h-8">
-                                                {PROCESS_OPTIONS.map(opt => (
-                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                                ))}
-                                            </Select>
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}

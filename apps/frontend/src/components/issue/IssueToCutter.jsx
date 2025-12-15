@@ -150,40 +150,63 @@ export function IssueToCutter() {
                         </div>
                         <div>
                             <Label>Item</Label>
-                            <Select value={itemId} onChange={e => setItemId(e.target.value)}>
-                                <option value="">Select Item</option>
-                                {db.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                            </Select>
+                            <Select
+                                value={itemId}
+                                onChange={e => setItemId(e.target.value)}
+                                options={db.items.map(i => ({ id: i.id, name: i.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Item"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Lot</Label>
-                            <Select value={lotNo} onChange={e => setLotNo(e.target.value)}>
-                                <option value="">Select Lot</option>
-                                {candidateLots.map(l => <option key={l.lotNo} value={l.lotNo}>{l.lotNo} ({formatDateDDMMYYYY(l.date)})</option>)}
-                            </Select>
+                            <Select
+                                value={lotNo}
+                                onChange={e => setLotNo(e.target.value)}
+                                options={candidateLots.map(l => ({ value: l.lotNo, label: `${l.lotNo} (${formatDateDDMMYYYY(l.date)})` }))}
+                                placeholder="Select Lot"
+                                clearable
+                            />
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                             <Label>Machine</Label>
-                            <Select value={machineId} onChange={e => setMachineId(e.target.value)}>
-                                <option value="">Select Machine</option>
-                                {(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                            </Select>
+                            <Select
+                                value={machineId}
+                                onChange={e => setMachineId(e.target.value)}
+                                options={(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => ({ id: m.id, name: m.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Machine"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Operator</Label>
-                            <Select value={operatorId} onChange={e => setOperatorId(e.target.value)}>
-                                <option value="">Select Operator</option>
-                                {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                            </Select>
+                            <Select
+                                value={operatorId}
+                                onChange={e => setOperatorId(e.target.value)}
+                                options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => ({ id: o.id, name: o.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Operator"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Cut</Label>
-                            <Select value={cutId} onChange={e => setCutId(e.target.value)}>
-                                <option value="">Select Cut</option>
-                                {db.cuts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </Select>
+                            <Select
+                                value={cutId}
+                                onChange={e => setCutId(e.target.value)}
+                                options={db.cuts.map(c => ({ id: c.id, name: c.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Cut"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Note</Label>

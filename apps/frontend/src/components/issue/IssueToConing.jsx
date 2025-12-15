@@ -213,48 +213,76 @@ export function IssueToConing() {
                         <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
                         <div>
                             <Label>Machine</Label>
-                            <Select value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })}>
-                                <option value="">Select Machine</option>
-                                {(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'coning').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.machineId}
+                                onChange={e => setForm({ ...form, machineId: e.target.value })}
+                                options={(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'coning').map(m => ({ id: m.id, name: m.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Machine"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Operator</Label>
-                            <Select value={form.operatorId} onChange={e => setForm({ ...form, operatorId: e.target.value })}>
-                                <option value="">Select Operator</option>
-                                {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.operatorId}
+                                onChange={e => setForm({ ...form, operatorId: e.target.value })}
+                                options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Operator"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Shift (Optional)</Label>
-                            <Select value={form.shift} onChange={e => setForm({ ...form, shift: e.target.value })}>
-                                <option value="">Select Shift</option>
-                                <option value="Day">Day</option>
-                                <option value="Night">Night</option>
-                            </Select>
+                            <Select
+                                value={form.shift}
+                                onChange={e => setForm({ ...form, shift: e.target.value })}
+                                options={[{ value: 'Day', label: 'Day' }, { value: 'Night', label: 'Night' }]}
+                                placeholder="Select Shift"
+                                clearable
+                                searchable={false}
+                            />
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <Label>Cone Type</Label>
-                            <Select value={form.coneTypeId} onChange={e => setForm({ ...form, coneTypeId: e.target.value })}>
-                                <option value="">Select</option>
-                                {db.cone_types?.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.coneTypeId}
+                                onChange={e => setForm({ ...form, coneTypeId: e.target.value })}
+                                options={(db.cone_types || []).map(x => ({ id: x.id, name: x.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Cone Type"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Wrapper</Label>
-                            <Select value={form.wrapperId} onChange={e => setForm({ ...form, wrapperId: e.target.value })}>
-                                <option value="">Select</option>
-                                {db.wrappers?.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.wrapperId}
+                                onChange={e => setForm({ ...form, wrapperId: e.target.value })}
+                                options={(db.wrappers || []).map(x => ({ id: x.id, name: x.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Wrapper"
+                                clearable
+                            />
                         </div>
                         <div>
                             <Label>Box</Label>
-                            <Select value={form.boxId} onChange={e => setForm({ ...form, boxId: e.target.value })}>
-                                <option value="">Select</option>
-                                {db.boxes?.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-                            </Select>
+                            <Select
+                                value={form.boxId}
+                                onChange={e => setForm({ ...form, boxId: e.target.value })}
+                                options={(db.boxes || []).map(x => ({ id: x.id, name: x.name }))}
+                                labelKey="name"
+                                valueKey="id"
+                                placeholder="Select Box"
+                                clearable
+                            />
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

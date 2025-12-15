@@ -347,10 +347,14 @@ export function ConingReceiveForm() {
                                     {cart.map(row => (
                                         <TableRow key={row.id}>
                                             <TableCell>
-                                                <Select value={row.boxId} onChange={e => updateRow(row.id, 'boxId', e.target.value)}>
-                                                    <option value="">Select</option>
-                                                    {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                                                </Select>
+                                                <Select
+                                                    value={row.boxId}
+                                                    onChange={e => updateRow(row.id, 'boxId', e.target.value)}
+                                                    options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => ({ id: b.id, name: b.name }))}
+                                                    labelKey="name"
+                                                    valueKey="id"
+                                                    placeholder="Select Box"
+                                                />
                                             </TableCell>
                                             <TableCell>
                                                 <Input type="number" value={row.coneCount} onChange={e => updateRow(row.id, 'coneCount', e.target.value)} className="h-8" />
@@ -362,10 +366,15 @@ export function ConingReceiveForm() {
                                                 {formatKg(calcRowNet(row))}
                                             </TableCell>
                                             <TableCell>
-                                                <Select value={row.operatorId} onChange={e => updateRow(row.id, 'operatorId', e.target.value)} className="h-8">
-                                                    <option value="">Select</option>
-                                                    {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                                                </Select>
+                                                <Select
+                                                    value={row.operatorId}
+                                                    onChange={e => updateRow(row.id, 'operatorId', e.target.value)}
+                                                    className="h-8"
+                                                    options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
+                                                    labelKey="name"
+                                                    valueKey="id"
+                                                    placeholder="Select Operator"
+                                                />
                                             </TableCell>
                                             <TableCell>
                                                 <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCart(p => p.filter(x => x.id !== row.id))}>X</Button>

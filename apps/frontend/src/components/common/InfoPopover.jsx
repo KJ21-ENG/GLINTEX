@@ -10,10 +10,12 @@ export function InfoPopover({
   title = 'Info',
   items = [],
   renderItem,
+  renderContent,
   emptyText = 'No items.',
   onAction,
   actionLabel = 'Apply',
   widthClassName = 'w-64',
+  bodyClassName = 'max-h-[200px] overflow-y-auto text-sm space-y-1',
   buttonClassName = 'h-6 w-6 rounded-full hover:bg-muted',
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -84,9 +86,11 @@ export function InfoPopover({
               </Button>
             )}
           </div>
-          <div className="max-h-[200px] overflow-y-auto text-sm space-y-1">
+          <div className={bodyClassName}>
             {list.length === 0 ? (
               <div className="text-muted-foreground">{emptyText}</div>
+            ) : renderContent ? (
+              renderContent(list)
             ) : (
               list.map((item, i) => (
                 <div key={i} className="text-muted-foreground border-b last:border-0 py-1">
@@ -100,4 +104,3 @@ export function InfoPopover({
     </div>
   );
 }
-

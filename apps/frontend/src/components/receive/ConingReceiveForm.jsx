@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
-import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
-import { formatKg, todayISO, uid } from '../../utils';
+import { InfoPopover } from '../common/InfoPopover';
+import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
+import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
@@ -17,6 +18,31 @@ export function ConingReceiveForm() {
     // --- Derived ---
     const perConeWeight = Number(issue?.requiredPerConeNetWeight || 0);
     const totalExpected = Number(issue?.expectedCones || 0);
+
+    const issueRefs = useMemo(() => {
+        if (!issue?.receivedRowRefs) return [];
+        try {
+            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+            return Array.isArray(refs) ? refs : [];
+        } catch {
+            return [];
+        }
+    }, [issue?.receivedRowRefs]);
+
+    const totalIssuedWeight = useMemo(() => {
+        const sumFromRefs = issueRefs.reduce((sum, ref) => sum + (Number(ref?.issueWeight) || 0), 0);
+        if (sumFromRefs > 0) return sumFromRefs;
+        // Fallback: sum referenced holo receive row weights (if issueWeight not stamped)
+        return issueRefs.reduce((sum, ref) => {
+            const holoRow = (db.receive_from_holo_machine_rows || []).find((r) => r.id === ref?.rowId);
+            return sum + (Number(holoRow?.rollWeight) || 0);
+        }, 0);
+    }, [issueRefs, db.receive_from_holo_machine_rows]);
+
+    const coningPieceTotals = useMemo(() => {
+        if (!issue?.id) return null;
+        return (db.receive_from_coning_machine_piece_totals || []).find((t) => t.pieceId === issue.id) || null;
+    }, [db.receive_from_coning_machine_piece_totals, issue?.id]);
 
     // --- Handlers ---
     async function handleScan() {
@@ -70,12 +96,34 @@ export function ConingReceiveForm() {
 
         // Cone Tare? 
         // We need to know the cone type from the issue.
-        const coneTypeId = issue?.receivedRowRefs?.[0]?.coneTypeId;
+        const coneTypeId = issueRefs?.[0]?.coneTypeId;
         const coneType = db.cone_types.find(c => c.id === coneTypeId);
-        const coneWt = (coneType?.weight || 0) * Number(row.coneCount);
+        const coneWt = (coneType?.weight || 0) * Number(row.coneCount || 0);
 
         return Math.max(0, gross - boxWt - coneWt);
     }
+
+    const cartTotals = useMemo(() => {
+        let totalNetWeight = 0;
+        let totalCones = 0;
+        for (const row of cart) {
+            totalNetWeight += calcRowNet(row);
+            const cones = Number(row.coneCount || 0);
+            if (Number.isFinite(cones)) totalCones += cones;
+        }
+        return { totalNetWeight, totalCones };
+    }, [cart, db.boxes, db.cone_types, issueRefs]);
+
+    const totalReceivedWeight = Number(coningPieceTotals?.totalNetWeight || 0) + cartTotals.totalNetWeight;
+    const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
+    const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
+    const isReceivedOverIssued = totalIssuedWeight > 0 && totalReceivedWeight > totalIssuedWeight + 0.001;
+
+    const receiveRowsForLot = useMemo(() => {
+        const lotNo = issue?.lotNo;
+        if (!lotNo) return [];
+        return (db.receive_from_coning_machine_rows || []).filter((row) => (row.issue?.lotNo || '') === lotNo);
+    }, [db.receive_from_coning_machine_rows, issue?.lotNo]);
 
     async function handleSubmit() {
         if (!issue || cart.length === 0) return;
@@ -210,10 +258,71 @@ export function ConingReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="flex gap-4 p-4 bg-muted rounded-md text-sm">
-                            <div><strong>Lot:</strong> {issue.lotNo}</div>
-                            <div><strong>Expected:</strong> {totalExpected} cones</div>
-                            <div><strong>Target:</strong> {perConeWeight} g/cone</div>
+                        <div className="p-4 bg-muted rounded-md text-sm space-y-3">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div><strong>Lot:</strong> {issue.lotNo}</div>
+                                <div><strong>Total Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
+                                <div><strong>Expected:</strong> {totalExpected} cones</div>
+                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
+                            </div>
+                            <div className="border-t border-border/60" />
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-center">
+                                <div className="hidden md:block" />
+                                <div className="flex items-center gap-2">
+                                    <div>
+                                        <strong>Total Received Wt:</strong>{' '}
+                                        <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
+                                            {formatKg(totalReceivedWeight)}
+                                        </span>
+                                    </div>
+                                    <InfoPopover
+                                        title={`Coning Receives (${issue.lotNo})`}
+                                        items={receiveRowsForLot}
+                                        emptyText="No receives yet for this lot."
+                                        widthClassName="w-[560px]"
+                                        bodyClassName="max-h-[240px] overflow-auto"
+                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
+                                        renderContent={(rows) => (
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow>
+                                                        <TableHead className="h-8 px-2 text-left text-xs">Date</TableHead>
+                                                        <TableHead className="h-8 px-2 text-left text-xs">Barcode</TableHead>
+                                                        <TableHead className="h-8 px-2 text-right text-xs">Cones</TableHead>
+                                                        <TableHead className="h-8 px-2 text-right text-xs">Gross (kg)</TableHead>
+                                                        <TableHead className="h-8 px-2 text-right text-xs">Net (kg)</TableHead>
+                                                        <TableHead className="h-8 px-2 text-left text-xs">Box</TableHead>
+                                                        <TableHead className="h-8 px-2 text-left text-xs">Operator</TableHead>
+                                                    </TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {rows.map((row) => {
+                                                        const dateLabel = formatDateDDMMYYYY(row.date || row.createdAt) || '—';
+                                                        const cones = Number(row.coneCount || 0);
+                                                        const gross = Number(row.grossWeight || 0);
+                                                        const net = Number(row.netWeight || 0);
+                                                        const boxName = row.box?.name || '—';
+                                                        const operatorName = row.operator?.name || '—';
+                                                        return (
+                                                            <TableRow key={row.id || row.barcode}>
+                                                                <TableCell className="p-2 text-left text-xs">{dateLabel}</TableCell>
+                                                                <TableCell className="p-2 text-left font-mono text-xs">{row.barcode || '—'}</TableCell>
+                                                                <TableCell className="p-2 text-right text-xs">{cones || 0}</TableCell>
+                                                                <TableCell className="p-2 text-right text-xs">{formatKg(gross)}</TableCell>
+                                                                <TableCell className="p-2 text-right text-xs">{formatKg(net)}</TableCell>
+                                                                <TableCell className="p-2 text-left text-xs">{boxName}</TableCell>
+                                                                <TableCell className="p-2 text-left text-xs">{operatorName}</TableCell>
+                                                            </TableRow>
+                                                        );
+                                                    })}
+                                                </TableBody>
+                                            </Table>
+                                        )}
+                                    />
+                                </div>
+                                <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
+                                <div><strong>Per Cone Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

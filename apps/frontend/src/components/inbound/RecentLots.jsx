@@ -5,7 +5,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useBrand } from '../../context';
 import { Pagination, ColumnFilter, ValueFilterMenu, DateFilterMenu } from '../common';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 
 const DEFAULT_SORT = { key: 'createdAt', direction: 'desc' };
 
@@ -78,9 +78,9 @@ export function RecentLots({ db }) {
   const baseRows = useMemo(() => {
     return db.lots.map(l => ({
       ...l,
-      itemName: db.items.find(i=>i.id===l.itemId)?.name || "—",
-      firmName: db.firms.find(f=>f.id===l.firmId)?.name || "—",
-      supplierName: db.suppliers.find(s=>s.id===l.supplierId)?.name || "—",
+      itemName: db.items.find(i => i.id === l.itemId)?.name || "—",
+      firmName: db.firms.find(f => f.id === l.firmId)?.name || "—",
+      supplierName: db.suppliers.find(s => s.id === l.supplierId)?.name || "—",
     }));
   }, [db.lots, db.items, db.firms, db.suppliers]);
 
@@ -354,7 +354,7 @@ export function RecentLots({ db }) {
             pagedRows.map(r => (
               <tr key={r.lotNo} className={`border-t ${cls.rowBorder} row-hover`}>
                 <td className="py-2 pr-2 font-medium">{r.lotNo}</td>
-                <td className="py-2 pr-2">{r.date}</td>
+                <td className="py-2 pr-2">{formatDateDDMMYYYY(r.date)}</td>
                 <td className="py-2 pr-2">{r.itemName}</td>
                 <td className="py-2 pr-2">{r.firmName}</td>
                 <td className="py-2 pr-2">{r.supplierName}</td>

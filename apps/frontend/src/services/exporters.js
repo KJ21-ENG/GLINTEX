@@ -1,6 +1,7 @@
 import { utils, write } from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { formatDateDDMMYYYY } from '../utils/formatting';
 
 function orderLotsForExport(lots) {
   return [...lots].sort((a, b) => {
@@ -24,7 +25,7 @@ function flattenLots(lots, piecesByLot) {
     for (const p of pieces) {
       rows.push({
         lotNo: lot.lotNo,
-        date: lot.date,
+        date: formatDateDDMMYYYY(lot.date),
         itemName: lot.itemName,
         firmName: lot.firmName,
         supplierName: lot.supplierName,
@@ -39,7 +40,7 @@ function flattenLots(lots, piecesByLot) {
 
 export function exportXlsx(lots, piecesByLot) {
   const orderedLots = orderLotsForExport(lots);
-  const lotsSheet = orderedLots.map(l => ({ Lot: l.lotNo, Date: l.date, Item: l.itemName, Firm: l.firmName, Supplier: l.supplierName, "Available Pieces": (piecesByLot[l.lotNo] || []).length }));
+  const lotsSheet = orderedLots.map(l => ({ Lot: l.lotNo, Date: formatDateDDMMYYYY(l.date), Item: l.itemName, Firm: l.firmName, Supplier: l.supplierName, "Available Pieces": (piecesByLot[l.lotNo] || []).length }));
   const pieces = flattenLots(orderedLots, piecesByLot);
   const wb = utils.book_new();
   const ws1 = utils.json_to_sheet(lotsSheet);
@@ -127,7 +128,7 @@ export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold:
     const remainingWeight = (lot.pendingWeight !== undefined && lot.pendingWeight !== null) ? Number(lot.pendingWeight) : remainingWeightFromPieces;
     body.push([
       lot.lotNo,
-      lot.date || '',
+      formatDateDDMMYYYY(lot.date) || '',
       lot.itemName || '',
       lot.firmName || '',
       lot.supplierName || '',

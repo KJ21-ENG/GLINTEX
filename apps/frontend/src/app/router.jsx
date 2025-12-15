@@ -1,24 +1,27 @@
 import React from "react";
 import { createBrowserRouter, redirect } from "react-router-dom";
-import DashboardLayout from "../components/layouts/DashboardLayout";
+import ProtectedAppLayout from "./ProtectedAppLayout.jsx";
 
 // We will import the pages directly. 
 // Note: They will be broken until refactored in the next steps, 
 // but we are following the plan to refactor them immediately after.
-import { 
-  Inbound, 
-  Stock, 
-  IssueToMachine, 
-  ReceiveFromMachine, 
-  Masters, 
-  Reports, 
-  Settings 
+import {
+  Inbound,
+  Stock,
+  IssueToMachine,
+  ReceiveFromMachine,
+  Masters,
+  Reports,
+  Settings,
+  Login,
+  Setup
 } from "../pages";
+import LabelDesigner from "../pages/Settings/LabelDesigner";
 
 export const router = createBrowserRouter([
   {
     path: "/app",
-    element: <DashboardLayout />,
+    element: <ProtectedAppLayout />,
     children: [
       {
         index: true,
@@ -52,7 +55,19 @@ export const router = createBrowserRouter([
         path: "settings",
         element: <Settings />,
       },
+      {
+        path: "settings/label-designer",
+        element: <LabelDesigner />,
+      },
     ],
+  },
+  {
+    path: "/login",
+    element: <Login />,
+  },
+  {
+    path: "/setup",
+    element: <Setup />,
   },
   {
     path: "/",

@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { LotPopover } from './LotPopover';
 
@@ -116,7 +116,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.firmId || ''}::${lot.twistName || ''}`;
+      const key = `${lot.itemId || ''}::${lot.twistName || ''}`;
       const existing = map.get(key) || {
         lotNo: '', // grouped rows show dash in lot column
         itemId: lot.itemId,
@@ -143,6 +143,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
 
+  const tableColumnCount = groupBy ? 8 : 9;
+
   return (
     <div className="rounded-md border bg-card">
       <Table>
@@ -150,21 +152,26 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           <TableRow>
             <TableHead className="w-[30px]"></TableHead>
             <TableHead>Lot No</TableHead>
+            <TableHead>Date</TableHead>
             <TableHead>Item</TableHead>
             <TableHead>Yarn / Twist</TableHead>
-            <TableHead>Firm / Supplier</TableHead>
+            {!groupBy ? <TableHead>Firm</TableHead> : null}
+            <TableHead>Supplier</TableHead>
             <TableHead className="">Total Rolls</TableHead>
             <TableHead className="">Net Weight</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {displayLots.length === 0 ? (
-            <TableRow><TableCell colSpan={7} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
           ) : (
             displayLots.map((l, idx) => {
+              const rowKey = groupBy
+                ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx)
+                : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
               const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
               return (
-                <React.Fragment key={l.lotNo || idx}>
+                <React.Fragment key={rowKey}>
                   <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
                     <TableCell>
                       {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
@@ -174,15 +181,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                         <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
                       ) : (l.lotNo || '—')}
                     </TableCell>
+                    <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
                     <TableCell>{l.itemName}</TableCell>
                     <TableCell>{l.yarnName} / {l.twistName}</TableCell>
-                    <TableCell>{l.firmName}<br /><span className="text-xs text-muted-foreground">{l.supplierName}</span></TableCell>
+                    {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
+                    <TableCell>{l.supplierName}</TableCell>
                     <TableCell className="">{l.totalRolls}</TableCell>
                     <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                   </TableRow>
                   {isExpanded && (
                     <TableRow className="bg-muted/30">
-                      <TableCell colSpan={7} className="p-4">
+                      <TableCell colSpan={9} className="p-4">
                         <div className="border rounded-md bg-background">
                           <Table>
                             <TableHeader>
@@ -200,7 +209,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                               {l.rows.map(r => (
                                 <TableRow key={r.id}>
                                   <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                  <TableCell>{r.date}</TableCell>
+                                  <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                   <TableCell>{r.rollType?.name || '—'}</TableCell>
                                   <TableCell className="">{r.rollCount}</TableCell>
                                   <TableCell className="">{formatKg(r.rollWeight)}</TableCell>

@@ -1,12 +1,12 @@
 import React from "react";
 import { RouterProvider } from "react-router-dom";
-import { InventoryProvider } from "../context/InventoryContext";
 import router from "./router.jsx";
+import { AuthProvider } from "../context/AuthContext";
 
 export default function App() {
   return (
-    <InventoryProvider>
+    <AuthProvider>
       <RouterProvider router={router} />
-    </InventoryProvider>
+    </AuthProvider>
   );
 }

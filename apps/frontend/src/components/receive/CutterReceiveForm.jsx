@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
-import { formatKg, todayISO, uid } from '../../utils';
+import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
 import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
+import { InfoPopover } from '../common/InfoPopover';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -16,6 +18,7 @@ export function CutterReceiveForm() {
 
     // Fields
     const [cutId, setCutId] = useState('');
+    const [shift, setShift] = useState('');
     const [helperId, setHelperId] = useState('');
     const [bobbinId, setBobbinId] = useState('');
     const [boxId, setBoxId] = useState('');
@@ -42,8 +45,8 @@ export function CutterReceiveForm() {
             if (res && res.id) {
                 setIssueRecord(res);
                 // Auto-fill known fields if available/logical
-                // Reset other fields
-                setCutId('');
+                // Auto-fill cut from issue, reset other fields
+                setCutId(res.cutId || '');
                 setHelperId('');
                 setBobbinId('');
                 setBoxId('');
@@ -73,12 +76,70 @@ export function CutterReceiveForm() {
         return Math.max(0, g - tare);
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
-    function handleAdd() {
+    // Compute inbound weight and total received for the current issue
+    const { inboundWeight, totalReceived, totalReceivedBobbins } = useMemo(() => {
+        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0 };
+        const pieceIds = issueRecord.pieceIds;
+
+        // Get inbound weight from inbound_items
+        const inboundWt = pieceIds.reduce((sum, pid) => {
+            const piece = db.inbound_items?.find(p => p.id === pid);
+            return sum + (piece?.weight || 0);
+        }, 0);
+
+        // Get total received from piece totals (database)
+        const receivedFromDb = pieceIds.reduce((sum, pid) => {
+            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
+            return sum + (tot?.totalNetWeight || 0);
+        }, 0);
+
+        // Get total received bobbins from piece totals
+        const bobbinsFromDb = pieceIds.reduce((sum, pid) => {
+            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
+            return sum + (tot?.totalBob || 0);
+        }, 0);
+
+        // Add cart items' net weights for real-time update
+        const receivedInCart = cart.reduce((sum, entry) => {
+            if (pieceIds.includes(entry.pieceId)) {
+                return sum + (Number(entry.netWeight) || 0);
+            }
+            return sum;
+        }, 0);
+
+        // Add cart items' bobbins for real-time update
+        const bobbinsInCart = cart.reduce((sum, entry) => {
+            if (pieceIds.includes(entry.pieceId)) {
+                return sum + (Number(entry.bobbinQty) || 0);
+            }
+            return sum;
+        }, 0);
+
+        return {
+            inboundWeight: inboundWt,
+            totalReceived: receivedFromDb + receivedInCart,
+            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart
+        };
+    }, [issueRecord, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
+
+    const computeNextBarcode = (pieceId, lotNo, seq) => {
+        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId);
+        const existingMax = existing.reduce((max, row) => {
+            const idx = parseReceiveCrateIndex(row.barcode);
+            if (idx != null && idx > max) return idx;
+            return max;
+        }, 0);
+        const inCartCount = cart.filter((c) => c.pieceId === pieceId).length;
+        const nextIndex = existingMax + inCartCount + 1;
+        return makeReceiveBarcode({ lotNo, seq, crateIndex: nextIndex });
+    };
+
+    async function handleAdd() {
         if (!issueRecord) return;
-        
-        // Validation: Bobbin, Box, Qty, Gross Weight are mandatory. Cut and Helper are optional.
-        if (!bobbinId || !boxId || !bobbinQty || !grossWeight) {
-            alert('Please fill all fields (Bobbin, Box, Qty, Gross Weight)');
+
+        // Validation: Cut, Bobbin, Box, Qty, Gross Weight are mandatory. Helper and Shift are optional.
+        if (!cutId || !bobbinId || !boxId || !bobbinQty || !grossWeight) {
+            alert('Please fill all fields (Cut, Bobbin, Box, Qty, Gross Weight)');
             return;
         }
 
@@ -87,6 +148,54 @@ export function CutterReceiveForm() {
             alert('No piece ID found in issue record');
             return;
         }
+
+        // Validate bobbin weight is set
+        const bobbinWeight = Number(selectedBobbin?.weight);
+        if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+            alert('Bobbin weight is missing. Please update the bobbin first.');
+            return;
+        }
+
+        // Validate box weight is set
+        const boxWeight = Number(selectedBox?.weight);
+        if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+            alert('Box weight is missing. Please update the box first.');
+            return;
+        }
+
+        // Validate net weight is positive
+        if (!Number.isFinite(netWeight) || netWeight <= 0) {
+            alert('Computed net weight must be positive. Check weights and quantity.');
+            return;
+        }
+
+        // Validate net weight doesn't exceed pending weight
+        const pieceMeta = db.inbound_items.find((p) => p.id === pieceIdToUse);
+        const pieceInboundWeight = Number(pieceMeta?.weight || 0);
+        const pieceTotals = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pieceIdToUse);
+        const alreadyReceivedDb = Number(pieceTotals?.totalNetWeight || 0);
+        const existingWastage = Number(pieceTotals?.wastageNetWeight || 0);
+        // Include cart items for this piece that are not yet saved
+        const cartReceivedForPiece = cart.reduce((sum, entry) => {
+            if (entry.pieceId === pieceIdToUse) {
+                return sum + (Number(entry.netWeight) || 0);
+            }
+            return sum;
+        }, 0);
+        const pendingWeight = Math.max(0, pieceInboundWeight - alreadyReceivedDb - existingWastage - cartReceivedForPiece);
+
+        if (pendingWeight <= 0) {
+            alert('Piece has no pending weight remaining.');
+            return;
+        }
+
+        if (netWeight > pendingWeight + 0.001) { // Small tolerance for floating point
+            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds pending weight (${pendingWeight.toFixed(3)} kg).`);
+            return;
+        }
+
+        const seq = pieceMeta?.seq || Number((pieceMeta?.id || '').split('-').pop());
+        const receiveBarcode = computeNextBarcode(pieceIdToUse, issueRecord.lotNo, seq || 0);
 
         const cutName = db.cuts.find(c => c.id === cutId)?.name;
         const helperName = db.workers.find(o => o.id === helperId)?.name;
@@ -98,22 +207,58 @@ export function CutterReceiveForm() {
             lotNo: issueRecord.lotNo,
             itemId: issueRecord.itemId,
             operatorId: issueRecord.operatorId, // Capture operator from issue
-            cutId, helperId, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
+            cutId, helperId, shift, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
             netWeight: netWeight,
+            barcode: receiveBarcode,
 
             // Display Names
             itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
             cutName: cutName,
+            cut: cutName,
             helperName: helperName,
+            shiftName: shift,
             operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
             bobbinName: selectedBobbin?.name,
             boxName: selectedBox?.name
         }]);
 
+        const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+        if (template && receiveBarcode) {
+            const confirmPrint = window.confirm('Print sticker for this crate?');
+            if (confirmPrint) {
+                const itemName = db.items.find(i => i.id === issueRecord.itemId)?.name;
+                const machineName = db.machines.find(m => m.id === issueRecord.machineId)?.name;
+                const tareWeight = ((selectedBox?.weight || 0) + (selectedBobbin?.weight || 0) * Number(bobbinQty)).toFixed(3);
+
+                await printStageTemplate(
+                    LABEL_STAGE_KEYS.CUTTER_RECEIVE,
+                    {
+                        lotNo: issueRecord.lotNo,
+                        itemName,
+                        pieceId: pieceIdToUse,
+                        barcode: receiveBarcode,
+                        netWeight: netWeight,
+                        grossWeight,
+                        tareWeight,
+                        bobbinQty,
+                        bobbinName: selectedBobbin?.name,
+                        boxName: selectedBox?.name,
+                        cut: cutName,
+                        cutName,
+                        machineName,
+                        helperName,
+                        operatorName: db.workers.find((o) => o.id === issueRecord.operatorId)?.name,
+                        date: receiveDate,
+                    },
+                    { template },
+                );
+            }
+        }
+
         // Reset fields for next box
         setGrossWeight('');
         setBobbinQty('');
-        setIsWastage(false); 
+        setIsWastage(false);
     }
 
     async function handleSave() {
@@ -121,7 +266,7 @@ export function CutterReceiveForm() {
         setSaving(true);
         try {
             for (const entry of cart) {
-                await api.manualReceiveFromMachine({ 
+                await api.manualReceiveFromMachine({
                     pieceId: entry.pieceId,
                     lotNo: entry.lotNo,
                     bobbinId: entry.bobbinId,
@@ -132,6 +277,7 @@ export function CutterReceiveForm() {
                     operatorId: entry.operatorId, // Pass operatorId
                     cutId: entry.cutId,
                     helperId: entry.helperId,
+                    shift: entry.shift,
                     isWastage: entry.isWastage
                 });
 
@@ -171,11 +317,61 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
                             <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
+                            <div><span className="font-semibold">Inbound Wt:</span> {formatKg(inboundWeight)}</div>
+                            <div>
+                                <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
+                                <InfoPopover
+                                    title="Received Crates"
+                                    items={(db.receive_from_cutter_machine_rows || []).filter(row =>
+                                        issueRecord?.pieceIds?.includes(row.pieceId)
+                                    )}
+                                    renderContent={(items) => (
+                                        <table className="w-full text-xs">
+                                            <thead>
+                                                <tr className="border-b">
+                                                    <th className="text-left py-1 px-1 font-medium">Barcode</th>
+                                                    <th className="text-left py-1 px-1 font-medium">Date</th>
+                                                    <th className="text-right py-1 px-1 font-medium">Bobbins</th>
+                                                    <th className="text-right py-1 px-1 font-medium">Net Wt</th>
+                                                    <th className="text-left py-1 px-1 font-medium">Cut</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {items.map((row, idx) => (
+                                                    <tr key={row.id || idx} className="border-b last:border-0">
+                                                        <td className="py-1 px-1 font-mono">{row.barcode || '—'}</td>
+                                                        <td className="py-1 px-1">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
+                                                        <td className="py-1 px-1 text-right">{row.bobbinQuantity || 0}</td>
+                                                        <td className="py-1 px-1 text-right font-medium">{formatKg(row.netWt)}</td>
+                                                        <td className="py-1 px-1">{row.cutMaster?.name || row.cut || '—'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                            <tfoot>
+                                                <tr className="border-t-2 bg-muted/50 font-semibold">
+                                                    <td className="py-1 px-1" colSpan={2}>Total</td>
+                                                    <td className="py-1 px-1 text-right">{items.reduce((sum, row) => sum + (row.bobbinQuantity || 0), 0)}</td>
+                                                    <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + (row.netWt || 0), 0))}</td>
+                                                    <td className="py-1 px-1"></td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    )}
+                                    emptyText="No crates received yet"
+                                    widthClassName="w-[420px]"
+                                    bodyClassName="max-h-[300px] overflow-y-auto"
+                                    buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
+                                    align="right"
+                                />
+                            </div>
+                            <div>
+                                <span className="font-semibold">Bobbins:</span> {totalReceivedBobbins}
+                            </div>
                         </div>
                     )}
                 </CardContent>
@@ -191,7 +387,7 @@ export function CutterReceiveForm() {
                                 <Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} />
                             </div>
                             <div>
-                                <Label>Cut (Optional)</Label>
+                                <Label>Cut</Label>
                                 <Select value={cutId} onChange={e => setCutId(e.target.value)}>
                                     <option value="">Select Cut</option>
                                     {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -202,6 +398,14 @@ export function CutterReceiveForm() {
                                 <Select value={helperId} onChange={e => setHelperId(e.target.value)}>
                                     <option value="">Select Helper</option>
                                     {db.helpers?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                </Select>
+                            </div>
+                            <div>
+                                <Label>Shift (Optional)</Label>
+                                <Select value={shift} onChange={e => setShift(e.target.value)}>
+                                    <option value="">Select Shift</option>
+                                    <option value="Day">Day</option>
+                                    <option value="Night">Night</option>
                                 </Select>
                             </div>
                             <div className="flex items-end pb-2">
@@ -224,7 +428,7 @@ export function CutterReceiveForm() {
                                 <Label>Box Type</Label>
                                 <Select value={boxId} onChange={e => setBoxId(e.target.value)}>
                                     <option value="">Select Box</option>
-                                    {db.boxes?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                                    {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>

@@ -4,25 +4,29 @@ const getApiBase = () => {
   if (import.meta.env.VITE_API_BASE) {
     return import.meta.env.VITE_API_BASE;
   }
-  
+
   // Auto-detect from current window location
   if (typeof window !== 'undefined') {
     return `${window.location.protocol}//${window.location.hostname}:4000`;
   }
-  
+
   // Fallback for SSR or when window is not available
   return 'http://localhost:4000';
 };
 
 const BASE = getApiBase();
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, headers } = {}) {
   const res = await fetch(BASE + path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(headers || {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    }
     const raw = await res.text();
     let message = raw;
     let parsed = null;
@@ -46,6 +50,35 @@ async function request(path, { method = 'GET', body } = {}) {
 
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
+export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
+
+// Auth
+export async function authStatus() { return await request('/api/auth/status'); }
+export async function authMe() { return await request('/api/auth/me'); }
+export async function authLogin(username, password) { return await request('/api/auth/login', { method: 'POST', body: { username, password } }); }
+export async function authBootstrap({ bootstrapToken, username, password, displayName }) {
+  return await request('/api/auth/bootstrap', { method: 'POST', body: { bootstrapToken, username, password, displayName } });
+}
+export async function authLogout() { return await request('/api/auth/logout', { method: 'POST' }); }
+
+// Admin (roles/users)
+export async function listAdminRoles() { return await request('/api/admin/roles'); }
+export async function createAdminRole({ key, name, description }) {
+  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description } });
+}
+export async function updateAdminRole(id, { name, description }) {
+  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description } });
+}
+export async function listAdminUsers() { return await request('/api/admin/users'); }
+export async function createAdminUser({ username, displayName, password, roleId, isActive }) {
+  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleId, isActive } });
+}
+export async function updateAdminUser(id, { displayName, roleId, isActive }) {
+  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleId, isActive } });
+}
+export async function resetAdminUserPassword(id, password) {
+  return await request(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });
+}
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
@@ -90,13 +123,13 @@ export async function createSupplier(name) { return await request('/api/supplier
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
 export async function updateSupplier(id, name) { return await request(`/api/suppliers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listMachines() { return await request('/api/machines'); }
-export async function createMachine(name) { return await request('/api/machines', { method: 'POST', body: { name } }); }
+export async function createMachine(name, processType = 'all') { return await request('/api/machines', { method: 'POST', body: { name, processType } }); }
 export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
-export async function updateMachine(id, name) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateMachine(id, name, processType) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name, processType } }); }
 export async function listOperators() { return await request('/api/operators'); }
-export async function createOperator(name, role = 'operator') { return await request('/api/operators', { method: 'POST', body: { name, role } }); }
+export async function createOperator(name, role = 'operator', processType = 'all') { return await request('/api/operators', { method: 'POST', body: { name, role, processType } }); }
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
-export async function updateOperator(id, name, role) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name, role } }); }
+export async function updateOperator(id, name, role, processType) { return await request(`/api/operators/${id}`, { method: 'PUT', body: { name, role, processType } }); }
 export async function listBobbins() { return await request('/api/bobbins'); }
 export async function createBobbin(name, weight) { return await request('/api/bobbins', { method: 'POST', body: { name, weight } }); }
 export async function deleteBobbin(id) { return await request(`/api/bobbins/${id}`, { method: 'DELETE' }); }
@@ -114,9 +147,9 @@ export async function createWrapper(name) { return await request('/api/wrappers'
 export async function deleteWrapper(id) { return await request(`/api/wrappers/${id}`, { method: 'DELETE' }); }
 export async function updateWrapper(id, name) { return await request(`/api/wrappers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listBoxes() { return await request('/api/boxes'); }
-export async function createBox(name, weight) { return await request('/api/boxes', { method: 'POST', body: { name, weight } }); }
+export async function createBox(name, weight, processType = 'all') { return await request('/api/boxes', { method: 'POST', body: { name, weight, processType } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
-export async function updateBox(id, name, weight) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function updateBox(id, name, weight, processType) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight, processType } }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToCutterMachine(id) { return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'DELETE' }); }
@@ -147,6 +180,19 @@ export async function whatsappGroups() { return await request('/api/whatsapp/gro
 export default {
   health,
   getDB,
+  getLotSequenceNext,
+  authStatus,
+  authMe,
+  authLogin,
+  authBootstrap,
+  authLogout,
+  listAdminRoles,
+  createAdminRole,
+  updateAdminRole,
+  listAdminUsers,
+  createAdminUser,
+  updateAdminUser,
+  resetAdminUserPassword,
   createLot,
   createIssueToMachine,
   createIssueToCutterMachine,

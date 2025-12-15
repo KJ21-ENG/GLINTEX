@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label } from '../components/ui';
-import { formatKg, uid, todayISO } from '../utils';
-import { Trash2, Plus, Save, ArrowUpDown, Search } from 'lucide-react';
+import * as api from '../api/client';
+import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
+import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
+import { Trash2, Plus, Save, ArrowUpDown, Search, Printer } from 'lucide-react';
+
 
 export function Inbound() {
     const { db, createLot, refreshing } = useInventory();
@@ -22,11 +25,8 @@ export function Inbound() {
     // Load Preview Sequence
     const fetchSequence = async () => {
         try {
-            // Using direct fetch as this isn't in the context actions yet, or we can move it there.
-            // Keeping it here as per original implementation.
-            const res = await fetch((import.meta.env.VITE_API_BASE || 'http://localhost:4000') + '/api/sequence/next');
-            const j = await res.json();
-            setPreviewLotNo(j.next);
+            const res = await api.getLotSequenceNext();
+            setPreviewLotNo(res?.next || "");
         } catch (e) {
             console.error("Failed to fetch sequence", e);
         }
@@ -58,22 +58,48 @@ export function Inbound() {
         setSaving(true);
         try {
             const pieces = cart.map((row, idx) => ({ seq: idx + 1, weight: Number(row.weight) }));
+            const savedLotNo = previewLotNo;
+            let result = null;
             try {
-                await createLot({ date, itemId, firmId, supplierId, pieces });
+                result = await createLot({ date, itemId, firmId, supplierId, pieces });
             } catch (err) {
                 if (err && String(err.message || '').toLowerCase().includes('lot already exists')) {
                     await fetchSequence(); // Retry with new sequence
-                    await createLot({ date, itemId, firmId, supplierId, pieces });
+                    result = await createLot({ date, itemId, firmId, supplierId, pieces });
                 } else {
                     throw err;
+                }
+            }
+
+            const refreshedDb = result?.db || db;
+            const lotNo = result?.res?.lot?.lotNo || savedLotNo;
+            const piecesForLot = (refreshedDb?.inbound_items || []).filter((p) => p.lotNo === lotNo);
+            const itemName = refreshedDb?.items?.find((i) => i.id === itemId)?.name;
+            const inboundTemplate = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+            if (inboundTemplate && piecesForLot.length > 0) {
+                const confirmPrint = window.confirm(`Print ${piecesForLot.length} stickers for lot ${lotNo}?`);
+                if (confirmPrint) {
+                    for (const piece of piecesForLot) {
+                        await printStageTemplate(
+                            LABEL_STAGE_KEYS.INBOUND,
+                            {
+                                lotNo,
+                                itemName,
+                                pieceId: piece.id,
+                                seq: piece.seq,
+                                weight: piece.weight,
+                                barcode: piece.barcode,
+                                date,
+                            },
+                            { template: inboundTemplate },
+                        );
+                    }
                 }
             }
 
             // Success
             const totalPieces = cart.length;
             const totalWeight = cart.reduce((s, r) => s + (Number(r.weight) || 0), 0);
-            // Ideally show a toast here instead of alert, but preserving simple functionality
-            // alert(`Saved Lot with ${totalPieces} pcs / ${formatKg(totalWeight)} kg`);
 
             // Reset
             setCart([]);
@@ -217,6 +243,7 @@ export function Inbound() {
 function RecentLotsTable({ db }) {
     const [filter, setFilter] = useState("");
     const [page, setPage] = useState(1);
+    const [expandedLot, setExpandedLot] = useState(null);
     const pageSize = 25;
 
     const lots = useMemo(() => {
@@ -245,6 +272,75 @@ function RecentLotsTable({ db }) {
     const paged = lots.slice((page - 1) * pageSize, page * pageSize);
     const totalPages = Math.ceil(lots.length / pageSize);
 
+    // Get pieces for expanded lot
+    const getPiecesForLot = (lotNo) => {
+        return (db?.inbound_items || []).filter(p => p.lotNo === lotNo).sort((a, b) => (a.seq || 0) - (b.seq || 0));
+    };
+
+    const handleReprintPiece = async (piece, lot) => {
+        try {
+            const template = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+            if (!template) {
+                alert('No sticker template found for Inbound. Please configure it in Label Designer.');
+                return;
+            }
+
+            await printStageTemplate(
+                LABEL_STAGE_KEYS.INBOUND,
+                {
+                    lotNo: lot.lotNo,
+                    itemName: lot.itemName,
+                    pieceId: piece.id,
+                    seq: piece.seq,
+                    weight: piece.weight,
+                    barcode: piece.barcode,
+                    date: lot.date,
+                },
+                { template },
+            );
+        } catch (err) {
+            alert(err.message || 'Failed to reprint sticker');
+        }
+    };
+
+    const handleReprintAllPieces = async (lot) => {
+        const pieces = getPiecesForLot(lot.lotNo);
+        if (pieces.length === 0) {
+            alert('No pieces found for this lot');
+            return;
+        }
+
+        if (!confirm(`Print ${pieces.length} stickers for lot ${lot.lotNo}?`)) {
+            return;
+        }
+
+        try {
+            const template = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+            if (!template) {
+                alert('No sticker template found for Inbound. Please configure it in Label Designer.');
+                return;
+            }
+
+            for (const piece of pieces) {
+                await printStageTemplate(
+                    LABEL_STAGE_KEYS.INBOUND,
+                    {
+                        lotNo: lot.lotNo,
+                        itemName: lot.itemName,
+                        pieceId: piece.id,
+                        seq: piece.seq,
+                        weight: piece.weight,
+                        barcode: piece.barcode,
+                        date: lot.date,
+                    },
+                    { template },
+                );
+            }
+        } catch (err) {
+            alert(err.message || 'Failed to reprint stickers');
+        }
+    };
+
     return (
         <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -264,6 +360,7 @@ function RecentLotsTable({ db }) {
                     <Table>
                         <TableHeader>
                             <TableRow>
+                                <TableHead className="w-[40px]"></TableHead>
                                 <TableHead>Lot No</TableHead>
                                 <TableHead>Date</TableHead>
                                 <TableHead>Item</TableHead>
@@ -271,26 +368,95 @@ function RecentLotsTable({ db }) {
                                 <TableHead>Supplier</TableHead>
                                 <TableHead className="">Pieces</TableHead>
                                 <TableHead className="">Weight</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {paged.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                    <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                         No lots found.
                                     </TableCell>
                                 </TableRow>
                             ) : (
                                 paged.map(l => (
-                                    <TableRow key={l.lotNo}>
-                                        <TableCell className="font-medium">{l.lotNo}</TableCell>
-                                        <TableCell>{l.date}</TableCell>
-                                        <TableCell>{l.itemName}</TableCell>
-                                        <TableCell>{l.firmName}</TableCell>
-                                        <TableCell>{l.supplierName}</TableCell>
-                                        <TableCell className="">{l.totalPieces}</TableCell>
-                                        <TableCell className="font-mono">{formatKg(l.totalWeight)}</TableCell>
-                                    </TableRow>
+                                    <React.Fragment key={l.lotNo}>
+                                        <TableRow className={expandedLot === l.lotNo ? 'bg-muted/50' : ''}>
+                                            <TableCell>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6"
+                                                    onClick={() => setExpandedLot(expandedLot === l.lotNo ? null : l.lotNo)}
+                                                >
+                                                    {expandedLot === l.lotNo ? '−' : '+'}
+                                                </Button>
+                                            </TableCell>
+                                            <TableCell className="font-medium">{l.lotNo}</TableCell>
+                                            <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
+                                            <TableCell>{l.itemName}</TableCell>
+                                            <TableCell>{l.firmName}</TableCell>
+                                            <TableCell>{l.supplierName}</TableCell>
+                                            <TableCell className="">{l.totalPieces}</TableCell>
+                                            <TableCell className="font-mono">{formatKg(l.totalWeight)}</TableCell>
+                                            <TableCell>
+                                                <ActionMenu actions={[
+                                                    {
+                                                        label: 'Reprint All',
+                                                        icon: <Printer className="w-4 h-4" />,
+                                                        onClick: () => handleReprintAllPieces(l),
+                                                    },
+                                                ]} />
+                                            </TableCell>
+                                        </TableRow>
+                                        {expandedLot === l.lotNo && (
+                                            <TableRow>
+                                                <TableCell colSpan={9} className="bg-muted/30 p-0">
+                                                    <div className="p-4">
+                                                        <h4 className="font-medium text-sm mb-2">Pieces in Lot {l.lotNo}</h4>
+                                                        <div className="rounded-md border bg-background">
+                                                            <Table>
+                                                                <TableHeader>
+                                                                    <TableRow>
+                                                                        <TableHead className="w-[60px]">Seq</TableHead>
+                                                                        <TableHead>Piece ID</TableHead>
+                                                                        <TableHead>Barcode</TableHead>
+                                                                        <TableHead>Weight (kg)</TableHead>
+                                                                        <TableHead>Status</TableHead>
+                                                                        <TableHead className="w-[50px]">Actions</TableHead>
+                                                                    </TableRow>
+                                                                </TableHeader>
+                                                                <TableBody>
+                                                                    {getPiecesForLot(l.lotNo).map(piece => (
+                                                                        <TableRow key={piece.id}>
+                                                                            <TableCell>{piece.seq}</TableCell>
+                                                                            <TableCell className="font-mono text-xs">{piece.id}</TableCell>
+                                                                            <TableCell className="font-mono text-xs">{piece.barcode || '—'}</TableCell>
+                                                                            <TableCell>{formatKg(piece.weight)}</TableCell>
+                                                                            <TableCell>
+                                                                                <Badge variant={piece.status === 'available' ? 'default' : 'secondary'}>
+                                                                                    {piece.status}
+                                                                                </Badge>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <ActionMenu actions={[
+                                                                                    {
+                                                                                        label: 'Reprint',
+                                                                                        icon: <Printer className="w-4 h-4" />,
+                                                                                        onClick: () => handleReprintPiece(piece, l),
+                                                                                    },
+                                                                                ]} />
+                                                                            </TableCell>
+                                                                        </TableRow>
+                                                                    ))}
+                                                                </TableBody>
+                                                            </Table>
+                                                        </div>
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                    </React.Fragment>
                                 ))
                             )}
                         </TableBody>

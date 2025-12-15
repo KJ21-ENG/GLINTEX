@@ -8,8 +8,10 @@
     "start": "node src/server.js"
   },
   "dependencies": {
-    "@prisma/client": "^4.15.0",
+    "@prisma/client": "^4.16.2",
+    "bcryptjs": "^2.4.3",
     "bwip-js": "^3.1.0",
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.0.3",

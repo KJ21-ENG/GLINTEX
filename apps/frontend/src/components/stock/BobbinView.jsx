@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg } from '../../utils';
+import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 export function BobbinView({ db, filters, search = '', groupBy = false }) {
@@ -51,6 +51,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
       return {
         ...row,
         lotNo,
+        date: row.date || row.createdAt || '',
         itemId: piece?.itemId || lotMeta?.itemId || '',
         firmId: lotMeta?.firmId || '',
         supplierId: lotMeta?.supplierId || '',
@@ -129,7 +130,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+      const key = `${lot.itemId || ''}`;
       const existing = map.get(key) || {
         lotNo: '', // display dash for grouped rows
         itemId: lot.itemId,
@@ -167,8 +168,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                     <TableRow>
                         <TableHead className="w-[30px]"></TableHead>
                         <TableHead>Lot No</TableHead>
+                        <TableHead>Date</TableHead>
                         <TableHead>Item</TableHead>
-                        <TableHead>Firm</TableHead>
+                        {!groupBy ? <TableHead>Firm</TableHead> : null}
                         <TableHead>Supplier</TableHead>
                         <TableHead className="">Bobbins (Avail/Total)</TableHead>
                         <TableHead className="">Weight (Avail/Total)</TableHead>
@@ -177,7 +179,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                 </TableHeader>
                 <TableBody>
                     {displayData.length === 0 ? (
-                        <TableRow><TableCell colSpan={8} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
                     ) : (
                         displayData.map((l, idx) => {
                             const isExpanded = !groupBy && expandedLot === l.lotNo;
@@ -189,8 +191,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                                             {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                                         </TableCell>
                                         <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
+                                        <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
                                         <TableCell>{l.itemName}</TableCell>
-                                        <TableCell>{l.firmName}</TableCell>
+                                        {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
                                         <TableCell>{l.supplierName}</TableCell>
                                         <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
                                         <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
@@ -198,7 +201,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                                     </TableRow>
                                     {isExpanded && !groupBy && (
                                         <TableRow className="bg-muted/30">
-                                            <TableCell colSpan={8} className="p-4">
+                                            <TableCell colSpan={9} className="p-4">
                                                 <div className="border rounded-md bg-background">
                                                     <Table>
                                                         <TableHeader>
@@ -215,7 +218,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                                                             {l.crates.map(c => (
                                                                 <TableRow key={c.id}>
                                                                     <TableCell className="font-mono text-xs">{c.barcode}</TableCell>
-                                                                    <TableCell>{c.date}</TableCell>
+                                                                    <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
                                                                     <TableCell>{c.bobbinName}</TableCell>
                                                                     <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
                                                                     <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>

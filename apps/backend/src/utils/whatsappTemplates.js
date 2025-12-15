@@ -19,12 +19,11 @@ export async function listTemplates() {
   return await prisma.whatsappTemplate.findMany({ orderBy: { id: 'asc' } });
 }
 
-export async function upsertTemplate(event, data) {
+export async function upsertTemplate(event, data, opts = {}) {
+  const actorUserId = opts.actorUserId;
   return await prisma.whatsappTemplate.upsert({
     where: { event },
-    update: data,
-    create: { event, ...data },
+    update: { ...data, ...(actorUserId ? { updatedByUserId: actorUserId } : {}) },
+    create: { event, ...data, ...(actorUserId ? { createdByUserId: actorUserId, updatedByUserId: actorUserId } : {}) },
   });
 }
-
-

@@ -4,88 +4,114 @@ import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBo
 import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
 
+// Process type options for dropdowns
+const PROCESS_OPTIONS = [
+    { value: 'all', label: 'All Processes' },
+    { value: 'cutter', label: 'Cutter' },
+    { value: 'holo', label: 'Holo' },
+    { value: 'coning', label: 'Coning' },
+];
+
+
+
 export function Masters() {
-  const { 
-    db, 
-    createItem, updateItem, deleteItem,
-    createYarn, updateYarn, deleteYarn,
-    createCut, updateCut, deleteCut,
-    createTwist, updateTwist, deleteTwist,
-    createFirm, updateFirm, deleteFirm,
-    createSupplier, updateSupplier, deleteSupplier,
-    createMachine, updateMachine, deleteMachine,
-    createOperator, updateOperator, deleteOperator,
-    createBobbin, updateBobbin, deleteBobbin,
-    createRollType, updateRollType, deleteRollType,
-    createConeType, updateConeType, deleteConeType,
-    createWrapper, updateWrapper, deleteWrapper,
-    createBox, updateBox, deleteBox,
-    refreshing 
-  } = useInventory();
+    const {
+        db,
+        createItem, updateItem, deleteItem,
+        createYarn, updateYarn, deleteYarn,
+        createCut, updateCut, deleteCut,
+        createTwist, updateTwist, deleteTwist,
+        createFirm, updateFirm, deleteFirm,
+        createSupplier, updateSupplier, deleteSupplier,
+        createMachine, updateMachine, deleteMachine,
+        createOperator, updateOperator, deleteOperator,
+        createBobbin, updateBobbin, deleteBobbin,
+        createRollType, updateRollType, deleteRollType,
+        createConeType, updateConeType, deleteConeType,
+        createWrapper, updateWrapper, deleteWrapper,
+        createBox, updateBox, deleteBox,
+        refreshing
+    } = useInventory();
 
-  const [activeTab, setActiveTab] = useState('items');
+    const [activeTab, setActiveTab] = useState('items');
 
-  const tabs = [
-    { id: 'items', label: 'Items' },
-    { id: 'yarns', label: 'Yarns' },
-    { id: 'cuts', label: 'Cuts' },
-    { id: 'twists', label: 'Twists' },
-    { id: 'firms', label: 'Firms' },
-    { id: 'suppliers', label: 'Suppliers' },
-    { id: 'machines', label: 'Machines' },
-    { id: 'workers', label: 'Workers' },
-    { id: 'bobbins', label: 'Bobbins' },
-    { id: 'rollTypes', label: 'Roll Types' },
-    { id: 'coneTypes', label: 'Cone Types' },
-    { id: 'wrappers', label: 'Wrappers' },
-    { id: 'boxes', label: 'Boxes' },
-  ];
+    const renderContent = () => {
+        switch (activeTab) {
+            case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} />;
+            case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} />;
+            case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
+            case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
+            case 'firms': return <SimpleMasterCrud title="Firms" data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
+            case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
+            case 'machines': return <MachinesMasterCrud data={db.machines || []} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
+            case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
+            case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} />;
+            case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} />;
+            case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} />;
+            case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} />;
+            case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} />;
+            default: return null;
+        }
+    }
 
-  const renderContent = () => {
-      switch(activeTab) {
-          case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} />;
-          case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} />;
-          case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
-          case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
-          case 'firms': return <SimpleMasterCrud title="Firms" data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
-          case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
-          case 'machines': return <SimpleMasterCrud title="Machines" data={db.machines} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
-        case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
-          case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} />;
-          case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} />;
-          case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} />;
-          case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} />;
-          case 'boxes': return <WeightMasterCrud title="Boxes" data={db.boxes} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} />;
-          default: return null;
-      }
-  }
+    // Render a tab button
+    const TabButton = ({ id, label }) => (
+        <button
+            onClick={() => setActiveTab(id)}
+            className={`w-full px-4 py-2.5 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 ${activeTab === id ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
+        >
+            {label}
+        </button>
+    );
 
-  return (
-    <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
-      <Card className="w-full md:w-64 shrink-0">
-          <CardHeader>
-              <CardTitle className="text-lg">Master Data</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-              <nav className="flex flex-col">
-                  {tabs.map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => setActiveTab(t.id)}
-                        className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 ${activeTab === t.id ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
-                      >
-                          {t.label}
-                      </button>
-                  ))}
-              </nav>
-          </CardContent>
-      </Card>
+    // Render a section divider
+    const SectionDivider = ({ label }) => (
+        <div className="px-4 py-2 mt-2 first:mt-0">
+            <div className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest border-b border-border pb-1">
+                {label}
+            </div>
+        </div>
+    );
 
-      <div className="flex-1 w-full">
-          {renderContent()}
-      </div>
-    </div>
-  );
+    return (
+        <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
+            <Card className="w-full md:w-56 shrink-0">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-lg">Master Data</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0 pb-2">
+                    <nav className="flex flex-col">
+                        <SectionDivider label="Global" />
+                        <TabButton id="items" label="Items" />
+                        <TabButton id="firms" label="Firms" />
+                        <TabButton id="suppliers" label="Suppliers" />
+
+                        <SectionDivider label="Cutter" />
+                        <TabButton id="cuts" label="Cuts" />
+                        <TabButton id="bobbins" label="Bobbins" />
+
+                        <SectionDivider label="Holo" />
+                        <TabButton id="yarns" label="Yarns" />
+                        <TabButton id="twists" label="Twists" />
+                        <TabButton id="rollTypes" label="Roll Types" />
+
+                        <SectionDivider label="Coning" />
+                        <TabButton id="coneTypes" label="Cone Types" />
+                        <TabButton id="wrappers" label="Wrappers" />
+
+                        <SectionDivider label="Shared" />
+                        <TabButton id="machines" label="Machines" />
+                        <TabButton id="workers" label="Workers" />
+                        <TabButton id="boxes" label="Boxes" />
+                    </nav>
+                </CardContent>
+            </Card>
+
+            <div className="flex-1 w-full">
+                {renderContent()}
+            </div>
+        </div>
+    );
 }
 
 // --- Sub Components ---
@@ -116,12 +142,12 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                 <CardTitle>{title}</CardTitle>
                 <div className="relative w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder={`New ${title} name`} value={newName} onChange={e=>setNewName(e.target.value)} />
+                    <Input placeholder={`New ${title} name`} value={newName} onChange={e => setNewName(e.target.value)} />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -140,19 +166,19 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                                 <TableRow key={item.id}>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" />
+                                            <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" />
                                         ) : item.name}
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name)}}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
                                             </div>
                                         )}
                                     </TableCell>
@@ -191,17 +217,17 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
 
     return (
         <Card>
-             <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>{title}</CardTitle>
-                 <div className="relative w-48">
+                <div className="relative w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1" />
-                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e=>setNewWeight(e.target.value)} className="w-32" />
+                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" />
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-32" />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -215,26 +241,26 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                             {filtered.length === 0 ? (
+                            {filtered.length === 0 ? (
                                 <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
                                     </TableCell>
                                     <TableCell className="">
-                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e=>setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" /> : formatKg(item.weight)}
+                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" /> : formatKg(item.weight)}
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight)}}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
                                             </div>
                                         )}
                                     </TableCell>
@@ -248,44 +274,51 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
     )
 }
 
-function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
+// New component for Machines with processType support
+function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     const [newName, setNewName] = useState('');
-    const [newRole, setNewRole] = useState('operator');
+    const [newProcessType, setNewProcessType] = useState('all');
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
-    const [editRole, setEditRole] = useState('operator');
+    const [editProcessType, setEditProcessType] = useState('all');
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
         if (!newName.trim()) return;
-        await onCreate(newName, newRole);
+        await onCreate(newName, newProcessType);
         setNewName('');
+        setNewProcessType('all');
     }
 
     const handleUpdate = async (id) => {
         if (!editName.trim()) return;
-        await onUpdate(id, editName, editRole);
+        await onUpdate(id, editName, editProcessType);
         setEditingId(null);
     }
 
+
+
     return (
         <Card>
-             <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Workers</CardTitle>
-                 <div className="relative w-48">
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Machines</CardTitle>
+                <div className="relative w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-8 h-9" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1" />
-                    <Select value={newRole} onChange={e=>setNewRole(e.target.value)} className="w-32">
-                        <option value="operator">Operator</option>
-                        <option value="helper">Helper</option>
-                    </Select>
+                    <Input placeholder="Machine Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" />
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-40"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -294,7 +327,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Name</TableHead>
-                                <TableHead>Role</TableHead>
+                                <TableHead>Process</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -304,26 +337,266 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e=>setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Select value={editRole} onChange={e=>setEditRole(e.target.value)} className="h-8">
-                                                <option value="operator">Operator</option>
-                                                <option value="helper">Helper</option>
-                                            </Select>
-                                        ) : <Badge variant="outline" className="capitalize">{item.role || 'operator'}</Badge>}
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">
+                                                {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
+                                            </span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={()=>handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={()=>{setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator')}}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={()=>{if(confirm('Delete?')) onDelete(item.id)}}><Trash2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+// Updated Workers component with processType support
+function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newRole, setNewRole] = useState('operator');
+    const [newProcessType, setNewProcessType] = useState('all');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editRole, setEditRole] = useState('operator');
+    const [editProcessType, setEditProcessType] = useState('all');
+
+    const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, newRole, newProcessType);
+        setNewName('');
+        setNewProcessType('all');
+    }
+
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, editRole, editProcessType);
+        setEditingId(null);
+    }
+
+
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Workers</CardTitle>
+                <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex gap-2 flex-wrap">
+                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[150px]" />
+                    <Select
+                        value={newRole}
+                        onChange={e => setNewRole(e.target.value)}
+                        className="w-32"
+                        options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
+                        searchable={false}
+                    />
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-40"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
+
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Role</TableHead>
+                                <TableHead>Process</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select
+                                                value={editRole}
+                                                onChange={e => setEditRole(e.target.value)}
+                                                className="h-8"
+                                                options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
+                                                searchable={false}
+                                            />
+                                        ) : <span className="text-sm text-muted-foreground capitalize">{item.role || 'operator'}</span>}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">
+                                                {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
+                                            </span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+// Boxes component with weight and processType support
+function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newWeight, setNewWeight] = useState('');
+    const [newProcessType, setNewProcessType] = useState('all');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editWeight, setEditWeight] = useState('');
+    const [editProcessType, setEditProcessType] = useState('all');
+
+    const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, Number(newWeight), newProcessType);
+        setNewName('');
+        setNewWeight('');
+        setNewProcessType('all');
+    }
+
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, Number(editWeight), editProcessType);
+        setEditingId(null);
+    }
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Boxes</CardTitle>
+                <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex gap-2 flex-wrap">
+                    <Input placeholder="Box Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[120px]" />
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-28" />
+                    <Select
+                        value={newProcessType}
+                        onChange={e => setNewProcessType(e.target.value)}
+                        className="w-36"
+                        options={PROCESS_OPTIONS}
+                        searchable={false}
+                    />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
+
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Weight (kg)</TableHead>
+                                <TableHead>Process</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24" /> : formatKg(item.weight)}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select
+                                                value={editProcessType}
+                                                onChange={e => setEditProcessType(e.target.value)}
+                                                className="h-8"
+                                                options={PROCESS_OPTIONS}
+                                                searchable={false}
+                                            />
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">
+                                                {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
+                                            </span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
                                             </div>
                                         )}
                                     </TableCell>

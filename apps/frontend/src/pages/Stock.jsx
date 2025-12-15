@@ -6,13 +6,14 @@ import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, aggregateLots } from '../utils';
+import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 
 const EPSILON = 1e-9;
 
@@ -40,7 +41,7 @@ export function Stock() {
   const [view, setView] = useState(() => (isHolo ? 'holo' : 'jumbo')); // 'jumbo' | 'bobbins' | 'holo'
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
-  const [groupByItemFirm, setGroupByItemFirm] = useState(false);
+  const [groupByItem, setGroupByItem] = useState(false);
 
   // --- Filters ---
   const [search, setSearch] = useState("");
@@ -157,10 +158,10 @@ export function Stock() {
   }, [allLots, search, filters]);
 
   const displayedLots = useMemo(() => {
-    if (!groupByItemFirm) return filteredLots;
+    if (!groupByItem) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.firmId || ''}`;
+      const key = `${lot.itemId || ''}`;
       const existing = map.get(key) || {
         lotNo: `Group-${key}`,
         itemId: lot.itemId,
@@ -186,13 +187,21 @@ export function Stock() {
       map.set(key, existing);
     });
     return Array.from(map.values());
-  }, [filteredLots, groupByItemFirm]);
+  }, [filteredLots, groupByItem]);
 
   // --- Handlers ---
 
   const [markingPieces, setMarkingPieces] = useState(() => new Set());
   const [issueModalOpen, setIssueModalOpen] = useState(false);
-  const [issueModalData, setIssueModalData] = useState({ lotNo: '', pieceIds: [], date: todayISO(), machineId: '', operatorId: '', note: '' });
+  const [issueModalData, setIssueModalData] = useState({
+    lotNo: '',
+    pieceIds: [],
+    date: todayISO(),
+    machineId: '',
+    operatorId: '',
+    cutId: '',
+    note: '',
+  });
   const [issuing, setIssuing] = useState(false);
 
   // Keep view aligned with process (match main-branch behaviour)
@@ -211,7 +220,7 @@ export function Stock() {
     }
   }, [isCutter, isHolo, view]);
 
-  useEffect(() => { setExpandedLot(null); }, [groupByItemFirm, view, processId]);
+  useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
 
   async function handleMarkWastage(pieceId) {
     if (!pieceId) return;
@@ -260,14 +269,18 @@ export function Stock() {
   function openIssueModal(lotNo) {
     const pieceIds = (selectedByLot[lotNo] || []).slice();
     if (!pieceIds.length) { alert('Select pieces to issue'); return; }
-    setIssueModalData({ lotNo, pieceIds, date: todayISO(), machineId: '', operatorId: '', note: '' });
+    setIssueModalData({ lotNo, pieceIds, date: todayISO(), machineId: '', operatorId: '', cutId: '', note: '' });
     setIssueModalOpen(true);
   }
 
   async function doIssue() {
     setIssuing(true);
     try {
-      const { lotNo, pieceIds, date, machineId, operatorId, note } = issueModalData;
+      const { lotNo, pieceIds, date, machineId, operatorId, cutId, note } = issueModalData;
+      if (!cutId) {
+        alert('Select a cut before issuing.');
+        return;
+      }
       const payload = {
         date,
         itemId: lotsMap[lotNo].itemId,
@@ -275,9 +288,46 @@ export function Stock() {
         pieceIds,
         note,
         machineId,
-        operatorId
+        operatorId,
+        cutId,
       };
-      await createIssueToMachine(payload);
+      const result = await createIssueToMachine(payload);
+      const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+      const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
+      if (template && issueRecord) {
+        const confirmPrint = window.confirm('Print sticker for this issue?');
+        if (confirmPrint) {
+          const itemName = lotsMap[lotNo]?.itemName;
+          const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
+          const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+          const inboundDate = lotsMap[lotNo]?.date || '';
+          const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
+          const selectedPieces = (db?.inbound_items || []).filter((p) => pieceIds.includes(p.id));
+          const primaryPiece =
+            selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
+          const pieceId = primaryPiece?.id || pieceIds[0] || '';
+          const seq = primaryPiece?.seq ?? '';
+          await printStageTemplate(
+            LABEL_STAGE_KEYS.CUTTER_ISSUE,
+            {
+              lotNo: issueRecord.lotNo,
+              itemName,
+              pieceId,
+              seq,
+              barcode: issueRecord.barcode,
+              count: issueRecord.count || pieceIds.length,
+              totalWeight: issueRecord.totalWeight,
+              pieceIds,
+              machineName,
+              operatorName,
+              inboundDate,
+              cut,
+              date,
+            },
+            { template },
+          );
+        }
+      }
       setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
       setIssueModalOpen(false);
     } catch (e) {
@@ -289,7 +339,7 @@ export function Stock() {
 
   function handleApplyLotFilter(lots) {
     setSearch(lots.join(" "));
-    setGroupByItemFirm(false); // Optionally disable grouping to see the individual lots
+    setGroupByItem(false); // Optionally disable grouping to see the individual lots
   }
 
   // --- Render Helper ---
@@ -381,8 +431,8 @@ export function Stock() {
             </div>
             <div className="flex items-center gap-2 ml-auto pb-1">
               <Label className="text-xs cursor-pointer flex items-center gap-2">
-                <input type="checkbox" checked={groupByItemFirm} onChange={e => setGroupByItemFirm(e.target.checked)} className="rounded border-gray-300" />
-                Group by Item / Firm
+                <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
+                Group by Item
               </Label>
             </div>
           </CardContent>
@@ -391,11 +441,11 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {processId === 'coning' ? (
-        <ConingView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : isHolo ? (
-        <HoloView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : showBobbins ? (
-        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItemFirm} onApplyFilter={handleApplyLotFilter} />
+        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : (
         <div className="rounded-md border bg-card">
           <Table>
@@ -405,7 +455,7 @@ export function Stock() {
                 <TableHead>Lot No</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
-                <TableHead>Firm</TableHead>
+                {!groupByItem ? <TableHead>Firm</TableHead> : null}
                 <TableHead>Supplier</TableHead>
                 <TableHead className="">Pieces</TableHead>
                 <TableHead className="">Total Wt</TableHead>
@@ -414,29 +464,29 @@ export function Stock() {
             </TableHeader>
             <TableBody>
               {displayedLots.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={groupByItem ? 8 : 9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
               ) : (
                 displayedLots.map((l, idx) => {
-                  const isExpanded = !groupByItemFirm && expandedLot === l.lotNo;
+                  const isExpanded = !groupByItem && expandedLot === l.lotNo;
                   return (
                     <React.Fragment key={l.lotNo || idx}>
                       <TableRow
                         className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => !groupByItemFirm && toggleExpand(l.lotNo)}
+                        onClick={() => !groupByItem && toggleExpand(l.lotNo)}
                       >
                         <TableCell>
-                          {!groupByItemFirm && (
+                          {!groupByItem && (
                             isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />
                           )}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {groupByItemFirm ? (
+                          {groupByItem ? (
                             <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
                           ) : (l.lotNo || '—')}
                         </TableCell>
-                        <TableCell>{l.date}</TableCell>
+                        <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
                         <TableCell>{l.itemName}</TableCell>
-                        <TableCell>{l.firmName}</TableCell>
+                        {!groupByItem ? <TableCell>{l.firmName}</TableCell> : null}
                         <TableCell>{l.supplierName}</TableCell>
                         <TableCell className="">
                           {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
@@ -446,7 +496,7 @@ export function Stock() {
                           {formatKg(l.pendingWeight)}
                         </TableCell>
                       </TableRow>
-                      {isExpanded && !groupByItemFirm && (
+                      {isExpanded && !groupByItem && (
                         <TableRow className="bg-muted/30 hover:bg-muted/30">
                           <TableCell colSpan={9} className="p-4">
                             <div className="bg-background border rounded-lg p-4 shadow-sm">
@@ -519,7 +569,7 @@ export function Stock() {
       <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>
         <DialogContent title="Issue Pieces to Machine" onOpenChange={setIssueModalOpen}>
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <Label>Date</Label>
                 <Input type="date" value={issueModalData.date} onChange={e => setIssueModalData({ ...issueModalData, date: e.target.value })} />
@@ -528,7 +578,14 @@ export function Stock() {
                 <Label>Machine</Label>
                 <Select value={issueModalData.machineId} onChange={e => setIssueModalData({ ...issueModalData, machineId: e.target.value })}>
                   <option value="">Select Machine</option>
-                  {db?.machines?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {(db?.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label>Cut</Label>
+                <Select value={issueModalData.cutId} onChange={e => setIssueModalData({ ...issueModalData, cutId: e.target.value })}>
+                  <option value="">Select Cut</option>
+                  {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
             </div>
@@ -536,7 +593,7 @@ export function Stock() {
               <Label>Operator</Label>
               <Select value={issueModalData.operatorId} onChange={e => setIssueModalData({ ...issueModalData, operatorId: e.target.value })}>
                 <option value="">Select Operator</option>
-                {db?.operators?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                {(db?.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </Select>
             </div>
             <div>
@@ -545,7 +602,7 @@ export function Stock() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setIssueModalOpen(false)}>Cancel</Button>
-              <Button onClick={doIssue} disabled={issuing}>
+              <Button onClick={doIssue} disabled={issuing || !issueModalData.machineId || !issueModalData.operatorId || !issueModalData.cutId}>
                 {issuing ? 'Issuing...' : 'Confirm Issue'}
               </Button>
             </div>

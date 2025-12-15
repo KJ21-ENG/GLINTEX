@@ -2,15 +2,20 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { logCrud } from '../utils/auditLogger.js';
+import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
+import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries } from '../utils/barcodeHelpers.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+
+let bootstrapToken = null;
 
 function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();
@@ -51,6 +56,13 @@ function toInt(val) {
   return Number.isFinite(rounded) ? rounded : null;
 }
 
+// Round weight value to 3 decimal places for consistent storage
+function roundTo3Decimals(val) {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 1000) / 1000;
+}
+
 function toOptionalString(val) {
   if (val === undefined || val === null) return null;
   const str = String(val).trim();
@@ -62,6 +74,35 @@ function normalizeWorkerRole(role) {
   return val === 'helper' ? 'helper' : 'operator';
 }
 
+function getActor(req) {
+  if (!req || !req.user) return null;
+  return {
+    userId: req.user.id,
+    username: req.user.username,
+    roleKey: req.user.roleKey,
+  };
+}
+
+function actorCreateFields(actorUserId) {
+  if (!actorUserId) return {};
+  return { createdByUserId: actorUserId, updatedByUserId: actorUserId };
+}
+
+function actorUpdateFields(actorUserId) {
+  if (!actorUserId) return {};
+  return { updatedByUserId: actorUserId };
+}
+
+async function logCrudWithActor(req, args) {
+  const actor = getActor(req);
+  return await logCrud({
+    ...args,
+    actorUserId: actor?.userId,
+    actorUsername: actor?.username,
+    actorRoleKey: actor?.roleKey,
+  });
+}
+
 // Helper: Get or create bobbin by name (normalize to "Bobbin" if empty/null)
 async function getOrCreateBobbin(pcsTypeName) {
   if (!pcsTypeName || !String(pcsTypeName).trim()) {
@@ -69,7 +110,7 @@ async function getOrCreateBobbin(pcsTypeName) {
     pcsTypeName = 'Bobbin';
   }
   const normalizedName = String(pcsTypeName).trim();
-  
+
   // Try to find existing bobbin (case-insensitive)
   const existing = await prisma.bobbin.findFirst({
     where: {
@@ -79,16 +120,16 @@ async function getOrCreateBobbin(pcsTypeName) {
       },
     },
   });
-  
+
   if (existing) {
     return existing.id;
   }
-  
+
   // Create new bobbin
   const newBobbin = await prisma.bobbin.create({
     data: { name: normalizedName },
   });
-  
+
   return newBobbin.id;
 }
 
@@ -322,8 +363,395 @@ async function sendNotification(event, payload) {
   }
 }
 
+// ===== Auth (public) =====
+
+router.get('/api/auth/status', async (req, res) => {
+  try {
+    await ensureDefaultAdminUser();
+    const userCount = await prisma.user.count();
+    res.json({ ok: true, hasUsers: userCount > 0, needsBootstrap: userCount === 0 });
+  } catch (err) {
+    console.error('Failed to read auth status', err);
+    res.status(500).json({ error: 'Failed to read auth status' });
+  }
+});
+
+router.post('/api/auth/login', async (req, res) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || '');
+    if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
+
+    const user = await prisma.user.findUnique({
+      where: { username },
+      include: { role: true },
+    });
+    if (!user || !user.role) return res.status(401).json({ error: 'invalid_credentials' });
+    if (user.isActive === false) return res.status(403).json({ error: 'user_disabled' });
+
+    const ok = await verifyPassword(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'invalid_credentials' });
+
+    const expiresAt = getSessionExpiryDate();
+    const { token, tokenHash } = generateSessionToken();
+    await prisma.userSession.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+      },
+    });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date(), ...actorUpdateFields(user.id) },
+    });
+
+    res.cookie(SESSION_COOKIE_NAME, token, { ...getSessionCookieOptions(), expires: expiresAt });
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        role: { id: user.role.id, key: user.role.key, name: user.role.name },
+      },
+    });
+  } catch (err) {
+    console.error('Login failed', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+router.post('/api/auth/bootstrap', async (req, res) => {
+  try {
+    const userCount = await prisma.user.count();
+    if (userCount > 0) return res.status(409).json({ error: 'already_bootstrapped' });
+
+    if (!bootstrapToken) {
+      bootstrapToken = randomUUID();
+      console.log('============================================================');
+      console.log('GLINTEX AUTH BOOTSTRAP TOKEN (one-time):', bootstrapToken);
+      console.log('Use it to create the first admin user via POST /api/auth/bootstrap');
+      console.log('============================================================');
+    }
+
+    const provided = String(req.headers['x-bootstrap-token'] || req.body?.bootstrapToken || '').trim();
+    if (!provided || provided !== bootstrapToken) return res.status(401).json({ error: 'invalid_bootstrap_token' });
+
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || '');
+    const displayName = req.body?.displayName ? String(req.body.displayName).trim() : null;
+    if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+
+    const adminRole = await prisma.role.findUnique({ where: { key: 'admin' } });
+    if (!adminRole) return res.status(500).json({ error: 'admin role missing; run migrations' });
+
+    const passwordHash = await hashPassword(password);
+    const createdUser = await prisma.user.create({
+      data: {
+        username,
+        displayName,
+        passwordHash,
+        roleId: adminRole.id,
+        isActive: true,
+      },
+      include: { role: true },
+    });
+
+    const expiresAt = getSessionExpiryDate();
+    const { token, tokenHash } = generateSessionToken();
+    await prisma.userSession.create({
+      data: {
+        userId: createdUser.id,
+        tokenHash,
+        expiresAt,
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+      },
+    });
+
+    bootstrapToken = null;
+    res.cookie(SESSION_COOKIE_NAME, token, { ...getSessionCookieOptions(), expires: expiresAt });
+    res.json({
+      ok: true,
+      user: {
+        id: createdUser.id,
+        username: createdUser.username,
+        displayName: createdUser.displayName,
+        role: { id: createdUser.role.id, key: createdUser.role.key, name: createdUser.role.name },
+      },
+    });
+  } catch (err) {
+    console.error('Bootstrap failed', err);
+    res.status(500).json({ error: 'Bootstrap failed' });
+  }
+});
+
 router.get('/api/health', async (req, res) => {
   res.json({ ok: true });
+});
+
+// ===== Auth (required) =====
+router.use(requireAuth);
+
+router.get('/api/auth/me', async (req, res) => {
+  res.json({ ok: true, user: req.user });
+});
+
+router.post('/api/auth/logout', async (req, res) => {
+  try {
+    const sessionId = req.session?.id;
+    if (sessionId) {
+      await prisma.userSession.update({ where: { id: sessionId }, data: { revokedAt: new Date() } });
+    }
+  } catch (err) {
+    console.error('Failed to revoke session', err);
+  }
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// ===== Admin: Users & Roles =====
+
+router.get('/api/admin/roles', requireRole('admin'), async (req, res) => {
+  const roles = await prisma.role.findMany({ orderBy: { key: 'asc' } });
+  res.json({ roles });
+});
+
+router.post('/api/admin/roles', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const key = String(req.body?.key || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const description = req.body?.description != null ? String(req.body.description).trim() : null;
+    if (!key || !/^[a-z0-9_\\-]+$/.test(key)) return res.status(400).json({ error: 'role key must be alphanumeric/underscore/dash' });
+    if (!name) return res.status(400).json({ error: 'role name is required' });
+
+    const created = await prisma.role.create({
+      data: {
+        key,
+        name,
+        description,
+        ...actorCreateFields(actor?.userId),
+      },
+    });
+
+    await logCrud({
+      entityType: 'role',
+      entityId: created.id,
+      action: 'create',
+      payload: { key, name, description },
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({ role: created });
+  } catch (err) {
+    console.error('Failed to create role', err);
+    if (err.code === 'P2002') return res.status(409).json({ error: 'role already exists' });
+    res.status(500).json({ error: err.message || 'Failed to create role' });
+  }
+});
+
+router.put('/api/admin/roles/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+    const existing = await prisma.role.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Role not found' });
+
+    const name = req.body?.name != null ? String(req.body.name).trim() : undefined;
+    const description = req.body?.description != null ? String(req.body.description).trim() : undefined;
+    const updated = await prisma.role.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...actorUpdateFields(actor?.userId),
+      },
+    });
+
+    await logCrud({
+      entityType: 'role',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({ role: updated });
+  } catch (err) {
+    console.error('Failed to update role', err);
+    res.status(500).json({ error: err.message || 'Failed to update role' });
+  }
+});
+
+router.get('/api/admin/users', requireRole('admin'), async (req, res) => {
+  const users = await prisma.user.findMany({
+    orderBy: { username: 'asc' },
+    include: { role: true },
+  });
+  res.json({
+    users: users.map(u => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.displayName,
+      isActive: u.isActive,
+      role: u.role ? { id: u.role.id, key: u.role.key, name: u.role.name } : null,
+      lastLoginAt: u.lastLoginAt,
+      createdAt: u.createdAt,
+      updatedAt: u.updatedAt,
+      createdByUserId: u.createdByUserId || null,
+      updatedByUserId: u.updatedByUserId || null,
+    })),
+  });
+});
+
+router.post('/api/admin/users', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const username = normalizeUsername(req.body?.username);
+    const displayName = req.body?.displayName != null ? String(req.body.displayName).trim() : null;
+    const password = String(req.body?.password || '');
+    const roleId = req.body?.roleId ? String(req.body.roleId) : '';
+    const isActive = req.body?.isActive !== false;
+    if (!username || !password || !roleId) return res.status(400).json({ error: 'username, password, roleId are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+
+    const role = await prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) return res.status(400).json({ error: 'role not found' });
+
+    const passwordHash = await hashPassword(password);
+    const created = await prisma.user.create({
+      data: {
+        username,
+        displayName,
+        passwordHash,
+        roleId,
+        isActive,
+        ...actorCreateFields(actor?.userId),
+      },
+      include: { role: true },
+    });
+
+    await logCrud({
+      entityType: 'user',
+      entityId: created.id,
+      action: 'create',
+      payload: { username, displayName, roleId, isActive },
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({
+      user: {
+        id: created.id,
+        username: created.username,
+        displayName: created.displayName,
+        isActive: created.isActive,
+        role: created.role ? { id: created.role.id, key: created.role.key, name: created.role.name } : null,
+        createdAt: created.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error('Failed to create user', err);
+    if (err.code === 'P2002') return res.status(409).json({ error: 'username already exists' });
+    res.status(500).json({ error: err.message || 'Failed to create user' });
+  }
+});
+
+router.put('/api/admin/users/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+    const existing = await prisma.user.findUnique({ where: { id }, include: { role: true } });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
+    const displayName = req.body?.displayName !== undefined ? (req.body.displayName ? String(req.body.displayName).trim() : null) : undefined;
+    const roleId = req.body?.roleId !== undefined ? String(req.body.roleId || '') : undefined;
+    const isActive = req.body?.isActive !== undefined ? !!req.body.isActive : undefined;
+    if (roleId !== undefined && !roleId) return res.status(400).json({ error: 'roleId is required when provided' });
+    if (roleId !== undefined) {
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) return res.status(400).json({ error: 'role not found' });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(displayName !== undefined ? { displayName } : {}),
+        ...(roleId !== undefined ? { roleId } : {}),
+        ...(isActive !== undefined ? { isActive } : {}),
+        ...actorUpdateFields(actor?.userId),
+      },
+      include: { role: true },
+    });
+
+    await logCrud({
+      entityType: 'user',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({
+      user: {
+        id: updated.id,
+        username: updated.username,
+        displayName: updated.displayName,
+        isActive: updated.isActive,
+        role: updated.role ? { id: updated.role.id, key: updated.role.key, name: updated.role.name } : null,
+      },
+    });
+  } catch (err) {
+    console.error('Failed to update user', err);
+    res.status(500).json({ error: err.message || 'Failed to update user' });
+  }
+});
+
+router.put('/api/admin/users/:id/password', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+    const password = String(req.body?.password || '');
+    if (!password || password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+
+    const passwordHash = await hashPassword(password);
+    await prisma.user.update({
+      where: { id },
+      data: { passwordHash, ...actorUpdateFields(actor?.userId) },
+    });
+
+    await logCrud({
+      entityType: 'user',
+      entityId: id,
+      action: 'password_reset',
+      payload: { userId: id },
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to reset password', err);
+    res.status(500).json({ error: err.message || 'Failed to reset password' });
+  }
 });
 
 router.get('/api/db', async (req, res) => {
@@ -532,26 +960,26 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
     const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
     const rows = rowIds.length > 0
       ? await prisma.receiveFromCutterMachineRow.findMany({
-          where: { id: { in: rowIds } },
-          select: {
-            id: true,
-            pieceId: true,
-            barcode: true,
-            netWt: true,
-            tareWt: true,
-            pktBoxWt: true,
-            pcsBoxWt: true,
-            grossWt: true,
-            bobbinQuantity: true,
-          },
-        })
+        where: { id: { in: rowIds } },
+        select: {
+          id: true,
+          pieceId: true,
+          barcode: true,
+          netWt: true,
+          tareWt: true,
+          pktBoxWt: true,
+          pcsBoxWt: true,
+          grossWt: true,
+          bobbinQuantity: true,
+        },
+      })
       : [];
     const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
     const pieces = pieceIds.length
       ? await prisma.inboundItem.findMany({
-          where: { id: { in: pieceIds } },
-          select: { id: true, lotNo: true, itemId: true, seq: true },
-        })
+        where: { id: { in: pieceIds } },
+        select: { id: true, lotNo: true, itemId: true, seq: true },
+      })
       : [];
     const pieceMap = new Map(pieces.map((p) => [p.id, p]));
     const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
@@ -615,13 +1043,14 @@ router.get('/api/sequence/next', async (req, res) => {
 // Set the lot sequence to a specific integer value (so the next created lot becomes value+1)
 router.post('/api/sequence/set', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { next } = req.body || {};
     const num = Number(next);
     if (!Number.isInteger(num) || num < 0) return res.status(400).json({ error: 'next must be a non-negative integer' });
     const updated = await prisma.sequence.upsert({
       where: { id: 'lot_sequence' },
-      update: { nextValue: num },
-      create: { id: 'lot_sequence', nextValue: num },
+      update: { nextValue: num, ...actorUpdateFields(actorUserId) },
+      create: { id: 'lot_sequence', nextValue: num, ...actorCreateFields(actorUserId) },
     });
     res.json({ ok: true, nextValue: updated.nextValue });
   } catch (err) {
@@ -672,12 +1101,59 @@ router.get('/api/whatsapp/templates', async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
+// Sticker template endpoints (shared across all users)
+router.get('/api/sticker_templates', async (req, res) => {
+  try {
+    const templates = await prisma.stickerTemplate.findMany({ orderBy: { stageKey: 'asc' } });
+    res.json({ templates });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.get('/api/sticker_templates/:stageKey', async (req, res) => {
+  try {
+    const stageKey = String(req.params.stageKey || '').trim();
+    if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });
+    const template = await prisma.stickerTemplate.findUnique({ where: { stageKey } });
+    if (!template) return res.status(404).json({ error: 'Template not found' });
+    res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.put('/api/sticker_templates/:stageKey', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const stageKey = String(req.params.stageKey || '').trim();
+    if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });
+    const dimensions = req.body?.dimensions;
+    const content = req.body?.content;
+    if (!dimensions || typeof dimensions !== 'object') return res.status(400).json({ error: 'dimensions must be an object' });
+    if (!content || typeof content !== 'object') return res.status(400).json({ error: 'content must be an object' });
+
+    const template = await prisma.stickerTemplate.upsert({
+      where: { stageKey },
+      update: { dimensions, content, ...actorUpdateFields(actorUserId) },
+      create: { stageKey, dimensions, content, ...actorCreateFields(actorUserId) },
+    });
+
+    await logCrudWithActor(req, { entityType: 'StickerTemplate', entityId: template.id, action: 'upsert', payload: { stageKey } });
+    res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 router.put('/api/whatsapp/templates/:event', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { event } = req.params;
     const { enabled, template, sendToPrimary, groupIds } = req.body;
     const cleanGroups = Array.isArray(groupIds) ? groupIds.filter(x => typeof x === 'string') : [];
-    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '', sendToPrimary: sendToPrimary !== false, groupIds: cleanGroups });
+    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '', sendToPrimary: sendToPrimary !== false, groupIds: cleanGroups }, { actorUserId });
+    await logCrudWithActor(req, { entityType: 'whatsapp_template', entityId: String(t.id), action: 'upsert', payload: { event } });
     res.json(t);
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -698,7 +1174,7 @@ router.post('/api/whatsapp/send-event', async (req, res) => {
     if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
     const seen = new Set();
     const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
-    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(()=>{}); else whatsapp.sendToChatIdSafe(r.value, msg).catch(()=>{}); });
+    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(() => { }); else whatsapp.sendToChatIdSafe(r.value, msg).catch(() => { }); });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
@@ -750,6 +1226,8 @@ router.post('/api/whatsapp/send-test', async (req, res) => {
 
 router.post('/api/lots', async (req, res) => {
   try {
+    const actor = getActor(req);
+    const actorUserId = actor?.userId;
     const { date, itemId, firmId, supplierId, pieces } = req.body;
     if (!date || !itemId || !firmId || !supplierId) {
       return res.status(400).json({ error: 'Missing required lot fields' });
@@ -760,8 +1238,8 @@ router.post('/api/lots', async (req, res) => {
 
     const preparedPieces = pieces.map((piece, idx) => {
       const seq = piece.seq || idx + 1;
-      const weight = Number(piece.weight);
-      if (!Number.isFinite(weight) || weight <= 0) {
+      const weight = roundTo3Decimals(piece.weight);
+      if (weight <= 0) {
         throw new Error(`Invalid weight for piece ${idx + 1}`);
       }
       return {
@@ -770,24 +1248,24 @@ router.post('/api/lots', async (req, res) => {
       };
     });
 
-      const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
-      if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-      const materialCode = deriveMaterialCodeFromItem(itemRecord);
+    const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    const materialCode = deriveMaterialCodeFromItem(itemRecord);
 
     const totalPieces = preparedPieces.length;
-    const totalWeight = preparedPieces.reduce((sum, piece) => sum + piece.weight, 0);
+    const totalWeight = roundTo3Decimals(preparedPieces.reduce((sum, piece) => sum + piece.weight, 0));
 
     const result = await prisma.$transaction(async (tx) => {
       // Get next lot number from sequence
       const sequence = await tx.sequence.upsert({
         where: { id: 'lot_sequence' },
-        update: { nextValue: { increment: 1 } },
-        create: { id: 'lot_sequence', nextValue: 1 }
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'lot_sequence', nextValue: 1, ...actorCreateFields(actorUserId) }
       });
 
       // Use the sequence value directly as the lot number (e.g. "001", "002")
       const lotNo = String(sequence.nextValue).padStart(3, "0");
-      
+
       // Update piece IDs with the actual lot number
       const updatedPieces = preparedPieces.map((piece, idx) => {
         const seq = idx + 1;
@@ -798,7 +1276,8 @@ router.post('/api/lots', async (req, res) => {
           itemId,
           seq,
           status: 'available',
-          barcode: makeInboundBarcode({ materialCode, lotNo, seq }),
+          barcode: makeInboundBarcode({ lotNo, seq }),
+          ...actorCreateFields(actorUserId),
         };
       });
 
@@ -811,6 +1290,7 @@ router.post('/api/lots', async (req, res) => {
           supplierId,
           totalPieces,
           totalWeight,
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -831,6 +1311,9 @@ router.post('/api/lots', async (req, res) => {
           pieces: updatedPieces.map(p => ({ id: p.id, seq: p.seq, weight: p.weight })),
         },
         client: tx,
+        actorUserId: actorUserId,
+        actorUsername: actor?.username,
+        actorRoleKey: actor?.roleKey,
       });
 
       return lot;
@@ -854,17 +1337,24 @@ router.post('/api/lots', async (req, res) => {
 
 router.post('/api/issue_to_cutter_machine', async (req, res) => {
   try {
-    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId } = req.body;
+    const actorUserId = req.user?.id;
+    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId, cutId } = req.body;
     if (!date || !itemId || !lotNo) {
       return res.status(400).json({ error: 'Missing required issue_to_cutter_machine fields' });
     }
     if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
       return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
     }
+    if (!cutId) {
+      return res.status(400).json({ error: 'cutId is required' });
+    }
 
     const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
     const materialCode = deriveMaterialCodeFromItem(itemRecord);
+
+    const cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
+    if (!cutRecord) return res.status(404).json({ error: 'Cut not found' });
 
     const { issueRecord } = await prisma.$transaction(async (tx) => {
       const pieces = await tx.inboundItem.findMany({
@@ -893,7 +1383,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
 
       await tx.inboundItem.updateMany({
         where: { id: { in: pieceIds } },
-        data: { status: 'consumed' },
+        data: { status: 'consumed', ...actorUpdateFields(actorUserId) },
       });
 
       const firstSeq = pieces[0]?.seq ?? 0;
@@ -902,22 +1392,24 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
           id: randomUUID(),
           date,
           itemId,
-            lotNo,
-            count: pieceIds.length,
-            totalWeight,
-            pieceIds: pieceIdsCsv,
-            reason: 'internal',
-            note: note || null,
-            machineId: machineId || null,
+          lotNo,
+          cutId,
+          count: pieceIds.length,
+          totalWeight,
+          pieceIds: pieceIdsCsv,
+          reason: 'internal',
+          note: note || null,
+          machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: makeIssueBarcode({ materialCode, lotNo, seq: firstSeq }),
+          barcode: makeIssueBarcode({ lotNo, seq: firstSeq }),
+          ...actorCreateFields(actorUserId),
         },
       });
 
-        return { issueRecord: issueRow };
-      });
+      return { issueRecord: issueRow };
+    });
 
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'issue_to_cutter_machine',
       entityId: issueRecord.id,
       action: 'create',
@@ -925,6 +1417,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
         lotNo: issueRecord.lotNo,
         date: issueRecord.date,
         itemId: issueRecord.itemId,
+        cutId: issueRecord.cutId,
         count: issueRecord.count,
         totalWeight: issueRecord.totalWeight,
         pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [],
@@ -939,9 +1432,10 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
       const itemName = (await prisma.item.findUnique({ where: { id: issueRecord.itemId } })).name || '';
       const machineName = issueRecord.machineId ? (await prisma.machine.findUnique({ where: { id: issueRecord.machineId } })).name : '';
       const operatorName = issueRecord.operatorId ? (await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } })).name : '';
+      const cutName = issueRecord.cutId ? (await prisma.cut.findUnique({ where: { id: issueRecord.cutId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
+      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
       // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
@@ -963,6 +1457,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
 
 router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
       return res.status(400).json({ error: 'Missing filename' });
@@ -988,7 +1483,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
 
     const pieceIncrements = aggregateNetByPiece(rows);
     const pieceCountIncrements = aggregatePieceCounts(rows);
-    
+
     const pieceIds = Array.from(pieceIncrements.keys());
     const inboundAndTotals = await fetchInboundAndTotals(pieceIds);
     const pieceMeta = buildPieceSummaries(pieceIds, inboundAndTotals, pieceIncrements);
@@ -998,7 +1493,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
       // Normalize PcsTypeName to bobbin IDs (create bobbins if they don't exist)
       const uniquePcsTypeNames = [...new Set(rows.map(r => r.pcsTypeName).filter(Boolean))];
       const bobbinIdMap = new Map();
-      
+
       for (const pcsTypeName of uniquePcsTypeNames) {
         const normalizedName = pcsTypeName.trim() || 'Bobbin';
         // Find or create bobbin (case-insensitive)
@@ -1010,16 +1505,16 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
             },
           },
         });
-        
+
         if (!bobbin) {
           bobbin = await tx.bobbin.create({
-            data: { name: normalizedName },
+            data: { name: normalizedName, ...actorCreateFields(actorUserId) },
           });
         }
-        
+
         bobbinIdMap.set(pcsTypeName, bobbin.id);
       }
-      
+
       // Also ensure "Bobbin" exists for empty/null values
       if (!bobbinIdMap.has(null) && !bobbinIdMap.has('')) {
         let defaultBobbin = await tx.bobbin.findFirst({
@@ -1030,13 +1525,13 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
             },
           },
         });
-        
+
         if (!defaultBobbin) {
           defaultBobbin = await tx.bobbin.create({
-            data: { name: 'Bobbin' },
+            data: { name: 'Bobbin', ...actorCreateFields(actorUserId) },
           });
         }
-        
+
         bobbinIdMap.set(null, defaultBobbin.id);
         bobbinIdMap.set('', defaultBobbin.id);
       }
@@ -1045,6 +1540,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
         data: {
           originalFilename: filename,
           rowCount: rows.length,
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -1053,8 +1549,9 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
         uploadId: createdUpload.id,
         bobbinQuantity: row.bobbinQuantity,
         bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
+        ...actorCreateFields(actorUserId),
       }));
-      
+
       if (createPayload.length > 0) {
         await tx.receiveFromCutterMachineRow.createMany({ data: createPayload });
       }
@@ -1064,21 +1561,20 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
         const pcsIncrement = pieceCountIncrements.get(pieceId) || 0;
         const updateData = {
           totalNetWeight: { increment: incrementBy },
+          ...(pcsIncrement > 0 ? { totalBob: { increment: pcsIncrement } } : {}),
+          ...actorUpdateFields(actorUserId),
         };
-        if (pcsIncrement > 0) {
-          updateData.totalBob = { increment: pcsIncrement };
-        }
         await tx.receiveFromCutterMachinePieceTotal.upsert({
           where: { pieceId },
           update: updateData,
-          create: { pieceId, totalNetWeight: incrementBy, totalBob: pcsIncrement > 0 ? pcsIncrement : 0 },
+          create: { pieceId, totalNetWeight: incrementBy, totalBob: pcsIncrement > 0 ? pcsIncrement : 0, ...actorCreateFields(actorUserId) },
         });
       }
 
       return createdUpload;
     });
 
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'receive_upload',
       entityId: upload.id,
       action: 'create',
@@ -1108,6 +1604,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
 // Mark remaining pending weight for a piece as wastage (only if piece was issued to machine)
 router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { pieceId } = req.body || {};
     if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
 
@@ -1132,8 +1629,8 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
     const updated = await prisma.$transaction(async (tx) => {
       await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId },
-        update: { wastageNetWeight: { increment: remaining } },
-        create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining },
+        update: { wastageNetWeight: { increment: remaining }, ...actorUpdateFields(actorUserId) },
+        create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining, ...actorCreateFields(actorUserId) },
       });
       return tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     });
@@ -1149,7 +1646,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
       sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
     } catch (e) { console.error('notify piece wastage error', e); }
 
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'receive_piece_total',
       entityId: pieceId,
       action: 'update',
@@ -1167,6 +1664,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
 
 router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const {
       pieceId,
       lotNo,
@@ -1179,6 +1677,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       receiveDate,
       issueBarcode,
       cutId,
+      shift,
     } = req.body || {};
 
     if (!boxId) return res.status(400).json({ error: 'Missing box selection' });
@@ -1271,6 +1770,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
         data: {
           originalFilename: 'manual-entry',
           rowCount: 1,
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -1305,12 +1805,14 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
           helperId: helperRec ? helperRec.id : null,
           bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
-          shift: helperRec ? helperRec.name : null,
+          shift: shift || null,
+          helperName: helperRec ? helperRec.name : null,
           cutId: cutRecord ? cutRecord.id : null,
           cut: cutRecord ? cutRecord.name : null,
           narration: 'Manual entry',
           createdBy: 'manual',
           barcode: receiveBarcode,
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -1319,11 +1821,13 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
         update: {
           totalNetWeight: { increment: net },
           totalBob: { increment: bobbinQty },
+          ...actorUpdateFields(actorUserId),
         },
         create: {
           pieceId: resolvedPieceId,
           totalNetWeight: net,
           totalBob: bobbinQty,
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -1411,7 +1915,8 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
 
 router.post('/api/issue_to_holo_machine', async (req, res) => {
   try {
-    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId } = req.body || {};
+    const actorUserId = req.user?.id;
+    const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId, shift } = req.body || {};
     if (!date) {
       return res.status(400).json({ error: 'Missing date' });
     }
@@ -1499,6 +2004,14 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     const normalizedYarnKg = Number(yarnKg || 0);
 
     const created = await prisma.$transaction(async (tx) => {
+      // Get next Holo issue series number
+      const holoSeq = await tx.holoIssueSequence.upsert({
+        where: { id: 'holo_issue_seq' },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+      });
+      const seriesNumber = holoSeq.nextValue - 1; // Use value before increment
+
       const issue = await tx.issueToHoloMachine.create({
         data: {
           date,
@@ -1508,13 +2021,15 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           twistId: twistRecord.id,
           machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: `HLO-${lotNo}-${Date.now()}`,
+          barcode: makeHoloIssueBarcode({ series: seriesNumber }),
           note: note || null,
+          shift: shift || null,
           metallicBobbins: totalBobbins,
           metallicBobbinsWeight: totalWeight,
           yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
           receivedRowRefs: normalizedCrates,
           rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
+          ...actorCreateFields(actorUserId),
         },
       });
 
@@ -1527,11 +2042,27 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           data: {
             issuedBobbins: existingQty + (Number(crate.issuedBobbins) || 0),
             issuedBobbinWeight: existingWeight + (Number(crate.issuedBobbinWeight) || 0),
+            ...actorUpdateFields(actorUserId),
           },
         });
       }
 
       return issue;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'issue_to_holo_machine',
+      entityId: created.id,
+      action: 'create',
+      payload: {
+        date: created.date,
+        lotNo: created.lotNo,
+        itemId: created.itemId,
+        machineId: created.machineId,
+        operatorId: created.operatorId,
+        yarnId: created.yarnId,
+        twistId: created.twistId,
+      },
     });
 
     res.json({ ok: true, issueToHoloMachine: created });
@@ -1543,6 +2074,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
 
 router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const {
       issueId,
       pieceId,
@@ -1581,7 +2113,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     })();
 
     if (tareWeight == null) {
-       return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
+      return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
     }
 
     const netWeight = grossNum - tareWeight;
@@ -1589,10 +2121,11 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
 
-    const tsPart = Date.now().toString().slice(-6);
-    const randPart = Math.random().toString(36).slice(-4).toUpperCase();
-    const lotPart = (issue?.lotNo || 'HLO').replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'HLO';
-    const barcode = `RHO-${lotPart}-${tsPart}${randPart}`;
+    // Extract series from issue barcode and count existing crates
+    const issueSeriesNumber = parseHoloSeries(issue?.barcode) || 1;
+    const existingCrates = await prisma.receiveFromHoloMachineRow.count({ where: { issueId } });
+    const crateIndex = existingCrates + 1;
+    const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
     const createdRow = await prisma.receiveFromHoloMachineRow.create({
       data: {
@@ -1610,21 +2143,24 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
         boxId: boxId || null,
         notes: notes || null,
         createdBy: createdBy || 'manual',
+        ...actorCreateFields(actorUserId),
       },
     });
-    
+
     const netIncrement = Number(netWeight);
     await prisma.receiveFromHoloMachinePieceTotal.upsert({
       where: { pieceId },
       update: {
         totalRolls: { increment: rollCountNum },
         totalNetWeight: { increment: netIncrement },
+        ...actorUpdateFields(actorUserId),
       },
       create: {
         pieceId,
         totalRolls: rollCountNum,
         totalNetWeight: netIncrement,
         wastageNetWeight: 0,
+        ...actorCreateFields(actorUserId),
       },
     });
     res.json({ ok: true, row: createdRow });
@@ -1636,7 +2172,8 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
 
 router.post('/api/issue_to_coning_machine', async (req, res) => {
   try {
-    const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt } = req.body || {};
+    const actorUserId = req.user?.id;
+    const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt, shift } = req.body || {};
     if (!date) return res.status(400).json({ error: 'Missing date' });
     const crateRows = Array.isArray(crates) ? crates : [];
     if (crateRows.length === 0) return res.status(400).json({ error: 'Scan at least one crate to issue' });
@@ -1664,9 +2201,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
     const coningRows = rowIds.length
       ? await prisma.receiveFromConingMachineRow.findMany({
-          where: { id: { in: rowIds } },
-          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
-        })
+        where: { id: { in: rowIds } },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+      })
       : [];
 
     const matchedConingRowIds = new Set(coningRows.map((row) => row.id));
@@ -1682,9 +2219,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
     const holoRows = holoWhere.length
       ? await prisma.receiveFromHoloMachineRow.findMany({
-          where: { OR: holoWhere },
-          include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
-        })
+        where: { OR: holoWhere },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+      })
       : [];
 
     const rows = [...coningRows, ...holoRows];
@@ -1835,19 +2372,45 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     const expectedCones = requiredPerConeNetWeight > 0
       ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
       : 0;
-    const created = await prisma.issueToConingMachine.create({
-      data: {
-        date,
-        itemId,
-        lotNo,
-        machineId: machineId || null,
-        operatorId: operatorId || null,
-        barcode: `CN-${lotNo}-${Date.now()}`,
-        note: note || null,
-        rollsIssued: Number(totalRolls || 0),
-        requiredPerConeNetWeight,
-        expectedCones,
-        receivedRowRefs: preparedCrates,
+
+    const created = await prisma.$transaction(async (tx) => {
+      // Get next Coning issue series number
+      const coningSeq = await tx.coningIssueSequence.upsert({
+        where: { id: 'coning_issue_seq' },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+      });
+      const seriesNumber = coningSeq.nextValue - 1; // Use value before increment
+
+      return tx.issueToConingMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: makeConingIssueBarcode({ series: seriesNumber }),
+          note: note || null,
+          shift: shift || null,
+          rollsIssued: Number(totalRolls || 0),
+          requiredPerConeNetWeight,
+          expectedCones,
+          receivedRowRefs: preparedCrates,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'issue_to_coning_machine',
+      entityId: created.id,
+      action: 'create',
+      payload: {
+        date: created.date,
+        lotNo: created.lotNo,
+        itemId: created.itemId,
+        machineId: created.machineId,
+        operatorId: created.operatorId,
       },
     });
     res.json({ ok: true, issueToConingMachine: created });
@@ -1859,6 +2422,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
 router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const {
       issueId,
       pieceId: rawPieceId,
@@ -1901,9 +2465,10 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
 
     const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
     const crateIndex = existingCount + 1;
-    const paddedIndex = String(crateIndex).padStart(3, '0');
-    const baseCode = issue.barcode || issue.lotNo || issue.id;
-    const barcode = `RCN-${baseCode}-${paddedIndex}`;
+    // Extract series from issue barcode (e.g., ICO-001 -> 1)
+    const issueSeriesMatch = issue.barcode?.match(/^ICO-(\d+)/i);
+    const issueSeriesNumber = issueSeriesMatch ? Number(issueSeriesMatch[1]) : 1;
+    const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
     const createdRow = await prisma.receiveFromConingMachineRow.create({
       data: {
@@ -1921,6 +2486,7 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
         notes: notes || null,
         date: date || issue.date,
         createdBy: createdBy || 'manual',
+        ...actorCreateFields(actorUserId),
       },
     });
     await prisma.receiveFromConingMachinePieceTotal.upsert({
@@ -1928,12 +2494,14 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
       update: {
         totalCones: { increment: coneCount },
         totalNetWeight: { increment: netWeight || 0 },
+        ...actorUpdateFields(actorUserId),
       },
       create: {
         pieceId,
         totalCones: coneCount,
         totalNetWeight: netWeight || 0,
         wastageNetWeight: 0,
+        ...actorCreateFields(actorUserId),
       },
     });
     res.json({ ok: true, row: createdRow });
@@ -1944,8 +2512,9 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
 });
 
 // Simple import endpoint: replaces data for simplicity
-router.post('/api/import', async (req, res) => {
+router.post('/api/import', requireRole('admin'), async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const data = req.body;
     if (!data) return res.status(400).json({ error: 'Missing body' });
 
@@ -1971,57 +2540,57 @@ router.post('/api/import', async (req, res) => {
     // Bulk create
     if (Array.isArray(data.items)) {
       for (const it of data.items) {
-        await prisma.item.create({ data: { id: it.id || undefined, name: it.name } });
+        await prisma.item.create({ data: { id: it.id || undefined, name: it.name, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.firms)) {
       for (const f of data.firms) {
-        await prisma.firm.create({ data: { id: f.id || undefined, name: f.name } });
+        await prisma.firm.create({ data: { id: f.id || undefined, name: f.name, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.suppliers)) {
       for (const s of data.suppliers) {
-        await prisma.supplier.create({ data: { id: s.id || undefined, name: s.name } });
+        await prisma.supplier.create({ data: { id: s.id || undefined, name: s.name, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.lots)) {
       for (const l of data.lots) {
-        await prisma.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, supplierId: l.supplierId || null, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0) } });
+        await prisma.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, supplierId: l.supplierId || null, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0), ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.inbound_items)) {
       for (const ii of data.inbound_items) {
-        await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0 } });
+        await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.issue_to_cutter_machine)) {
       for (const c of data.issue_to_cutter_machine) {
-        await prisma.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null } });
+        await prisma.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.workers)) {
       for (const w of data.workers) {
-        await prisma.operator.create({ data: { id: w.id || undefined, name: w.name, role: normalizeWorkerRole(w.role) } });
+        await prisma.operator.create({ data: { id: w.id || undefined, name: w.name, role: normalizeWorkerRole(w.role), ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.bobbins)) {
       for (const b of data.bobbins) {
-        await prisma.bobbin.create({ data: { id: b.id || undefined, name: b.name, weight: b.weight != null ? Number(b.weight) : null } });
+        await prisma.bobbin.create({ data: { id: b.id || undefined, name: b.name, weight: b.weight != null ? Number(b.weight) : null, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.boxes)) {
       for (const box of data.boxes) {
-        await prisma.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0) } });
+        await prisma.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0), ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.cone_types)) {
       for (const ct of data.cone_types) {
-        await prisma.coneType.create({ data: { id: ct.id || undefined, name: ct.name, weight: ct.weight != null ? Number(ct.weight) : null } });
+        await prisma.coneType.create({ data: { id: ct.id || undefined, name: ct.name, weight: ct.weight != null ? Number(ct.weight) : null, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.wrappers)) {
       for (const w of data.wrappers) {
-        await prisma.wrapper.create({ data: { id: w.id || undefined, name: w.name } });
+        await prisma.wrapper.create({ data: { id: w.id || undefined, name: w.name, ...actorCreateFields(actorUserId) } });
       }
     }
     if (Array.isArray(data.issue_to_coning_machine)) {
@@ -2040,6 +2609,7 @@ router.post('/api/import', async (req, res) => {
             requiredPerConeNetWeight: Number(c.requiredPerConeNetWeight || 0),
             expectedCones: Number(c.expectedCones || 0),
             receivedRowRefs: Array.isArray(c.receivedRowRefs) ? c.receivedRowRefs : [],
+            ...actorCreateFields(actorUserId),
           },
         });
       }
@@ -2063,6 +2633,7 @@ router.post('/api/import', async (req, res) => {
             helperId: row.helperId || null,
             notes: row.notes || null,
             createdBy: row.createdBy || null,
+            ...actorCreateFields(actorUserId),
           },
         });
       }
@@ -2075,6 +2646,7 @@ router.post('/api/import', async (req, res) => {
             totalCones: Number(total.totalCones || 0),
             totalNetWeight: Number(total.totalNetWeight || 0),
             wastageNetWeight: Number(total.wastageNetWeight || 0),
+            ...actorCreateFields(actorUserId),
           },
         });
       }
@@ -2083,10 +2655,14 @@ router.post('/api/import', async (req, res) => {
     // Settings
     if (data.ui && data.ui.brand) {
       const b = data.ui.brand;
-      await prisma.settings.upsert({ where: { id: 1 }, update: { brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null }, create: { id: 1, brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null } });
+      await prisma.settings.upsert({
+        where: { id: 1 },
+        update: { brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorUpdateFields(actorUserId) },
+        create: { id: 1, brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorCreateFields(actorUserId) },
+      });
     }
 
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'import',
       entityId: null,
       action: 'import',
@@ -2120,9 +2696,10 @@ router.post('/api/import', async (req, res) => {
 // Basic CRUD endpoints (items example)
 router.get('/api/items', async (req, res) => { res.json(await prisma.item.findMany()); });
 router.post('/api/items', async (req, res) => {
+  const actorUserId = req.user?.id;
   const { name } = req.body;
-  const item = await prisma.item.create({ data: { name } });
-  await logCrud({
+  const item = await prisma.item.create({ data: { name, ...actorCreateFields(actorUserId) } });
+  await logCrudWithActor(req, {
     entityType: 'item',
     entityId: item.id,
     action: 'create',
@@ -2141,7 +2718,7 @@ router.delete('/api/items/:id', async (req, res) => {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
   await prisma.item.delete({ where: { id } });
-  await logCrud({
+  await logCrudWithActor(req, {
     entityType: 'item',
     entityId: id,
     action: 'delete',
@@ -2157,8 +2734,8 @@ router.put('/api/items/:id', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.item.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Item not found' });
-    const updated = await prisma.item.update({ where: { id }, data: { name } });
-    await logCrud({
+    const updated = await prisma.item.update({ where: { id }, data: { name, ...actorUpdateFields(req.user?.id) } });
+    await logCrudWithActor(req, {
       entityType: 'item',
       entityId: id,
       action: 'update',
@@ -2183,12 +2760,13 @@ router.get('/api/yarns', async (req, res) => {
 
 router.post('/api/yarns', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name } = req.body || {};
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Missing yarn name' });
     }
-    const yarn = await prisma.yarn.create({ data: { name: String(name).trim() } });
-    await logCrud({ entityType: 'yarn', entityId: yarn.id, action: 'create', payload: yarn });
+    const yarn = await prisma.yarn.create({ data: { name: String(name).trim(), ...actorCreateFields(actorUserId) } });
+    await logCrudWithActor(req, { entityType: 'yarn', entityId: yarn.id, action: 'create', payload: yarn });
     res.json(yarn);
   } catch (err) {
     console.error('Failed to create yarn', err);
@@ -2198,6 +2776,7 @@ router.post('/api/yarns', async (req, res) => {
 
 router.put('/api/yarns/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body || {};
     if (!name || !String(name).trim()) {
@@ -2207,8 +2786,8 @@ router.put('/api/yarns/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Yarn not found' });
     }
-    const updated = await prisma.yarn.update({ where: { id }, data: { name: String(name).trim() } });
-    await logCrud({
+    const updated = await prisma.yarn.update({ where: { id }, data: { name: String(name).trim(), ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'yarn',
       entityId: id,
       action: 'update',
@@ -2235,7 +2814,7 @@ router.delete('/api/yarns/:id', async (req, res) => {
       return res.status(400).json({ error: 'Yarn has been used in issues and cannot be deleted' });
     }
     await prisma.yarn.delete({ where: { id } });
-    await logCrud({ entityType: 'yarn', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'yarn', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete yarn', err);
@@ -2250,13 +2829,14 @@ router.get('/api/cuts', async (req, res) => {
 
 router.post('/api/cuts', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name } = req.body || {};
     const trimmed = typeof name === 'string' ? name.trim() : '';
     if (!trimmed) {
       return res.status(400).json({ error: 'Missing cut name' });
     }
-    const cut = await prisma.cut.create({ data: { name: trimmed } });
-    await logCrud({ entityType: 'cut', entityId: cut.id, action: 'create', payload: cut });
+    const cut = await prisma.cut.create({ data: { name: trimmed, ...actorCreateFields(actorUserId) } });
+    await logCrudWithActor(req, { entityType: 'cut', entityId: cut.id, action: 'create', payload: cut });
     res.json(cut);
   } catch (err) {
     console.error('Failed to create cut', err);
@@ -2266,6 +2846,7 @@ router.post('/api/cuts', async (req, res) => {
 
 router.put('/api/cuts/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body || {};
     const trimmed = typeof name === 'string' ? name.trim() : '';
@@ -2276,8 +2857,8 @@ router.put('/api/cuts/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Cut not found' });
     }
-    const updated = await prisma.cut.update({ where: { id }, data: { name: trimmed } });
-    await logCrud({
+    const updated = await prisma.cut.update({ where: { id }, data: { name: trimmed, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'cut',
       entityId: id,
       action: 'update',
@@ -2304,7 +2885,7 @@ router.delete('/api/cuts/:id', async (req, res) => {
       return res.status(400).json({ error: 'Cut is in use and cannot be deleted' });
     }
     await prisma.cut.delete({ where: { id } });
-    await logCrud({ entityType: 'cut', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'cut', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete cut', err);
@@ -2319,13 +2900,14 @@ router.get('/api/twists', async (req, res) => {
 
 router.post('/api/twists', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name } = req.body || {};
     const trimmed = typeof name === 'string' ? name.trim() : '';
     if (!trimmed) {
       return res.status(400).json({ error: 'Missing twist name' });
     }
-    const twist = await prisma.twist.create({ data: { name: trimmed } });
-    await logCrud({ entityType: 'twist', entityId: twist.id, action: 'create', payload: twist });
+    const twist = await prisma.twist.create({ data: { name: trimmed, ...actorCreateFields(actorUserId) } });
+    await logCrudWithActor(req, { entityType: 'twist', entityId: twist.id, action: 'create', payload: twist });
     res.json(twist);
   } catch (err) {
     console.error('Failed to create twist', err);
@@ -2335,6 +2917,7 @@ router.post('/api/twists', async (req, res) => {
 
 router.put('/api/twists/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body || {};
     const trimmed = typeof name === 'string' ? name.trim() : '';
@@ -2345,8 +2928,8 @@ router.put('/api/twists/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Twist not found' });
     }
-    const updated = await prisma.twist.update({ where: { id }, data: { name: trimmed } });
-    await logCrud({
+    const updated = await prisma.twist.update({ where: { id }, data: { name: trimmed, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'twist',
       entityId: id,
       action: 'update',
@@ -2373,7 +2956,7 @@ router.delete('/api/twists/:id', async (req, res) => {
       return res.status(400).json({ error: 'Twist is in use and cannot be deleted' });
     }
     await prisma.twist.delete({ where: { id } });
-    await logCrud({ entityType: 'twist', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'twist', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete twist', err);
@@ -2383,9 +2966,10 @@ router.delete('/api/twists/:id', async (req, res) => {
 
 router.get('/api/firms', async (req, res) => { res.json(await prisma.firm.findMany()); });
 router.post('/api/firms', async (req, res) => {
+  const actorUserId = req.user?.id;
   const { name } = req.body;
-  const firm = await prisma.firm.create({ data: { name } });
-  await logCrud({ entityType: 'firm', entityId: firm.id, action: 'create', payload: firm });
+  const firm = await prisma.firm.create({ data: { name, ...actorCreateFields(actorUserId) } });
+  await logCrudWithActor(req, { entityType: 'firm', entityId: firm.id, action: 'create', payload: firm });
   res.json(firm);
 });
 router.delete('/api/firms/:id', async (req, res) => {
@@ -2397,19 +2981,20 @@ router.delete('/api/firms/:id', async (req, res) => {
     return res.status(400).json({ error: 'Firm is referenced and cannot be deleted' });
   }
   await prisma.firm.delete({ where: { id } });
-  await logCrud({ entityType: 'firm', entityId: id, action: 'delete', payload: existingFirm });
+  await logCrudWithActor(req, { entityType: 'firm', entityId: id, action: 'delete', payload: existingFirm });
   res.json({ ok: true });
 });
 // Update firm name
 router.put('/api/firms/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.firm.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Firm not found' });
-    const updated = await prisma.firm.update({ where: { id }, data: { name } });
-    await logCrud({
+    const updated = await prisma.firm.update({ where: { id }, data: { name, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'firm',
       entityId: id,
       action: 'update',
@@ -2429,9 +3014,10 @@ router.put('/api/firms/:id', async (req, res) => {
 
 router.get('/api/suppliers', async (req, res) => { res.json(await prisma.supplier.findMany()); });
 router.post('/api/suppliers', async (req, res) => {
+  const actorUserId = req.user?.id;
   const { name } = req.body;
-  const seller = await prisma.supplier.create({ data: { name } });
-  await logCrud({ entityType: 'supplier', entityId: seller.id, action: 'create', payload: seller });
+  const seller = await prisma.supplier.create({ data: { name, ...actorCreateFields(actorUserId) } });
+  await logCrudWithActor(req, { entityType: 'supplier', entityId: seller.id, action: 'create', payload: seller });
   res.json(seller);
 });
 router.delete('/api/suppliers/:id', async (req, res) => {
@@ -2443,19 +3029,20 @@ router.delete('/api/suppliers/:id', async (req, res) => {
     return res.status(400).json({ error: 'Supplier is referenced and cannot be deleted' });
   }
   await prisma.supplier.delete({ where: { id } });
-  await logCrud({ entityType: 'supplier', entityId: id, action: 'delete', payload: existingSupplier });
+  await logCrudWithActor(req, { entityType: 'supplier', entityId: id, action: 'delete', payload: existingSupplier });
   res.json({ ok: true });
 });
 // Update supplier name
 router.put('/api/suppliers/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.supplier.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Supplier not found' });
-    const updated = await prisma.supplier.update({ where: { id }, data: { name } });
-    await logCrud({
+    const updated = await prisma.supplier.update({ where: { id }, data: { name, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'supplier',
       entityId: id,
       action: 'update',
@@ -2475,9 +3062,10 @@ router.put('/api/suppliers/:id', async (req, res) => {
 
 router.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
 router.post('/api/machines', async (req, res) => {
-  const { name } = req.body;
-  const machine = await prisma.machine.create({ data: { name } });
-  await logCrud({ entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
+  const actorUserId = req.user?.id;
+  const { name, processType = 'all' } = req.body;
+  const machine = await prisma.machine.create({ data: { name, processType, ...actorCreateFields(actorUserId) } });
+  await logCrudWithActor(req, { entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
   res.json(machine);
 });
 router.delete('/api/machines/:id', async (req, res) => {
@@ -2489,19 +3077,22 @@ router.delete('/api/machines/:id', async (req, res) => {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
   await prisma.machine.delete({ where: { id } });
-  await logCrud({ entityType: 'machine', entityId: id, action: 'delete', payload: existingMachine });
+  await logCrudWithActor(req, { entityType: 'machine', entityId: id, action: 'delete', payload: existingMachine });
   res.json({ ok: true });
 });
-// Update machine name
+// Update machine name and processType
 router.put('/api/machines/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
-    const updated = await prisma.machine.update({ where: { id }, data: { name } });
-    await logCrud({
+    const data = { name };
+    if (processType !== undefined) data.processType = processType;
+    const updated = await prisma.machine.update({ where: { id }, data: { ...data, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'machine',
       entityId: id,
       action: 'update',
@@ -2510,6 +3101,8 @@ router.put('/api/machines/:id', async (req, res) => {
       payload: {
         oldName: existing.name,
         newName: updated.name,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);
@@ -2521,11 +3114,12 @@ router.put('/api/machines/:id', async (req, res) => {
 
 router.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
 router.post('/api/operators', async (req, res) => {
-  const { name, role } = req.body;
+  const actorUserId = req.user?.id;
+  const { name, role, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const workerRole = normalizeWorkerRole(role);
-  const worker = await prisma.operator.create({ data: { name, role: workerRole } });
-  await logCrud({ entityType: 'operator', entityId: worker.id, action: 'create', payload: worker });
+  const worker = await prisma.operator.create({ data: { name, role: workerRole, processType, ...actorCreateFields(actorUserId) } });
+  await logCrudWithActor(req, { entityType: 'operator', entityId: worker.id, action: 'create', payload: worker });
   res.json(worker);
 });
 router.delete('/api/operators/:id', async (req, res) => {
@@ -2546,21 +3140,23 @@ router.delete('/api/operators/:id', async (req, res) => {
     return res.status(400).json({ error: 'Operator is referenced and cannot be deleted' });
   }
   await prisma.operator.delete({ where: { id } });
-  await logCrud({ entityType: 'operator', entityId: id, action: 'delete', payload: existingOperator });
+  await logCrudWithActor(req, { entityType: 'operator', entityId: id, action: 'delete', payload: existingOperator });
   res.json({ ok: true });
 });
-// Update operator name
+// Update operator name, role, and processType
 router.put('/api/operators/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
-    const { name, role } = req.body;
+    const { name, role, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.operator.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Operator not found' });
     const data = { name };
     if (role !== undefined) data.role = normalizeWorkerRole(role);
-    const updated = await prisma.operator.update({ where: { id }, data });
-    await logCrud({
+    if (processType !== undefined) data.processType = processType;
+    const updated = await prisma.operator.update({ where: { id }, data: { ...data, ...actorUpdateFields(actorUserId) } });
+    await logCrudWithActor(req, {
       entityType: 'operator',
       entityId: id,
       action: 'update',
@@ -2571,6 +3167,8 @@ router.put('/api/operators/:id', async (req, res) => {
         newName: updated.name,
         oldRole: existing.role,
         newRole: updated.role,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);
@@ -2582,15 +3180,17 @@ router.put('/api/operators/:id', async (req, res) => {
 
 router.get('/api/bobbins', async (req, res) => { res.json(await prisma.bobbin.findMany()); });
 router.post('/api/bobbins', async (req, res) => {
+  const actorUserId = req.user?.id;
   const { name, weight } = req.body;
   const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
   const bobbin = await prisma.bobbin.create({
     data: {
       name,
       weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+      ...actorCreateFields(actorUserId),
     },
   });
-  await logCrud({ entityType: 'bobbin', entityId: bobbin.id, action: 'create', payload: bobbin });
+  await logCrudWithActor(req, { entityType: 'bobbin', entityId: bobbin.id, action: 'create', payload: bobbin });
   res.json(bobbin);
 });
 router.delete('/api/bobbins/:id', async (req, res) => {
@@ -2602,12 +3202,13 @@ router.delete('/api/bobbins/:id', async (req, res) => {
     return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
   }
   await prisma.bobbin.delete({ where: { id } });
-  await logCrud({ entityType: 'bobbin', entityId: id, action: 'delete', payload: existingBobbin });
+  await logCrudWithActor(req, { entityType: 'bobbin', entityId: id, action: 'delete', payload: existingBobbin });
   res.json({ ok: true });
 });
 // Update bobbin name and weight
 router.put('/api/bobbins/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name, weight } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -2619,9 +3220,10 @@ router.put('/api/bobbins/:id', async (req, res) => {
       data: {
         name,
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+        ...actorUpdateFields(actorUserId),
       },
     });
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'bobbin',
       entityId: id,
       action: 'update',
@@ -2645,6 +3247,7 @@ router.put('/api/bobbins/:id', async (req, res) => {
 router.get('/api/roll_types', async (req, res) => { res.json(await prisma.rollType.findMany()); });
 router.post('/api/roll_types', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name, weight } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
@@ -2652,9 +3255,10 @@ router.post('/api/roll_types', async (req, res) => {
       data: {
         name,
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+        ...actorCreateFields(actorUserId),
       },
     });
-    await logCrud({ entityType: 'roll_type', entityId: created.id, action: 'create', payload: created });
+    await logCrudWithActor(req, { entityType: 'roll_type', entityId: created.id, action: 'create', payload: created });
     res.json(created);
   } catch (err) {
     console.error('Failed to create roll type', err);
@@ -2663,6 +3267,7 @@ router.post('/api/roll_types', async (req, res) => {
 });
 router.put('/api/roll_types/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name, weight } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -2674,9 +3279,10 @@ router.put('/api/roll_types/:id', async (req, res) => {
       data: {
         name,
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+        ...actorUpdateFields(actorUserId),
       },
     });
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'roll_type',
       entityId: id,
       action: 'update',
@@ -2698,7 +3304,7 @@ router.delete('/api/roll_types/:id', async (req, res) => {
       return res.status(400).json({ error: 'Roll type is referenced and cannot be deleted' });
     }
     await prisma.rollType.delete({ where: { id } });
-    await logCrud({ entityType: 'roll_type', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'roll_type', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete roll type', err);
@@ -2708,7 +3314,8 @@ router.delete('/api/roll_types/:id', async (req, res) => {
 
 router.get('/api/boxes', async (req, res) => { res.json(await prisma.box.findMany()); });
 router.post('/api/boxes', async (req, res) => {
-  const { name, weight } = req.body;
+  const actorUserId = req.user?.id;
+  const { name, weight, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const weightNum = Number(weight);
   if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
@@ -2716,27 +3323,32 @@ router.post('/api/boxes', async (req, res) => {
     data: {
       name,
       weight: weightNum,
+      processType,
+      ...actorCreateFields(actorUserId),
     },
   });
-  await logCrud({ entityType: 'box', entityId: box.id, action: 'create', payload: box });
+  await logCrudWithActor(req, { entityType: 'box', entityId: box.id, action: 'create', payload: box });
   res.json(box);
 });
 router.delete('/api/boxes/:id', async (req, res) => {
   const { id } = req.params;
   const existingBox = await prisma.box.findUnique({ where: { id } });
   if (!existingBox) return res.status(404).json({ error: 'Box not found' });
-  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id } });
+  const usage = (await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id } }))
+    + (await prisma.receiveFromHoloMachineRow.count({ where: { boxId: id } }))
+    + (await prisma.receiveFromConingMachineRow.count({ where: { boxId: id } }));
   if (usage > 0) {
     return res.status(400).json({ error: 'Box is referenced and cannot be deleted' });
   }
   await prisma.box.delete({ where: { id } });
-  await logCrud({ entityType: 'box', entityId: id, action: 'delete', payload: existingBox });
+  await logCrudWithActor(req, { entityType: 'box', entityId: id, action: 'delete', payload: existingBox });
   res.json({ ok: true });
 });
 
 router.get('/api/cone_types', async (req, res) => { res.json(await prisma.coneType.findMany()); });
 router.post('/api/cone_types', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name, weight } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
@@ -2744,9 +3356,10 @@ router.post('/api/cone_types', async (req, res) => {
       data: {
         name,
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+        ...actorCreateFields(actorUserId),
       },
     });
-    await logCrud({ entityType: 'cone_type', entityId: created.id, action: 'create', payload: created });
+    await logCrudWithActor(req, { entityType: 'cone_type', entityId: created.id, action: 'create', payload: created });
     res.json(created);
   } catch (err) {
     console.error('Failed to create cone type', err);
@@ -2755,6 +3368,7 @@ router.post('/api/cone_types', async (req, res) => {
 });
 router.put('/api/cone_types/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name, weight } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -2766,13 +3380,15 @@ router.put('/api/cone_types/:id', async (req, res) => {
       data: {
         name,
         weight: weightNum !== null && Number.isFinite(weightNum) ? weightNum : null,
+        ...actorUpdateFields(actorUserId),
       },
     });
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'cone_type',
       entityId: id,
       action: 'update',
-      payload: { before: existing, after: updated },
+      before: existing,
+      after: updated,
     });
     res.json(updated);
   } catch (err) {
@@ -2786,7 +3402,7 @@ router.delete('/api/cone_types/:id', async (req, res) => {
     const existing = await prisma.coneType.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Cone type not found' });
     await prisma.coneType.delete({ where: { id } });
-    await logCrud({ entityType: 'cone_type', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'cone_type', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete cone type', err);
@@ -2797,14 +3413,16 @@ router.delete('/api/cone_types/:id', async (req, res) => {
 router.get('/api/wrappers', async (req, res) => { res.json(await prisma.wrapper.findMany()); });
 router.post('/api/wrappers', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const created = await prisma.wrapper.create({
       data: {
         name,
+        ...actorCreateFields(actorUserId),
       },
     });
-    await logCrud({ entityType: 'wrapper', entityId: created.id, action: 'create', payload: created });
+    await logCrudWithActor(req, { entityType: 'wrapper', entityId: created.id, action: 'create', payload: created });
     res.json(created);
   } catch (err) {
     console.error('Failed to create wrapper', err);
@@ -2813,6 +3431,7 @@ router.post('/api/wrappers', async (req, res) => {
 });
 router.put('/api/wrappers/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -2822,13 +3441,15 @@ router.put('/api/wrappers/:id', async (req, res) => {
       where: { id },
       data: {
         name,
+        ...actorUpdateFields(actorUserId),
       },
     });
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'wrapper',
       entityId: id,
       action: 'update',
-      payload: { before: existing, after: updated },
+      before: existing,
+      after: updated,
     });
     res.json(updated);
   } catch (err) {
@@ -2842,7 +3463,7 @@ router.delete('/api/wrappers/:id', async (req, res) => {
     const existing = await prisma.wrapper.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Wrapper not found' });
     await prisma.wrapper.delete({ where: { id } });
-    await logCrud({ entityType: 'wrapper', entityId: id, action: 'delete', payload: existing });
+    await logCrudWithActor(req, { entityType: 'wrapper', entityId: id, action: 'delete', payload: existing });
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete wrapper', err);
@@ -2851,21 +3472,21 @@ router.delete('/api/wrappers/:id', async (req, res) => {
 });
 router.put('/api/boxes/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
-    const { name, weight } = req.body;
+    const { name, weight, processType } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const weightNum = Number(weight);
     if (!Number.isFinite(weightNum) || weightNum <= 0) return res.status(400).json({ error: 'weight must be a positive number' });
     const existing = await prisma.box.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Box not found' });
+    const data = { name, weight: weightNum, ...actorUpdateFields(actorUserId) };
+    if (processType !== undefined) data.processType = processType;
     const updated = await prisma.box.update({
       where: { id },
-      data: {
-        name,
-        weight: weightNum,
-      },
+      data,
     });
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'box',
       entityId: id,
       action: 'update',
@@ -2876,6 +3497,8 @@ router.put('/api/boxes/:id', async (req, res) => {
         newName: updated.name,
         oldWeight: existing.weight,
         newWeight: updated.weight,
+        oldProcessType: existing.processType,
+        newProcessType: updated.processType,
       },
     });
     res.json(updated);
@@ -2887,8 +3510,9 @@ router.put('/api/boxes/:id', async (req, res) => {
 
 router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
-    
+
     // Find the issue_to_cutter_machine record
     const issueRecord = await prisma.issueToCutterMachine.findUnique({ where: { id } });
     if (!issueRecord) {
@@ -2904,19 +3528,30 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
         return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
       }
     }
-    
+
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
       // Delete the issue_to_cutter_machine record
       await tx.issueToCutterMachine.delete({ where: { id } });
-      
+
       // Mark pieces as available again
       if (cleanPieceIds.length > 0) {
         await tx.inboundItem.updateMany({
           where: { id: { in: cleanPieceIds } },
-          data: { status: 'available' },
+          data: { status: 'available', ...actorUpdateFields(actorUserId) },
         });
       }
+
+      await logCrudWithActor(req, {
+        entityType: 'issue_to_cutter_machine',
+        entityId: id,
+        action: 'delete',
+        payload: {
+          issue: issueRecord,
+          restoredPieceIds: cleanPieceIds,
+        },
+        client: tx,
+      });
     });
 
     res.json({ ok: true });
@@ -2940,27 +3575,34 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
 // Delete a single inbound item (piece)
 router.delete('/api/inbound_items/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const existing = await prisma.inboundItem.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Inbound piece not found' });
     // Do not allow delete if consumed
     if (existing.status === 'consumed') return res.status(400).json({ error: 'Cannot delete consumed piece' });
-    await prisma.inboundItem.delete({ where: { id } });
-    // Recalculate lot totals
-    const agg = await prisma.inboundItem.aggregate({ where: { lotNo: existing.lotNo }, _sum: { weight: true }, _count: { id: true } });
-    const totalWeight = Number(agg._sum.weight || 0);
-    const totalPieces = Number(agg._count.id || 0);
-    await prisma.lot.update({ where: { lotNo: existing.lotNo }, data: { totalWeight, totalPieces } });
 
-    await logCrud({
-      entityType: 'inbound_item',
-      entityId: id,
-      action: 'delete',
-      payload: {
-        lotNo: existing.lotNo,
-        itemId: existing.itemId,
-        weight: existing.weight,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.inboundItem.delete({ where: { id } });
+      // Recalculate lot totals
+      const agg = await tx.inboundItem.aggregate({ where: { lotNo: existing.lotNo }, _sum: { weight: true }, _count: { id: true } });
+      const totalWeight = Number(agg._sum.weight || 0);
+      const totalPieces = Number(agg._count.id || 0);
+      await tx.lot.update({ where: { lotNo: existing.lotNo }, data: { totalWeight, totalPieces, ...actorUpdateFields(actorUserId) } });
+
+      await logCrudWithActor(req, {
+        entityType: 'inbound_item',
+        entityId: id,
+        action: 'delete',
+        payload: {
+          lotNo: existing.lotNo,
+          itemId: existing.itemId,
+          weight: existing.weight,
+          totalWeight,
+          totalPieces,
+        },
+        client: tx,
+      });
     });
 
     res.json({ ok: true });
@@ -2968,18 +3610,18 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
     try {
       const itemName = existing.itemId ? (await prisma.item.findUnique({ where: { id: existing.itemId } })).name : '';
       sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id });
-       // If deleting this piece caused available count to become zero, notify
-       try {
-         const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
-         console.log(`Available pieces after inbound piece delete for ${itemName}: ${availableAfter}`);
-         if (availableAfter === 0) {
-           console.log(`Triggering out_of_stock notification for ${itemName}`);
-           // Add small delay to ensure first message is queued before second
-           setTimeout(() => {
-             sendNotification('item_out_of_stock', { itemName, available: 0 });
-           }, 1000);
-         }
-       } catch (e) { console.error('failed to check/send out_of_stock after inbound piece delete', e); }
+      // If deleting this piece caused available count to become zero, notify
+      try {
+        const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
+        console.log(`Available pieces after inbound piece delete for ${itemName}: ${availableAfter}`);
+        if (availableAfter === 0) {
+          console.log(`Triggering out_of_stock notification for ${itemName}`);
+          // Add small delay to ensure first message is queued before second
+          setTimeout(() => {
+            sendNotification('item_out_of_stock', { itemName, available: 0 });
+          }, 1000);
+        }
+      } catch (e) { console.error('failed to check/send out_of_stock after inbound piece delete', e); }
     } catch (e) { console.error('notify inbound piece deleted error', e); }
   } catch (err) {
     console.error('Failed to delete inbound piece', err);
@@ -2989,6 +3631,7 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
 
 router.put('/api/settings', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { brandPrimary, brandGold, logoDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
     const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(req.body, 'whatsappNumber');
     const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(req.body, 'whatsappGroupIds');
@@ -3010,6 +3653,7 @@ router.put('/api/settings', async (req, res) => {
         brandPrimary: brandPrimary || '#2E4CA6',
         brandGold: brandGold || '#D4AF37',
         logoDataUrl: logoDataUrl || null,
+        ...actorUpdateFields(actorUserId),
       };
       if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
@@ -3019,6 +3663,7 @@ router.put('/api/settings', async (req, res) => {
         brandPrimary: brandPrimary || '#2E4CA6',
         brandGold: brandGold || '#D4AF37',
         logoDataUrl: logoDataUrl || null,
+        ...actorCreateFields(actorUserId),
       };
       if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
@@ -3028,14 +3673,14 @@ router.put('/api/settings', async (req, res) => {
         update: updateData,
         create: createData,
       });
-    await logCrud({
-      entityType: 'settings',
-      entityId: '1',
-      action: 'update',
-      before: previousSettings,
-      after: settings,
-      payload: settings,
-    });
+      await logCrudWithActor(req, {
+        entityType: 'settings',
+        entityId: '1',
+        action: 'update',
+        before: previousSettings,
+        after: settings,
+        payload: settings,
+      });
       return res.json(settings);
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
@@ -3046,15 +3691,17 @@ router.put('/api/settings', async (req, res) => {
           brandPrimary: brandPrimary || '#2E4CA6',
           brandGold: brandGold || '#D4AF37',
           logoDataUrl: logoDataUrl || null,
+          ...actorUpdateFields(actorUserId),
         },
         create: {
           id: 1,
           brandPrimary: brandPrimary || '#2E4CA6',
           brandGold: brandGold || '#D4AF37',
           logoDataUrl: logoDataUrl || null,
+          ...actorCreateFields(actorUserId),
         },
       });
-      await logCrud({
+      await logCrudWithActor(req, {
         entityType: 'settings',
         entityId: '1',
         action: 'update',
@@ -3073,6 +3720,7 @@ router.put('/api/settings', async (req, res) => {
 // Update a single inbound piece (seq, weight)
 router.put('/api/inbound_items/:id', async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const { seq, weight } = req.body;
     if (seq !== undefined && (!Number.isInteger(seq) || seq < 1)) return res.status(400).json({ error: 'seq must be a positive integer' });
@@ -3084,14 +3732,21 @@ router.put('/api/inbound_items/:id', async (req, res) => {
       if (!existing) throw new Error('Inbound piece not found');
       beforeInbound = existing;
 
-      const updated = await tx.inboundItem.update({ where: { id }, data: { ...(seq !== undefined ? { seq } : {}), ...(weight !== undefined ? { weight: Number(weight) } : {}) } });
+      const updated = await tx.inboundItem.update({
+        where: { id },
+        data: {
+          ...(seq !== undefined ? { seq } : {}),
+          ...(weight !== undefined ? { weight: Number(weight) } : {}),
+          ...actorUpdateFields(actorUserId),
+        },
+      });
 
       // Recalculate lot totals (totalPieces and totalWeight) based on current inbound items for the lot
       const lotNo = updated.lotNo;
       const agg = await tx.inboundItem.aggregate({ where: { lotNo }, _sum: { weight: true }, _count: { id: true } });
       const totalWeight = Number(agg._sum.weight || 0);
       const totalPieces = Number(agg._count.id || 0);
-      await tx.lot.update({ where: { lotNo }, data: { totalWeight, totalPieces } });
+      await tx.lot.update({ where: { lotNo }, data: { totalWeight, totalPieces, ...actorUpdateFields(actorUserId) } });
 
       return updated;
     });
@@ -3099,7 +3754,7 @@ router.put('/api/inbound_items/:id', async (req, res) => {
     const payload = {};
     if (seq !== undefined) payload.seq = seq;
     if (weight !== undefined) payload.weight = weight;
-    await logCrud({
+    await logCrudWithActor(req, {
       entityType: 'inbound_item',
       entityId: id,
       action: 'update',
@@ -3132,7 +3787,7 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
     await prisma.$transaction(async (tx) => {
       await tx.inboundItem.deleteMany({ where: { lotNo } });
       await tx.lot.deleteMany({ where: { lotNo } });
-      await logCrud({
+      await logCrudWithActor(req, {
         entityType: 'lot',
         entityId: lotRec ? lotRec.id : null,
         action: 'delete',
@@ -3155,17 +3810,17 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
       try {
         const itemIdentifier = lotRec ? lotRec.itemId : null;
         const itemNameForCheck = itemRec ? itemRec.name : (lotRec ? (await prisma.item.findUnique({ where: { id: lotRec.itemId } })).name : '');
-         if (itemIdentifier) {
-           const availableAfter = await prisma.inboundItem.count({ where: { itemId: itemIdentifier, status: 'available' } });
-           console.log(`Available pieces after lot delete for ${itemNameForCheck}: ${availableAfter}`);
-           if (availableAfter === 0) {
-             console.log(`Triggering out_of_stock notification for ${itemNameForCheck}`);
-             // Add small delay to ensure first message is queued before second
-             setTimeout(() => {
-               sendNotification('item_out_of_stock', { itemName: itemNameForCheck || '', available: 0 });
-             }, 1000);
-           }
-         }
+        if (itemIdentifier) {
+          const availableAfter = await prisma.inboundItem.count({ where: { itemId: itemIdentifier, status: 'available' } });
+          console.log(`Available pieces after lot delete for ${itemNameForCheck}: ${availableAfter}`);
+          if (availableAfter === 0) {
+            console.log(`Triggering out_of_stock notification for ${itemNameForCheck}`);
+            // Add small delay to ensure first message is queued before second
+            setTimeout(() => {
+              sendNotification('item_out_of_stock', { itemName: itemNameForCheck || '', available: 0 });
+            }, 1000);
+          }
+        }
       } catch (e) { console.error('failed to check/send out_of_stock after lot delete', e); }
     } catch (e) { console.error('notify lot deleted error', e); }
   } catch (err) {

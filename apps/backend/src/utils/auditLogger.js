@@ -38,7 +38,7 @@ function buildChanges(before, after) {
   return Object.keys(changes).length ? changes : undefined;
 }
 
-export async function logCrud({ entityType, entityId = null, action, before, after, payload, client }) {
+export async function logCrud({ entityType, entityId = null, action, before, after, payload, client, actorUserId, actorUsername, actorRoleKey }) {
   if (!entityType || !action) return;
 
   const target = client || prisma;
@@ -64,6 +64,9 @@ export async function logCrud({ entityType, entityId = null, action, before, aft
         entityType,
         entityId,
         action,
+        actorUserId: actorUserId ? String(actorUserId) : null,
+        actorUsername: actorUsername ? String(actorUsername) : null,
+        actorRoleKey: actorRoleKey ? String(actorRoleKey) : null,
         payload: compactPayload,
         payloadText,
       },

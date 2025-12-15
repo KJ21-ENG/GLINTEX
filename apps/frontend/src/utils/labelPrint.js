@@ -10,6 +10,7 @@ const DEFAULT_MATERIAL_CODE = (import.meta.env.VITE_BARCODE_MATERIAL_CODE || 'ME
 export const LABEL_STAGE_KEYS = {
   INBOUND: 'inbound',
   CUTTER_ISSUE: 'cutter_issue',
+  CUTTER_ISSUE_SMALL: 'cutter_issue_small',
   CUTTER_RECEIVE: 'cutter_receive',
   HOLO_ISSUE: 'holo_issue',
   HOLO_RECEIVE: 'holo_receive',
@@ -30,6 +31,20 @@ export const STAGE_VARIABLES = {
     { key: 'barcode', label: 'Barcode' },
   ],
   [LABEL_STAGE_KEYS.CUTTER_ISSUE]: [
+    { key: 'lotNo', label: 'Lot No' },
+    { key: 'itemName', label: 'Item Name' },
+    { key: 'pieceId', label: 'Piece ID' },
+    { key: 'seq', label: 'Sequence' },
+    { key: 'inboundDate', label: 'Lot Inbound Date' },
+    { key: 'cut', label: 'Cut' },
+    { key: 'count', label: 'Pieces Count' },
+    { key: 'totalWeight', label: 'Total Weight' },
+    { key: 'machineName', label: 'Machine' },
+    { key: 'operatorName', label: 'Operator' },
+    { key: 'date', label: 'Date' },
+    { key: 'barcode', label: 'Issue Barcode' },
+  ],
+  [LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL]: [
     { key: 'lotNo', label: 'Lot No' },
     { key: 'itemName', label: 'Item Name' },
     { key: 'pieceId', label: 'Piece ID' },
@@ -357,7 +372,9 @@ export const parseReceiveCrateIndex = (barcode) => {
   return Number.isFinite(num) ? num : null;
 };
 
-export const buildTspl = (dimensions, content, data = {}) => {
+export const buildTspl = (dimensions, content, data = {}, options = {}) => {
+  const stageKey = options.stageKey || '';
+  const copiesOverride = options.copies || null;
   const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
   const baseDensity = clampInt(dims.density ?? 8, 0, 15);
   const {
@@ -406,11 +423,23 @@ export const buildTspl = (dimensions, content, data = {}) => {
     const centerX = (left + right) / 2;
     const centerY = (top + bottom) / 2;
 
+    // For cutter_issue_small stage, wrap at full label width instead of half
+    const useFullWidth = stageKey === LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
+
     let axisMaxMm = null;
-    if (angle === 0) axisMaxMm = (originX < centerX ? centerX : right) - originX;
-    else if (angle === 180) axisMaxMm = originX - (originX > centerX ? centerX : left);
-    else if (angle === 90) axisMaxMm = (originY < centerY ? centerY : bottom) - originY;
-    else if (angle === 270) axisMaxMm = originY - (originY > centerY ? centerY : top);
+    if (useFullWidth) {
+      // Full width wrapping - wrap at edge of label
+      if (angle === 0) axisMaxMm = right - originX;
+      else if (angle === 180) axisMaxMm = originX - left;
+      else if (angle === 90) axisMaxMm = bottom - originY;
+      else if (angle === 270) axisMaxMm = originY - top;
+    } else {
+      // Half width wrapping (default behavior)
+      if (angle === 0) axisMaxMm = (originX < centerX ? centerX : right) - originX;
+      else if (angle === 180) axisMaxMm = originX - (originX > centerX ? centerX : left);
+      else if (angle === 90) axisMaxMm = (originY < centerY ? centerY : bottom) - originY;
+      else if (angle === 270) axisMaxMm = originY - (originY > centerY ? centerY : top);
+    }
 
     if (!axisMaxMm || axisMaxMm <= 0) return null;
     const maxChars = Math.floor(axisMaxMm / Math.max(0.1, charWidthMm));
@@ -668,14 +697,15 @@ export const buildTspl = (dimensions, content, data = {}) => {
     });
   }
 
-  lines.push(`PRINT ${mergedContent.copies || 1}`);
+  const finalCopies = copiesOverride || mergedContent.copies || 1;
+  lines.push(`PRINT ${finalCopies}`);
   return `${lines.join('\r\n')}\r\n`;
 };
 
-export const buildTsplFromTemplate = (template = {}, data = {}) => {
+export const buildTsplFromTemplate = (template = {}, data = {}, options = {}) => {
   const dimensions = { ...DEFAULT_DIMENSIONS, ...(template.dimensions || {}) };
   const content = migrateContent(template.content || template);
-  return buildTspl(dimensions, content, data);
+  return buildTspl(dimensions, content, data, options);
 };
 
 export const loadTemplate = async (stageKey, options = {}) => {
@@ -769,7 +799,8 @@ export const printStageTemplate = async (stageKey, data = {}, options = {}) => {
   if (!template) {
     return { success: false, skipped: true, reason: 'Template not found' };
   }
-  const tspl = buildTsplFromTemplate(template, data);
+  const copies = options.copies || 1;
+  const tspl = buildTsplFromTemplate(template, data, { stageKey, copies });
   const printer = options.printer || getPreferredPrinter();
   const result = await sendToLocalPrinter({ printer, content: tspl, type: 'raw', serviceBase: options.serviceBase });
   return { ...result, tspl };

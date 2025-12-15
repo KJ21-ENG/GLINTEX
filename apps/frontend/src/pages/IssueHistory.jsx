@@ -213,6 +213,61 @@ export function IssueHistory({ db, refreshDb }) {
     }
   };
 
+  const handlePrintSmallSticker = async (row) => {
+    try {
+      // Only for cutter process
+      if (process !== 'cutter') return;
+
+      // Ask for quantity
+      const qtyInput = prompt('Enter quantity of stickers to print:', '1');
+      if (qtyInput === null) return; // User cancelled
+      const qty = parseInt(qtyInput, 10);
+      if (!qty || qty < 1) {
+        alert('Please enter a valid quantity (1 or more)');
+        return;
+      }
+
+      const stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
+      const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
+      const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
+      const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
+      const cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
+
+      // Get inbound date from first piece
+      const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
+      const firstPiece = db.inbound_items?.find(p => p.id === pieceList[0]);
+      const lot = db.lots?.find(l => l.lotNo === row.lotNo);
+      const inboundDate = lot?.date || firstPiece?.date || '';
+
+      const data = {
+        lotNo: row.lotNo,
+        itemName,
+        pieceId: row.pieceIds,
+        seq: firstPiece?.seq || '',
+        count: row.count,
+        totalWeight: row.totalWeight,
+        machineName,
+        operatorName,
+        cut,
+        inboundDate,
+        date: row.date,
+        barcode: row.barcode,
+      };
+
+      const template = await loadTemplate(stageKey);
+      if (!template) {
+        alert('No small sticker template found. Please configure it in Label Designer (Issue to machine (cutter)_small sticker).');
+        return;
+      }
+
+      // Print the requested quantity in one go
+      await printStageTemplate(stageKey, data, { template, copies: qty });
+      // Silent success - printer handles feedback
+    } catch (err) {
+      alert(err.message || 'Failed to print small sticker');
+    }
+  };
+
   const issues = useMemo(() => {
     let rows = [];
     if (process === 'holo') {
@@ -255,20 +310,34 @@ export function IssueHistory({ db, refreshDb }) {
     return map;
   }, [db.yarns]);
 
-  const getActions = (row) => [
-    {
-      label: 'Reprint',
-      icon: <Printer className="w-4 h-4" />,
-      onClick: () => handleReprint(row),
-    },
-    {
+  const getActions = (row) => {
+    const actions = [
+      {
+        label: 'Reprint',
+        icon: <Printer className="w-4 h-4" />,
+        onClick: () => handleReprint(row),
+      },
+    ];
+
+    // Add Print Small Stickers button for cutter process only
+    if (process === 'cutter') {
+      actions.push({
+        label: 'Print Small Stickers',
+        icon: <Printer className="w-4 h-4" />,
+        onClick: () => handlePrintSmallSticker(row),
+      });
+    }
+
+    actions.push({
       label: 'Delete',
       icon: <Trash2 className="w-4 h-4" />,
       onClick: () => handleDelete(row.id),
       variant: 'destructive',
       disabled: deletingId === row.id,
-    },
-  ];
+    });
+
+    return actions;
+  };
 
   return (
     <div className="space-y-4">

@@ -786,7 +786,7 @@ const LabelPreview = ({
                 className={`${className} select-none`}
                 onMouseDown={onMouseDown}
                 onTouchStart={onTouchStart}
-                onClick={() => {}}
+                onClick={() => { }}
               >
                 {lineValue || ''}
                 {isSelected && i === 0 && (
@@ -822,7 +822,7 @@ const LabelPreview = ({
         className={`${className} select-none`}
         onMouseDown={onMouseDown}
         onTouchStart={onTouchStart}
-        onClick={() => {}}
+        onClick={() => { }}
       >
         {text.type === 'barcode' ? (
           <div className="absolute inset-x-1 bottom-1 text-[10px] font-mono bg-white/80 px-1 rounded">
@@ -1515,6 +1515,7 @@ const LabelDesigner = () => {
   const stageOptions = [
     { value: LABEL_STAGE_KEYS.INBOUND, label: 'Inbound' },
     { value: LABEL_STAGE_KEYS.CUTTER_ISSUE, label: 'Issue to machine (cutter)' },
+    { value: LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL, label: 'Issue to machine (cutter)_small sticker' },
     { value: LABEL_STAGE_KEYS.CUTTER_RECEIVE, label: 'Receive from machine (cutter)' },
     { value: LABEL_STAGE_KEYS.HOLO_ISSUE, label: 'Issue to machine (holo)' },
     { value: LABEL_STAGE_KEYS.HOLO_RECEIVE, label: 'Receive from machine (holo)' },
@@ -1811,9 +1812,8 @@ const LabelDesigner = () => {
                                       <button
                                         key={v.key}
                                         type="button"
-                                        className={`w-full text-left px-3 py-2 flex items-center justify-between ${
-                                          idx === mentionIndex ? 'bg-indigo-50' : ''
-                                        }`}
+                                        className={`w-full text-left px-3 py-2 flex items-center justify-between ${idx === mentionIndex ? 'bg-indigo-50' : ''
+                                          }`}
                                         onMouseDown={(e) => {
                                           e.preventDefault();
                                           applyMention(text.id, v.key);
@@ -1834,222 +1834,48 @@ const LabelDesigner = () => {
                       </div>
                       <div className="max-h-[30vh] overflow-y-auto pr-1 space-y-3">
                         {isBarcode ? (
-                            <div className="space-y-2 text-xs text-muted-foreground">
-                              <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <Label className="text-xs">Height (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    step="0.5"
-                                    className="h-8"
-                                    value={text.style?.heightMm ?? 12}
-                                    onChange={(e) =>
-                                      updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })
-                                    }
-                                  />
-                                </div>
-                                <div>
-                                  <Label className="text-xs">Module width (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    step="0.05"
-                                    className="h-8"
-                                    value={text.style?.moduleMm ?? 0.3}
-                                    onChange={(e) =>
-                                      updateTextStyle(text.id, {
-                                        moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3),
-                                      })
-                                    }
-                                  />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Label className="text-xs">Human readable</Label>
-                                  <Button
-                                    size="sm"
-                                    variant={text.style?.humanReadable === false ? 'outline' : 'default'}
-                                    className="h-8"
-                                    onClick={() =>
-                                      updateTextStyle(text.id, {
-                                        humanReadable: text.style?.humanReadable === false ? true : false,
-                                      })
-                                    }
-                                  >
-                                    {text.style?.humanReadable === false ? 'Off' : 'On'}
-                                  </Button>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Label className="text-xs">Angle</Label>
-                                  <select
-                                    value={text.angle || 0}
-                                    onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
-                                    className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  >
-                                    {[0, 90, 180, 270].map((deg) => (
-                                      <option key={deg} value={deg}>{deg}°</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div>
-                                  <Label className="text-xs">X (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    className="h-8"
-                                    value={text.pos?.x ?? 0}
-                                    onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className="text-xs">Y (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    className="h-8"
-                                    value={text.pos?.y ?? 0}
-                                    onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          ) : isLine ? (
-                            <div className="space-y-2 text-xs text-muted-foreground">
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <Label className="text-xs">Length (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    step="0.5"
-                                    className="h-8"
-                                    value={text.style?.lengthMm ?? 20}
-                                    onChange={(e) =>
-                                      updateTextStyle(text.id, {
-                                        lengthMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
-                                      })
-                                    }
-                                  />
-                                </div>
-                                <div>
-                                  <Label className="text-xs">Thickness (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    step="0.1"
-                                    className="h-8"
-                                    value={text.style?.thicknessMm ?? 0.6}
-                                    onChange={(e) =>
-                                      updateTextStyle(text.id, {
-                                        thicknessMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
-                                      })
-                                    }
-                                  />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Label className="text-xs">Angle</Label>
-                                  <select
-                                    value={text.angle || 0}
-                                    onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
-                                    className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  >
-                                    {[0, 90, 180, 270].map((deg) => (
-                                      <option key={deg} value={deg}>{deg}°</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div>
-                                  <Label className="text-xs">X (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    className="h-8"
-                                    value={text.pos?.x ?? 0}
-                                    onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className="text-xs">Y (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    className="h-8"
-                                    value={text.pos?.y ?? 0}
-                                    onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                              <div className="flex items-center gap-2">
-                                <Label className="text-xs">
-                                  Font size (pt){hasMixedFontSize ? ' (mixed)' : ''}
-                                </Label>
+                          <div className="space-y-2 text-xs text-muted-foreground">
+                            <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label className="text-xs">Height (mm)</Label>
                                 <Input
                                   type="number"
-                                  min="6"
-                                  className="h-8 w-20"
-                                  value={text.style?.size || dimensions.fontSize}
+                                  step="0.5"
+                                  className="h-8"
+                                  value={text.style?.heightMm ?? 12}
                                   onChange={(e) =>
-                                    updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, {
-                                      size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize),
+                                    updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Module width (mm)</Label>
+                                <Input
+                                  type="number"
+                                  step="0.05"
+                                  className="h-8"
+                                  value={text.style?.moduleMm ?? 0.3}
+                                  onChange={(e) =>
+                                    updateTextStyle(text.id, {
+                                      moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3),
                                     })
                                   }
                                 />
                               </div>
                               <div className="flex items-center gap-2">
-                                <Label className="text-xs">Opacity (%)</Label>
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="5"
-                                  className="h-8 w-20"
-                                  value={Math.round((text.style?.opacity ?? 1) * 100)}
-                                  onChange={(e) => {
-                                    const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
-                                    updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, { opacity: pct / 100 });
-                                  }}
-                                />
-                              </div>
-                              <div className="flex items-center gap-1">
+                                <Label className="text-xs">Human readable</Label>
                                 <Button
-                                  type="button"
                                   size="sm"
-                                  variant={text.style?.bold ? 'default' : 'outline'}
+                                  variant={text.style?.humanReadable === false ? 'outline' : 'default'}
                                   className="h-8"
-                                  onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
+                                  onClick={() =>
+                                    updateTextStyle(text.id, {
+                                      humanReadable: text.style?.humanReadable === false ? true : false,
+                                    })
+                                  }
                                 >
-                                  B
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={text.style?.italic ? 'default' : 'outline'}
-                                  className="h-8"
-                                  onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
-                                >
-                                  I
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={text.style?.underline ? 'default' : 'outline'}
-                                  className="h-8"
-                                  onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
-                                >
-                                  U
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={text.style?.background?.enabled ? 'default' : 'outline'}
-                                  className="h-8"
-                                  onClick={() => {
-                                    const nextEnabled = !text.style?.background?.enabled;
-                                    updateTextBackground(text.id, {
-                                      enabled: nextEnabled,
-                                      color: text.style?.background?.color || '#000000',
-                                      textColor: text.style?.background?.textColor || '#ffffff',
-                                      paddingMm: text.style?.background?.paddingMm ?? 0.8,
-                                    });
-                                  }}
-                                >
-                                  BG
+                                  {text.style?.humanReadable === false ? 'Off' : 'On'}
                                 </Button>
                               </div>
                               <div className="flex items-center gap-2">
@@ -2064,78 +1890,252 @@ const LabelDesigner = () => {
                                   ))}
                                 </select>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div>
                                 <Label className="text-xs">X (mm)</Label>
                                 <Input
                                   type="number"
-                                  className="h-8 w-20"
+                                  className="h-8"
                                   value={text.pos?.x ?? 0}
                                   onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
                                 />
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div>
                                 <Label className="text-xs">Y (mm)</Label>
                                 <Input
                                   type="number"
-                                  className="h-8 w-20"
+                                  className="h-8"
                                   value={text.pos?.y ?? 0}
                                   onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
                                 />
                               </div>
-                              <div className="flex items-center gap-2">
-                                {(() => {
-                                  const allSelectedTexts = selectedBlocks.filter((t) => t.type !== 'barcode' && t.type !== 'line');
-                                  const wrapAllOn = allSelectedTexts.length > 0 && allSelectedTexts.every((t) => t.style?.wrapAtCenter === true);
-                                  const wrapSomeOn = allSelectedTexts.some((t) => t.style?.wrapAtCenter === true);
-                                  return (
-                                    <>
-                                      <input
-                                        type="checkbox"
-                                        className="h-4 w-4"
-                                        checked={wrapAllOn}
-                                        ref={(el) => {
-                                          if (!el) return;
-                                          el.indeterminate = wrapSomeOn && !wrapAllOn;
-                                        }}
-                                        onChange={(e) => updateTextStyle(selectedTextIds, { wrapAtCenter: e.target.checked })}
-                                      />
-                                      <Label className="text-xs">Wrap within half label</Label>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                              {text.style?.background?.enabled && (
-                                <div className="flex flex-wrap items-center gap-2 mt-2 w-full">
-                                  <Label className="text-xs">BG color</Label>
-                                  <input
-                                    type="color"
-                                    value={text.style?.background?.color || '#000000'}
-                                    onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
-                                    className="h-8 w-10 border rounded cursor-pointer"
-                                  />
-                                  <Label className="text-xs ml-2">Text color</Label>
-                                  <input
-                                    type="color"
-                                    value={text.style?.background?.textColor || '#ffffff'}
-                                    onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
-                                    className="h-8 w-10 border rounded cursor-pointer"
-                                  />
-                                  <Label className="text-xs ml-2">Padding (mm)</Label>
-                                  <Input
-                                    type="number"
-                                    step="0.1"
-                                    className="h-8 w-20"
-                                    value={text.style?.background?.paddingMm ?? 0.8}
-                                    onChange={(e) =>
-                                      updateTextBackground(text.id, {
-                                        paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
-                                      })
-                                    }
-                                  />
-                                </div>
-                              )}
                             </div>
-                          )}
+                          </div>
+                        ) : isLine ? (
+                          <div className="space-y-2 text-xs text-muted-foreground">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label className="text-xs">Length (mm)</Label>
+                                <Input
+                                  type="number"
+                                  step="0.5"
+                                  className="h-8"
+                                  value={text.style?.lengthMm ?? 20}
+                                  onChange={(e) =>
+                                    updateTextStyle(text.id, {
+                                      lengthMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
+                                    })
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Thickness (mm)</Label>
+                                <Input
+                                  type="number"
+                                  step="0.1"
+                                  className="h-8"
+                                  value={text.style?.thicknessMm ?? 0.6}
+                                  onChange={(e) =>
+                                    updateTextStyle(text.id, {
+                                      thicknessMm: Math.max(0.1, parseFloat(e.target.value) || 0.1),
+                                    })
+                                  }
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">Angle</Label>
+                                <select
+                                  value={text.angle || 0}
+                                  onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                  className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  {[0, 90, 180, 270].map((deg) => (
+                                    <option key={deg} value={deg}>{deg}°</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">X (mm)</Label>
+                                <Input
+                                  type="number"
+                                  className="h-8"
+                                  value={text.pos?.x ?? 0}
+                                  onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Y (mm)</Label>
+                                <Input
+                                  type="number"
+                                  className="h-8"
+                                  value={text.pos?.y ?? 0}
+                                  onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">
+                                Font size (pt){hasMixedFontSize ? ' (mixed)' : ''}
+                              </Label>
+                              <Input
+                                type="number"
+                                min="6"
+                                className="h-8 w-20"
+                                value={text.style?.size || dimensions.fontSize}
+                                onChange={(e) =>
+                                  updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, {
+                                    size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize),
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Opacity (%)</Label>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="5"
+                                className="h-8 w-20"
+                                value={Math.round((text.style?.opacity ?? 1) * 100)}
+                                onChange={(e) => {
+                                  const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                  updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, { opacity: pct / 100 });
+                                }}
+                              />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={text.style?.bold ? 'default' : 'outline'}
+                                className="h-8"
+                                onClick={() => updateTextStyle(text.id, { bold: !text.style?.bold })}
+                              >
+                                B
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={text.style?.italic ? 'default' : 'outline'}
+                                className="h-8"
+                                onClick={() => updateTextStyle(text.id, { italic: !text.style?.italic })}
+                              >
+                                I
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={text.style?.underline ? 'default' : 'outline'}
+                                className="h-8"
+                                onClick={() => updateTextStyle(text.id, { underline: !text.style?.underline })}
+                              >
+                                U
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={text.style?.background?.enabled ? 'default' : 'outline'}
+                                className="h-8"
+                                onClick={() => {
+                                  const nextEnabled = !text.style?.background?.enabled;
+                                  updateTextBackground(text.id, {
+                                    enabled: nextEnabled,
+                                    color: text.style?.background?.color || '#000000',
+                                    textColor: text.style?.background?.textColor || '#ffffff',
+                                    paddingMm: text.style?.background?.paddingMm ?? 0.8,
+                                  });
+                                }}
+                              >
+                                BG
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Angle</Label>
+                              <select
+                                value={text.angle || 0}
+                                onChange={(e) => updateTextAngle(text.id, parseInt(e.target.value, 10))}
+                                className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                {[0, 90, 180, 270].map((deg) => (
+                                  <option key={deg} value={deg}>{deg}°</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">X (mm)</Label>
+                              <Input
+                                type="number"
+                                className="h-8 w-20"
+                                value={text.pos?.x ?? 0}
+                                onChange={(e) => updateTextPosition(text.id, 'x', parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Y (mm)</Label>
+                              <Input
+                                type="number"
+                                className="h-8 w-20"
+                                value={text.pos?.y ?? 0}
+                                onChange={(e) => updateTextPosition(text.id, 'y', parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {(() => {
+                                const allSelectedTexts = selectedBlocks.filter((t) => t.type !== 'barcode' && t.type !== 'line');
+                                const wrapAllOn = allSelectedTexts.length > 0 && allSelectedTexts.every((t) => t.style?.wrapAtCenter === true);
+                                const wrapSomeOn = allSelectedTexts.some((t) => t.style?.wrapAtCenter === true);
+                                return (
+                                  <>
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4"
+                                      checked={wrapAllOn}
+                                      ref={(el) => {
+                                        if (!el) return;
+                                        el.indeterminate = wrapSomeOn && !wrapAllOn;
+                                      }}
+                                      onChange={(e) => updateTextStyle(selectedTextIds, { wrapAtCenter: e.target.checked })}
+                                    />
+                                    <Label className="text-xs">Wrap within half label</Label>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                            {text.style?.background?.enabled && (
+                              <div className="flex flex-wrap items-center gap-2 mt-2 w-full">
+                                <Label className="text-xs">BG color</Label>
+                                <input
+                                  type="color"
+                                  value={text.style?.background?.color || '#000000'}
+                                  onChange={(e) => updateTextBackground(text.id, { color: e.target.value })}
+                                  className="h-8 w-10 border rounded cursor-pointer"
+                                />
+                                <Label className="text-xs ml-2">Text color</Label>
+                                <input
+                                  type="color"
+                                  value={text.style?.background?.textColor || '#ffffff'}
+                                  onChange={(e) => updateTextBackground(text.id, { textColor: e.target.value })}
+                                  className="h-8 w-10 border rounded cursor-pointer"
+                                />
+                                <Label className="text-xs ml-2">Padding (mm)</Label>
+                                <Input
+                                  type="number"
+                                  step="0.1"
+                                  className="h-8 w-20"
+                                  value={text.style?.background?.paddingMm ?? 0.8}
+                                  onChange={(e) =>
+                                    updateTextBackground(text.id, {
+                                      paddingMm: Math.max(0, parseFloat(e.target.value) || 0),
+                                    })
+                                  }
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   );

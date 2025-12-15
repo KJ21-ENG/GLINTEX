@@ -384,6 +384,10 @@ export const SearchableSelect = ({
                     ${isSelected ? 'font-medium' : ''}
                 `}
                 onMouseEnter={() => setHighlight(idx)}
+                onMouseDown={(e) => {
+                    // Prevent input blur so click can fire
+                    e.preventDefault();
+                }}
                 onClick={() => selectValue(opt.value)}
             >
                 <div className="flex items-center justify-between gap-2">
@@ -465,8 +469,11 @@ export const SearchableSelect = ({
                         className="w-full h-10 pl-9 pr-8 py-2 text-sm rounded-lg border focus:outline-none ring-2 ring-primary border-primary bg-card text-foreground"
                         aria-label="Search options"
                         onBlur={(e) => {
-                            // Don't close if clicking within the dropdown
+                            // Don't close if clicking within the dropdown portal
                             if (e.relatedTarget?.closest('.searchable-select-portal')) return;
+                            // Also don't close if clicking the trigger itself (which might happen during toggle)
+                            if (wrapperRef.current?.contains(e.relatedTarget)) return;
+
                             setOpen(false);
                             setQuery('');
                             setHighlight(-1);

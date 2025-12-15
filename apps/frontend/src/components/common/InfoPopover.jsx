@@ -17,6 +17,7 @@ export function InfoPopover({
   widthClassName = 'w-64',
   bodyClassName = 'max-h-[200px] overflow-y-auto text-sm space-y-1',
   buttonClassName = 'h-6 w-6 rounded-full hover:bg-muted',
+  align = 'left', // 'left' or 'right' - controls horizontal alignment
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const popoverRef = useRef(null);
@@ -66,7 +67,7 @@ export function InfoPopover({
 
       {isOpen && (
         <div
-          className={`absolute left-0 top-full mt-2 z-50 ${widthClassName} rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95`}
+          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-2 z-50 ${widthClassName} rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95`}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-center mb-2">

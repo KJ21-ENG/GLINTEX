@@ -277,7 +277,8 @@ export function IssueHistory({ db, refreshDb }) {
     } else {
       rows = db.issue_to_cutter_machine || [];
     }
-    return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Sort by createdAt timestamp descending (latest first, considering time)
+    return rows.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
   }, [db, process]);
 
   const itemNameById = useMemo(() => {

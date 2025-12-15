@@ -5,6 +5,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, Ca
 import { Printer } from 'lucide-react';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { InfoPopover } from '../common/InfoPopover';
 
 export function ReceiveHistoryTable() {
     const { db, process, refreshDb } = useInventory();
@@ -35,6 +36,27 @@ export function ReceiveHistoryTable() {
             }
         }
         return '—';
+    };
+
+    // Helper for Cutter Receive Info Popover
+    const getCutterReceiveInfo = (row) => {
+        const piece = db.inbound_items?.find(p => p.id === row.pieceId);
+        const item = db.items?.find(i => i.id === piece?.itemId);
+        const lot = db.lots?.find(l => l.lotNo === piece?.lotNo);
+        const box = db.boxes?.find(b => b.id === row.boxId);
+        const helper = db.workers?.find(w => w.id === row.helperId) || db.operators?.find(o => o.id === row.helperId);
+
+        return [
+            { label: 'Date', value: formatDateDDMMYYYY(row.date || row.createdAt) || '—' },
+            { label: 'Lot', value: piece?.lotNo || '—' },
+            { label: 'Item', value: item?.name || '—' },
+            { label: 'Gross Wt', value: `${formatKg(row.grossWt)} kg` },
+            { label: 'Tare Wt', value: `${formatKg(row.tareWt)} kg` },
+            { label: 'Net Wt', value: `${formatKg(row.netWt)} kg` },
+            { label: 'Box', value: box?.name || row.pktTypeName || '—' },
+            { label: 'Helper', value: helper?.name || row.helperName || '—' },
+            { label: 'Shift', value: row.shift || '—' },
+        ];
     };
 
     const handleReprint = async (row) => {
@@ -267,6 +289,7 @@ export function ReceiveHistoryTable() {
                             ) : (
                                 history.map(r => {
                                     if (process === 'cutter') {
+                                        const infoItems = getCutterReceiveInfo(r);
                                         return (
                                             <TableRow key={r.id}>
                                                 <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
@@ -274,7 +297,23 @@ export function ReceiveHistoryTable() {
                                                 <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                 <TableCell>{r.machineNo || '—'}</TableCell>
                                                 <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
-                                                <TableCell className="text-right font-medium">{formatKg(r.netWt)}</TableCell>
+                                                <TableCell className="text-right font-medium">
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {formatKg(r.netWt)}
+                                                        <InfoPopover
+                                                            title="Receive Details"
+                                                            items={infoItems}
+                                                            renderItem={(item) => (
+                                                                <div className="flex justify-between text-xs">
+                                                                    <span className="text-muted-foreground">{item.label}:</span>
+                                                                    <span className="font-medium">{item.value}</span>
+                                                                </div>
+                                                            )}
+                                                            widthClassName="w-56"
+                                                            buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
+                                                        />
+                                                    </div>
+                                                </TableCell>
                                                 <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
                                                 <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
                                                 <TableCell><ActionMenu actions={getActions(r)} /></TableCell>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
-import { formatKg, todayISO, uid } from '../../utils';
+import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
 import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
+import { InfoPopover } from '../common/InfoPopover';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -76,8 +77,8 @@ export function CutterReceiveForm() {
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
     // Compute inbound weight and total received for the current issue
-    const { inboundWeight, totalReceived } = useMemo(() => {
-        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0 };
+    const { inboundWeight, totalReceived, totalReceivedBobbins } = useMemo(() => {
+        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0 };
         const pieceIds = issueRecord.pieceIds;
 
         // Get inbound weight from inbound_items
@@ -92,6 +93,12 @@ export function CutterReceiveForm() {
             return sum + (tot?.totalNetWeight || 0);
         }, 0);
 
+        // Get total received bobbins from piece totals
+        const bobbinsFromDb = pieceIds.reduce((sum, pid) => {
+            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
+            return sum + (tot?.totalBob || 0);
+        }, 0);
+
         // Add cart items' net weights for real-time update
         const receivedInCart = cart.reduce((sum, entry) => {
             if (pieceIds.includes(entry.pieceId)) {
@@ -100,7 +107,19 @@ export function CutterReceiveForm() {
             return sum;
         }, 0);
 
-        return { inboundWeight: inboundWt, totalReceived: receivedFromDb + receivedInCart };
+        // Add cart items' bobbins for real-time update
+        const bobbinsInCart = cart.reduce((sum, entry) => {
+            if (pieceIds.includes(entry.pieceId)) {
+                return sum + (Number(entry.bobbinQty) || 0);
+            }
+            return sum;
+        }, 0);
+
+        return {
+            inboundWeight: inboundWt,
+            totalReceived: receivedFromDb + receivedInCart,
+            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart
+        };
     }, [issueRecord, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
 
     const computeNextBarcode = (pieceId, lotNo, seq) => {
@@ -298,13 +317,61 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
                             <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
                             <div><span className="font-semibold">Inbound Wt:</span> {formatKg(inboundWeight)}</div>
-                            <div><span className="font-semibold">Received:</span> {formatKg(totalReceived)}</div>
+                            <div>
+                                <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
+                                <InfoPopover
+                                    title="Received Crates"
+                                    items={(db.receive_from_cutter_machine_rows || []).filter(row =>
+                                        issueRecord?.pieceIds?.includes(row.pieceId)
+                                    )}
+                                    renderContent={(items) => (
+                                        <table className="w-full text-xs">
+                                            <thead>
+                                                <tr className="border-b">
+                                                    <th className="text-left py-1 px-1 font-medium">Barcode</th>
+                                                    <th className="text-left py-1 px-1 font-medium">Date</th>
+                                                    <th className="text-right py-1 px-1 font-medium">Bobbins</th>
+                                                    <th className="text-right py-1 px-1 font-medium">Net Wt</th>
+                                                    <th className="text-left py-1 px-1 font-medium">Cut</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {items.map((row, idx) => (
+                                                    <tr key={row.id || idx} className="border-b last:border-0">
+                                                        <td className="py-1 px-1 font-mono">{row.barcode || '—'}</td>
+                                                        <td className="py-1 px-1">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
+                                                        <td className="py-1 px-1 text-right">{row.bobbinQuantity || 0}</td>
+                                                        <td className="py-1 px-1 text-right font-medium">{formatKg(row.netWt)}</td>
+                                                        <td className="py-1 px-1">{row.cutMaster?.name || row.cut || '—'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                            <tfoot>
+                                                <tr className="border-t-2 bg-muted/50 font-semibold">
+                                                    <td className="py-1 px-1" colSpan={2}>Total</td>
+                                                    <td className="py-1 px-1 text-right">{items.reduce((sum, row) => sum + (row.bobbinQuantity || 0), 0)}</td>
+                                                    <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + (row.netWt || 0), 0))}</td>
+                                                    <td className="py-1 px-1"></td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    )}
+                                    emptyText="No crates received yet"
+                                    widthClassName="w-[420px]"
+                                    bodyClassName="max-h-[300px] overflow-y-auto"
+                                    buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
+                                    align="right"
+                                />
+                            </div>
+                            <div>
+                                <span className="font-semibold">Bobbins:</span> {totalReceivedBobbins}
+                            </div>
                         </div>
                     )}
                 </CardContent>

@@ -1,6 +1,6 @@
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 24px;
   font-weight: 400;
   color: #0f0f0f;
@@ -14,34 +14,34 @@
 
 .container {
   margin: 0;
-  padding: 2rem;
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* justify-content: center; */
   min-height: 100vh;
 }
 
 h1 {
-  margin-bottom: 2rem;
-  font-size: 1.5rem;
+  margin-bottom: 1.5rem;
+  font-size: 1.4rem;
   text-align: center;
 }
 
 .card {
   background: white;
-  padding: 1.5rem;
+  padding: 1.25rem;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   width: 100%;
-  max-width: 400px;
+  max-width: 500px;
   margin-bottom: 1rem;
 }
 
 .card h2 {
   margin-top: 0;
-  font-size: 1.2rem;
-  margin-bottom: 1rem;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
   border-bottom: 1px solid #eee;
   padding-bottom: 0.5rem;
 }
@@ -50,13 +50,13 @@ h1 {
   display: flex;
   align-items: center;
   font-weight: bold;
-  font-size: 1.1rem;
+  font-size: 1rem;
   margin-bottom: 0.5rem;
 }
 
 .status-dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   margin-right: 8px;
   background-color: #ccc;
@@ -75,13 +75,14 @@ h1 {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 150px;
+  max-height: 100px;
   overflow-y: auto;
 }
 
 .printer-list li {
-  padding: 0.5rem 0;
+  padding: 0.25rem 0;
   border-bottom: 1px solid #f0f0f0;
+  font-size: 0.9rem;
 }
 
 .setting {
@@ -91,36 +92,95 @@ h1 {
 
 .setting input {
   margin-right: 0.5rem;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   cursor: pointer;
+}
+
+.btn-group {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: opacity 0.2s;
+}
+
+.btn:hover {
+  opacity: 0.9;
 }
 
 .stop-btn {
-  margin-top: 1rem;
   background-color: #f44336;
   color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  width: 100%;
-  font-weight: bold;
 }
 
-.stop-btn:hover {
-  background-color: #d32f2f;
+.restart-btn {
+  background-color: #ff9800;
+  color: white;
+}
+
+.force-btn {
+  background-color: #2196f3;
+  color: white;
 }
 
 .error-text {
   color: #d32f2f;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   margin-top: 0.5rem;
 }
 
 .footer {
   margin-top: 2rem;
   color: #888;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   text-align: center;
+}
+
+/* Queue Table */
+.queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.queue-table th {
+  text-align: left;
+  padding: 0.5rem;
+  background: #f9f9f9;
+  font-weight: 600;
+  color: #666;
+}
+
+.queue-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+.queue-status {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-Processing { background: #e3f2fd; color: #1976d2; }
+.status-Completed { background: #e8f5e9; color: #2e7d32; }
+.status-Failed { background: #ffebee; color: #c62828; }
+
+.empty-state {
+  text-align: center;
+  color: #999;
+  padding: 1rem;
+  font-style: italic;
 }

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { InfoPopover } from '../common/InfoPopover';
+import { CatchWeightButton } from '../common/CatchWeightButton';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
@@ -360,7 +361,13 @@ export function ConingReceiveForm() {
                                                 <Input type="number" value={row.coneCount} onChange={e => updateRow(row.id, 'coneCount', e.target.value)} className="h-8" />
                                             </TableCell>
                                             <TableCell>
-                                                <Input type="number" value={row.grossWeight} onChange={e => updateRow(row.id, 'grossWeight', e.target.value)} className="h-8" />
+                                                <div className="flex gap-1">
+                                                    <Input type="number" value={row.grossWeight} onChange={e => updateRow(row.id, 'grossWeight', e.target.value)} className="h-8 flex-1" />
+                                                    <CatchWeightButton
+                                                        onWeightCaptured={(wt) => updateRow(row.id, 'grossWeight', wt.toFixed(3))}
+                                                        className="h-8 w-8"
+                                                    />
+                                                </div>
                                             </TableCell>
                                             <TableCell className="">
                                                 {formatKg(calcRowNet(row))}

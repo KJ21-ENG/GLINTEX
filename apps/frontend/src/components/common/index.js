@@ -16,3 +16,4 @@ export { Popover } from './Popover.jsx';
 export { ColumnFilter } from './ColumnFilter.jsx';
 export { ValueFilterMenu, DateFilterMenu } from './SheetFilterMenu.jsx';
 export { ContextMenu } from './ContextMenu.jsx';
+export { CatchWeightButton } from './CatchWeightButton.jsx';

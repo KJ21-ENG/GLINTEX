@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -230,7 +231,10 @@ export function HoloReceiveForm() {
                             </div>
                             <div>
                                 <Label>Gross Weight</Label>
-                                <Input type="number" value={form.grossWeight} onChange={e => setForm({ ...form, grossWeight: e.target.value })} />
+                                <div className="flex gap-2">
+                                    <Input type="number" value={form.grossWeight} onChange={e => setForm({ ...form, grossWeight: e.target.value })} className="flex-1" />
+                                    <CatchWeightButton onWeightCaptured={(wt) => setForm({ ...form, grossWeight: wt.toFixed(3) })} />
+                                </div>
                             </div>
                         </div>
 

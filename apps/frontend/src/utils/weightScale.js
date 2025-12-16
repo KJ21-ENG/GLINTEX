@@ -116,27 +116,37 @@ export async function readWeight(port, timeoutMs = 2000) {
         const startTime = Date.now();
 
         while (Date.now() - startTime < timeoutMs) {
-            const { value, done } = await Promise.race([
-                reader.read(),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Read timeout')), timeoutMs)
-                )
-            ]);
+            let timeoutId;
+            try {
+                const { value, done } = await Promise.race([
+                    reader.read(),
+                    new Promise((_, reject) => {
+                        timeoutId = setTimeout(
+                            () => reject(new Error('Read timeout')),
+                            timeoutMs
+                        );
+                    })
+                ]);
 
-            if (done) break;
+                if (done) break;
 
-            if (value) {
-                buffer += decoder.decode(value, { stream: true });
+                if (value) {
+                    buffer += decoder.decode(value, { stream: true });
 
-                // Try to parse weight from accumulated buffer
-                const weight = parseWeightFromBuffer(buffer);
-                if (weight !== null) {
-                    return weight;
+                    // Try to parse weight from accumulated buffer
+                    const weight = parseWeightFromBuffer(buffer);
+                    if (weight !== null) {
+                        return weight;
+                    }
+
+                    // Keep buffer manageable (last 100 chars)
+                    if (buffer.length > 100) {
+                        buffer = buffer.slice(-50);
+                    }
                 }
-
-                // Keep buffer manageable (last 100 chars)
-                if (buffer.length > 100) {
-                    buffer = buffer.slice(-50);
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
                 }
             }
         }

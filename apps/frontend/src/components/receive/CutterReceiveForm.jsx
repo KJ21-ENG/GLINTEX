@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
+import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -437,7 +438,10 @@ export function CutterReceiveForm() {
                             </div>
                             <div>
                                 <Label>Gross Weight</Label>
-                                <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} />
+                                <div className="flex gap-2">
+                                    <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" />
+                                    <CatchWeightButton onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))} />
+                                </div>
                             </div>
                         </div>
 

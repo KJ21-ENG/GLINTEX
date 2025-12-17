@@ -1,0 +1,23 @@
+services:
+  db:
+    ports: []
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  backend:
+    ports:
+      - "4002:4000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SHADOW_DATABASE_URL: ${SHADOW_DATABASE_URL}
+      PORT: 4000
+      BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
+
+  frontend:
+    build:
+      args:
+        VITE_API_BASE: ${VITE_API_BASE}
+    ports:
+      - "4174:80"

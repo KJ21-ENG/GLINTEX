@@ -31,7 +31,7 @@ export function normalizeDb(raw) {
     ...record,
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
     // Normalize date to canonical ISO (YYYY-MM-DD) for sorting, keep original for display if needed
-    dateISO: (function() {
+    dateISO: (function () {
       try {
         // lazy-load formatting helper to avoid cycles
         const { parseDateToISO } = require('./formatting');
@@ -89,16 +89,17 @@ export function extractBrandFromDb(db) {
     primary: settingsRow.brandPrimary || defaultBrand.primary,
     gold: settingsRow.brandGold || defaultBrand.gold,
     logoDataUrl: settingsRow.logoDataUrl || "",
+    faviconDataUrl: settingsRow.faviconDataUrl || "",
   };
 }
 
-export function groupBy(arr, keyFn) { 
-  const m = {}; 
-  for (const x of arr) { 
-    const k = keyFn(x); 
+export function groupBy(arr, keyFn) {
+  const m = {};
+  for (const x of arr) {
+    const k = keyFn(x);
     (m[k] ||= []).push(x);
-  } 
-  return m; 
+  }
+  return m;
 }
 
 /**

@@ -101,6 +101,18 @@ export const InventoryProvider = ({ children }) => {
 
     root.style.setProperty('--brand-primary', brand.primary);
     root.style.setProperty('--brand-gold', brand.gold);
+
+    if (brand.faviconDataUrl) {
+      const link = document.querySelector("link[rel*='icon']") || document.createElement('link');
+      link.type = 'image/x-icon';
+      link.rel = 'shortcut icon';
+      link.href = brand.faviconDataUrl;
+      document.getElementsByTagName('head')[0].appendChild(link);
+    } else {
+      // optional: reset to default if no custom favicon
+      const link = document.querySelector("link[rel*='icon']");
+      if (link) link.href = '/favicon.png';
+    }
   }, [brand]);
 
   useEffect(() => {

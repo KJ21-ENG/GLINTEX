@@ -41,12 +41,12 @@ export function Settings() {
                             <Printer className="w-4 h-4" /> Label Designer
                         </button>
                         {isAdmin && (
-                          <button
-                            onClick={() => setActiveTab('users')}
-                            className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'users' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
-                          >
-                            <Users className="w-4 h-4" /> Users & Roles
-                          </button>
+                            <button
+                                onClick={() => setActiveTab('users')}
+                                className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'users' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}
+                            >
+                                <Users className="w-4 h-4" /> Users & Roles
+                            </button>
                         )}
                     </nav>
                 </CardContent>
@@ -54,16 +54,16 @@ export function Settings() {
 
             <div className="flex-1 w-full space-y-6">
                 <Card>
-                  <CardContent className="pt-6 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Signed in as </span>
-                      <span className="font-medium">{user?.displayName || user?.username || '—'}</span>
-                      {/* role is shown elsewhere; avoid duplicating it here */}
-                    </div>
-                    <Button variant="outline" onClick={logout}>
-                      <LogOut className="w-4 h-4 mr-2" /> Logout
-                    </Button>
-                  </CardContent>
+                    <CardContent className="pt-6 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+                        <div className="text-sm">
+                            <span className="text-muted-foreground">Signed in as </span>
+                            <span className="font-medium">{user?.displayName || user?.username || '—'}</span>
+                            {/* role is shown elsewhere; avoid duplicating it here */}
+                        </div>
+                        <Button variant="outline" onClick={logout}>
+                            <LogOut className="w-4 h-4 mr-2" /> Logout
+                        </Button>
+                    </CardContent>
                 </Card>
                 {activeTab === 'whatsapp' && <WhatsAppSettings db={db} refreshDb={refreshDb} updateSettings={updateSettings} />}
                 {activeTab === 'templates' && <MessageTemplates />}
@@ -277,6 +277,8 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
     const [localBrand, setLocalBrand] = useState(brand);
     const [saving, setSaving] = useState(false);
     const [accessUrl, setAccessUrl] = useState('');
+    const logoInputRef = React.useRef(null);
+    const faviconInputRef = React.useRef(null);
 
     useEffect(() => { setLocalBrand(brand); }, [brand]);
 
@@ -299,6 +301,14 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = () => setLocalBrand(p => ({ ...p, logoDataUrl: reader.result }));
+        reader.readAsDataURL(file);
+    };
+
+    const handleFavicon = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => setLocalBrand(p => ({ ...p, faviconDataUrl: reader.result }));
         reader.readAsDataURL(file);
     };
 
@@ -339,10 +349,22 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
                             <div className="h-16 w-16 border rounded-md flex items-center justify-center overflow-hidden bg-muted">
                                 {localBrand.logoDataUrl ? <img src={localBrand.logoDataUrl} className="h-full w-full object-contain" /> : <span className="text-xs text-muted-foreground">No Logo</span>}
                             </div>
-                            <label className="cursor-pointer">
-                                <Button variant="outline" as="span"><Upload className="w-4 h-4 mr-2" /> Upload</Button>
-                                <input type="file" className="hidden" accept="image/*" onChange={handleLogo} />
-                            </label>
+                            <div>
+                                <Button variant="outline" onClick={() => logoInputRef.current?.click()}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
+                                <input ref={logoInputRef} type="file" className="hidden" accept="image/*" onChange={handleLogo} />
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <Label>Favicon</Label>
+                        <div className="flex items-center gap-4 mt-2">
+                            <div className="h-16 w-16 border rounded-md flex items-center justify-center overflow-hidden bg-muted">
+                                {localBrand.faviconDataUrl ? <img src={localBrand.faviconDataUrl} className="h-full w-full object-contain" /> : <span className="text-xs text-muted-foreground">No Favicon</span>}
+                            </div>
+                            <div>
+                                <Button variant="outline" onClick={() => faviconInputRef.current?.click()}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
+                                <input ref={faviconInputRef} type="file" className="hidden" accept="image/*" onChange={handleFavicon} />
+                            </div>
                         </div>
                     </div>
                     <Button onClick={handleSave} disabled={saving}><Save className="w-4 h-4 mr-2" /> Save Branding</Button>

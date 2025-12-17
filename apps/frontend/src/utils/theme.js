@@ -8,6 +8,7 @@ export const defaultBrand = {
   primary: "#2E4CA6",
   gold: "#D4AF37",
   logoDataUrl: "",
+  faviconDataUrl: "",
 };
 
 export function themeClasses(theme) {

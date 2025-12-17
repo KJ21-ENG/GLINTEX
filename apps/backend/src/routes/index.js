@@ -3636,9 +3636,10 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
 router.put('/api/settings', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { brandPrimary, brandGold, logoDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
+    const { brandPrimary, brandGold, logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
     const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(req.body, 'whatsappNumber');
     const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(req.body, 'whatsappGroupIds');
+    const hasFaviconDataUrl = Object.prototype.hasOwnProperty.call(req.body, 'faviconDataUrl');
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
     function normalizeForStore(num) {
@@ -3659,6 +3660,7 @@ router.put('/api/settings', async (req, res) => {
         logoDataUrl: logoDataUrl || null,
         ...actorUpdateFields(actorUserId),
       };
+      if (hasFaviconDataUrl) updateData.faviconDataUrl = faviconDataUrl || null;
       if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
 
@@ -3669,6 +3671,7 @@ router.put('/api/settings', async (req, res) => {
         logoDataUrl: logoDataUrl || null,
         ...actorCreateFields(actorUserId),
       };
+      if (hasFaviconDataUrl) createData.faviconDataUrl = faviconDataUrl || null;
       if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
 

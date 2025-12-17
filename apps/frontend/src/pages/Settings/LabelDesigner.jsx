@@ -12,6 +12,8 @@ import {
   buildTspl,
   loadTemplate,
   saveTemplate,
+  fetchLocalPrinters,
+  sendToLocalPrinter,
   setPreferredPrinter,
   getPreferredPrinter,
 } from '../../utils/labelPrint';
@@ -1178,6 +1180,7 @@ const LabelDesigner = () => {
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState(() => getPreferredPrinter() || '');
   const [serviceStatus, setServiceStatus] = useState({ state: 'idle', message: 'Idle', tone: 'muted' });
+  const [printServiceBase, setPrintServiceBase] = useState('');
   const defaultStage = LABEL_STAGE_KEYS.INBOUND;
   const [dimensions, setDimensions] = useState(() => ({ ...DEFAULT_DIMENSIONS }));
   const [content, setContent] = useState(() => ({ ...DEFAULT_CONTENT }));
@@ -1201,6 +1204,12 @@ const LabelDesigner = () => {
   const [mentionIndex, setMentionIndex] = useState(0);
 
   const cloneContent = (value) => JSON.parse(JSON.stringify(value || {}));
+  const serviceToneClass =
+    serviceStatus.tone === 'success'
+      ? 'text-emerald-600'
+      : serviceStatus.tone === 'error'
+        ? 'text-rose-600'
+        : 'text-muted-foreground';
 
   const pushHistory = useCallback((snapshot) => {
     if (!snapshot) return;
@@ -1289,12 +1298,10 @@ const LabelDesigner = () => {
   const fetchPrinters = async () => {
     try {
       setServiceStatus({ state: 'connecting', message: 'Connecting to local print service...', tone: 'muted' });
-      const response = await fetch('http://localhost:9090/printers');
-      if (!response.ok) {
-        throw new Error('Local print service not reachable on port 9090');
-      }
-      const data = await response.json();
-      const printerList = data.printers || [];
+      const result = await fetchLocalPrinters();
+      if (!result.success) throw new Error(result.error || 'Local print service not reachable');
+      const printerList = result.printers || [];
+      setPrintServiceBase(result.serviceBase || '');
       setPrinters(printerList);
       setSelectedPrinter((prev) => {
         if (prev && printerList.includes(prev)) return prev;
@@ -1302,14 +1309,18 @@ const LabelDesigner = () => {
       });
       setServiceStatus({
         state: 'connected',
-        message: `${printerList.length} printer${printerList.length === 1 ? '' : 's'} available via local service.`,
+        message: `${printerList.length} printer${printerList.length === 1 ? '' : 's'} available via ${result.serviceBase || 'local service'}.`,
         tone: 'success',
       });
     } catch (error) {
       console.error('Error fetching printers:', error);
+      const protocolHint =
+        typeof window !== 'undefined' && window.location?.protocol !== 'https:' && window.location?.hostname !== 'localhost'
+          ? ' If you are using Chrome/Edge, serve the web app over HTTPS to allow access to http://localhost:9090.'
+          : '';
       setServiceStatus({
         state: 'error',
-        message: 'Could not reach local print service. Please start it on port 9090.',
+        message: `Could not reach local print service on port 9090.${protocolHint}`,
         tone: 'error',
       });
     }
@@ -1491,16 +1502,12 @@ const LabelDesigner = () => {
     setLastCommand(command);
     try {
       setServiceStatus({ state: 'working', message: 'Sending job for silent print...', tone: 'muted' });
-      const response = await fetch('http://localhost:9090/print', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          printer: selectedPrinter,
-          content: command,
-          type: 'raw',
-        }),
+      const result = await sendToLocalPrinter({
+        printer: selectedPrinter,
+        content: command,
+        type: 'raw',
+        serviceBase: printServiceBase || undefined,
       });
-      const result = await response.json();
       if (result.success) {
         setServiceStatus({ state: 'connected', message: 'Print job sent via local service.', tone: 'success' });
       } else {
@@ -1560,7 +1567,7 @@ const LabelDesigner = () => {
             <div className="space-y-2">
               <div className="flex items-center gap-1">
                 <Label className="text-sm font-medium">Target printer</Label>
-                <HelpPopover text="Local print service: http://localhost:9090 (apps/local-print-service/server.js)" />
+                <HelpPopover text="Local print service runs on your PC: http://localhost:9090 (apps/local-print-service/server.js). Override via VITE_PRINT_SERVICE_URL if needed." />
               </div>
               <div className="flex gap-2">
                 <select
@@ -1576,6 +1583,10 @@ const LabelDesigner = () => {
                 <Button variant="outline" size="icon" onClick={fetchPrinters}>
                   <RefreshCw className="w-4 h-4" />
                 </Button>
+              </div>
+              <div className={`text-xs ${serviceToneClass}`}>
+                {serviceStatus.message}
+                {printServiceBase ? <span className="ml-1 text-muted-foreground">({printServiceBase})</span> : null}
               </div>
             </div>
 

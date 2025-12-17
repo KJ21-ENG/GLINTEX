@@ -796,6 +796,76 @@ export const getPreferredPrinter = () => {
   }
 };
 
+const DEFAULT_PRINT_SERVICE_BASES = ['http://localhost:9090', 'http://127.0.0.1:9090'];
+
+const normalizeServiceBase = (value) => String(value || '').trim().replace(/\/+$/, '');
+
+export const getPrintServiceCandidates = () => {
+  const candidates = [];
+  const fromEnv = normalizeServiceBase(import.meta?.env?.VITE_PRINT_SERVICE_URL);
+  if (fromEnv) candidates.push(fromEnv);
+  if (typeof window !== 'undefined') {
+    try {
+      const fromStorage = normalizeServiceBase(window.localStorage.getItem('printServiceBase'));
+      if (fromStorage) candidates.push(fromStorage);
+    } catch (e) {
+      // ignore
+    }
+  }
+  DEFAULT_PRINT_SERVICE_BASES.forEach((base) => candidates.push(base));
+  return [...new Set(candidates)].filter(Boolean);
+};
+
+export const resolvePrintServiceBase = async ({ timeoutMs = 1500, candidates } = {}) => {
+  const list = candidates && candidates.length ? candidates : getPrintServiceCandidates();
+  const tryFetch = async (url) => {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(t);
+    }
+  };
+
+  let lastError = null;
+  for (const base of list) {
+    try {
+      const health = await tryFetch(`${base}/health`);
+      if (health.ok) {
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem('printServiceBase', base);
+          } catch (e) {
+            // ignore
+          }
+        }
+        return { success: true, serviceBase: base };
+      }
+    } catch (e) {
+      lastError = e;
+    }
+
+    try {
+      const printersProbe = await tryFetch(`${base}/printers`);
+      if (printersProbe.ok) {
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem('printServiceBase', base);
+          } catch (e) {
+            // ignore
+          }
+        }
+        return { success: true, serviceBase: base };
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  return { success: false, error: lastError?.message || 'Failed to reach local print service', serviceBase: list[0] };
+};
+
 export const setPreferredPrinter = (printerName) => {
   if (typeof window === 'undefined') return;
   try {
@@ -809,13 +879,19 @@ export const sendToLocalPrinter = async ({
   printer,
   content,
   type = 'raw',
-  serviceBase = 'http://localhost:9090',
+  serviceBase,
 }) => {
   if (!content) {
     return { success: false, error: 'Missing print content' };
   }
   try {
-    const response = await fetch(`${serviceBase}/print`, {
+    const resolved = serviceBase
+      ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
+      : await resolvePrintServiceBase();
+    if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
+    const base = resolved.serviceBase;
+
+    const response = await fetch(`${base}/print`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ printer, content, type }),
@@ -827,6 +903,29 @@ export const sendToLocalPrinter = async ({
     return { success: false, error: result.error || 'Failed to send print job', result };
   } catch (err) {
     return { success: false, error: err.message || 'Failed to send print job' };
+  }
+};
+
+export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {}) => {
+  const resolved = serviceBase
+    ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
+    : await resolvePrintServiceBase({ timeoutMs: Math.min(1500, timeoutMs) });
+  if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${resolved.serviceBase}/printers`, { signal: controller.signal });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      return { success: false, error: text || 'Failed to fetch printers' };
+    }
+    const data = await response.json().catch(() => ({}));
+    return { success: true, printers: data.printers || [], serviceBase: resolved.serviceBase };
+  } catch (err) {
+    return { success: false, error: err.message || 'Failed to fetch printers' };
+  } finally {
+    clearTimeout(t);
   }
 };
 

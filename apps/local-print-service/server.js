@@ -8,6 +8,13 @@ const os = require('os');
 
 const app = express();
 const PORT = 9090;
+const MAX_QUEUE = 100;
+const jobQueue = [];
+
+const pushJob = (job) => {
+    jobQueue.push(job);
+    if (jobQueue.length > MAX_QUEUE) jobQueue.splice(0, jobQueue.length - MAX_QUEUE);
+};
 
 // Middleware to set Chrome PNA header for all responses
 app.use((req, res, next) => {
@@ -16,14 +23,29 @@ app.use((req, res, next) => {
 });
 
 // Enable CORS for all routes with PNA compatible options
-app.use(cors({
+const corsOptions = {
     origin: true, // Reflects the request origin to allow any cloud domain
-    credentials: true // often required specifically for PNA
-}));
+    credentials: false,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Access-Control-Request-Private-Network'],
+    optionsSuccessStatus: 204,
+    maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Parse JSON bodies
 app.use(bodyParser.json());
 app.use(bodyParser.text());
+
+app.get('/health', (req, res) => {
+    res.json({ ok: true, service: 'glintex-local-print-service', port: PORT });
+});
+
+app.get('/queue', (req, res) => {
+    res.json(jobQueue);
+});
 
 // Endpoint to list available printers
 app.get('/printers', (req, res) => {
@@ -31,27 +53,32 @@ app.get('/printers', (req, res) => {
     let command = '';
 
     if (platform === 'win32') {
-        command = 'powershell "Get-Printer | Select-Object Name"';
+        command = 'powershell -NoProfile -Command "Get-Printer | Select-Object -ExpandProperty Name | ConvertTo-Json"';
     } else {
-        command = 'lpstat -p | awk \'{print $2}\'';
+        command = 'lpstat -e';
     }
 
     exec(command, (error, stdout, stderr) => {
         if (error) {
             console.error(`Error listing printers: ${error.message}`);
-            return res.status(500).json({ error: 'Failed to list printers' });
+            return res.status(500).json({ error: 'Failed to list printers', details: stderr || error.message });
         }
 
         let printers = [];
         if (platform === 'win32') {
-            // Parse PowerShell output (skip headers)
-            const lines = stdout.trim().split('\r\n');
-            if (lines.length > 2) {
-                printers = lines.slice(2).map(line => line.trim()).filter(line => line);
+            try {
+                const parsed = JSON.parse(stdout);
+                const names = Array.isArray(parsed) ? parsed : [parsed];
+                printers = names.map((name) => String(name || '').trim()).filter(Boolean);
+            } catch (e) {
+                printers = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
             }
         } else {
-            // Parse lpstat output
-            printers = stdout.trim().split('\n').filter(line => line);
+            printers = stdout
+                .trim()
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean);
         }
 
         res.json({ printers });
@@ -66,6 +93,16 @@ app.post('/print', (req, res) => {
         return res.status(400).json({ error: 'Printer name and content are required' });
     }
 
+    const job = {
+        id: `job_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        at: new Date().toISOString(),
+        printer,
+        type: type || 'raw',
+        bytes: Buffer.byteLength(String(content || ''), 'utf8'),
+        status: 'queued',
+    };
+    pushJob(job);
+
     const tempDir = os.tmpdir();
     const timestamp = Date.now();
     const tempFilePath = path.join(tempDir, `print_job_${timestamp}.txt`);
@@ -74,6 +111,8 @@ app.post('/print', (req, res) => {
     fs.writeFile(tempFilePath, content, (err) => {
         if (err) {
             console.error(`Error writing temp file: ${err.message}`);
+            job.status = 'error';
+            job.error = err.message;
             return res.status(500).json({ error: 'Failed to process print job' });
         }
 
@@ -106,10 +145,13 @@ app.post('/print', (req, res) => {
 
             if (error) {
                 console.error(`Error printing: ${error.message}`);
+                job.status = 'error';
+                job.error = stderr || error.message;
                 return res.status(500).json({ error: 'Failed to send print job' });
             }
 
             console.log(`Print job sent to ${printer}`);
+            job.status = 'sent';
             res.json({ success: true, message: 'Print job sent successfully' });
         });
     });

@@ -1,5 +1,5 @@
 use actix_cors::Cors;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{middleware::DefaultHeaders, web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -37,13 +37,25 @@ struct AppState {
     queue: Mutex<Vec<PrintJobRecord>>,
 }
 
+async fn health() -> impl Responder {
+    HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "service": "glintex-print-client",
+        "port": 9090
+    }))
+}
+
 async fn list_printers() -> impl Responder {
     let platform = std::env::consts::OS;
     let mut printers = Vec::new();
 
     if platform == "windows" {
         let mut cmd = Command::new("powershell");
-        cmd.args(&["Get-Printer", "|", "Select-Object", "Name"]);
+        cmd.args(&[
+            "-NoProfile",
+            "-Command",
+            "Get-Printer | Select-Object -ExpandProperty Name",
+        ]);
         
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -53,24 +65,22 @@ async fn list_printers() -> impl Responder {
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let lines: Vec<&str> = stdout.trim().split("\r\n").collect();
-            if lines.len() > 2 {
-                for line in lines.iter().skip(2) {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        printers.push(trimmed.to_string());
-                    }
+            for line in lines {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    printers.push(trimmed.to_string());
                 }
             }
         }
     } else {
         // Mac/Linux
-        let output = Command::new("lpstat").arg("-p").output();
+        let output = Command::new("lpstat").arg("-e").output();
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 && parts[0] == "printer" {
-                    printers.push(parts[1].to_string());
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    printers.push(trimmed.to_string());
                 }
             }
         }
@@ -184,10 +194,16 @@ fn start_server() {
         let sys = actix_web::rt::System::new();
         sys.block_on(async {
             HttpServer::new(|| {
-                let cors = Cors::permissive();
+                let cors = Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header()
+                    .max_age(86400);
                 App::new()
                     .wrap(cors)
+                    .wrap(DefaultHeaders::new().add(("Access-Control-Allow-Private-Network", "true")))
                     .app_data(get_app_state())
+                    .route("/health", web::get().to(health))
                     .route("/printers", web::get().to(list_printers))
                     .route("/queue", web::get().to(get_queue))
                     .route("/print", web::post().to(print))

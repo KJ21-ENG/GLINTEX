@@ -207,8 +207,12 @@ export const SearchableSelect = ({
         const dropdownHeight = Math.min(320, (visibleOptions.length + 1) * 40 + 20);
 
         let top = rect.bottom + window.scrollY + 4;
+        let transform = 'none';
+
         if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
-            top = rect.top + window.scrollY - dropdownHeight - 4;
+            // Flip to top: Position at top edge of trigger, then shift up by 100% height + 4px gap
+            top = rect.top + window.scrollY - 4;
+            transform = 'translateY(-100%)';
         }
 
         // Calculate width: min of trigger width, but can expand to fit content
@@ -225,7 +229,8 @@ export const SearchableSelect = ({
             top,
             left,
             width,
-            minWidth: rect.width
+            minWidth: rect.width,
+            transform
         });
     }, [visibleOptions.length, maxLabelWidth]);
 
@@ -416,7 +421,8 @@ export const SearchableSelect = ({
                 top: dropdownPosition.top,
                 left: dropdownPosition.left,
                 width: dropdownPosition.width,
-                minWidth: dropdownPosition.minWidth
+                minWidth: dropdownPosition.minWidth,
+                transform: dropdownPosition.transform
             }}
         >
             {/* Options List */}

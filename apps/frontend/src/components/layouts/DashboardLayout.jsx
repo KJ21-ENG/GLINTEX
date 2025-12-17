@@ -39,6 +39,22 @@ export default function DashboardLayout() {
 
   const toggleTheme = () => setTheme(prev => prev === "dark" ? "light" : "dark");
 
+  // Close sidebar on desktop view to prevent stuck overlay
+  React.useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const handler = (e) => {
+      if (e.matches) {
+        setSidebarOpen(false);
+      }
+    };
+    // Initial check
+    if (media.matches) {
+      setSidebarOpen(false);
+    }
+    media.addEventListener("change", handler);
+    return () => media.removeEventListener("change", handler);
+  }, []);
+
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       <div className="p-6 flex items-center gap-3 border-b border-border/50">

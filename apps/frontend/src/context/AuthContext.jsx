@@ -65,20 +65,34 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async ({ username, password }) => {
     const res = await api.authLogin(username, password);
-    setUser(res?.user || null);
+    const nextUser = res?.user || null;
+    setUser(nextUser);
     setHasUsers(true);
     setNeedsBootstrap(false);
     setError(null);
-    return res?.user || null;
+    try {
+      const me = await api.authMe();
+      if (me?.user) setUser(me.user);
+    } catch (_) {
+      // ignore; login response is good enough
+    }
+    return nextUser;
   }, []);
 
   const bootstrap = useCallback(async ({ bootstrapToken, username, password, displayName }) => {
     const res = await api.authBootstrap({ bootstrapToken, username, password, displayName });
-    setUser(res?.user || null);
+    const nextUser = res?.user || null;
+    setUser(nextUser);
     setHasUsers(true);
     setNeedsBootstrap(false);
     setError(null);
-    return res?.user || null;
+    try {
+      const me = await api.authMe();
+      if (me?.user) setUser(me.user);
+    } catch (_) {
+      // ignore; bootstrap response is good enough
+    }
+    return nextUser;
   }, []);
 
   const logout = useCallback(async () => {
@@ -107,4 +121,3 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   );
 }
-

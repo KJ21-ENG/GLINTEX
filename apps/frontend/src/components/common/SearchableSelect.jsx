@@ -206,7 +206,10 @@ export const SearchableSelect = ({
         const spaceAbove = rect.top;
         const dropdownHeight = Math.min(320, (visibleOptions.length + 1) * 40 + 20);
 
-        const top = rect.bottom + window.scrollY + 4;
+        let top = rect.bottom + window.scrollY + 4;
+        if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
+            top = rect.top + window.scrollY - dropdownHeight - 4;
+        }
 
         // Calculate width: min of trigger width, but can expand to fit content
         const contentWidth = maxLabelWidth;
@@ -251,23 +254,6 @@ export const SearchableSelect = ({
         };
     }, [open, updatePosition]);
 
-    // Auto-scroll to ensure dropdown is visible when opened
-    useEffect(() => {
-        if (open && wrapperRef.current) {
-            const rect = wrapperRef.current.getBoundingClientRect();
-            const viewportHeight = window.innerHeight;
-            // Calculate approximate height (same logic as in updatePosition)
-            const dropdownHeight = Math.min(320, (visibleOptions.length + 1) * 40 + 20);
-            const spaceBelow = viewportHeight - rect.bottom;
-
-            if (spaceBelow < dropdownHeight + 10) {
-                window.scrollBy({
-                    top: dropdownHeight - spaceBelow + 20,
-                    behavior: 'smooth'
-                });
-            }
-        }
-    }, [open]); // Only run when opened
 
     // Keyboard navigation
     useEffect(() => {

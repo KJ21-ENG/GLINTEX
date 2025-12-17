@@ -416,7 +416,9 @@ router.post('/api/auth/login', async (req, res) => {
         id: user.id,
         username: user.username,
         displayName: user.displayName,
-        role: { id: user.role.id, key: user.role.key, name: user.role.name },
+        roleId: user.role.id,
+        roleKey: user.role.key,
+        roleName: user.role.name,
       },
     });
   } catch (err) {
@@ -482,7 +484,9 @@ router.post('/api/auth/bootstrap', async (req, res) => {
         id: createdUser.id,
         username: createdUser.username,
         displayName: createdUser.displayName,
-        role: { id: createdUser.role.id, key: createdUser.role.key, name: createdUser.role.name },
+        roleId: createdUser.role.id,
+        roleKey: createdUser.role.key,
+        roleName: createdUser.role.name,
       },
     });
   } catch (err) {

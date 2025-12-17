@@ -206,10 +206,7 @@ export const SearchableSelect = ({
         const spaceAbove = rect.top;
         const dropdownHeight = Math.min(320, (visibleOptions.length + 1) * 40 + 20);
 
-        let top = rect.bottom + window.scrollY + 4;
-        if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
-            top = rect.top + window.scrollY - dropdownHeight - 4;
-        }
+        const top = rect.bottom + window.scrollY + 4;
 
         // Calculate width: min of trigger width, but can expand to fit content
         const contentWidth = maxLabelWidth;
@@ -253,6 +250,24 @@ export const SearchableSelect = ({
             window.removeEventListener('resize', updatePosition);
         };
     }, [open, updatePosition]);
+
+    // Auto-scroll to ensure dropdown is visible when opened
+    useEffect(() => {
+        if (open && wrapperRef.current) {
+            const rect = wrapperRef.current.getBoundingClientRect();
+            const viewportHeight = window.innerHeight;
+            // Calculate approximate height (same logic as in updatePosition)
+            const dropdownHeight = Math.min(320, (visibleOptions.length + 1) * 40 + 20);
+            const spaceBelow = viewportHeight - rect.bottom;
+
+            if (spaceBelow < dropdownHeight + 10) {
+                window.scrollBy({
+                    top: dropdownHeight - spaceBelow + 20,
+                    behavior: 'smooth'
+                });
+            }
+        }
+    }, [open]); // Only run when opened
 
     // Keyboard navigation
     useEffect(() => {
@@ -410,7 +425,7 @@ export const SearchableSelect = ({
     // Dropdown content
     const dropdownContent = open && (
         <div
-            className="searchable-select-portal fixed z-[9999] rounded-lg border shadow-xl overflow-hidden bg-card border-border"
+            className="searchable-select-portal absolute z-[9999] rounded-lg border shadow-xl overflow-hidden bg-card border-border"
             style={{
                 top: dropdownPosition.top,
                 left: dropdownPosition.left,

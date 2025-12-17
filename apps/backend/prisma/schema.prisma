@@ -413,6 +413,7 @@ model Settings {
   brandPrimary String
   brandGold    String
   logoDataUrl  String?
+  faviconDataUrl String?
   whatsappNumber String?
   whatsappGroupIds String[] @default([])
   createdAt    DateTime @default(now())

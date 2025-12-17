@@ -191,10 +191,6 @@ export default function UserManagement() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="text-sm text-muted-foreground">
-            Roles are assigned to users. Permissions are not enforced yet (only <Badge>admin</Badge> can manage users/roles).
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-2">
               <Label>Role Key</Label>

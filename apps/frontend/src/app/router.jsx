@@ -14,7 +14,8 @@ import {
   Reports,
   Settings,
   Login,
-  Setup
+  Setup,
+  ScaleTestPage
 } from "../pages";
 import LabelDesigner from "../pages/Settings/LabelDesigner";
 
@@ -26,6 +27,10 @@ export const router = createBrowserRouter([
       {
         index: true,
         loader: () => redirect("/app/inbound"),
+      },
+      {
+        path: "scale-test",
+        element: <ScaleTestPage />,
       },
       {
         path: "inbound",

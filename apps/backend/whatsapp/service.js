@@ -25,7 +25,7 @@ function detectChromeExecutable() {
       const p = puppeteer.executablePath();
       if (p && fs.existsSync(p)) return p;
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // Common system paths
   const candidates = [];
@@ -41,7 +41,7 @@ function detectChromeExecutable() {
     candidates.push('/usr/bin/chromium');
   }
   for (const p of candidates) {
-    try { if (p && fs.existsSync(p)) return p; } catch (_) {}
+    try { if (p && fs.existsSync(p)) return p; } catch (_) { }
   }
   return null;
 }
@@ -72,8 +72,8 @@ function cleanupStaleAuthDir({ force = false, reason = '' } = {}) {
         // If we cannot read stats, fall through to removal after logging below.
       }
     }
-    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-    console.log(`Removed LocalAuth session directory (${reason || 'stale lock'}):`, AUTH_DIR);
+    fs.rmSync(LOCK_FILE, { force: true });
+    console.log(`Removed LocalAuth SingletonLock (${reason || 'stale lock'}):`, LOCK_FILE);
     return true;
   } catch (err) {
     console.warn('Failed to cleanup LocalAuth session directory:', err && err.message ? err.message : err);
@@ -140,7 +140,18 @@ class WhatsappService {
     const puppeteerOpts = {
       headless: true,
       defaultViewport: null,
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-zygote','--no-first-run','--disable-extensions','--disable-features=site-per-process'],
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--no-first-run',
+        '--disable-extensions',
+        '--disable-features=site-per-process',
+        '--disable-blink-features=AutomationControlled'
+      ],
     };
     if (execPath) puppeteerOpts.executablePath = execPath;
 
@@ -149,7 +160,14 @@ class WhatsappService {
     let lastErr = null;
     for (let attempt = 1; attempt <= maxLaunchAttempts; attempt++) {
       try {
-        const client = new Client({ authStrategy: new LocalAuth({ clientId: 'glintex' }), puppeteer: puppeteerOpts });
+        const client = new Client({
+          authStrategy: new LocalAuth({ clientId: 'glintex' }),
+          puppeteer: puppeteerOpts,
+          webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014582691-alpha.html',
+          }
+        });
 
         client.on('qr', async (qr) => {
           this.qrDataUrl = await qrcode.toDataURL(qr);
@@ -318,7 +336,7 @@ class WhatsappService {
               const expired = item.timeoutMs > 0 && (now - item.enqueuedAt) >= item.timeoutMs;
               if (expired || item.attempts >= this._maxSendAttempts) {
                 const errMsg = expired ? 'Whatsapp send timed out waiting for connection' : 'Whatsapp client not available';
-                try { item.reject(new Error(errMsg)); } catch (_) {}
+                try { item.reject(new Error(errMsg)); } catch (_) { }
                 const idx = this._sendQueue.indexOf(item);
                 if (idx >= 0) this._sendQueue.splice(idx, 1);
               }
@@ -332,7 +350,7 @@ class WhatsappService {
         if (!entry) break;
         const now = Date.now();
         if (entry.timeoutMs > 0 && (now - entry.enqueuedAt) >= entry.timeoutMs) {
-          try { entry.reject(new Error('Whatsapp send timed out')); } catch (_) {}
+          try { entry.reject(new Error('Whatsapp send timed out')); } catch (_) { }
           continue;
         }
         entry.attempts += 1;
@@ -406,7 +424,7 @@ class WhatsappService {
       try {
         if (err) waiter.reject(err);
         else waiter.resolve();
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -433,7 +451,7 @@ class WhatsappService {
     if (error) {
       const pending = this._sendQueue.splice(0);
       for (const item of pending) {
-        try { item.reject(error); } catch (_) {}
+        try { item.reject(error); } catch (_) { }
       }
     }
     if (!scheduleReconnect) {

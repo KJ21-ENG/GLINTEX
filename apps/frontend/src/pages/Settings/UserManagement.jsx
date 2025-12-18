@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Save, Edit2, X, KeyRound, RefreshCw } from 'lucide-react';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui';
+import { Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui';
 import * as api from '../../api';
 import { useAuth } from '../../context/AuthContext';
 
@@ -350,7 +350,7 @@ export default function UserManagement() {
                         </Select>
                       ) : (
                         u.role ? (
-                          <Badge>{u.role.name}</Badge>
+                          u.role.name
                         ) : '—'
                       )}
                     </TableCell>
@@ -358,7 +358,7 @@ export default function UserManagement() {
                       {editingUserId === u.id ? (
                         <Checkbox checked={editIsActive} onCheckedChange={(v) => setEditIsActive(!!v)} />
                       ) : (
-                        <Badge variant={u.isActive ? 'default' : 'destructive'}>{u.isActive ? 'Active' : 'Disabled'}</Badge>
+                        u.isActive ? 'Active' : 'Disabled'
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDateTime(u.lastLoginAt)}</TableCell>

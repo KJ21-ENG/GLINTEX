@@ -19,6 +19,28 @@ export function Login() {
     if (needsBootstrap) navigate('/setup', { replace: true });
   }, [loading, needsBootstrap, navigate]);
 
+  // Fetch and apply public branding (favicon) on login page
+  useEffect(() => {
+    async function loadPublicBranding() {
+      try {
+        const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:4001';
+        const res = await fetch(`${apiBase}/api/public/branding`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.faviconDataUrl) {
+          let link = document.querySelector("link[rel*='icon']") || document.createElement('link');
+          link.type = 'image/x-icon';
+          link.rel = 'shortcut icon';
+          link.href = data.faviconDataUrl;
+          document.head.appendChild(link);
+        }
+      } catch (err) {
+        console.warn('Failed to load public branding', err);
+      }
+    }
+    loadPublicBranding();
+  }, []);
+
   if (!loading && user) {
     return <Navigate to={from} replace />;
   }

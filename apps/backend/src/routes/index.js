@@ -499,6 +499,30 @@ router.get('/api/health', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Public branding endpoint (accessible without login)
+router.get('/api/public/branding', async (req, res) => {
+  try {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings) {
+      return res.json({
+        brandPrimary: '#2E4CA6',
+        brandGold: '#D4AF37',
+        logoDataUrl: null,
+        faviconDataUrl: null,
+      });
+    }
+    res.json({
+      brandPrimary: settings.brandPrimary,
+      brandGold: settings.brandGold,
+      logoDataUrl: settings.logoDataUrl || null,
+      faviconDataUrl: settings.faviconDataUrl || null,
+    });
+  } catch (err) {
+    console.error('Failed to fetch public branding', err);
+    res.status(500).json({ error: 'Failed to fetch branding' });
+  }
+});
+
 // ===== Auth (required) =====
 router.use(requireAuth);
 

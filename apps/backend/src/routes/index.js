@@ -9,7 +9,7 @@ import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -61,6 +61,85 @@ function roundTo3Decimals(val) {
   const num = Number(val);
   if (!Number.isFinite(num)) return 0;
   return Math.round(num * 1000) / 1000;
+}
+
+const OPENING_LOT_SEQUENCE_ID = 'opening_lot_sequence';
+
+function formatOpeningLotNo(nextVal) {
+  const num = Number(nextVal);
+  const padded = Number.isFinite(num)
+    ? String(num).padStart(3, '0')
+    : String(nextVal || '').padStart(3, '0');
+  return `OP-${padded}`;
+}
+
+async function getOpeningLotPreview() {
+  const seq = await prisma.sequence.findUnique({ where: { id: OPENING_LOT_SEQUENCE_ID } });
+  const nextValue = (seq ? seq.nextValue : 0) + 1;
+  return { nextValue, lotNo: formatOpeningLotNo(nextValue) };
+}
+
+async function allocateOpeningLot(tx, actorUserId) {
+  const seq = await tx.sequence.upsert({
+    where: { id: OPENING_LOT_SEQUENCE_ID },
+    update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+    create: { id: OPENING_LOT_SEQUENCE_ID, nextValue: 1, ...actorCreateFields(actorUserId) },
+  });
+  return formatOpeningLotNo(seq.nextValue);
+}
+
+async function ensureHoloIssueSequence(tx, actorUserId) {
+  const rows = await tx.$queryRaw`
+    SELECT GREATEST(
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "IssueToHoloMachine" WHERE barcode ~ '^IHO-[0-9]+'), 0),
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ReceiveFromHoloMachineRow" WHERE barcode ~ '^RHO-[0-9]+'), 0)
+    ) AS max_series
+  `;
+  const maxSeries = Number(rows?.[0]?.max_series || 0);
+  const current = await tx.holoIssueSequence.findUnique({ where: { id: 'holo_issue_seq' } });
+  if (!current) {
+    await tx.holoIssueSequence.create({
+      data: {
+        id: 'holo_issue_seq',
+        nextValue: Math.max(1, maxSeries + 1),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+    return;
+  }
+  if (Number(current.nextValue || 0) <= maxSeries) {
+    await tx.holoIssueSequence.update({
+      where: { id: 'holo_issue_seq' },
+      data: { nextValue: maxSeries + 1, ...actorUpdateFields(actorUserId) },
+    });
+  }
+}
+
+async function ensureConingIssueSequence(tx, actorUserId) {
+  const rows = await tx.$queryRaw`
+    SELECT GREATEST(
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "IssueToConingMachine" WHERE barcode ~ '^ICO-[0-9]+'), 0),
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ReceiveFromConingMachineRow" WHERE barcode ~ '^RCO-[0-9]+'), 0)
+    ) AS max_series
+  `;
+  const maxSeries = Number(rows?.[0]?.max_series || 0);
+  const current = await tx.coningIssueSequence.findUnique({ where: { id: 'coning_issue_seq' } });
+  if (!current) {
+    await tx.coningIssueSequence.create({
+      data: {
+        id: 'coning_issue_seq',
+        nextValue: Math.max(1, maxSeries + 1),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+    return;
+  }
+  if (Number(current.nextValue || 0) <= maxSeries) {
+    await tx.coningIssueSequence.update({
+      where: { id: 'coning_issue_seq' },
+      data: { nextValue: maxSeries + 1, ...actorUpdateFields(actorUserId) },
+    });
+  }
 }
 
 function toOptionalString(val) {
@@ -1087,6 +1166,632 @@ router.post('/api/sequence/set', async (req, res) => {
   }
 });
 
+// ===== Opening Stock =====
+
+router.get('/api/opening_stock/sequence/next', async (req, res) => {
+  try {
+    const preview = await getOpeningLotPreview();
+    res.json({ next: preview.lotNo, raw: preview.nextValue });
+  } catch (err) {
+    console.error('Failed to read opening sequence', err);
+    res.status(500).json({ error: 'Failed to read opening sequence' });
+  }
+});
+
+router.post('/api/opening_stock/cutter_receive', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { date, itemId, firmId, supplierId, crates } = req.body || {};
+    if (!date || !itemId || !firmId || !supplierId) {
+      return res.status(400).json({ error: 'Missing required opening stock fields' });
+    }
+    if (!Array.isArray(crates) || crates.length === 0) {
+      return res.status(400).json({ error: 'Add at least one crate' });
+    }
+
+    const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
+      prisma.item.findUnique({ where: { id: itemId } }),
+      prisma.firm.findUnique({ where: { id: firmId } }),
+      prisma.supplier.findUnique({ where: { id: supplierId } }),
+    ]);
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+
+    const bobbinIds = Array.from(new Set(crates.map(c => c?.bobbinId).filter(Boolean)));
+    const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
+    const operatorIds = Array.from(new Set(crates.map(c => c?.operatorId).filter(Boolean)));
+    const helperIds = Array.from(new Set(crates.map(c => c?.helperId).filter(Boolean)));
+    const cutIds = Array.from(new Set(crates.map(c => c?.cutId).filter(Boolean)));
+
+    const [bobbins, boxes, operators, helpers, cuts] = await Promise.all([
+      bobbinIds.length ? prisma.bobbin.findMany({ where: { id: { in: bobbinIds } } }) : Promise.resolve([]),
+      boxIds.length ? prisma.box.findMany({ where: { id: { in: boxIds } } }) : Promise.resolve([]),
+      operatorIds.length ? prisma.operator.findMany({ where: { id: { in: operatorIds } } }) : Promise.resolve([]),
+      helperIds.length ? prisma.operator.findMany({ where: { id: { in: helperIds } } }) : Promise.resolve([]),
+      cutIds.length ? prisma.cut.findMany({ where: { id: { in: cutIds } } }) : Promise.resolve([]),
+    ]);
+
+    const bobbinMap = new Map(bobbins.map(b => [b.id, b]));
+    const boxMap = new Map(boxes.map(b => [b.id, b]));
+    const operatorMap = new Map(operators.map(o => [o.id, o]));
+    const helperMap = new Map(helpers.map(h => [h.id, h]));
+    const cutMap = new Map(cuts.map(c => [c.id, c]));
+
+    const normalizedCrates = crates.map((crate, idx) => {
+      const rowIndex = idx + 1;
+      if (!crate?.cutId) {
+        throw new Error(`Missing cut for crate ${rowIndex}`);
+      }
+      const bobbinId = crate?.bobbinId || null;
+      const boxId = crate?.boxId || null;
+      const bobbin = bobbinId ? bobbinMap.get(bobbinId) : null;
+      const box = boxId ? boxMap.get(boxId) : null;
+      if (!bobbin) throw new Error(`Missing bobbin for crate ${rowIndex}`);
+      if (!box) throw new Error(`Missing box for crate ${rowIndex}`);
+
+      const bobbinQty = Math.max(0, toInt(crate?.bobbinQuantity) || 0);
+      if (bobbinQty <= 0) throw new Error(`Invalid bobbin quantity for crate ${rowIndex}`);
+      const gross = toNumber(crate?.grossWeight);
+      if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
+
+      const bobbinWeight = Number(bobbin.weight);
+      const boxWeight = Number(box.weight);
+      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+        throw new Error('Bobbin weight missing. Update bobbin first.');
+      }
+      if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+        throw new Error('Box weight missing. Update box first.');
+      }
+
+      const tare = bobbinWeight * bobbinQty + boxWeight;
+      const net = roundTo3Decimals(gross - tare);
+      if (!Number.isFinite(net) || net <= 0) {
+        throw new Error(`Net weight must be positive for crate ${rowIndex}`);
+      }
+
+      if (!cutMap.has(crate.cutId)) {
+        throw new Error(`Cut not found for crate ${rowIndex}`);
+      }
+
+      return {
+        bobbinId,
+        boxId,
+        bobbinQty,
+        gross,
+        tare,
+        net,
+        operatorId: crate?.operatorId || null,
+        helperId: crate?.helperId || null,
+        cutId: crate.cutId,
+        shift: crate?.shift || null,
+        machineNo: crate?.machineNo || null,
+      };
+    });
+
+    const totalNetWeight = roundTo3Decimals(normalizedCrates.reduce((sum, row) => sum + row.net, 0));
+    const totalBobbins = normalizedCrates.reduce((sum, row) => sum + row.bobbinQty, 0);
+    if (!Number.isFinite(totalNetWeight) || totalNetWeight <= 0) {
+      return res.status(400).json({ error: 'Total net weight must be greater than zero' });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lotNo = await allocateOpeningLot(tx, actorUserId);
+      const pieceId = `${lotNo}-1`;
+
+      await tx.lot.create({
+        data: {
+          lotNo,
+          date,
+          itemId,
+          firmId,
+          supplierId,
+          totalPieces: 1,
+          totalWeight: totalNetWeight,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.create({
+        data: {
+          id: pieceId,
+          lotNo,
+          itemId,
+          weight: totalNetWeight,
+          status: 'consumed',
+          seq: 1,
+          barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const upload = await tx.receiveFromCutterMachineUpload.create({
+        data: {
+          originalFilename: 'opening-stock',
+          rowCount: normalizedCrates.length,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const rows = [];
+      let crateIndex = 0;
+      for (const row of normalizedCrates) {
+        crateIndex += 1;
+        const barcode = makeReceiveBarcode({ lotNo, seq: 1, crateIndex });
+        const vchNo = `OPEN-${randomUUID().slice(0, 8)}`;
+        const cut = row.cutId ? cutMap.get(row.cutId) : null;
+        const created = await tx.receiveFromCutterMachineRow.create({
+          data: {
+            uploadId: upload.id,
+            pieceId,
+            vchNo,
+            date,
+            grossWt: row.gross,
+            tareWt: row.tare,
+            netWt: row.net,
+            totalKg: row.net,
+            pktTypeName: boxMap.get(row.boxId)?.name || null,
+            pcsTypeName: bobbinMap.get(row.bobbinId)?.name || null,
+            bobbinId: row.bobbinId,
+            boxId: row.boxId,
+            operatorId: row.operatorId,
+            helperId: row.helperId,
+            bobbinQuantity: row.bobbinQty,
+            employee: row.operatorId ? operatorMap.get(row.operatorId)?.name || null : null,
+            helperName: row.helperId ? helperMap.get(row.helperId)?.name || null : null,
+            cutId: row.cutId || null,
+            cut: cut ? cut.name : null,
+            shift: row.shift,
+            machineNo: row.machineNo,
+            narration: 'Opening stock',
+            createdBy: 'opening',
+            barcode,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        rows.push({ id: created.id, barcode });
+      }
+
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalNetWeight: { increment: totalNetWeight },
+          totalBob: { increment: totalBobbins },
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId,
+          totalNetWeight,
+          totalBob: totalBobbins,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      return { lotNo, pieceId, uploadId: upload.id, rows };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'opening_cutter_receive',
+      entityId: result.uploadId,
+      action: 'create',
+      payload: {
+        lotNo: result.lotNo,
+        pieceId: result.pieceId,
+        rowCount: result.rows.length,
+        totalNetWeight,
+        totalBobbins,
+      },
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to create opening cutter stock', err);
+    res.status(400).json({ error: err.message || 'Failed to create opening cutter stock' });
+  }
+});
+
+router.post('/api/opening_stock/holo_receive', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { date, itemId, firmId, supplierId, twistId, yarnId, machineId, operatorId, shift, crates } = req.body || {};
+    if (!date || !itemId || !firmId || !supplierId || !twistId) {
+      return res.status(400).json({ error: 'Missing required opening stock fields' });
+    }
+    if (!Array.isArray(crates) || crates.length === 0) {
+      return res.status(400).json({ error: 'Add at least one crate' });
+    }
+
+    const [itemRecord, firmRecord, supplierRecord, twistRecord] = await Promise.all([
+      prisma.item.findUnique({ where: { id: itemId } }),
+      prisma.firm.findUnique({ where: { id: firmId } }),
+      prisma.supplier.findUnique({ where: { id: supplierId } }),
+      prisma.twist.findUnique({ where: { id: twistId } }),
+    ]);
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+    if (!twistRecord) return res.status(404).json({ error: 'Twist not found' });
+
+    const rollTypeIds = Array.from(new Set(crates.map(c => c?.rollTypeId).filter(Boolean)));
+    const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
+
+    const [rollTypes, boxes] = await Promise.all([
+      rollTypeIds.length ? prisma.rollType.findMany({ where: { id: { in: rollTypeIds } } }) : Promise.resolve([]),
+      boxIds.length ? prisma.box.findMany({ where: { id: { in: boxIds } } }) : Promise.resolve([]),
+    ]);
+
+    const rollTypeMap = new Map(rollTypes.map(r => [r.id, r]));
+    const boxMap = new Map(boxes.map(b => [b.id, b]));
+
+    const normalizedCrates = crates.map((crate, idx) => {
+      const rowIndex = idx + 1;
+      const rollTypeId = crate?.rollTypeId || null;
+      const rollType = rollTypeId ? rollTypeMap.get(rollTypeId) : null;
+      if (!rollType) throw new Error(`Missing roll type for crate ${rowIndex}`);
+      const rollTypeWeight = Number(rollType.weight);
+      if (!Number.isFinite(rollTypeWeight) || rollTypeWeight <= 0) {
+        throw new Error('Roll type weight missing. Update roll type first.');
+      }
+
+      const rollCount = Math.max(0, toInt(crate?.rollCount) || 0);
+      if (rollCount <= 0) throw new Error(`Invalid roll count for crate ${rowIndex}`);
+      const gross = toNumber(crate?.grossWeight);
+      if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
+
+      const boxId = crate?.boxId || null;
+      const box = boxId ? boxMap.get(boxId) : null;
+      const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : 0;
+      const crateTare = toNumber(crate?.crateTareWeight) || 0;
+      const tare = rollTypeWeight * rollCount + boxWeight + crateTare;
+      const net = roundTo3Decimals(gross - tare);
+      if (!Number.isFinite(net) || net <= 0) {
+        throw new Error(`Net weight must be positive for crate ${rowIndex}`);
+      }
+
+      return {
+        rollTypeId,
+        rollCount,
+        gross,
+        tare,
+        net,
+        boxId,
+        crateTare,
+        operatorId: crate?.operatorId || null,
+        helperId: crate?.helperId || null,
+        machineNo: crate?.machineNo || null,
+        notes: crate?.notes || null,
+      };
+    });
+
+    const totalNetWeight = roundTo3Decimals(normalizedCrates.reduce((sum, row) => sum + row.net, 0));
+    const totalRolls = normalizedCrates.reduce((sum, row) => sum + row.rollCount, 0);
+    if (!Number.isFinite(totalNetWeight) || totalNetWeight <= 0) {
+      return res.status(400).json({ error: 'Total net weight must be greater than zero' });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lotNo = await allocateOpeningLot(tx, actorUserId);
+      const pieceId = `${lotNo}-1`;
+
+      await tx.lot.create({
+        data: {
+          lotNo,
+          date,
+          itemId,
+          firmId,
+          supplierId,
+          totalPieces: 1,
+          totalWeight: totalNetWeight,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.create({
+        data: {
+          id: pieceId,
+          lotNo,
+          itemId,
+          weight: totalNetWeight,
+          status: 'consumed',
+          seq: 1,
+          barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await ensureHoloIssueSequence(tx, actorUserId);
+      const holoSeq = await tx.holoIssueSequence.upsert({
+        where: { id: 'holo_issue_seq' },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+      });
+      const seriesNumber = holoSeq.nextValue - 1;
+
+      const issue = await tx.issueToHoloMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          yarnId: yarnId || null,
+          twistId,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: makeHoloIssueBarcode({ series: seriesNumber }),
+          note: 'Opening Stock',
+          shift: shift || null,
+          metallicBobbins: 0,
+          metallicBobbinsWeight: 0,
+          yarnKg: 0,
+          receivedRowRefs: [],
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const rows = [];
+      let crateIndex = 0;
+      for (const row of normalizedCrates) {
+        crateIndex += 1;
+        const barcode = makeHoloReceiveBarcode({ series: seriesNumber, crateIndex });
+        const created = await tx.receiveFromHoloMachineRow.create({
+          data: {
+            issueId: issue.id,
+            date,
+            rollCount: row.rollCount,
+            rollWeight: row.net,
+            grossWeight: row.gross,
+            tareWeight: row.tare,
+            rollTypeId: row.rollTypeId,
+            boxId: row.boxId || null,
+            machineNo: row.machineNo || null,
+            operatorId: row.operatorId || null,
+            helperId: row.helperId || null,
+            notes: row.notes || null,
+            createdBy: 'opening',
+            barcode,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        rows.push({ id: created.id, barcode });
+      }
+
+      await tx.receiveFromHoloMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalRolls: { increment: totalRolls },
+          totalNetWeight: { increment: totalNetWeight },
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId,
+          totalRolls,
+          totalNetWeight,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      return { lotNo, pieceId, issueId: issue.id, issueBarcode: issue.barcode, rows };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'opening_holo_receive',
+      entityId: result.issueId,
+      action: 'create',
+      payload: {
+        lotNo: result.lotNo,
+        pieceId: result.pieceId,
+        issueId: result.issueId,
+        rowCount: result.rows.length,
+        totalNetWeight,
+        totalRolls,
+      },
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to create opening holo stock', err);
+    res.status(400).json({ error: err.message || 'Failed to create opening holo stock' });
+  }
+});
+
+router.post('/api/opening_stock/coning_receive', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, crates } = req.body || {};
+    if (!date || !itemId || !firmId || !supplierId || !coneTypeId) {
+      return res.status(400).json({ error: 'Missing required opening stock fields' });
+    }
+    if (!Array.isArray(crates) || crates.length === 0) {
+      return res.status(400).json({ error: 'Add at least one crate' });
+    }
+
+    const [itemRecord, firmRecord, supplierRecord, coneTypeRecord] = await Promise.all([
+      prisma.item.findUnique({ where: { id: itemId } }),
+      prisma.firm.findUnique({ where: { id: firmId } }),
+      prisma.supplier.findUnique({ where: { id: supplierId } }),
+      prisma.coneType.findUnique({ where: { id: coneTypeId } }),
+    ]);
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+    if (!coneTypeRecord) return res.status(404).json({ error: 'Cone type not found' });
+    if (wrapperId) {
+      const wrapper = await prisma.wrapper.findUnique({ where: { id: wrapperId } });
+      if (!wrapper) return res.status(404).json({ error: 'Wrapper not found' });
+    }
+
+    const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
+
+    const [boxes] = await Promise.all([
+      boxIds.length ? prisma.box.findMany({ where: { id: { in: boxIds } } }) : Promise.resolve([]),
+    ]);
+
+    const boxMap = new Map(boxes.map(b => [b.id, b]));
+
+    const coneWeight = Number(coneTypeRecord.weight);
+    if (!Number.isFinite(coneWeight) || coneWeight <= 0) {
+      return res.status(400).json({ error: 'Cone type weight missing. Update cone type first.' });
+    }
+
+    const normalizedCrates = crates.map((crate, idx) => {
+      const rowIndex = idx + 1;
+      const coneCount = Math.max(0, toInt(crate?.coneCount) || 0);
+      if (coneCount <= 0) throw new Error(`Invalid cone count for crate ${rowIndex}`);
+      const gross = toNumber(crate?.grossWeight);
+      if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
+
+      const boxId = crate?.boxId || null;
+      const box = boxId ? boxMap.get(boxId) : null;
+      const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : 0;
+      const tare = boxWeight + coneWeight * coneCount;
+      const net = roundTo3Decimals(gross - tare);
+      if (!Number.isFinite(net) || net <= 0) {
+        throw new Error(`Net weight must be positive for crate ${rowIndex}`);
+      }
+
+      return {
+        coneCount,
+        gross,
+        tare,
+        net,
+        boxId,
+        operatorId: crate?.operatorId || null,
+        helperId: crate?.helperId || null,
+        machineNo: crate?.machineNo || null,
+        notes: crate?.notes || null,
+      };
+    });
+
+    const totalNetWeight = roundTo3Decimals(normalizedCrates.reduce((sum, row) => sum + row.net, 0));
+    const totalCones = normalizedCrates.reduce((sum, row) => sum + row.coneCount, 0);
+    if (!Number.isFinite(totalNetWeight) || totalNetWeight <= 0) {
+      return res.status(400).json({ error: 'Total net weight must be greater than zero' });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lotNo = await allocateOpeningLot(tx, actorUserId);
+      const pieceId = `${lotNo}-1`;
+
+      await tx.lot.create({
+        data: {
+          lotNo,
+          date,
+          itemId,
+          firmId,
+          supplierId,
+          totalPieces: 1,
+          totalWeight: totalNetWeight,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.create({
+        data: {
+          id: pieceId,
+          lotNo,
+          itemId,
+          weight: totalNetWeight,
+          status: 'consumed',
+          seq: 1,
+          barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await ensureConingIssueSequence(tx, actorUserId);
+      const coningSeq = await tx.coningIssueSequence.upsert({
+        where: { id: 'coning_issue_seq' },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+      });
+      const seriesNumber = coningSeq.nextValue - 1;
+
+      const issue = await tx.issueToConingMachine.create({
+        data: {
+          date,
+          itemId,
+          lotNo,
+          machineId: machineId || null,
+          operatorId: operatorId || null,
+          barcode: makeConingIssueBarcode({ series: seriesNumber }),
+          note: 'Opening Stock',
+          shift: shift || null,
+          rollsIssued: 0,
+          requiredPerConeNetWeight: 0,
+          expectedCones: 0,
+          receivedRowRefs: [{ coneTypeId, wrapperId: wrapperId || null }],
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const rows = [];
+      let crateIndex = 0;
+      for (const row of normalizedCrates) {
+        crateIndex += 1;
+        const barcode = makeConingReceiveBarcode({ series: seriesNumber, crateIndex });
+        const created = await tx.receiveFromConingMachineRow.create({
+          data: {
+            issueId: issue.id,
+            coneCount: row.coneCount,
+            coneWeight: row.net,
+            netWeight: row.net,
+            tareWeight: row.tare,
+            grossWeight: row.gross,
+            barcode,
+            boxId: row.boxId || null,
+            machineNo: row.machineNo || null,
+            operatorId: row.operatorId || null,
+            helperId: row.helperId || null,
+            notes: row.notes || null,
+            date,
+            createdBy: 'opening',
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        rows.push({ id: created.id, barcode });
+      }
+
+      await tx.receiveFromConingMachinePieceTotal.upsert({
+        where: { pieceId: issue.id },
+        update: {
+          totalCones: { increment: totalCones },
+          totalNetWeight: { increment: totalNetWeight },
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId: issue.id,
+          totalCones,
+          totalNetWeight,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      return { lotNo, pieceId, issueId: issue.id, issueBarcode: issue.barcode, rows };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'opening_coning_receive',
+      entityId: result.issueId,
+      action: 'create',
+      payload: {
+        lotNo: result.lotNo,
+        pieceId: result.pieceId,
+        issueId: result.issueId,
+        rowCount: result.rows.length,
+        totalNetWeight,
+        totalCones,
+      },
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to create opening coning stock', err);
+    res.status(400).json({ error: err.message || 'Failed to create opening coning stock' });
+  }
+});
+
 // Whatsapp control endpoints
 router.get('/api/whatsapp/status', async (req, res) => {
   try {
@@ -2036,6 +2741,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     const normalizedYarnKg = Number(yarnKg || 0);
 
     const created = await prisma.$transaction(async (tx) => {
+      await ensureHoloIssueSequence(tx, actorUserId);
       // Get next Holo issue series number
       const holoSeq = await tx.holoIssueSequence.upsert({
         where: { id: 'holo_issue_seq' },
@@ -2132,7 +2838,13 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
 
     const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
-    const issue = await prisma.issueToHoloMachine.findUnique({ where: { id: issueId }, select: { lotNo: true } });
+    const issue = await prisma.issueToHoloMachine.findUnique({
+      where: { id: issueId },
+      select: { lotNo: true, barcode: true },
+    });
+    if (!issue) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
 
     const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
     const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : null;
@@ -2154,7 +2866,10 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     }
 
     // Extract series from issue barcode and count existing crates
-    const issueSeriesNumber = parseHoloSeries(issue?.barcode) || 1;
+    const issueSeriesNumber = parseHoloSeries(issue?.barcode);
+    if (!issueSeriesNumber) {
+      return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Holo receive series.' });
+    }
     const existingCrates = await prisma.receiveFromHoloMachineRow.count({ where: { issueId } });
     const crateIndex = existingCrates + 1;
     const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex });
@@ -2406,6 +3121,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       : 0;
 
     const created = await prisma.$transaction(async (tx) => {
+      await ensureConingIssueSequence(tx, actorUserId);
       // Get next Coning issue series number
       const coningSeq = await tx.coningIssueSequence.upsert({
         where: { id: 'coning_issue_seq' },
@@ -2497,9 +3213,10 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
 
     const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
     const crateIndex = existingCount + 1;
-    // Extract series from issue barcode (e.g., ICO-001 -> 1)
-    const issueSeriesMatch = issue.barcode?.match(/^ICO-(\d+)/i);
-    const issueSeriesNumber = issueSeriesMatch ? Number(issueSeriesMatch[1]) : 1;
+    const issueSeriesNumber = parseConingSeries(issue.barcode);
+    if (!issueSeriesNumber) {
+      return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Coning receive series.' });
+    }
     const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
     const createdRow = await prisma.receiveFromConingMachineRow.create({

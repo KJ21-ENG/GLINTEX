@@ -10,6 +10,7 @@ import {
   Stock,
   IssueToMachine,
   ReceiveFromMachine,
+  OpeningStock,
   Masters,
   Reports,
   Settings,
@@ -47,6 +48,10 @@ export const router = createBrowserRouter([
       {
         path: "receive",
         element: <ReceiveFromMachine />,
+      },
+      {
+        path: "opening-stock",
+        element: <OpeningStock />,
       },
       {
         path: "masters",

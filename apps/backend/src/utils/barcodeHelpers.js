@@ -65,7 +65,7 @@ export function parseReceiveCrateIndex(barcode) {
 // Extract series number from IHO/RHO barcodes
 export function parseHoloSeries(barcode) {
   if (typeof barcode !== 'string') return null;
-  const match = barcode.trim().match(/^(?:IHO|RHO)-(\d+)/i);
+  const match = barcode.trim().match(/^(?:IHO|HLO|RHO)-(\d+)/i);
   if (!match) return null;
   const num = Number(match[1]);
   return Number.isFinite(num) ? num : null;
@@ -74,7 +74,7 @@ export function parseHoloSeries(barcode) {
 // Extract series number from ICO/RCO barcodes
 export function parseConingSeries(barcode) {
   if (typeof barcode !== 'string') return null;
-  const match = barcode.trim().match(/^(?:ICO|RCO)-(\d+)/i);
+  const match = barcode.trim().match(/^(?:ICO|CN|RCO)-(\d+)/i);
   if (!match) return null;
   const num = Number(match[1]);
   return Number.isFinite(num) ? num : null;
@@ -85,4 +85,3 @@ export function deriveMaterialCodeFromItem(item) {
   // Material code is no longer used in barcodes, kept for backward compatibility
   return 'MET';
 }
-

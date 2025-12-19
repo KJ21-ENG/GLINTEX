@@ -51,6 +51,7 @@ async function request(path, { method = 'GET', body, headers } = {}) {
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
+export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
 
 // Auth
 export async function authStatus() { return await request('/api/auth/status'); }
@@ -91,6 +92,9 @@ export async function getReceiveCrateStats(pieceId) {
 }
 export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
 export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
+export async function createOpeningCutterReceive(payload) { return await request('/api/opening_stock/cutter_receive', { method: 'POST', body: payload }); }
+export async function createOpeningHoloReceive(payload) { return await request('/api/opening_stock/holo_receive', { method: 'POST', body: payload }); }
+export async function createOpeningConingReceive(payload) { return await request('/api/opening_stock/coning_receive', { method: 'POST', body: payload }); }
 export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
 export async function manualReceiveFromConingMachine(payload) { return await request('/api/receive_from_coning_machine/manual', { method: 'POST', body: payload }); }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
@@ -181,6 +185,7 @@ export default {
   health,
   getDB,
   getLotSequenceNext,
+  getOpeningLotSequenceNext,
   authStatus,
   authMe,
   authLogin,
@@ -198,6 +203,9 @@ export default {
   createIssueToCutterMachine,
   createIssueToHoloMachine,
   createIssueToConingMachine,
+  createOpeningCutterReceive,
+  createOpeningHoloReceive,
+  createOpeningConingReceive,
   importReceiveFromMachine,
   previewReceiveFromMachine,
   manualReceiveFromMachine,

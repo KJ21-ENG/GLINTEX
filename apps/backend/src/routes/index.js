@@ -1114,7 +1114,11 @@ router.get('/api/whatsapp/groups', async (req, res) => {
     const st = whatsapp.getStatus();
     if (st.status !== 'connected' || !whatsapp.client) return res.status(409).json({ error: 'not_connected' });
     const chats = await whatsapp.client.getChats();
-    const groups = (chats || []).filter(c => c.isGroup).map(c => ({ id: c.id?._serialized || c.id || '', name: c.name || '' }));
+    // Filter for groups where isGroup is true AND isReadOnly is false
+    // isReadOnly is usually true if you have left the group or are restricted
+    const groups = (chats || [])
+      .filter(c => c.isGroup && c.isReadOnly === false)
+      .map(c => ({ id: c.id?._serialized || c.id || '', name: c.name || '' }));
     res.json(groups);
   } catch (err) {
     res.status(500).json({ error: String(err) });

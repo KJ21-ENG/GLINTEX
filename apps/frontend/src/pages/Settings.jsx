@@ -13,6 +13,24 @@ export function Settings() {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('whatsapp');
     const isAdmin = user?.roleKey === 'admin';
+    const [groups, setGroups] = useState([]);
+
+    useEffect(() => {
+        let mounted = true;
+        async function loadGroupsIfConnected() {
+            try {
+                const s = await api.whatsappStatus();
+                if (!mounted) return;
+                if (s.status === 'connected' && groups.length === 0) {
+                    const g = await api.whatsappGroups();
+                    if (mounted) setGroups(g || []);
+                }
+            } catch (e) {
+                console.warn('Failed to auto-load groups in Settings', e);
+            }
+        }
+        loadGroupsIfConnected();
+    }, [groups.length]);
 
     return (
         <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
@@ -65,8 +83,8 @@ export function Settings() {
                         </Button>
                     </CardContent>
                 </Card>
-                {activeTab === 'whatsapp' && <WhatsAppSettings db={db} refreshDb={refreshDb} updateSettings={updateSettings} />}
-                {activeTab === 'templates' && <MessageTemplates />}
+                {activeTab === 'whatsapp' && <WhatsAppSettings db={db} refreshDb={refreshDb} updateSettings={updateSettings} groups={groups} setGroups={setGroups} />}
+                {activeTab === 'templates' && <MessageTemplates db={db} groups={groups} setGroups={setGroups} />}
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
                 {activeTab === 'users' && <UserManagement />}
@@ -75,13 +93,16 @@ export function Settings() {
     );
 }
 
-function MessageTemplates() {
+function MessageTemplates({ db, groups, setGroups }) {
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [editing, setEditing] = useState(null); // { event, template }
+    const [editing, setEditing] = useState(null); // { event, template, enabled, sendToPrimary, groupIds }
 
     useEffect(() => {
         load();
+        if (groups.length === 0) {
+            loadGroups();
+        }
     }, []);
 
     async function load() {
@@ -96,10 +117,24 @@ function MessageTemplates() {
         }
     }
 
+    async function loadGroups() {
+        try {
+            const res = await api.whatsappGroups();
+            setGroups(res || []);
+        } catch (e) {
+            console.warn('Failed to load whatsapp groups', e);
+        }
+    }
+
     async function handleSave() {
         if (!editing) return;
         try {
-            await api.updateWhatsappTemplate(editing.event, { template: editing.template });
+            await api.updateWhatsappTemplate(editing.event, {
+                template: editing.template,
+                enabled: editing.enabled,
+                sendToPrimary: editing.sendToPrimary,
+                groupIds: editing.groupIds
+            });
             setEditing(null);
             load();
             alert('Template updated');
@@ -107,6 +142,16 @@ function MessageTemplates() {
             alert(e.message);
         }
     }
+
+    const toggleGroup = (groupId) => {
+        if (!editing) return;
+        const current = editing.groupIds || [];
+        if (current.includes(groupId)) {
+            setEditing({ ...editing, groupIds: current.filter(id => id !== groupId) });
+        } else {
+            setEditing({ ...editing, groupIds: [...current, groupId] });
+        }
+    };
 
     return (
         <Card>
@@ -117,33 +162,115 @@ function MessageTemplates() {
                     {!loading && templates.length === 0 && <div className="text-sm text-muted-foreground">No templates found.</div>}
 
                     <div className="grid gap-4">
-                        {templates.map(t => (
-                            <div key={t.event} className="border p-4 rounded-md space-y-2">
-                                <div className="flex justify-between items-center">
-                                    <h4 className="font-medium capitalize">{t.event.replace(/_/g, ' ')}</h4>
-                                    <Button variant="outline" size="sm" onClick={() => setEditing(t)}>Edit</Button>
+                        {templates.map(t => {
+                            const primaryNumber = db?.settings?.[0]?.whatsappNumber;
+                            const assignedGroups = (t.groupIds || []).map(gid => {
+                                const g = groups.find(x => x.id === gid);
+                                if (g) return { id: gid, name: g.name };
+                                if (groups.length === 0) return { id: gid, name: 'Loading...' };
+                                return { id: gid, name: null };
+                            });
+
+                            return (
+                                <div key={t.event} className={`border p-4 rounded-md space-y-2 ${!t.enabled ? 'opacity-50 grayscale bg-muted/20' : ''}`}>
+                                    <div className="flex justify-between items-center">
+                                        <div className="flex items-center gap-2">
+                                            <h4 className="font-medium capitalize">{t.event.replace(/_/g, ' ')}</h4>
+                                            {!t.enabled && <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase font-bold">Disabled</span>}
+                                        </div>
+                                        <Button variant="outline" size="sm" onClick={() => setEditing(t)}>Edit</Button>
+                                    </div>
+                                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{t.template}</p>
+
+                                    {(t.sendToPrimary || assignedGroups.length > 0) && (
+                                        <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-muted/50">
+                                            {t.sendToPrimary && primaryNumber && (
+                                                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600 dark:bg-blue-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-blue-700 dark:border-blue-800">
+                                                    <Smartphone className="w-3.5 h-3.5 text-white/90" />
+                                                    <span>+{primaryNumber}</span>
+                                                </div>
+                                            )}
+                                            {assignedGroups.map(group => (
+                                                <div key={group.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 dark:bg-emerald-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-emerald-700 dark:border-emerald-800">
+                                                    <Users className="w-3.5 h-3.5 text-white/90" />
+                                                    <span className="max-w-[150px] truncate">
+                                                        {group.name === 'Loading...' ? (
+                                                            <span className="animate-pulse">Loading...</span>
+                                                        ) : group.name ? (
+                                                            group.name
+                                                        ) : (
+                                                            `Unknown Group (${group.id.split('@')[0]})`
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
-                                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{t.template}</p>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
 
                 {editing && (
                     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-                        <Card className="w-full max-w-lg">
-                            <CardHeader><CardTitle>Edit Template: {editing.event}</CardTitle></CardHeader>
-                            <CardContent className="space-y-4">
+                        <Card className="w-full max-w-lg max-h-[90vh] flex flex-col">
+                            <CardHeader><CardTitle>Edit Template: {editing.event.replace(/_/g, ' ')}</CardTitle></CardHeader>
+                            <CardContent className="space-y-4 overflow-y-auto">
+                                <div className="flex items-center gap-6 py-2 border-b">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={editing.enabled}
+                                            onChange={e => setEditing({ ...editing, enabled: e.target.checked })}
+                                            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                        />
+                                        <span className="text-sm font-medium">Enabled</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={editing.sendToPrimary}
+                                            onChange={e => setEditing({ ...editing, sendToPrimary: e.target.checked })}
+                                            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                        />
+                                        <span className="text-sm font-medium">Send to Primary No.</span>
+                                    </label>
+                                </div>
+
                                 <div className="space-y-2">
-                                    <Label>Template Message</Label>
+                                    <Label>Template Content</Label>
                                     <textarea
-                                        className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                        className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                         value={editing.template}
                                         onChange={e => setEditing({ ...editing, template: e.target.value })}
+                                        placeholder="Enter message template..."
                                     />
-                                    <p className="text-xs text-muted-foreground">Use variables like {'{lotNo}'}, {'{weight}'}, etc.</p>
+                                    <p className="text-[10px] text-muted-foreground">Use variables like {'{lotNo}'}, {'{weight}'}, {'{itemName}'}, etc.</p>
                                 </div>
-                                <div className="flex justify-end gap-2">
+
+                                <div className="space-y-2">
+                                    <Label>Send to Groups</Label>
+                                    {groups.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic bg-muted/30 p-2 rounded">No WhatsApp groups found. Ensure WhatsApp is connected.</p>
+                                    ) : (
+                                        <div className="border rounded-md divide-y max-h-[160px] overflow-y-auto">
+                                            {groups.map(g => (
+                                                <label key={g.id} className="flex items-center gap-3 p-2 hover:bg-muted/50 cursor-pointer transition-colors">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={(editing.groupIds || []).includes(g.id)}
+                                                        onChange={() => toggleGroup(g.id)}
+                                                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                                    />
+                                                    <span className="text-sm truncate">{g.name}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex justify-end gap-2 pt-2 border-t mt-4">
                                     <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
                                     <Button onClick={handleSave}>Save Changes</Button>
                                 </div>
@@ -156,11 +283,12 @@ function MessageTemplates() {
     );
 }
 
-function WhatsAppSettings({ db, refreshDb, updateSettings }) {
+function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) {
     const [status, setStatus] = useState({ status: 'disconnected' });
     const [qr, setQr] = useState(null);
     const [working, setWorking] = useState(false);
     const [primaryMobile, setPrimaryMobile] = useState('');
+    const [allowedGroupIds, setAllowedGroupIds] = useState([]);
 
     useEffect(() => {
         let mounted = true;
@@ -174,17 +302,24 @@ function WhatsAppSettings({ db, refreshDb, updateSettings }) {
                     setQr(q.qr || null);
                 } else {
                     setQr(null);
+                    // If connected, also load groups
+                    if (s.status === 'connected' && groups.length === 0) {
+                        const g = await api.whatsappGroups();
+                        setGroups(g || []);
+                    }
                 }
             } catch (e) { console.error(e); }
         }
         load();
         const interval = setInterval(load, 5000);
         return () => { mounted = false; clearInterval(interval); };
-    }, []);
+    }, [groups.length, setGroups]);
 
     useEffect(() => {
-        const num = db?.settings?.[0]?.whatsappNumber || '';
+        const settings = db?.settings?.[0];
+        const num = settings?.whatsappNumber || '';
         setPrimaryMobile(num ? String(num).replace(/^91/, '') : '');
+        setAllowedGroupIds(settings?.whatsappGroupIds || []);
     }, [db]);
 
     const isConnected = status.status === 'connected';
@@ -204,15 +339,28 @@ function WhatsAppSettings({ db, refreshDb, updateSettings }) {
             await api.whatsappLogout();
             setQr(null);
             setStatus({ status: 'disconnected' });
+            setGroups([]);
         } finally { setWorking(false); }
     };
 
-    const handleSaveMobile = async () => {
+    const handleSaveSettings = async () => {
         setWorking(true);
         try {
-            await updateSettings({ whatsappNumber: primaryMobile });
-            alert('Mobile number saved');
+            await updateSettings({
+                whatsappNumber: primaryMobile,
+                whatsappGroupIds: allowedGroupIds
+            });
+            alert('WhatsApp settings saved');
+            refreshDb();
         } catch (e) { alert(e.message); } finally { setWorking(false); }
+    };
+
+    const toggleAllowedGroup = (id) => {
+        if (allowedGroupIds.includes(id)) {
+            setAllowedGroupIds(allowedGroupIds.filter(x => x !== id));
+        } else {
+            setAllowedGroupIds([...allowedGroupIds, id]);
+        }
     };
 
     return (
@@ -231,6 +379,9 @@ function WhatsAppSettings({ db, refreshDb, updateSettings }) {
                             </div>
                         </div>
                         <div className="flex gap-2">
+                            <Button size="sm" variant="outline" onClick={() => { setGroups([]); }} disabled={!isConnected || working} title="Refresh Groups">
+                                <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
+                            </Button>
                             <Button size="sm" onClick={handleConnect} disabled={working || isConnected}>
                                 {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
                             </Button>
@@ -250,23 +401,57 @@ function WhatsAppSettings({ db, refreshDb, updateSettings }) {
             </Card>
 
             <Card>
-                <CardHeader><CardTitle>Primary Mobile</CardTitle></CardHeader>
-                <CardContent>
-                    <div className="flex gap-4">
-                        <div className="flex-1">
-                            <Label>Number (10 digits)</Label>
-                            <Input
-                                value={primaryMobile}
-                                onChange={e => setPrimaryMobile(e.target.value.replace(/\D/g, ''))}
-                                placeholder="9876543210"
-                                maxLength={10}
-                            />
+                <CardHeader>
+                    <CardTitle>Notification Settings</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Label>Primary Mobile Number (10 digits)</Label>
+                        <div className="flex gap-2">
+                            <div className="relative flex-1">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-medium">+91</span>
+                                <Input
+                                    className="pl-12"
+                                    value={primaryMobile}
+                                    onChange={e => setPrimaryMobile(e.target.value.replace(/\D/g, ''))}
+                                    placeholder="9876543210"
+                                    maxLength={10}
+                                />
+                            </div>
                         </div>
-                        <div className="flex items-end">
-                            <Button onClick={handleSaveMobile} disabled={working || primaryMobile.length < 10}>Save</Button>
-                        </div>
+                        <p className="text-[10px] text-muted-foreground">Direct alerts will be sent to this administrator number.</p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-2">Direct notifications will be sent to this number.</p>
+
+                    <div className="space-y-2">
+                        <Label>Authorized Groups</Label>
+                        {!isConnected ? (
+                            <p className="text-xs text-muted-foreground italic bg-muted/30 p-3 rounded-md">Connect WhatsApp to view and authorize groups for notifications.</p>
+                        ) : groups.length === 0 ? (
+                            <p className="text-xs text-muted-foreground p-3 border rounded-md animate-pulse">Fetching groups...</p>
+                        ) : (
+                            <div className="border rounded-md divide-y max-h-[200px] overflow-y-auto">
+                                {groups.map(g => (
+                                    <label key={g.id} className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={allowedGroupIds.includes(g.id)}
+                                            onChange={() => toggleAllowedGroup(g.id)}
+                                            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                        />
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-medium truncate">{g.name}</span>
+                                            <span className="text-[10px] text-muted-foreground truncate opacity-70">{g.id}</span>
+                                        </div>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                        <p className="text-[10px] text-muted-foreground">Select which groups are allowed to receive system notifications.</p>
+                    </div>
+
+                    <Button className="w-full" onClick={handleSaveSettings} disabled={working}>
+                        <Save className="w-4 h-4 mr-2" /> Save Notification Settings
+                    </Button>
                 </CardContent>
             </Card>
         </div>

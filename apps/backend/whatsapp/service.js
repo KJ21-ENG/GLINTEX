@@ -57,24 +57,29 @@ function isProfileInUse(authDir) {
 }
 
 function cleanupStaleAuthDir({ force = false, reason = '' } = {}) {
-  if (!fs.existsSync(LOCK_FILE)) return false;
   try {
-    const inUse = !force && isProfileInUse(AUTH_DIR);
-    if (inUse) {
-      try {
-        const stats = fs.statSync(LOCK_FILE);
-        const ageMs = Date.now() - (stats.mtimeMs ?? stats.ctimeMs ?? Date.now());
-        if (ageMs < STALE_LOCK_AGE_MS) {
-          console.log('SingletonLock present but appears active; skipping cleanup for now');
-          return false;
+    if (!fs.existsSync(AUTH_DIR)) return false;
+
+    // Chromium uses 'SingletonLock', 'SingletonCookie', 'SingletonSocket' etc.
+    // We want to remove primarily SingletonLock which is often a symlink.
+    const files = fs.readdirSync(AUTH_DIR);
+    let removedAny = false;
+
+    for (const file of files) {
+      if (file.startsWith('Singleton')) {
+        const fullPath = path.join(AUTH_DIR, file);
+        try {
+          // Use lstat to check for symlinks
+          const isSymlink = fs.lstatSync(fullPath).isSymbolicLink();
+          fs.rmSync(fullPath, { force: true });
+          console.log(`Removed stale Chromium lock file (${reason}): ${file}${isSymlink ? ' (symlink)' : ''}`);
+          removedAny = true;
+        } catch (e) {
+          // Ignore errors for individual files
         }
-      } catch (_) {
-        // If we cannot read stats, fall through to removal after logging below.
       }
     }
-    fs.rmSync(LOCK_FILE, { force: true });
-    console.log(`Removed LocalAuth SingletonLock (${reason || 'stale lock'}):`, LOCK_FILE);
-    return true;
+    return removedAny;
   } catch (err) {
     console.warn('Failed to cleanup LocalAuth session directory:', err && err.message ? err.message : err);
     return false;
@@ -138,9 +143,9 @@ class WhatsappService {
     // create client with faster puppeteer flags
     const execPath = detectChromeExecutable();
     const puppeteerOpts = {
-      headless: true,
+      headless: true, // Use standard true for Docker
       defaultViewport: null,
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -150,7 +155,8 @@ class WhatsappService {
         '--no-first-run',
         '--disable-extensions',
         '--disable-features=site-per-process',
-        '--disable-blink-features=AutomationControlled'
+        '--disable-blink-features=AutomationControlled',
+        '--remote-debugging-port=0'
       ],
     };
     if (execPath) puppeteerOpts.executablePath = execPath;
@@ -163,10 +169,7 @@ class WhatsappService {
         const client = new Client({
           authStrategy: new LocalAuth({ clientId: 'glintex' }),
           puppeteer: puppeteerOpts,
-          webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014582691-alpha.html',
-          }
+          // Removed webVersionCache to let #main handle it automatically
         });
 
         client.on('qr', async (qr) => {
@@ -177,6 +180,7 @@ class WhatsappService {
         });
 
         client.on('ready', () => {
+          console.log('Whatsapp client is READY');
           this.status = 'connected';
           this.qrDataUrl = null;
           this.emitter.emit('status', { status: this.status });
@@ -190,8 +194,13 @@ class WhatsappService {
         });
 
         client.on('authenticated', (session) => {
+          console.log('Whatsapp authenticated successfully');
           this.status = 'authenticated';
           this.emitter.emit('status', { status: this.status });
+        });
+
+        client.on('change_state', (state) => {
+          console.log('Whatsapp state changed:', state);
         });
 
         client.on('auth_failure', async (msg) => {
@@ -200,7 +209,11 @@ class WhatsappService {
         });
 
         client.on('disconnected', async (reason) => {
-          console.log('Whatsapp disconnected', reason);
+          console.log('Whatsapp disconnected! Reason:', reason);
+          // Log more info if it's a "NAVIGATION" or "SESSION_CLOSED" error
+          if (typeof reason === 'string' && reason.includes('NAVIGATION')) {
+            console.error('CRITICAL: Navigation error detected. This often means the web version is incompatible.');
+          }
           await this._handleFatalDisconnect('disconnected');
         });
 

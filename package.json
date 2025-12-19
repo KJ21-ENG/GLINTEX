@@ -13,5 +13,8 @@
     "build:backend": "npm run build --workspace apps/backend",
     "preview:frontend": "npm run preview --workspace apps/frontend",
     "start:backend": "npm run start --workspace apps/backend"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
   }
 }

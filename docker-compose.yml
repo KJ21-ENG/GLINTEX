@@ -27,7 +27,8 @@ services:
       PORT: 4000
       BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
     volumes:
-      - backend-whatsapp-auth:/app/.wwebjs_auth
+      - ./apps/backend/.wwebjs_auth:/app/.wwebjs_auth
+    shm_size: '1gb'
     ports:
       - "${BACKEND_PORT:-4001}:4000"
     depends_on:

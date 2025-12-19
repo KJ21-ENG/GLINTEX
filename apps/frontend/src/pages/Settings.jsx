@@ -1,11 +1,128 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
+
+const WHATSAPP_VARIABLES = {
+    inbound_created: [
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'date', label: 'Date' },
+        { key: 'totalPieces', label: 'Total Pieces' },
+        { key: 'totalWeight', label: 'Total Weight' },
+    ],
+    issue_to_machine_created: [
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'date', label: 'Date' },
+        { key: 'count', label: 'Pieces Count' },
+        { key: 'totalWeight', label: 'Total Weight' },
+        { key: 'machineName', label: 'Machine' },
+        { key: 'operatorName', label: 'Operator' },
+        { key: 'cutName', label: 'Cut' },
+    ],
+    issue_to_machine_deleted: [
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'date', label: 'Date' },
+        { key: 'count', label: 'Pieces Count' },
+        { key: 'totalWeight', label: 'Total Weight' },
+        { key: 'machineName', label: 'Machine' },
+        { key: 'operatorName', label: 'Operator' },
+    ],
+    piece_wastage_marked: [
+        { key: 'pieceId', label: 'Piece ID' },
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'wastage', label: 'Wastage (kg)' },
+        { key: 'wastagePercent', label: 'Wastage %' },
+    ],
+    item_out_of_stock: [
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'available', label: 'Available Weight' },
+    ],
+    lot_deleted: [
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'totalPieces', label: 'Total Pieces' },
+        { key: 'date', label: 'Date' },
+    ],
+    inbound_piece_deleted: [
+        { key: 'itemName', label: 'Item Name' },
+        { key: 'lotNo', label: 'Lot No' },
+        { key: 'pieceId', label: 'Piece ID' },
+    ],
+};
+
+function VariablesPopover({ variables }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const closeTimeoutRef = useRef(null);
+
+    const handleMouseEnter = () => {
+        if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+        }
+        setIsOpen(true);
+    };
+
+    const handleMouseLeave = () => {
+        closeTimeoutRef.current = setTimeout(() => {
+            setIsOpen(false);
+        }, 150);
+    };
+
+    useEffect(() => {
+        return () => {
+            if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+        };
+    }, []);
+
+    return (
+        <div
+            className="relative inline-block"
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+        >
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full hover:bg-muted"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isOpen) handleMouseEnter();
+                    else setIsOpen(false);
+                }}
+            >
+                <Info className="h-4 w-4 text-primary" />
+            </Button>
+
+            {isOpen && (
+                <div
+                    className="absolute left-0 top-full mt-2 z-50 w-64 rounded-md border bg-popover p-3 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="max-h-[300px] overflow-y-auto overscroll-contain text-xs space-y-1 pr-1">
+                        {!variables || variables.length === 0 ? (
+                            <div className="text-muted-foreground">No variables for this event.</div>
+                        ) : (
+                            variables.map((v) => (
+                                <div key={v.key} className="flex justify-between border-b last:border-0 py-1 gap-2">
+                                    <span className="font-mono text-[11px] shrink-0">@{v.key}</span>
+                                    <span className="text-muted-foreground text-right">{v.label}</span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
 
 export function Settings() {
     const { db, brand, refreshing, refreshDb, updateSettings } = useInventory();
@@ -97,6 +214,16 @@ function MessageTemplates({ db, groups, setGroups }) {
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editing, setEditing] = useState(null); // { event, template, enabled, sendToPrimary, groupIds }
+    const textareaRef = useRef(null);
+    const [mention, setMention] = useState({
+        open: false,
+        query: '',
+        start: -1,
+        caret: 0
+    });
+    const [mentionIndex, setMentionIndex] = useState(0);
+
+    const eventVariables = editing ? WHATSAPP_VARIABLES[editing.event] || [] : [];
 
     useEffect(() => {
         load();
@@ -151,6 +278,57 @@ function MessageTemplates({ db, groups, setGroups }) {
         } else {
             setEditing({ ...editing, groupIds: [...current, groupId] });
         }
+    };
+
+    const closeMention = () => {
+        setMention({ open: false, query: '', start: -1, caret: 0 });
+        setMentionIndex(0);
+    };
+
+    const handleValueChange = (nextValue, caretPos) => {
+        setEditing({ ...editing, template: nextValue });
+        const beforeCaret = nextValue.slice(0, caretPos);
+        const lastAt = beforeCaret.lastIndexOf('@');
+        if (lastAt === -1) {
+            closeMention();
+            return;
+        }
+        const afterAt = beforeCaret.slice(lastAt + 1);
+        if (!/^[a-zA-Z0-9_]*$/.test(afterAt)) {
+            closeMention();
+            return;
+        }
+        setMention({
+            open: true,
+            query: afterAt,
+            start: lastAt,
+            caret: caretPos
+        });
+        setMentionIndex(0);
+    };
+
+    const applyMention = (key) => {
+        if (!editing) return;
+        const value = editing.template || '';
+        const start = mention.start ?? -1;
+        const caret = mention.caret ?? value.length;
+        if (start < 0 || start > caret) return;
+        const before = value.slice(0, start);
+        const after = value.slice(caret);
+        const inserted = `@${key}`;
+        const nextValue = `${before}${inserted}${after}`;
+        setEditing({ ...editing, template: nextValue });
+        closeMention();
+        
+        requestAnimationFrame(() => {
+            if (textareaRef.current) {
+                const pos = before.length + inserted.length;
+                try {
+                    textareaRef.current.setSelectionRange(pos, pos);
+                    textareaRef.current.focus();
+                } catch (e) { /* ignore */ }
+            }
+        });
     };
 
     return (
@@ -239,14 +417,69 @@ function MessageTemplates({ db, groups, setGroups }) {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label>Template Content</Label>
-                                    <textarea
-                                        className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                                        value={editing.template}
-                                        onChange={e => setEditing({ ...editing, template: e.target.value })}
-                                        placeholder="Enter message template..."
-                                    />
-                                    <p className="text-[10px] text-muted-foreground">Use variables like {'{lotNo}'}, {'{weight}'}, {'{itemName}'}, etc.</p>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-1">
+                                            <Label>Template Content</Label>
+                                            <VariablesPopover variables={eventVariables} />
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground italic">Type @ to see variables</span>
+                                    </div>
+                                    <div className="relative">
+                                        <textarea
+                                            ref={textareaRef}
+                                            className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                            value={editing.template}
+                                            onChange={e => handleValueChange(e.target.value, e.target.selectionStart)}
+                                            onSelect={e => handleValueChange(e.target.value, e.target.selectionStart)}
+                                            onKeyDown={e => {
+                                                if (!mention.open) return;
+                                                const filtered = eventVariables.filter(v =>
+                                                    mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                                );
+                                                if (filtered.length === 0) return;
+                                                if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab'].includes(e.key)) {
+                                                    e.preventDefault();
+                                                }
+                                                if (e.key === 'ArrowDown') {
+                                                    setMentionIndex(prev => (prev + 1) % filtered.length);
+                                                } else if (e.key === 'ArrowUp') {
+                                                    setMentionIndex(prev => (prev - 1 + filtered.length) % filtered.length);
+                                                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                                                    const pick = filtered[mentionIndex] || filtered[0];
+                                                    if (pick) applyMention(pick.key);
+                                                } else if (e.key === 'Escape') {
+                                                    closeMention();
+                                                }
+                                            }}
+                                            placeholder="Enter message template..."
+                                        />
+                                        {mention.open && (
+                                            <div className="absolute z-[60] mt-1 w-full max-w-sm rounded-md border bg-white shadow-lg overflow-hidden">
+                                                <div className="max-h-48 overflow-y-auto overscroll-contain text-sm" onWheel={e => e.stopPropagation()}>
+                                                    {eventVariables
+                                                        .filter(v =>
+                                                            mention.query ? v.key.toLowerCase().startsWith(mention.query.toLowerCase()) : true
+                                                        )
+                                                        .map((v, idx) => (
+                                                            <button
+                                                                key={v.key}
+                                                                type="button"
+                                                                className={`w-full text-left px-3 py-2 flex items-center justify-between transition-colors ${idx === mentionIndex ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-50'
+                                                                    }`}
+                                                                onMouseDown={e => {
+                                                                    e.preventDefault();
+                                                                    applyMention(v.key);
+                                                                }}
+                                                            >
+                                                                <span className="font-mono text-xs">@{v.key}</span>
+                                                                <span className="text-[10px] opacity-70">{v.label}</span>
+                                                            </button>
+                                                        ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground">Supports both {'{{variable}}'} and @variable syntax.</p>
                                 </div>
 
                                 <div className="space-y-2">

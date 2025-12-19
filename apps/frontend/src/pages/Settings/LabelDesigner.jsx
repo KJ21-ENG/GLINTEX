@@ -1102,14 +1102,14 @@ const VariablesPopover = ({ variables }) => {
           className="absolute left-0 top-full mt-2 z-50 w-64 rounded-md border bg-popover p-3 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="max-h-[200px] overflow-y-auto text-xs space-y-1">
+          <div className="max-h-[300px] overflow-y-auto overscroll-contain text-xs space-y-1 pr-1">
             {variables.length === 0 ? (
               <div className="text-muted-foreground">No variables for this stage.</div>
             ) : (
               variables.map((v) => (
-                <div key={v.key} className="flex justify-between border-b last:border-0 py-1">
-                  <span className="font-mono text-[11px]">@{v.key}</span>
-                  <span className="text-muted-foreground">{v.label}</span>
+                <div key={v.key} className="flex justify-between border-b last:border-0 py-1 gap-2">
+                  <span className="font-mono text-[11px] shrink-0">@{v.key}</span>
+                  <span className="text-muted-foreground text-right">{v.label}</span>
                 </div>
               ))
             )}

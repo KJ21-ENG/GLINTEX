@@ -131,22 +131,39 @@ export function Settings() {
     const [activeTab, setActiveTab] = useState('whatsapp');
     const isAdmin = user?.roleKey === 'admin';
     const [groups, setGroups] = useState([]);
+    const [whatsappStatus, setWhatsappStatus] = useState({ status: 'disconnected' });
+    const [whatsappQr, setWhatsappQr] = useState(null);
 
     useEffect(() => {
         let mounted = true;
-        async function loadGroupsIfConnected() {
+        async function loadStatus() {
             try {
                 const s = await api.whatsappStatus();
                 if (!mounted) return;
-                if (s.status === 'connected' && groups.length === 0) {
-                    const g = await api.whatsappGroups();
-                    if (mounted) setGroups(g || []);
+                setWhatsappStatus(s);
+                if (s.status === 'qr') {
+                    const q = await api.whatsappQr();
+                    if (mounted) setWhatsappQr(q.qr || null);
+                } else {
+                    if (mounted) {
+                        setWhatsappQr(null);
+                        // If connected, also load groups if not already loaded
+                        if (s.status === 'connected' && groups.length === 0) {
+                            const g = await api.whatsappGroups();
+                            if (mounted) setGroups(g || []);
+                        }
+                    }
                 }
             } catch (e) {
-                console.warn('Failed to auto-load groups in Settings', e);
+                console.warn('Failed to auto-load WhatsApp status in Settings', e);
             }
         }
-        loadGroupsIfConnected();
+        loadStatus();
+        const interval = setInterval(loadStatus, 5000);
+        return () => {
+            mounted = false;
+            clearInterval(interval);
+        };
     }, [groups.length]);
 
     return (
@@ -200,8 +217,27 @@ export function Settings() {
                         </Button>
                     </CardContent>
                 </Card>
-                {activeTab === 'whatsapp' && <WhatsAppSettings db={db} refreshDb={refreshDb} updateSettings={updateSettings} groups={groups} setGroups={setGroups} />}
-                {activeTab === 'templates' && <MessageTemplates db={db} groups={groups} setGroups={setGroups} />}
+                {activeTab === 'whatsapp' && (
+                    <WhatsAppSettings
+                        db={db}
+                        refreshDb={refreshDb}
+                        updateSettings={updateSettings}
+                        groups={groups}
+                        setGroups={setGroups}
+                        whatsappStatus={whatsappStatus}
+                        setWhatsappStatus={setWhatsappStatus}
+                        whatsappQr={whatsappQr}
+                        setWhatsappQr={setWhatsappQr}
+                    />
+                )}
+                {activeTab === 'templates' && (
+                    <MessageTemplates
+                        db={db}
+                        groups={groups}
+                        setGroups={setGroups}
+                        whatsappStatus={whatsappStatus}
+                    />
+                )}
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
                 {activeTab === 'users' && <UserManagement />}
@@ -210,7 +246,7 @@ export function Settings() {
     );
 }
 
-function MessageTemplates({ db, groups, setGroups }) {
+function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editing, setEditing] = useState(null); // { event, template, enabled, sendToPrimary, groupIds }
@@ -227,10 +263,10 @@ function MessageTemplates({ db, groups, setGroups }) {
 
     useEffect(() => {
         load();
-        if (groups.length === 0) {
+        if (groups.length === 0 && whatsappStatus?.status === 'connected') {
             loadGroups();
         }
-    }, []);
+    }, [whatsappStatus?.status]);
 
     async function load() {
         setLoading(true);
@@ -256,11 +292,16 @@ function MessageTemplates({ db, groups, setGroups }) {
     async function handleSave() {
         if (!editing) return;
         try {
+            // Only keep group IDs that are currently valid/accessible
+            const validGroupIds = (editing.groupIds || []).filter(gid => 
+                groups.some(g => g.id === gid)
+            );
+
             await api.updateWhatsappTemplate(editing.event, {
                 template: editing.template,
                 enabled: editing.enabled,
                 sendToPrimary: editing.sendToPrimary,
-                groupIds: editing.groupIds
+                groupIds: validGroupIds
             });
             setEditing(null);
             load();
@@ -342,12 +383,14 @@ function MessageTemplates({ db, groups, setGroups }) {
                     <div className="grid gap-4">
                         {templates.map(t => {
                             const primaryNumber = db?.settings?.[0]?.whatsappNumber;
-                            const assignedGroups = (t.groupIds || []).map(gid => {
-                                const g = groups.find(x => x.id === gid);
-                                if (g) return { id: gid, name: g.name };
-                                if (groups.length === 0) return { id: gid, name: 'Loading...' };
-                                return { id: gid, name: null };
-                            });
+                            const assignedGroups = (t.groupIds || [])
+                                .map(gid => {
+                                    const g = groups.find(x => x.id === gid);
+                                    if (g) return { id: gid, name: g.name };
+                                    if (groups.length === 0) return { id: gid, name: 'Loading...' };
+                                    return null;
+                                })
+                                .filter(Boolean);
 
                             return (
                                 <div key={t.event} className={`border p-4 rounded-md space-y-2 ${!t.enabled ? 'opacity-50 grayscale bg-muted/20' : ''}`}>
@@ -368,7 +411,7 @@ function MessageTemplates({ db, groups, setGroups }) {
                                                     <span>+{primaryNumber}</span>
                                                 </div>
                                             )}
-                                            {assignedGroups.map(group => (
+                                            {whatsappStatus?.status === 'connected' && assignedGroups.map(group => (
                                                 <div key={group.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 dark:bg-emerald-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-emerald-700 dark:border-emerald-800">
                                                     <Users className="w-3.5 h-3.5 text-white/90" />
                                                     <span className="max-w-[150px] truncate">
@@ -516,37 +559,10 @@ function MessageTemplates({ db, groups, setGroups }) {
     );
 }
 
-function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) {
-    const [status, setStatus] = useState({ status: 'disconnected' });
-    const [qr, setQr] = useState(null);
+function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr }) {
     const [working, setWorking] = useState(false);
     const [primaryMobile, setPrimaryMobile] = useState('');
     const [allowedGroupIds, setAllowedGroupIds] = useState([]);
-
-    useEffect(() => {
-        let mounted = true;
-        async function load() {
-            try {
-                const s = await api.whatsappStatus();
-                if (!mounted) return;
-                setStatus(s);
-                if (s.status === 'qr') {
-                    const q = await api.whatsappQr();
-                    setQr(q.qr || null);
-                } else {
-                    setQr(null);
-                    // If connected, also load groups
-                    if (s.status === 'connected' && groups.length === 0) {
-                        const g = await api.whatsappGroups();
-                        setGroups(g || []);
-                    }
-                }
-            } catch (e) { console.error(e); }
-        }
-        load();
-        const interval = setInterval(load, 5000);
-        return () => { mounted = false; clearInterval(interval); };
-    }, [groups.length, setGroups]);
 
     useEffect(() => {
         const settings = db?.settings?.[0];
@@ -555,14 +571,14 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) 
         setAllowedGroupIds(settings?.whatsappGroupIds || []);
     }, [db]);
 
-    const isConnected = status.status === 'connected';
+    const isConnected = whatsappStatus.status === 'connected';
 
     const handleConnect = async () => {
         setWorking(true);
         try {
             await api.whatsappStart();
             const q = await api.whatsappQr();
-            setQr(q.qr || null);
+            setWhatsappQr(q.qr || null);
         } finally { setWorking(false); }
     };
 
@@ -570,8 +586,8 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) 
         setWorking(true);
         try {
             await api.whatsappLogout();
-            setQr(null);
-            setStatus({ status: 'disconnected' });
+            setWhatsappQr(null);
+            setWhatsappStatus({ status: 'disconnected' });
             setGroups([]);
         } finally { setWorking(false); }
     };
@@ -579,9 +595,14 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) 
     const handleSaveSettings = async () => {
         setWorking(true);
         try {
+            // Only keep group IDs that are currently valid/accessible
+            const validGroupIds = allowedGroupIds.filter(id => 
+                groups.some(g => g.id === id)
+            );
+
             await updateSettings({
                 whatsappNumber: primaryMobile,
-                whatsappGroupIds: allowedGroupIds
+                whatsappGroupIds: validGroupIds
             });
             alert('WhatsApp settings saved');
             refreshDb();
@@ -607,8 +628,8 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) 
                         <div className="flex items-center gap-4">
                             <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                             <div className="flex flex-col">
-                                <span className="font-medium capitalize">{status.status === 'qr' ? 'Scan QR' : status.status}</span>
-                                {status.mobile && <span className="text-xs text-muted-foreground">+{status.mobile}</span>}
+                                <span className="font-medium capitalize">{whatsappStatus.status === 'qr' ? 'Scan QR' : whatsappStatus.status}</span>
+                                {whatsappStatus.mobile && <span className="text-xs text-muted-foreground">+{whatsappStatus.mobile}</span>}
                             </div>
                         </div>
                         <div className="flex gap-2">
@@ -625,9 +646,9 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups }) 
                             )}
                         </div>
                     </div>
-                    {qr && (
+                    {whatsappQr && (
                         <div className="mt-4 flex justify-center p-4 bg-white rounded-lg border">
-                            <img src={qr} alt="QR Code" className="max-w-[200px]" />
+                            <img src={whatsappQr} alt="QR Code" className="max-w-[200px]" />
                         </div>
                     )}
                 </CardContent>

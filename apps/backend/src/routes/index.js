@@ -10,6 +10,7 @@ import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getS
 import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
+import { createBackup, listBackups, getBackupPath } from '../utils/backup.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -4578,6 +4579,62 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
   } catch (err) {
     console.error('Failed to delete lot', err);
     res.status(500).json({ error: err.message || 'Failed to delete lot' });
+  }
+});
+
+// ===== Backup Management =====
+
+// List all available backups (all authenticated users can view)
+router.get('/api/backups', async (req, res) => {
+  try {
+    const backups = listBackups();
+    res.json({ backups });
+  } catch (err) {
+    console.error('Failed to list backups', err);
+    res.status(500).json({ error: 'Failed to list backups' });
+  }
+});
+
+// Create a manual backup (admin only)
+router.post('/api/backups', requireRole('admin'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const result = await createBackup('manual');
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || 'Backup failed' });
+    }
+
+    await logCrud({
+      entityType: 'backup',
+      entityId: result.filename,
+      action: 'create',
+      payload: { filename: result.filename, size: result.size, type: 'manual' },
+      actorUserId: actor?.userId,
+      actorUsername: actor?.username,
+      actorRoleKey: actor?.roleKey,
+    });
+
+    res.json({ backup: result });
+  } catch (err) {
+    console.error('Failed to create backup', err);
+    res.status(500).json({ error: err.message || 'Failed to create backup' });
+  }
+});
+
+// Download a backup file (admin only)
+router.get('/api/backups/:filename/download', requireRole('admin'), async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const filepath = getBackupPath(filename);
+
+    if (!filepath) {
+      return res.status(404).json({ error: 'Backup not found' });
+    }
+
+    res.download(filepath, filename);
+  } catch (err) {
+    console.error('Failed to download backup', err);
+    res.status(500).json({ error: 'Failed to download backup' });
   }
 });
 

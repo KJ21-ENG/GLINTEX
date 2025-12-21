@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
@@ -186,6 +186,9 @@ export function Settings() {
                         <button onClick={() => setActiveTab('data')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'data' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
                             <Database className="w-4 h-4" /> Raw Data
                         </button>
+                        <button onClick={() => setActiveTab('backup')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'backup' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
+                            <HardDrive className="w-4 h-4" /> Backup
+                        </button>
                         <button
                             onClick={() => navigate('/app/settings/label-designer')}
                             className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
@@ -240,6 +243,7 @@ export function Settings() {
                 )}
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
+                {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} />}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
@@ -293,7 +297,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
         if (!editing) return;
         try {
             // Only keep group IDs that are currently valid/accessible
-            const validGroupIds = (editing.groupIds || []).filter(gid => 
+            const validGroupIds = (editing.groupIds || []).filter(gid =>
                 groups.some(g => g.id === gid)
             );
 
@@ -360,7 +364,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
         const nextValue = `${before}${inserted}${after}`;
         setEditing({ ...editing, template: nextValue });
         closeMention();
-        
+
         requestAnimationFrame(() => {
             if (textareaRef.current) {
                 const pos = before.length + inserted.length;
@@ -596,7 +600,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
         setWorking(true);
         try {
             // Only keep group IDs that are currently valid/accessible
-            const validGroupIds = allowedGroupIds.filter(id => 
+            const validGroupIds = allowedGroupIds.filter(id =>
                 groups.some(g => g.id === id)
             );
 
@@ -807,6 +811,133 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
                         </div>
                     </div>
                     <Button onClick={handleSave} disabled={saving}><Save className="w-4 h-4 mr-2" /> Save Branding</Button>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+
+function BackupSettings({ isAdmin }) {
+    const [backups, setBackups] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [creating, setCreating] = useState(false);
+
+    useEffect(() => {
+        loadBackups();
+    }, []);
+
+    async function loadBackups() {
+        setLoading(true);
+        try {
+            const res = await api.listBackups();
+            setBackups(res?.backups || []);
+        } catch (err) {
+            console.error('Failed to load backups', err);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function handleCreateBackup() {
+        if (creating) return;
+        setCreating(true);
+        try {
+            await api.createBackup();
+            alert('Backup created successfully');
+            loadBackups();
+        } catch (err) {
+            alert(err.message || 'Failed to create backup');
+        } finally {
+            setCreating(false);
+        }
+    }
+
+    function formatDate(isoString) {
+        try {
+            const date = new Date(isoString);
+            return date.toLocaleString('en-IN', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+            });
+        } catch {
+            return isoString;
+        }
+    }
+
+    return (
+        <div className="space-y-6">
+            <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle>Database Backups</CardTitle>
+                    {isAdmin && (
+                        <Button onClick={handleCreateBackup} disabled={creating} size="sm">
+                            <Plus className="w-4 h-4 mr-2" />
+                            {creating ? 'Creating...' : 'Create Backup'}
+                        </Button>
+                    )}
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="p-3 bg-muted/50 rounded-md border border-muted">
+                        <p className="text-xs text-muted-foreground">
+                            <strong>Automatic backups</strong> are created daily at 3:00 AM IST.
+                            The system retains the last 3 days of backups automatically.
+                        </p>
+                    </div>
+
+                    {loading ? (
+                        <div className="text-sm text-muted-foreground py-4 text-center">Loading backups...</div>
+                    ) : backups.length === 0 ? (
+                        <div className="text-sm text-muted-foreground py-4 text-center">No backups available.</div>
+                    ) : (
+                        <div className="rounded-md border overflow-x-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Filename</TableHead>
+                                        <TableHead>Created</TableHead>
+                                        <TableHead>Size</TableHead>
+                                        <TableHead>Type</TableHead>
+                                        {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {backups.map((backup) => (
+                                        <TableRow key={backup.filename}>
+                                            <TableCell className="font-mono text-xs">{backup.filename}</TableCell>
+                                            <TableCell className="whitespace-nowrap text-sm">{formatDate(backup.createdAt)}</TableCell>
+                                            <TableCell className="text-sm">{backup.sizeFormatted}</TableCell>
+                                            <TableCell>
+                                                <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${backup.type === 'auto' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'}`}>
+                                                    {backup.type}
+                                                </span>
+                                            </TableCell>
+                                            {isAdmin && (
+                                                <TableCell className="text-right">
+                                                    <a
+                                                        href={api.downloadBackupUrl(backup.filename)}
+                                                        download
+                                                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-primary hover:underline"
+                                                    >
+                                                        <Download className="w-3 h-3" /> Download
+                                                    </a>
+                                                </TableCell>
+                                            )}
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
+                    )}
+
+                    {!isAdmin && (
+                        <p className="text-[10px] text-muted-foreground italic text-center">
+                            Only administrators can create or download backups.
+                        </p>
+                    )}
                 </CardContent>
             </Card>
         </div>

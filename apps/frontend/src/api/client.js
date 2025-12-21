@@ -181,6 +181,11 @@ export async function updateWhatsappTemplate(event, body) { return await request
 export async function sendWhatsappEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
 export async function whatsappGroups() { return await request('/api/whatsapp/groups'); }
 
+// Backups
+export async function listBackups() { return await request('/api/backups'); }
+export async function createBackup() { return await request('/api/backups', { method: 'POST' }); }
+export function downloadBackupUrl(filename) { return `${BASE}/api/backups/${encodeURIComponent(filename)}/download`; }
+
 export default {
   health,
   getDB,

@@ -1,6 +1,7 @@
 import app from './app.js';
 import whatsapp from '../whatsapp/service.js';
 import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
+import { initBackupScheduler } from './utils/backup.js';
 
 const PORT = process.env.PORT || 4000;
 
@@ -38,6 +39,7 @@ async function start() {
   });
 
   startWhatsapp();
+  initBackupScheduler();
 }
 
 start();

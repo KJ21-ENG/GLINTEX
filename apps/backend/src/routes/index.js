@@ -11,6 +11,7 @@ import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
 import { createBackup, listBackups, getBackupPath } from '../utils/backup.js';
+import { getDiskUsage } from '../utils/diskSpace.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -4635,6 +4636,17 @@ router.get('/api/backups/:filename/download', requireRole('admin'), async (req, 
   } catch (err) {
     console.error('Failed to download backup', err);
     res.status(500).json({ error: 'Failed to download backup' });
+  }
+});
+
+// Get disk usage status
+router.get('/api/disk-usage', async (req, res) => {
+  try {
+    const usage = await getDiskUsage();
+    res.json(usage);
+  } catch (err) {
+    console.error('Failed to get disk usage', err);
+    res.status(500).json({ error: 'Failed to get disk usage' });
   }
 });
 

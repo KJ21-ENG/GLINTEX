@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
@@ -821,9 +821,11 @@ function BackupSettings({ isAdmin }) {
     const [backups, setBackups] = useState([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    const [diskUsage, setDiskUsage] = useState(null);
 
     useEffect(() => {
         loadBackups();
+        loadDiskUsage();
     }, []);
 
     async function loadBackups() {
@@ -835,6 +837,15 @@ function BackupSettings({ isAdmin }) {
             console.error('Failed to load backups', err);
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function loadDiskUsage() {
+        try {
+            const res = await api.getDiskUsage();
+            setDiskUsage(res);
+        } catch (err) {
+            console.error('Failed to load disk usage', err);
         }
     }
 
@@ -870,6 +881,25 @@ function BackupSettings({ isAdmin }) {
 
     return (
         <div className="space-y-6">
+            {/* Disk Space Alert */}
+            {diskUsage?.alert && (
+                <Card className={`border-2 ${diskUsage.critical ? 'border-red-500 bg-red-50 dark:bg-red-950' : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950'}`}>
+                    <CardContent className="pt-4">
+                        <div className="flex items-center gap-3">
+                            <AlertTriangle className={`w-6 h-6 ${diskUsage.critical ? 'text-red-500' : 'text-yellow-500'}`} />
+                            <div>
+                                <p className={`font-semibold ${diskUsage.critical ? 'text-red-700 dark:text-red-300' : 'text-yellow-700 dark:text-yellow-300'}`}>
+                                    {diskUsage.critical ? 'Critical: ' : 'Warning: '}Disk space {diskUsage.usedPercent}% used
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                    {diskUsage.freeFormatted} free of {diskUsage.totalFormatted} total
+                                </p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
             <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle>Database Backups</CardTitle>
@@ -887,6 +917,13 @@ function BackupSettings({ isAdmin }) {
                             The system retains the last 3 days of backups automatically.
                         </p>
                     </div>
+
+                    {/* Disk usage summary (when not alerting) */}
+                    {diskUsage && !diskUsage.alert && (
+                        <div className="text-xs text-muted-foreground">
+                            Disk: {diskUsage.usedFormatted} used / {diskUsage.freeFormatted} free ({diskUsage.usedPercent}%)
+                        </div>
+                    )}
 
                     {loading ? (
                         <div className="text-sm text-muted-foreground py-4 text-center">Loading backups...</div>

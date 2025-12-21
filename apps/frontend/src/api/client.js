@@ -186,6 +186,9 @@ export async function listBackups() { return await request('/api/backups'); }
 export async function createBackup() { return await request('/api/backups', { method: 'POST' }); }
 export function downloadBackupUrl(filename) { return `${BASE}/api/backups/${encodeURIComponent(filename)}/download`; }
 
+// Disk Usage
+export async function getDiskUsage() { return await request('/api/disk-usage'); }
+
 export default {
   health,
   getDB,

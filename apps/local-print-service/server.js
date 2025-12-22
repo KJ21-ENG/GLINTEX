@@ -120,19 +120,118 @@ app.post('/print', (req, res) => {
         let command = '';
 
         if (platform === 'win32') {
-            // Windows printing (using notepad /p for simple text or other tools for raw)
-            // For raw printing (like ZPL), we might need 'copy' to printer share or specific tools.
-            // This is a basic implementation.
-            command = `notepad /p "${tempFilePath}"`;
-            // Better approach for raw printing on windows often involves 'copy' to LPT or network share, 
-            // or using a dedicated tool like RawPrint. 
-            // For now, let's assume simple text printing or that the user has a setup for this.
-            // If it's ZPL, we might want to send it directly to the printer port/share.
-            // command = `copy /b "${tempFilePath}" "\\\\localhost\\${printer}"`; // Example for shared printer
+            // Windows: Use PowerShell to send raw bytes to the printer via Win32 API.
+            // This allows targeting a specific printer and avoids the "text-only" printing of notepad.
+            const psScriptPath = path.join(tempDir, `print_raw_${timestamp}.ps1`);
+            const psScript = `
+$printerName = "${printer}"
+$data = Get-Content -Path "${tempFilePath.replace(/\\/g, '\\\\')}" -Raw -Encoding utf8
+
+$definition = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class RawPrinterHelper {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA {
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }
+
+    [DllImport("winspool.drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("winspool.drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+    [DllImport("winspool.drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+    public static bool SendStringToPrinter(string szPrinterName, string szString) {
+        IntPtr pBytes;
+        Int32 dwCount;
+        dwCount = szString.Length;
+        pBytes = Marshal.StringToCoTaskMemAnsi(szString);
+        bool bSuccess = SendBytesToPrinter(szPrinterName, pBytes, dwCount);
+        Marshal.FreeCoTaskMem(pBytes);
+        return bSuccess;
+    }
+
+    public static bool SendBytesToPrinter(string szPrinterName, IntPtr pBytes, Int32 dwCount) {
+        Int32 dwError = 0, dwWritten = 0;
+        IntPtr hPrinter = new IntPtr(0);
+        DOCINFOA di = new DOCINFOA();
+        bool bSuccess = false;
+
+        di.pDocName = "GLINTEX Print Job";
+        di.pDataType = "RAW";
+
+        if (OpenPrinter(szPrinterName.Normalize(), out hPrinter, IntPtr.Zero)) {
+            if (StartDocPrinter(hPrinter, 1, di)) {
+                if (StartPagePrinter(hPrinter)) {
+                    bSuccess = WritePrinter(hPrinter, pBytes, dwCount, out dwWritten);
+                    EndPagePrinter(hPrinter);
+                }
+                EndDocPrinter(hPrinter);
+            }
+            ClosePrinter(hPrinter);
+        }
+        if (bSuccess == false) {
+            dwError = Marshal.GetLastWin32Error();
+        }
+        return bSuccess;
+    }
+}
+"@
+Add-Type -TypeDefinition $definition
+[RawPrinterHelper]::SendStringToPrinter($printerName, $data)
+`;
+            fs.writeFileSync(psScriptPath, psScript);
+            command = `powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`;
+
+            // Wrap exec to cleanup the script file too
+            const originalExec = exec;
+            const customExec = (cmd, cb) => {
+                originalExec(cmd, (err, so, se) => {
+                    fs.unlink(psScriptPath, (unlErr) => {
+                        if (unlErr) console.error(`Error deleting ps1 file: ${unlErr.message}`);
+                    });
+                    cb(err, so, se);
+                });
+            };
+            customExec(command, (error, stdout, stderr) => {
+                // Cleanup temp file
+                fs.unlink(tempFilePath, (unlinkErr) => {
+                    if (unlinkErr) console.error(`Error deleting temp file: ${unlinkErr.message}`);
+                });
+
+                if (error) {
+                    console.error(`Error printing: ${error.message}`);
+                    job.status = 'error';
+                    job.error = stderr || error.message;
+                    return res.status(500).json({ error: 'Failed to send print job' });
+                }
+
+                console.log(`Print job sent to ${printer}`);
+                job.status = 'sent';
+                res.json({ success: true, message: 'Print job sent successfully' });
+            });
+            return; // Exit here as we handled the response in customExec
         } else {
             // Mac/Linux printing using lp
-            // -d specifies destination printer
-            // -o raw can be used for raw ZPL/EPL commands if needed
             const options = type === 'raw' ? '-o raw' : '';
             command = `lp -d "${printer}" ${options} "${tempFilePath}"`;
         }

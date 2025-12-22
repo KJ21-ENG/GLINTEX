@@ -7,6 +7,7 @@ async function seed() {
     { event: 'issue_to_machine_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
     { event: 'inbound_piece_deleted', enabled: true, template: 'Inbound piece deleted: {{itemName}} Lot {{lotNo}} piece {{pieceId}}' },
     { event: 'item_out_of_stock', enabled: true, template: 'Out of stock: {{itemName}} is now out of stock (available: {{available}})' },
+    { event: 'backup_failed', enabled: true, template: 'Backup failed on {{host}} at {{time}} ({{type}}). Error: {{error}}. File: {{filename}}' },
   ];
 
   for (const t of defaults) {
@@ -24,4 +25,3 @@ async function seed() {
 }
 
 seed().catch(e => { console.error(e); process.exit(1); });
-

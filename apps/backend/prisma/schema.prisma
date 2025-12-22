@@ -416,6 +416,7 @@ model Settings {
   faviconDataUrl String?
   whatsappNumber String?
   whatsappGroupIds String[] @default([])
+  backupTime   String @default("03:00")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   createdByUserId String?

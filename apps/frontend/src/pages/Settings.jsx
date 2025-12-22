@@ -56,6 +56,13 @@ const WHATSAPP_VARIABLES = {
         { key: 'lotNo', label: 'Lot No' },
         { key: 'pieceId', label: 'Piece ID' },
     ],
+    backup_failed: [
+        { key: 'time', label: 'Time (ISO)' },
+        { key: 'type', label: 'Backup Type' },
+        { key: 'filename', label: 'Filename' },
+        { key: 'error', label: 'Error Message' },
+        { key: 'host', label: 'Host' },
+    ],
 };
 
 function VariablesPopover({ variables }) {
@@ -243,7 +250,7 @@ export function Settings() {
                 )}
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
-                {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} />}
+                {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} db={db} updateSettings={updateSettings} />}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
@@ -817,16 +824,26 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
     );
 }
 
-function BackupSettings({ isAdmin }) {
+function BackupSettings({ isAdmin, db, updateSettings }) {
     const [backups, setBackups] = useState([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [diskUsage, setDiskUsage] = useState(null);
+    const [backupTime, setBackupTime] = useState('03:00');
+    const [currentBackupTime, setCurrentBackupTime] = useState('03:00');
+    const [savingSchedule, setSavingSchedule] = useState(false);
+
+    const settingsBackupTime = db?.settings?.[0]?.backupTime || '03:00';
 
     useEffect(() => {
         loadBackups();
         loadDiskUsage();
     }, []);
+
+    useEffect(() => {
+        setCurrentBackupTime(settingsBackupTime);
+        setBackupTime(settingsBackupTime);
+    }, [settingsBackupTime]);
 
     async function loadBackups() {
         setLoading(true);
@@ -861,6 +878,29 @@ function BackupSettings({ isAdmin }) {
         } finally {
             setCreating(false);
         }
+    }
+
+    async function handleSaveSchedule() {
+        if (!isAdmin || savingSchedule) return;
+        setSavingSchedule(true);
+        try {
+            await updateSettings({ backupTime });
+            alert('Backup schedule updated');
+        } catch (err) {
+            alert(err.message || 'Failed to update backup schedule');
+        } finally {
+            setSavingSchedule(false);
+        }
+    }
+
+    function formatTimeLabel(value) {
+        const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+        if (!match) return value || '03:00';
+        const hour = Number(match[1]);
+        const minute = Number(match[2]);
+        const hour12 = ((hour + 11) % 12) + 1;
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${ampm}`;
     }
 
     function formatDate(isoString) {
@@ -913,10 +953,33 @@ function BackupSettings({ isAdmin }) {
                 <CardContent className="space-y-4">
                     <div className="p-3 bg-muted/50 rounded-md border border-muted">
                         <p className="text-xs text-muted-foreground">
-                            <strong>Automatic backups</strong> are created daily at 3:00 AM IST.
+                            <strong>Automatic backups</strong> are created daily at {formatTimeLabel(currentBackupTime)} IST.
                             The system retains the last 3 days of backups automatically.
                         </p>
                     </div>
+
+                    {isAdmin && (
+                        <div className="space-y-2">
+                            <Label>Auto backup time (IST)</Label>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Input
+                                    type="time"
+                                    value={backupTime}
+                                    onChange={(e) => setBackupTime(e.target.value)}
+                                    className="w-[140px]"
+                                />
+                                <Button
+                                    size="sm"
+                                    onClick={handleSaveSchedule}
+                                    disabled={savingSchedule || backupTime === currentBackupTime}
+                                >
+                                    <Save className="w-4 h-4 mr-2" />
+                                    {savingSchedule ? 'Saving...' : 'Save Time'}
+                                </Button>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground">Timezone: Asia/Kolkata (IST).</p>
+                        </div>
+                    )}
 
                     {/* Disk usage summary (when not alerting) */}
                     {diskUsage && !diskUsage.alert && (

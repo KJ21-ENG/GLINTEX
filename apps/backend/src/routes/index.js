@@ -5,12 +5,13 @@ import prisma from '../lib/prisma.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
+import { sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
-import { createBackup, listBackups, getBackupPath } from '../utils/backup.js';
+import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
 
 const router = Router();
@@ -413,35 +414,6 @@ function buildReceiveSummary({ filename, rows, incrementsMap, pieceMeta }) {
     lots: buildLotSummaries(pieceMeta.pieces),
     missingPieces,
   };
-}
-
-// Helper: send notification for an event using stored templates
-async function sendNotification(event, payload) {
-  try {
-    console.log('sendNotification called for', event, 'payload:', payload && JSON.stringify(payload));
-    const tpl = await getTemplateByEvent(event);
-    if (!tpl) return console.warn('No template for event', event);
-    if (!tpl.enabled) return console.log('Template disabled for event', event);
-    const msg = interpolateTemplate(tpl.template, payload || {});
-    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const recipients = [];
-    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) {
-      recipients.push({ type: 'number', value: settings.whatsappNumber });
-    }
-    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
-    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
-    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
-    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
-    if (recipients.length === 0) return console.warn('No recipients configured for', event);
-    const seen = new Set();
-    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
-    unique.forEach(r => {
-      if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(err => console.error('Failed to send to number', err));
-      else whatsapp.sendToChatIdSafe(r.value, msg).catch(err => console.error('Failed to send to group', err));
-    });
-  } catch (err) {
-    console.error('sendNotification error', err);
-  }
 }
 
 // ===== Auth (public) =====
@@ -4383,11 +4355,21 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
 router.put('/api/settings', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { brandPrimary, brandGold, logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds } = req.body;
-    const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(req.body, 'whatsappNumber');
-    const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(req.body, 'whatsappGroupIds');
-    const hasFaviconDataUrl = Object.prototype.hasOwnProperty.call(req.body, 'faviconDataUrl');
+    const body = req.body || {};
+    const brandPrimary = body.brandPrimary ?? body.primary;
+    const brandGold = body.brandGold ?? body.gold;
+    const { logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds, backupTime } = body;
+    const hasBrandPrimary = Object.prototype.hasOwnProperty.call(body, 'brandPrimary') || Object.prototype.hasOwnProperty.call(body, 'primary');
+    const hasBrandGold = Object.prototype.hasOwnProperty.call(body, 'brandGold') || Object.prototype.hasOwnProperty.call(body, 'gold');
+    const hasLogoDataUrl = Object.prototype.hasOwnProperty.call(body, 'logoDataUrl');
+    const hasFaviconDataUrl = Object.prototype.hasOwnProperty.call(body, 'faviconDataUrl');
+    const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(body, 'whatsappNumber');
+    const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(body, 'whatsappGroupIds');
+    const hasBackupTime = Object.prototype.hasOwnProperty.call(body, 'backupTime');
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (hasBackupTime && req.user?.roleKey !== 'admin') {
+      return res.status(403).json({ error: 'forbidden' });
+    }
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
     function normalizeForStore(num) {
       if (!num) return null;
@@ -4399,34 +4381,48 @@ router.put('/api/settings', async (req, res) => {
     }
     const normalizedWhatsAppNumber = normalizeForStore(whatsappNumber);
     const cleanGroupIds = Array.isArray(whatsappGroupIds) ? whatsappGroupIds.filter(x => typeof x === 'string') : undefined;
+    const normalizedBackupTime = hasBackupTime ? normalizeBackupTime(backupTime) : null;
+    if (hasBackupTime && !normalizedBackupTime) {
+      return res.status(400).json({ error: 'backupTime must be in HH:mm format (00:00-23:59)' });
+    }
     // Try to upsert including whatsappNumber if DB supports it, otherwise fallback without it
     try {
       const updateData = {
-        brandPrimary: brandPrimary || '#2E4CA6',
-        brandGold: brandGold || '#D4AF37',
-        logoDataUrl: logoDataUrl || null,
         ...actorUpdateFields(actorUserId),
       };
+      if (hasBrandPrimary) updateData.brandPrimary = brandPrimary || '#2E4CA6';
+      if (hasBrandGold) updateData.brandGold = brandGold || '#D4AF37';
+      if (hasLogoDataUrl) updateData.logoDataUrl = logoDataUrl || null;
       if (hasFaviconDataUrl) updateData.faviconDataUrl = faviconDataUrl || null;
       if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
+      if (hasBackupTime) updateData.backupTime = normalizedBackupTime;
 
       const createData = {
         id: 1,
-        brandPrimary: brandPrimary || '#2E4CA6',
-        brandGold: brandGold || '#D4AF37',
-        logoDataUrl: logoDataUrl || null,
+        brandPrimary: hasBrandPrimary ? (brandPrimary || '#2E4CA6') : '#2E4CA6',
+        brandGold: hasBrandGold ? (brandGold || '#D4AF37') : '#D4AF37',
+        logoDataUrl: hasLogoDataUrl ? (logoDataUrl || null) : null,
         ...actorCreateFields(actorUserId),
       };
       if (hasFaviconDataUrl) createData.faviconDataUrl = faviconDataUrl || null;
       if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
+      createData.backupTime = hasBackupTime ? normalizedBackupTime : '03:00';
 
       const settings = await prisma.settings.upsert({
         where: { id: 1 },
         update: updateData,
         create: createData,
       });
+      if (hasBackupTime) {
+        try {
+          await updateBackupScheduleTime(normalizedBackupTime);
+        } catch (scheduleErr) {
+          console.error('Failed to update backup scheduler', scheduleErr);
+          return res.status(500).json({ error: 'Failed to update backup scheduler' });
+        }
+      }
       await logCrudWithActor(req, {
         entityType: 'settings',
         entityId: '1',
@@ -4439,21 +4435,24 @@ router.put('/api/settings', async (req, res) => {
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
       console.warn('Failed to upsert with whatsappNumber, retrying without it:', innerErr.message || innerErr);
+      const fallbackUpdate = { ...actorUpdateFields(actorUserId) };
+      if (hasBrandPrimary) fallbackUpdate.brandPrimary = brandPrimary || '#2E4CA6';
+      if (hasBrandGold) fallbackUpdate.brandGold = brandGold || '#D4AF37';
+      if (hasLogoDataUrl) fallbackUpdate.logoDataUrl = logoDataUrl || null;
+      if (hasFaviconDataUrl) fallbackUpdate.faviconDataUrl = faviconDataUrl || null;
+      const fallbackCreate = {
+        id: 1,
+        brandPrimary: hasBrandPrimary ? (brandPrimary || '#2E4CA6') : '#2E4CA6',
+        brandGold: hasBrandGold ? (brandGold || '#D4AF37') : '#D4AF37',
+        logoDataUrl: hasLogoDataUrl ? (logoDataUrl || null) : null,
+        ...actorCreateFields(actorUserId),
+      };
+      if (hasFaviconDataUrl) fallbackCreate.faviconDataUrl = faviconDataUrl || null;
+
       const settings = await prisma.settings.upsert({
         where: { id: 1 },
-        update: {
-          brandPrimary: brandPrimary || '#2E4CA6',
-          brandGold: brandGold || '#D4AF37',
-          logoDataUrl: logoDataUrl || null,
-          ...actorUpdateFields(actorUserId),
-        },
-        create: {
-          id: 1,
-          brandPrimary: brandPrimary || '#2E4CA6',
-          brandGold: brandGold || '#D4AF37',
-          logoDataUrl: logoDataUrl || null,
-          ...actorCreateFields(actorUserId),
-        },
+        update: fallbackUpdate,
+        create: fallbackCreate,
       });
       await logCrudWithActor(req, {
         entityType: 'settings',

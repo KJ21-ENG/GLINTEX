@@ -202,7 +202,22 @@ export const InventoryProvider = ({ children }) => {
     // Settings
     updateSettings: async (values) => {
       await api.updateSettings(values);
-      setBrand(values); // Optimistic update
+      const hasBrandUpdate = values && (
+        Object.prototype.hasOwnProperty.call(values, 'primary')
+        || Object.prototype.hasOwnProperty.call(values, 'gold')
+        || Object.prototype.hasOwnProperty.call(values, 'brandPrimary')
+        || Object.prototype.hasOwnProperty.call(values, 'brandGold')
+        || Object.prototype.hasOwnProperty.call(values, 'logoDataUrl')
+        || Object.prototype.hasOwnProperty.call(values, 'faviconDataUrl')
+      );
+      if (hasBrandUpdate) {
+        setBrand(prev => ({
+          primary: values.primary ?? values.brandPrimary ?? prev.primary,
+          gold: values.gold ?? values.brandGold ?? prev.gold,
+          logoDataUrl: Object.prototype.hasOwnProperty.call(values, 'logoDataUrl') ? values.logoDataUrl : prev.logoDataUrl,
+          faviconDataUrl: Object.prototype.hasOwnProperty.call(values, 'faviconDataUrl') ? values.faviconDataUrl : prev.faviconDataUrl,
+        }));
+      }
       await refreshDb();
     },
   }), [refreshDb]);

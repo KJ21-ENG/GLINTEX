@@ -39,7 +39,7 @@ async function start() {
   });
 
   startWhatsapp();
-  initBackupScheduler();
+  await initBackupScheduler();
 }
 
 start();

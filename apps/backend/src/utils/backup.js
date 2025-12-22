@@ -2,16 +2,19 @@
  * Database Backup Utility
  * 
  * Provides automated and manual backup functionality for PostgreSQL database.
- * - Automatic daily backups at 3 AM IST
+ * - Automatic daily backups at configured time (default 3 AM IST)
  * - Retains last 3 days of backups
  * - Supports manual backup creation
  */
 
 import { spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
+import prisma from '../lib/prisma.js';
+import { sendNotification } from './notifications.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +24,11 @@ const BACKUP_DIR = path.resolve(__dirname, '../../backups');
 
 // Retention period in days
 const RETENTION_DAYS = 3;
+
+const DEFAULT_BACKUP_TIME = '03:00';
+const BACKUP_TIMEZONE = 'Asia/Kolkata';
+let backupTask = null;
+let currentBackupTime = DEFAULT_BACKUP_TIME;
 
 // Ensure backup directory exists
 if (!fs.existsSync(BACKUP_DIR)) {
@@ -122,17 +130,21 @@ export async function createBackup(type = 'auto') {
                     if (fs.existsSync(filepath)) {
                         fs.unlinkSync(filepath);
                     }
-                    reject(new Error(`pg_dump exited with code ${code}: ${stderr}`));
+                    const error = new Error(`pg_dump exited with code ${code}: ${stderr}`);
+                    error.filename = filename;
+                    reject(error);
                 }
             });
 
             pgDump.on('error', (err) => {
-                reject(new Error(`Failed to execute pg_dump: ${err.message}`));
+                const error = new Error(`Failed to execute pg_dump: ${err.message}`);
+                error.filename = filename;
+                reject(error);
             });
         });
     } catch (err) {
         console.error('[Backup] Error:', err.message);
-        return { success: false, error: err.message };
+        return { success: false, error: err.message, filename };
     }
 }
 
@@ -221,6 +233,38 @@ export function getBackupPath(filename) {
     return null;
 }
 
+export function normalizeBackupTime(value) {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+    if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function buildCronSchedule(time) {
+    const [hour, minute] = time.split(':').map(Number);
+    return `${minute} ${hour} * * *`;
+}
+
+async function loadBackupTimeFromDb() {
+    try {
+        const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+        const normalized = normalizeBackupTime(settings?.backupTime);
+        return normalized || DEFAULT_BACKUP_TIME;
+    } catch (err) {
+        console.warn('[Backup] Failed to load backup time from settings, using default:', err.message || err);
+        return DEFAULT_BACKUP_TIME;
+    }
+}
+
 /**
  * Format bytes to human-readable string
  */
@@ -234,14 +278,36 @@ function formatBytes(bytes) {
 
 /**
  * Initialize the backup scheduler
- * Schedules daily backup at 3:00 AM IST (21:30 UTC previous day)
+ * Schedules daily backup at configured time (IST)
  */
-export function initBackupScheduler() {
-    // 3:00 AM IST = 21:30 UTC (IST is UTC+5:30)
-    // Cron format: minute hour day month day-of-week
-    const cronSchedule = '0 3 * * *';
+export async function initBackupScheduler() {
+    const backupTime = await loadBackupTimeFromDb();
+    applyBackupSchedule(backupTime, { reason: 'initialized' });
+}
 
-    cron.schedule(cronSchedule, async () => {
+export async function updateBackupScheduleTime(time) {
+    const normalized = normalizeBackupTime(time);
+    if (!normalized) {
+        throw new Error('backupTime must be in HH:mm format (00:00-23:59)');
+    }
+
+    if (backupTask && currentBackupTime === normalized) {
+        return { updated: false, time: normalized };
+    }
+
+    applyBackupSchedule(normalized, { reason: 'updated' });
+    return { updated: true, time: normalized };
+}
+
+function applyBackupSchedule(backupTime, { reason }) {
+    const cronSchedule = buildCronSchedule(backupTime);
+
+    if (backupTask) {
+        backupTask.stop();
+    }
+
+    backupTask = cron.schedule(cronSchedule, async () => {
+        const scheduledAt = new Date();
         console.log('[Backup] Starting scheduled backup...');
         try {
             const result = await createBackup('auto');
@@ -249,14 +315,39 @@ export function initBackupScheduler() {
                 console.log(`[Backup] Scheduled backup completed: ${result.filename}`);
             } else {
                 console.error('[Backup] Scheduled backup failed:', result.error);
+                await notifyBackupFailure({
+                    type: 'auto',
+                    error: result.error,
+                    filename: result.filename,
+                    time: scheduledAt,
+                });
             }
         } catch (err) {
             console.error('[Backup] Scheduled backup error:', err.message);
+            await notifyBackupFailure({
+                type: 'auto',
+                error: err.message,
+                filename: err.filename,
+                time: scheduledAt,
+            });
         }
     }, {
         scheduled: true,
-        timezone: 'Asia/Kolkata',
+        timezone: BACKUP_TIMEZONE,
     });
 
-    console.log('[Backup] Scheduler initialized - Daily backups at 3:00 AM IST');
+    currentBackupTime = backupTime;
+    console.log(`[Backup] Scheduler ${reason} - Daily backups at ${backupTime} IST`);
+}
+
+async function notifyBackupFailure({ type, error, filename, time }) {
+    const payload = {
+        type,
+        error: String(error || 'unknown'),
+        filename: filename || 'n/a',
+        time: (time instanceof Date ? time : new Date()).toISOString(),
+        host: os.hostname(),
+    };
+    const fallbackTemplate = 'Backup failed on {{host}} at {{time}} (type: {{type}}). Error: {{error}}. Filename: {{filename}}';
+    await sendNotification('backup_failed', payload, { fallbackTemplate });
 }

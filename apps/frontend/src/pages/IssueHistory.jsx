@@ -4,7 +4,7 @@ import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../components/ui';
 import { Trash2, Printer } from 'lucide-react';
 import * as api from '../api';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 
 export function IssueHistory({ db, refreshDb }) {
   const { process } = useInventory();
@@ -260,8 +260,8 @@ export function IssueHistory({ db, refreshDb }) {
         return;
       }
 
-      // Print the requested quantity in one go
-      await printStageTemplate(stageKey, data, { template, copies: qty });
+      // Print the requested quantity in one go using batch utility
+      await printStageTemplatesBatch(stageKey, [data], { template, copies: qty });
       // Silent success - printer handles feedback
     } catch (err) {
       alert(err.message || 'Failed to print small sticker');

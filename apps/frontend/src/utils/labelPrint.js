@@ -929,16 +929,36 @@ export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {})
   }
 };
 
-export const printStageTemplate = async (stageKey, data = {}, options = {}) => {
+export const printStageTemplatesBatch = async (stageKey, dataArray = [], options = {}) => {
+  if (!stageKey || !Array.isArray(dataArray) || dataArray.length === 0) {
+    return { success: false, skipped: true, reason: 'Missing stageKey or empty dataArray' };
+  }
+
   const template = options.template || (await loadTemplate(stageKey, { apiBase: options.apiBase }));
   if (!template) {
     return { success: false, skipped: true, reason: 'Template not found' };
   }
-  const copies = options.copies || 1;
-  const tspl = buildTsplFromTemplate(template, data, { stageKey, copies });
+
+  // Generate TSPL for each item and concatenate
+  let combinedTspl = '';
+  for (const data of dataArray) {
+    const copies = options.copies || 1;
+    combinedTspl += buildTsplFromTemplate(template, data, { stageKey, copies });
+  }
+
   const printer = options.printer || getPreferredPrinter();
-  const result = await sendToLocalPrinter({ printer, content: tspl, type: 'raw', serviceBase: options.serviceBase });
-  return { ...result, tspl };
+  const result = await sendToLocalPrinter({
+    printer,
+    content: combinedTspl,
+    type: 'raw',
+    serviceBase: options.serviceBase
+  });
+
+  return { ...result, tspl: combinedTspl };
+};
+
+export const printStageTemplate = async (stageKey, data = {}, options = {}) => {
+  return printStageTemplatesBatch(stageKey, [data], options);
 };
 
 export default {
@@ -957,10 +977,9 @@ export default {
   sendToLocalPrinter,
   getPreferredPrinter,
   setPreferredPrinter,
-  makeInboundBarcode,
-  makeIssueBarcode,
   makeReceiveBarcode,
   parseReceiveCrateIndex,
   deriveMaterialCodeFromItem,
   getStageVariables,
+  printStageTemplatesBatch,
 };

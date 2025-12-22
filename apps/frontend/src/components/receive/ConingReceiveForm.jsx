@@ -5,7 +5,7 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 
 export function ConingReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -134,10 +134,12 @@ export function ConingReceiveForm() {
             const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
             const baseCount = existingRows.length;
             const baseCode = issue.barcode || issue.lotNo || issue.id;
+            const labelsToPrint = [];
+
             for (const row of cart) {
                 await api.manualReceiveFromConingMachine({
                     issueId: issue.id,
-                    pieceId: issue.id, // Coning treats the issue as the unit usually
+                    pieceId: issue.id,
                     coneCount: Number(row.coneCount),
                     boxId: row.boxId,
                     grossWeight: Number(row.grossWeight),
@@ -145,6 +147,7 @@ export function ConingReceiveForm() {
                     operatorId: row.operatorId,
                     notes: row.notes
                 });
+
                 if (confirmPrint) {
                     const index = cart.indexOf(row);
                     const paddedIndex = String(baseCount + index + 1).padStart(3, '0');
@@ -159,29 +162,23 @@ export function ConingReceiveForm() {
                     let rollType = '';
                     let coneType = '';
                     let wrapperName = '';
-
                     let rollCount = 0;
 
                     try {
                         const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
                         if (Array.isArray(refs) && refs.length > 0) {
                             const firstRef = refs[0];
-                            // Cone/Wrapper from issue definition (stored in refs as per creation logic)
                             if (firstRef.coneTypeId) coneType = db.cone_types.find(c => c.id === firstRef.coneTypeId)?.name || '';
                             if (firstRef.wrapperId) wrapperName = db.wrappers.find(w => w.id === firstRef.wrapperId)?.name || '';
 
-                            // Calculate total issued rolls from all refs
                             refs.forEach(ref => {
                                 if (ref.issueRolls) rollCount += Number(ref.issueRolls) || 0;
                                 else {
-                                    // Fallback to row lookup if issueRolls not stamped
                                     const r = db.receive_from_holo_machine_rows?.find(row => row.id === ref.rowId);
                                     if (r) rollCount += (r.rollCount || 0);
                                 }
                             });
 
-                            // Trace back for Cut/Yarn/RollType
-                            // The ref points to a ReceiveFromHoloMachineRow (usually)
                             const rid = firstRef.rowId;
                             if (rid) {
                                 const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === rid);
@@ -190,7 +187,6 @@ export function ConingReceiveForm() {
                                     const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
                                     if (holoIssue) {
                                         if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
-                                        // Trace cut
                                         const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                         if (Array.isArray(hRefs) && hRefs.length > 0) {
                                             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === hRefs[0].rowId);
@@ -204,31 +200,35 @@ export function ConingReceiveForm() {
                         }
                     } catch (e) { console.error('Error resolving details', e); }
 
-                    await printStageTemplate(
-                        LABEL_STAGE_KEYS.CONING_RECEIVE,
-                        {
-                            lotNo: issue.lotNo,
-                            issueBarcode: issue.barcode,
-                            barcode,
-                            coneCount: row.coneCount,
-                            rollCount,
-                            grossWeight: row.grossWeight,
-                            tareWeight: Number(row.grossWeight) - calcRowNet(row),
-                            netWeight: calcRowNet(row),
-                            boxName,
-                            operatorName,
-                            itemName,
-                            cut: cutName,
-                            yarnName,
-                            rollType,
-                            coneType,
-                            wrapperName,
-                            shift: issue.shift || '',
-                            date: receiveDate,
-                        },
-                        { template },
-                    );
+                    labelsToPrint.push({
+                        lotNo: issue.lotNo,
+                        issueBarcode: issue.barcode,
+                        barcode,
+                        coneCount: row.coneCount,
+                        rollCount,
+                        grossWeight: row.grossWeight,
+                        tareWeight: Number(row.grossWeight) - calcRowNet(row),
+                        netWeight: calcRowNet(row),
+                        boxName,
+                        operatorName,
+                        itemName,
+                        cut: cutName,
+                        yarnName,
+                        rollType,
+                        coneType,
+                        wrapperName,
+                        shift: issue.shift || '',
+                        date: receiveDate,
+                    });
                 }
+            }
+
+            if (labelsToPrint.length > 0) {
+                await printStageTemplatesBatch(
+                    LABEL_STAGE_KEYS.CONING_RECEIVE,
+                    labelsToPrint,
+                    { template }
+                );
             }
             await refreshDb();
             setCart([]);

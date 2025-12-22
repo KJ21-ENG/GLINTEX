@@ -3,7 +3,7 @@ import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search, Printer } from 'lucide-react';
 
 
@@ -79,21 +79,20 @@ export function Inbound() {
             if (inboundTemplate && piecesForLot.length > 0) {
                 const confirmPrint = window.confirm(`Print ${piecesForLot.length} stickers for lot ${lotNo}?`);
                 if (confirmPrint) {
-                    for (const piece of piecesForLot) {
-                        await printStageTemplate(
-                            LABEL_STAGE_KEYS.INBOUND,
-                            {
-                                lotNo,
-                                itemName,
-                                pieceId: piece.id,
-                                seq: piece.seq,
-                                weight: piece.weight,
-                                barcode: piece.barcode,
-                                date,
-                            },
-                            { template: inboundTemplate },
-                        );
-                    }
+                    const batchData = piecesForLot.map(piece => ({
+                        lotNo,
+                        itemName,
+                        pieceId: piece.id,
+                        seq: piece.seq,
+                        weight: piece.weight,
+                        barcode: piece.barcode,
+                        date,
+                    }));
+                    await printStageTemplatesBatch(
+                        LABEL_STAGE_KEYS.INBOUND,
+                        batchData,
+                        { template: inboundTemplate },
+                    );
                 }
             }
 
@@ -318,21 +317,21 @@ function RecentLotsTable({ db }) {
                 return;
             }
 
-            for (const piece of pieces) {
-                await printStageTemplate(
-                    LABEL_STAGE_KEYS.INBOUND,
-                    {
-                        lotNo: lot.lotNo,
-                        itemName: lot.itemName,
-                        pieceId: piece.id,
-                        seq: piece.seq,
-                        weight: piece.weight,
-                        barcode: piece.barcode,
-                        date: lot.date,
-                    },
-                    { template },
-                );
-            }
+            const batchData = pieces.map(piece => ({
+                lotNo: lot.lotNo,
+                itemName: lot.itemName,
+                pieceId: piece.id,
+                seq: piece.seq,
+                weight: piece.weight,
+                barcode: piece.barcode,
+                date: lot.date,
+            }));
+
+            await printStageTemplatesBatch(
+                LABEL_STAGE_KEYS.INBOUND,
+                batchData,
+                { template },
+            );
         } catch (err) {
             alert(err.message || 'Failed to reprint stickers');
         }

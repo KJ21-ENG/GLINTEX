@@ -125,14 +125,106 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
     let status;
 
     if platform == "windows" {
-        // Simple text print for Windows
-        let mut cmd = Command::new("notepad");
-        cmd.arg("/p").arg(&file_path);
+        // Windows: Use PowerShell to send raw bytes to the printer via Win32 API.
+        // This allows targeting a specific printer and avoids the "text-only" printing of notepad.
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let ps_script_path = temp_dir.join(format!("print_raw_{}.ps1", timestamp));
+        
+        let printer = &job.printer;
+        // Escape backslashes for PowerShell file path
+        let escaped_file_path = file_path.to_string_lossy().replace("\\", "\\\\");
+        
+        let ps_script = format!(r#"
+$printerName = "{}"
+$data = Get-Content -Path "{}" -Raw -Encoding utf8
+
+$definition = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class RawPrinterHelper {{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA {{
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }}
+
+    [DllImport("winspool.drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("winspool.drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+    [DllImport("winspool.drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+    public static bool SendStringToPrinter(string szPrinterName, string szString) {{
+        IntPtr pBytes;
+        Int32 dwCount;
+        dwCount = szString.Length;
+        pBytes = Marshal.StringToCoTaskMemAnsi(szString);
+        bool bSuccess = SendBytesToPrinter(szPrinterName, pBytes, dwCount);
+        Marshal.FreeCoTaskMem(pBytes);
+        return bSuccess;
+    }}
+
+    public static bool SendBytesToPrinter(string szPrinterName, IntPtr pBytes, Int32 dwCount) {{
+        Int32 dwError = 0, dwWritten = 0;
+        IntPtr hPrinter = new IntPtr(0);
+        DOCINFOA di = new DOCINFOA();
+        bool bSuccess = false;
+
+        di.pDocName = "GLINTEX Print Job";
+        di.pDataType = "RAW";
+
+        if (OpenPrinter(szPrinterName.Normalize(), out hPrinter, IntPtr.Zero)) {{
+            if (StartDocPrinter(hPrinter, 1, di)) {{
+                if (StartPagePrinter(hPrinter)) {{
+                    bSuccess = WritePrinter(hPrinter, pBytes, dwCount, out dwWritten);
+                    EndPagePrinter(hPrinter);
+                }}
+                EndDocPrinter(hPrinter);
+            }}
+            ClosePrinter(hPrinter);
+        }}
+        if (bSuccess == false) {{
+            dwError = Marshal.GetLastWin32Error();
+        }}
+        return bSuccess;
+    }}
+}}
+"@
+Add-Type -TypeDefinition $definition
+[RawPrinterHelper]::SendStringToPrinter($printerName, $data)
+"#, printer, escaped_file_path);
+
+        if let Err(e) = fs::write(&ps_script_path, ps_script) {
+            return HttpResponse::InternalServerError().body(format!("Failed to write ps1 file: {}", e));
+        }
+
+        let mut cmd = Command::new("powershell");
+        cmd.args(&["-ExecutionPolicy", "Bypass", "-File", &ps_script_path.to_string_lossy()]);
         
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
         status = cmd.status();
+        
+        // Cleanup ps1 script
+        let _ = fs::remove_file(ps_script_path);
     } else {
         // Mac/Linux
         let mut cmd = Command::new("lp");

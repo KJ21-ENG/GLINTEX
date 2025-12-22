@@ -26,6 +26,9 @@ services:
       SHADOW_DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex_shadow
       PORT: 4000
       BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}
+      GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI}
     volumes:
       - ./apps/backend/.wwebjs_auth:/app/.wwebjs_auth
       - ./apps/backend/backups:/app/backups

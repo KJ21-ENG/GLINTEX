@@ -53,7 +53,7 @@ function App() {
         const data = await response.json();
         setPrinters(data.printers || []);
         setErrorMsg("");
-        
+
         // Fetch queue if online
         fetchQueue();
       } else {
@@ -79,9 +79,18 @@ function App() {
 
   const handleStopService = async () => {
     try {
-      await invoke("stop_service_app");
+      await invoke("stop_server");
+      setServerStatus("Offline");
     } catch (error) {
       console.error("Failed to stop service:", error);
+    }
+  };
+
+  const handleExitApp = async () => {
+    try {
+      await invoke("stop_service_app");
+    } catch (error) {
+      console.error("Failed to exit app:", error);
     }
   };
 
@@ -112,29 +121,38 @@ function App() {
           {serverStatus}
         </div>
         <p style={{ margin: 0, color: '#666' }}>Port: 9090</p>
-        
+
         <div className="btn-group">
-          <button 
-            className="btn force-btn" 
+          <button
+            className="btn force-btn"
             onClick={handleForceStart}
             disabled={isLoading}
           >
             {isLoading ? "Starting..." : "Force Start"}
           </button>
-          
-          <button 
-            className="btn restart-btn" 
+
+          <button
+            className="btn restart-btn"
             onClick={handleForceStart}
             disabled={isLoading}
           >
             Restart
           </button>
-          
+
           <button className="btn stop-btn" onClick={handleStopService}>
-            Stop App
+            Stop Service
           </button>
         </div>
-        
+
+        <div style={{ marginTop: '10px', textAlign: 'center' }}>
+          <button
+            style={{ background: 'transparent', border: 'none', color: '#999', cursor: 'pointer', fontSize: '12px', textDecoration: 'underline' }}
+            onClick={handleExitApp}
+          >
+            Exit Application Entirely
+          </button>
+        </div>
+
         {errorMsg && <p className="error-text">{errorMsg}</p>}
       </div>
 
@@ -180,7 +198,7 @@ function App() {
             Start on System Startup
           </label>
         </div>
-        
+
         <h3 style={{ fontSize: '0.9rem', marginTop: '1rem', marginBottom: '0.5rem', color: '#666' }}>Available Printers</h3>
         {printers.length > 0 ? (
           <ul className="printer-list">

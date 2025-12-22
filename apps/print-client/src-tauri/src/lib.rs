@@ -35,6 +35,7 @@ struct PrintJobRecord {
 
 struct AppState {
     queue: Mutex<Vec<PrintJobRecord>>,
+    server_handle: Mutex<Option<actix_web::dev::ServerHandle>>,
 }
 
 async fn health() -> impl Responder {
@@ -276,16 +277,28 @@ fn get_app_state() -> web::Data<AppState> {
     APP_STATE.get_or_init(|| {
         web::Data::new(AppState {
             queue: Mutex::new(Vec::new()),
+            server_handle: Mutex::new(None),
         })
     }).clone()
 }
 
 #[tauri::command]
 fn start_server() {
-    thread::spawn(|| {
+    let state = get_app_state();
+    
+    // Stop existing server if any
+    let mut handle_lock = state.server_handle.lock().unwrap();
+    if let Some(handle) = handle_lock.take() {
+        // Stop the server (gracefully but quickly)
+        let _ = handle.stop(false);
+        // Give a small delay for port release
+        thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    thread::spawn(move || {
         let sys = actix_web::rt::System::new();
         sys.block_on(async {
-            HttpServer::new(|| {
+            let server = HttpServer::new(|| {
                 let cors = Cors::default()
                     .allow_any_origin()
                     .allow_any_method()
@@ -302,8 +315,16 @@ fn start_server() {
             })
             .bind(("0.0.0.0", 9090))
             .expect("Can not bind to port 9090")
-            .run()
-            .await
+            .run();
+
+            // Save the handle
+            {
+                let state = get_app_state();
+                let mut handle_lock = state.server_handle.lock().unwrap();
+                *handle_lock = Some(server.handle());
+            }
+
+            server.await
         })
     });
 }
@@ -311,6 +332,7 @@ fn start_server() {
 #[tauri::command]
 fn kill_existing_service() -> Result<String, String> {
     let platform = std::env::consts::OS;
+    let current_pid = std::process::id().to_string();
     
     if platform == "windows" {
         // Find PID listening on 9090
@@ -325,6 +347,11 @@ fn kill_existing_service() -> Result<String, String> {
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if let Some(pid) = parts.last() {
+                // IMPORTANT: Don't kill our own process!
+                if pid == &current_pid {
+                    continue;
+                }
+                
                 // Kill PID
                 let mut kill_cmd = Command::new("taskkill");
                 kill_cmd.args(&["/F", "/PID", pid]);
@@ -343,10 +370,11 @@ fn kill_existing_service() -> Result<String, String> {
             
         let stdout = String::from_utf8_lossy(&output.stdout);
         for pid in stdout.lines() {
-            if !pid.trim().is_empty() {
+            let trimmed = pid.trim();
+            if !trimmed.is_empty() && trimmed != current_pid {
                 let _ = Command::new("kill")
                     .arg("-9")
-                    .arg(pid)
+                    .arg(trimmed)
                     .output();
             }
         }
@@ -365,6 +393,15 @@ fn force_start_service() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn stop_server() {
+    let state = get_app_state();
+    let mut handle_lock = state.server_handle.lock().unwrap();
+    if let Some(handle) = handle_lock.take() {
+        let _ = handle.stop(false);
+    }
+}
+
+#[tauri::command]
 fn stop_service_app(app_handle: tauri::AppHandle) {
     app_handle.exit(0);
 }
@@ -378,6 +415,7 @@ pub fn run() {
             Some(vec![]),
         ))
         .invoke_handler(tauri::generate_handler![
+            stop_server,
             stop_service_app, 
             start_server,
             kill_existing_service,

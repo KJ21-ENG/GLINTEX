@@ -423,6 +423,17 @@ model Settings {
   updatedByUserId String?
 }
 
+model GoogleDriveCredential {
+  id           Int      @id @default(1)
+  refreshToken String
+  accessToken  String?
+  tokenExpiry  DateTime?
+  email        String?
+  folderId     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 model Sequence {
   id        String @id @default("lot_sequence")
   nextValue Int    @default(1)

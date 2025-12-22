@@ -13,6 +13,7 @@ import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
+import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback } from '../utils/googleDrive.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -573,6 +574,28 @@ router.get('/api/public/branding', async (req, res) => {
   } catch (err) {
     console.error('Failed to fetch public branding', err);
     res.status(500).json({ error: 'Failed to fetch branding' });
+  }
+});
+
+router.get('/api/google-drive/callback', async (req, res) => {
+  try {
+    const error = req.query?.error;
+    if (error) {
+      return res.status(400).send('<html><body><h3>Google Drive connection failed</h3><p>Please try again.</p></body></html>');
+    }
+
+    const code = typeof req.query?.code === 'string' ? req.query.code : '';
+    const state = typeof req.query?.state === 'string' ? req.query.state : '';
+    if (!code || !state) {
+      return res.status(400).send('<html><body><h3>Missing OAuth parameters</h3><p>Please try connecting again.</p></body></html>');
+    }
+
+    const result = await handleGoogleDriveCallback({ code, state });
+    const emailLabel = result?.email ? `Connected as ${result.email}.` : 'Connected successfully.';
+    return res.send(`<html><body><h3>Google Drive connected</h3><p>${emailLabel}</p><p>You can close this window.</p><script>setTimeout(() => window.close(), 1500);</script></body></html>`);
+  } catch (err) {
+    console.error('Google Drive callback failed', err);
+    return res.status(500).send('<html><body><h3>Google Drive connection failed</h3><p>Please try again.</p></body></html>');
   }
 });
 
@@ -4579,6 +4602,38 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
   } catch (err) {
     console.error('Failed to delete lot', err);
     res.status(500).json({ error: err.message || 'Failed to delete lot' });
+  }
+});
+
+// ===== Google Drive Backup (admin only) =====
+
+router.get('/api/google-drive/status', requireRole('admin'), async (req, res) => {
+  try {
+    const status = await getGoogleDriveStatus();
+    res.json(status);
+  } catch (err) {
+    console.error('Failed to fetch Google Drive status', err);
+    res.status(500).json({ error: 'Failed to fetch Google Drive status' });
+  }
+});
+
+router.post('/api/google-drive/connect', requireRole('admin'), async (req, res) => {
+  try {
+    const { authUrl } = createGoogleDriveAuthUrl();
+    res.json({ authUrl });
+  } catch (err) {
+    console.error('Failed to create Google Drive auth url', err);
+    res.status(500).json({ error: err.message || 'Failed to connect Google Drive' });
+  }
+});
+
+router.post('/api/google-drive/disconnect', requireRole('admin'), async (req, res) => {
+  try {
+    await disconnectGoogleDrive();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to disconnect Google Drive', err);
+    res.status(500).json({ error: 'Failed to disconnect Google Drive' });
   }
 });
 

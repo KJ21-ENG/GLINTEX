@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import prisma from '../lib/prisma.js';
+import { uploadBackupToDrive } from './googleDrive.js';
 import { sendNotification } from './notifications.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -106,7 +107,7 @@ export async function createBackup(type = 'auto') {
                 stderr += data.toString();
             });
 
-            pgDump.on('close', (code) => {
+            pgDump.on('close', async (code) => {
                 if (code === 0) {
                     const stats = fs.statSync(filepath);
                     console.log(`[Backup] Created ${type} backup: ${filename} (${formatBytes(stats.size)})`);
@@ -116,6 +117,21 @@ export async function createBackup(type = 'auto') {
                         console.error('[Backup] Cleanup failed:', err.message);
                     });
 
+                    let driveUpload = null;
+                    try {
+                        driveUpload = await uploadBackupToDrive({ filepath, filename });
+                        if (driveUpload?.success) {
+                            console.log(`[Backup] Uploaded to Google Drive: ${filename}`);
+                        } else if (driveUpload?.skipped) {
+                            console.log(`[Backup] Google Drive upload skipped (${driveUpload.reason})`);
+                        } else if (driveUpload?.error) {
+                            console.warn('[Backup] Google Drive upload failed:', driveUpload.error);
+                        }
+                    } catch (err) {
+                        console.error('[Backup] Google Drive upload failed:', err.message);
+                        driveUpload = { success: false, error: err.message };
+                    }
+
                     resolve({
                         success: true,
                         filename,
@@ -124,6 +140,7 @@ export async function createBackup(type = 'auto') {
                         sizeFormatted: formatBytes(stats.size),
                         type,
                         createdAt: new Date().toISOString(),
+                        driveUpload,
                     });
                 } else {
                     // Clean up failed backup file if it exists

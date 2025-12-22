@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
@@ -829,6 +829,9 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [diskUsage, setDiskUsage] = useState(null);
+    const [driveStatus, setDriveStatus] = useState({ loading: true, connected: false, configured: true });
+    const [connectingDrive, setConnectingDrive] = useState(false);
+    const [disconnectingDrive, setDisconnectingDrive] = useState(false);
     const [backupTime, setBackupTime] = useState('03:00');
     const [currentBackupTime, setCurrentBackupTime] = useState('03:00');
     const [savingSchedule, setSavingSchedule] = useState(false);
@@ -838,7 +841,10 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     useEffect(() => {
         loadBackups();
         loadDiskUsage();
-    }, []);
+        if (isAdmin) {
+            loadDriveStatus();
+        }
+    }, [isAdmin]);
 
     useEffect(() => {
         setCurrentBackupTime(settingsBackupTime);
@@ -866,6 +872,17 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
         }
     }
 
+    async function loadDriveStatus() {
+        try {
+            setDriveStatus(prev => ({ ...prev, loading: true }));
+            const res = await api.googleDriveStatus();
+            setDriveStatus({ loading: false, ...res });
+        } catch (err) {
+            console.error('Failed to load Google Drive status', err);
+            setDriveStatus({ loading: false, connected: false, configured: true, error: err.message || 'Failed to load status' });
+        }
+    }
+
     async function handleCreateBackup() {
         if (creating) return;
         setCreating(true);
@@ -879,6 +896,39 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
             setCreating(false);
         }
     }
+
+    async function handleConnectDrive() {
+        if (connectingDrive) return;
+        setConnectingDrive(true);
+        try {
+            const res = await api.googleDriveConnect();
+            if (res?.authUrl) {
+                window.open(res.authUrl, 'glintex-google-drive', 'width=520,height=680');
+            } else {
+                alert('Failed to start Google Drive connection');
+            }
+        } catch (err) {
+            alert(err.message || 'Failed to connect Google Drive');
+        } finally {
+            setConnectingDrive(false);
+        }
+    }
+
+    async function handleDisconnectDrive() {
+        if (disconnectingDrive) return;
+        setDisconnectingDrive(true);
+        try {
+            await api.googleDriveDisconnect();
+            await loadDriveStatus();
+        } catch (err) {
+            alert(err.message || 'Failed to disconnect Google Drive');
+        } finally {
+            setDisconnectingDrive(false);
+        }
+    }
+
+    const driveLabel = driveStatus.connected ? 'Connected' : 'Not connected';
+    const driveBadgeClass = driveStatus.connected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-muted text-muted-foreground';
 
     async function handleSaveSchedule() {
         if (!isAdmin || savingSchedule) return;
@@ -978,6 +1028,58 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                                 </Button>
                             </div>
                             <p className="text-[10px] text-muted-foreground">Timezone: Asia/Kolkata (IST).</p>
+                        </div>
+                    )}
+
+                    {isAdmin && (
+                        <div className="space-y-3 rounded-md border p-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Cloud className="w-4 h-4 text-muted-foreground" />
+                                    <h4 className="text-sm font-semibold">Google Drive</h4>
+                                </div>
+                                <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${driveBadgeClass}`}>
+                                    {driveLabel}
+                                </span>
+                            </div>
+
+                            {!driveStatus.configured && (
+                                <div className="text-xs text-muted-foreground space-y-1">
+                                    <p>Google Drive OAuth is not configured. Add the required env vars on the backend and restart the server.</p>
+                                    {Array.isArray(driveStatus.missing) && driveStatus.missing.length > 0 && (
+                                        <p>Missing: {driveStatus.missing.join(', ')}</p>
+                                    )}
+                                </div>
+                            )}
+
+                            {driveStatus.configured && driveStatus.connected && (
+                                <div className="text-xs text-muted-foreground">
+                                    <div>Account: {driveStatus.email || 'Unknown email'}</div>
+                                    <div>Folder: GLINTEX_Backups (keeps last 3 backups)</div>
+                                </div>
+                            )}
+
+                            {driveStatus.configured && !driveStatus.connected && (
+                                <p className="text-xs text-muted-foreground">
+                                    Connect Google Drive to upload every backup offsite. The system keeps the latest 3 backups.
+                                </p>
+                            )}
+
+                            <div className="flex flex-wrap gap-2">
+                                <Button size="sm" variant="outline" onClick={loadDriveStatus} disabled={driveStatus.loading}>
+                                    <RefreshCw className={`w-4 h-4 mr-2 ${driveStatus.loading ? 'animate-spin' : ''}`} />
+                                    Refresh Status
+                                </Button>
+                                {driveStatus.connected ? (
+                                    <Button size="sm" variant="destructive" onClick={handleDisconnectDrive} disabled={disconnectingDrive}>
+                                        {disconnectingDrive ? 'Disconnecting...' : 'Disconnect'}
+                                    </Button>
+                                ) : (
+                                    <Button size="sm" onClick={handleConnectDrive} disabled={connectingDrive || !driveStatus.configured}>
+                                        {connectingDrive ? 'Connecting...' : 'Connect Google Drive'}
+                                    </Button>
+                                )}
+                            </div>
                         </div>
                     )}
 

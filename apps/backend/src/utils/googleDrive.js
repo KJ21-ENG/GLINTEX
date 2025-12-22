@@ -87,6 +87,16 @@ async function ensureBackupFolder(drive, existingFolderId) {
   return created.data.id;
 }
 
+function buildFolderUrl(folderId) {
+  if (!folderId) return null;
+  return `https://drive.google.com/drive/folders/${folderId}`;
+}
+
+function buildFileUrl(fileId) {
+  if (!fileId) return null;
+  return `https://drive.google.com/file/d/${fileId}/view`;
+}
+
 async function persistTokens(tokens) {
   if (!tokens) return;
   const existing = await prisma.googleDriveCredential.findUnique({
@@ -260,7 +270,50 @@ export async function getGoogleDriveStatus() {
     configured: true,
     email: credential.email,
     folderId: credential.folderId,
+    folderUrl: buildFolderUrl(credential.folderId),
     connectedAt: credential.createdAt,
+  };
+}
+
+export async function listDriveBackups() {
+  const { configured, drive, credential } = await getDriveClient();
+
+  if (!configured) {
+    return { configured: false, connected: false, files: [] };
+  }
+  if (!drive || !credential) {
+    return { configured: true, connected: false, files: [] };
+  }
+
+  const folderId = await ensureBackupFolder(drive, credential.folderId);
+  if (folderId && folderId !== credential.folderId) {
+    await prisma.googleDriveCredential.update({
+      where: { id: DRIVE_CREDENTIAL_ID },
+      data: { folderId },
+    });
+  }
+
+  const res = await drive.files.list({
+    q: `'${folderId}' in parents and trashed=false and name contains '.dump'`,
+    orderBy: 'createdTime desc',
+    fields: 'files(id,name,size,createdTime,webViewLink)',
+    spaces: 'drive',
+  });
+
+  const files = (res.data.files || []).map(file => ({
+    id: file.id,
+    name: file.name,
+    size: file.size ? Number(file.size) : null,
+    createdTime: file.createdTime,
+    webViewLink: file.webViewLink || buildFileUrl(file.id),
+  }));
+
+  return {
+    configured: true,
+    connected: true,
+    folderId,
+    folderUrl: buildFolderUrl(folderId),
+    files,
   };
 }
 

@@ -13,7 +13,7 @@ import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
-import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback } from '../utils/googleDrive.js';
+import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 500;
@@ -4634,6 +4634,16 @@ router.post('/api/google-drive/disconnect', requireRole('admin'), async (req, re
   } catch (err) {
     console.error('Failed to disconnect Google Drive', err);
     res.status(500).json({ error: 'Failed to disconnect Google Drive' });
+  }
+});
+
+router.get('/api/google-drive/files', requireRole('admin'), async (req, res) => {
+  try {
+    const result = await listDriveBackups();
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to list Google Drive backups', err);
+    res.status(500).json({ error: 'Failed to list Google Drive backups' });
   }
 });
 

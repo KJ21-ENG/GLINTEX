@@ -190,6 +190,7 @@ export function downloadBackupUrl(filename) { return `${BASE}/api/backups/${enco
 export async function googleDriveStatus() { return await request('/api/google-drive/status'); }
 export async function googleDriveConnect() { return await request('/api/google-drive/connect', { method: 'POST' }); }
 export async function googleDriveDisconnect() { return await request('/api/google-drive/disconnect', { method: 'POST' }); }
+export async function googleDriveFiles() { return await request('/api/google-drive/files'); }
 
 // Disk Usage
 export async function getDiskUsage() { return await request('/api/disk-usage'); }

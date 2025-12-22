@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
@@ -832,9 +832,13 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     const [driveStatus, setDriveStatus] = useState({ loading: true, connected: false, configured: true });
     const [connectingDrive, setConnectingDrive] = useState(false);
     const [disconnectingDrive, setDisconnectingDrive] = useState(false);
+    const [driveFiles, setDriveFiles] = useState([]);
+    const [driveFilesLoading, setDriveFilesLoading] = useState(false);
+    const [driveFilesError, setDriveFilesError] = useState('');
     const [backupTime, setBackupTime] = useState('03:00');
     const [currentBackupTime, setCurrentBackupTime] = useState('03:00');
     const [savingSchedule, setSavingSchedule] = useState(false);
+    const [activeTab, setActiveTab] = useState('server');
 
     const settingsBackupTime = db?.settings?.[0]?.backupTime || '03:00';
 
@@ -850,6 +854,12 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
         setCurrentBackupTime(settingsBackupTime);
         setBackupTime(settingsBackupTime);
     }, [settingsBackupTime]);
+
+    useEffect(() => {
+        if (!isAdmin || activeTab !== 'drive') return;
+        loadDriveStatus();
+        loadDriveFiles();
+    }, [isAdmin, activeTab]);
 
     async function loadBackups() {
         setLoading(true);
@@ -880,6 +890,25 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
         } catch (err) {
             console.error('Failed to load Google Drive status', err);
             setDriveStatus({ loading: false, connected: false, configured: true, error: err.message || 'Failed to load status' });
+        }
+    }
+
+    async function loadDriveFiles() {
+        setDriveFilesLoading(true);
+        setDriveFilesError('');
+        try {
+            const res = await api.googleDriveFiles();
+            const files = res?.connected ? (res?.files || []) : [];
+            setDriveFiles(files);
+            if (res?.folderUrl) {
+                setDriveStatus(prev => ({ ...prev, folderUrl: res.folderUrl }));
+            }
+        } catch (err) {
+            console.error('Failed to load Google Drive files', err);
+            setDriveFilesError(err.message || 'Failed to load Google Drive backups');
+            setDriveFiles([]);
+        } finally {
+            setDriveFilesLoading(false);
         }
     }
 
@@ -927,8 +956,18 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
         }
     }
 
+    async function handleRefreshDrive() {
+        await loadDriveStatus();
+        await loadDriveFiles();
+    }
+
     const driveLabel = driveStatus.connected ? 'Connected' : 'Not connected';
     const driveBadgeClass = driveStatus.connected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-muted text-muted-foreground';
+    const tabBaseClass = 'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors';
+    const tabActiveClass = 'border-primary text-primary';
+    const tabInactiveClass = 'border-transparent text-muted-foreground hover:text-foreground';
+    const serverTabClass = `${tabBaseClass} ${activeTab === 'server' ? tabActiveClass : tabInactiveClass}`;
+    const driveTabClass = `${tabBaseClass} ${activeTab === 'drive' ? tabActiveClass : tabInactiveClass}`;
 
     async function handleSaveSchedule() {
         if (!isAdmin || savingSchedule) return;
@@ -967,6 +1006,21 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
         } catch {
             return isoString;
         }
+    }
+
+    function formatBytes(value) {
+        const bytes = Number(value);
+        if (!Number.isFinite(bytes)) return '-';
+        if (bytes === 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = bytes;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex += 1;
+        }
+        const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+        return `${size.toFixed(precision)} ${units[unitIndex]}`;
     }
 
     return (
@@ -1031,114 +1085,200 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                         </div>
                     )}
 
-                    {isAdmin && (
-                        <div className="space-y-3 rounded-md border p-4">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Cloud className="w-4 h-4 text-muted-foreground" />
-                                    <h4 className="text-sm font-semibold">Google Drive</h4>
-                                </div>
-                                <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${driveBadgeClass}`}>
-                                    {driveLabel}
-                                </span>
-                            </div>
+                    <div className="flex items-center gap-2 border-b">
+                        <button type="button" className={serverTabClass} onClick={() => setActiveTab('server')}>
+                            Server
+                        </button>
+                        {isAdmin && (
+                            <button type="button" className={driveTabClass} onClick={() => setActiveTab('drive')}>
+                                Google Drive
+                            </button>
+                        )}
+                    </div>
 
-                            {!driveStatus.configured && (
-                                <div className="text-xs text-muted-foreground space-y-1">
-                                    <p>Google Drive OAuth is not configured. Add the required env vars on the backend and restart the server.</p>
-                                    {Array.isArray(driveStatus.missing) && driveStatus.missing.length > 0 && (
-                                        <p>Missing: {driveStatus.missing.join(', ')}</p>
-                                    )}
-                                </div>
-                            )}
-
-                            {driveStatus.configured && driveStatus.connected && (
+                    {activeTab === 'server' && (
+                        <div className="space-y-4">
+                            {/* Disk usage summary (when not alerting) */}
+                            {diskUsage && !diskUsage.alert && (
                                 <div className="text-xs text-muted-foreground">
-                                    <div>Account: {driveStatus.email || 'Unknown email'}</div>
-                                    <div>Folder: GLINTEX_Backups (keeps last 3 backups)</div>
+                                    Disk: {diskUsage.usedFormatted} used / {diskUsage.freeFormatted} free ({diskUsage.usedPercent}%)
                                 </div>
                             )}
 
-                            {driveStatus.configured && !driveStatus.connected && (
-                                <p className="text-xs text-muted-foreground">
-                                    Connect Google Drive to upload every backup offsite. The system keeps the latest 3 backups.
+                            {loading ? (
+                                <div className="text-sm text-muted-foreground py-4 text-center">Loading backups...</div>
+                            ) : backups.length === 0 ? (
+                                <div className="text-sm text-muted-foreground py-4 text-center">No backups available.</div>
+                            ) : (
+                                <div className="rounded-md border overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Filename</TableHead>
+                                                <TableHead>Created</TableHead>
+                                                <TableHead>Size</TableHead>
+                                                <TableHead>Type</TableHead>
+                                                {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {backups.map((backup) => (
+                                                <TableRow key={backup.filename}>
+                                                    <TableCell className="font-mono text-xs">{backup.filename}</TableCell>
+                                                    <TableCell className="whitespace-nowrap text-sm">{formatDate(backup.createdAt)}</TableCell>
+                                                    <TableCell className="text-sm">{backup.sizeFormatted}</TableCell>
+                                                    <TableCell>
+                                                        <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${backup.type === 'auto' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'}`}>
+                                                            {backup.type}
+                                                        </span>
+                                                    </TableCell>
+                                                    {isAdmin && (
+                                                        <TableCell className="text-right">
+                                                            <a
+                                                                href={api.downloadBackupUrl(backup.filename)}
+                                                                download
+                                                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-primary hover:underline"
+                                                            >
+                                                                <Download className="w-3 h-3" /> Download
+                                                            </a>
+                                                        </TableCell>
+                                                    )}
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            )}
+
+                            {!isAdmin && (
+                                <p className="text-[10px] text-muted-foreground italic text-center">
+                                    Only administrators can create or download backups.
                                 </p>
                             )}
-
-                            <div className="flex flex-wrap gap-2">
-                                <Button size="sm" variant="outline" onClick={loadDriveStatus} disabled={driveStatus.loading}>
-                                    <RefreshCw className={`w-4 h-4 mr-2 ${driveStatus.loading ? 'animate-spin' : ''}`} />
-                                    Refresh Status
-                                </Button>
-                                {driveStatus.connected ? (
-                                    <Button size="sm" variant="destructive" onClick={handleDisconnectDrive} disabled={disconnectingDrive}>
-                                        {disconnectingDrive ? 'Disconnecting...' : 'Disconnect'}
-                                    </Button>
-                                ) : (
-                                    <Button size="sm" onClick={handleConnectDrive} disabled={connectingDrive || !driveStatus.configured}>
-                                        {connectingDrive ? 'Connecting...' : 'Connect Google Drive'}
-                                    </Button>
-                                )}
-                            </div>
                         </div>
                     )}
 
-                    {/* Disk usage summary (when not alerting) */}
-                    {diskUsage && !diskUsage.alert && (
-                        <div className="text-xs text-muted-foreground">
-                            Disk: {diskUsage.usedFormatted} used / {diskUsage.freeFormatted} free ({diskUsage.usedPercent}%)
-                        </div>
-                    )}
+                    {activeTab === 'drive' && (
+                        <div className="space-y-4">
+                            {!isAdmin ? (
+                                <p className="text-sm text-muted-foreground">Only administrators can access Google Drive backups.</p>
+                            ) : (
+                                <>
+                                    <div className="space-y-3 rounded-md border p-4">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Cloud className="w-4 h-4 text-muted-foreground" />
+                                                <h4 className="text-sm font-semibold">Google Drive</h4>
+                                            </div>
+                                            <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${driveBadgeClass}`}>
+                                                {driveLabel}
+                                            </span>
+                                        </div>
 
-                    {loading ? (
-                        <div className="text-sm text-muted-foreground py-4 text-center">Loading backups...</div>
-                    ) : backups.length === 0 ? (
-                        <div className="text-sm text-muted-foreground py-4 text-center">No backups available.</div>
-                    ) : (
-                        <div className="rounded-md border overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Filename</TableHead>
-                                        <TableHead>Created</TableHead>
-                                        <TableHead>Size</TableHead>
-                                        <TableHead>Type</TableHead>
-                                        {isAdmin && <TableHead className="text-right">Actions</TableHead>}
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {backups.map((backup) => (
-                                        <TableRow key={backup.filename}>
-                                            <TableCell className="font-mono text-xs">{backup.filename}</TableCell>
-                                            <TableCell className="whitespace-nowrap text-sm">{formatDate(backup.createdAt)}</TableCell>
-                                            <TableCell className="text-sm">{backup.sizeFormatted}</TableCell>
-                                            <TableCell>
-                                                <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${backup.type === 'auto' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'}`}>
-                                                    {backup.type}
-                                                </span>
-                                            </TableCell>
-                                            {isAdmin && (
-                                                <TableCell className="text-right">
-                                                    <a
-                                                        href={api.downloadBackupUrl(backup.filename)}
-                                                        download
-                                                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-primary hover:underline"
-                                                    >
-                                                        <Download className="w-3 h-3" /> Download
-                                                    </a>
-                                                </TableCell>
+                                        {!driveStatus.configured && (
+                                            <div className="text-xs text-muted-foreground space-y-1">
+                                                <p>Google Drive OAuth is not configured. Add the required env vars on the backend and restart the server.</p>
+                                                {Array.isArray(driveStatus.missing) && driveStatus.missing.length > 0 && (
+                                                    <p>Missing: {driveStatus.missing.join(', ')}</p>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {driveStatus.configured && driveStatus.connected && (
+                                            <div className="text-xs text-muted-foreground space-y-1">
+                                                <div>Account: {driveStatus.email || 'Unknown email'}</div>
+                                                <div>Folder: GLINTEX_Backups (keeps last 3 backups)</div>
+                                            </div>
+                                        )}
+
+                                        {driveStatus.configured && !driveStatus.connected && (
+                                            <p className="text-xs text-muted-foreground">
+                                                Connect Google Drive to upload every backup offsite. The system keeps the latest 3 backups.
+                                            </p>
+                                        )}
+
+                                        {driveStatus.error && (
+                                            <p className="text-xs text-red-600 dark:text-red-400">{driveStatus.error}</p>
+                                        )}
+
+                                        <div className="flex flex-wrap gap-2">
+                                            <Button size="sm" variant="outline" onClick={handleRefreshDrive} disabled={driveStatus.loading}>
+                                                <RefreshCw className={`w-4 h-4 mr-2 ${driveStatus.loading ? 'animate-spin' : ''}`} />
+                                                Refresh Status
+                                            </Button>
+                                            {driveStatus.connected ? (
+                                                <Button size="sm" variant="destructive" onClick={handleDisconnectDrive} disabled={disconnectingDrive}>
+                                                    {disconnectingDrive ? 'Disconnecting...' : 'Disconnect'}
+                                                </Button>
+                                            ) : (
+                                                <Button size="sm" onClick={handleConnectDrive} disabled={connectingDrive || !driveStatus.configured}>
+                                                    {connectingDrive ? 'Connecting...' : 'Connect Google Drive'}
+                                                </Button>
                                             )}
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    )}
+                                            {driveStatus.connected && driveStatus.folderUrl && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => window.open(driveStatus.folderUrl, '_blank', 'noopener,noreferrer')}
+                                                >
+                                                    <ExternalLink className="w-4 h-4 mr-2" />
+                                                    Open Folder
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
 
-                    {!isAdmin && (
-                        <p className="text-[10px] text-muted-foreground italic text-center">
-                            Only administrators can create or download backups.
-                        </p>
+                                    {driveStatus.configured && driveStatus.connected && (
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <h4 className="text-sm font-semibold">Drive Backups</h4>
+                                                <span className="text-[10px] text-muted-foreground">GLINTEX_Backups</span>
+                                            </div>
+
+                                            {driveFilesLoading ? (
+                                                <div className="text-sm text-muted-foreground py-4 text-center">Loading Drive backups...</div>
+                                            ) : driveFilesError ? (
+                                                <div className="text-sm text-red-600 dark:text-red-400 py-4 text-center">{driveFilesError}</div>
+                                            ) : driveFiles.length === 0 ? (
+                                                <div className="text-sm text-muted-foreground py-4 text-center">No backups on Google Drive yet.</div>
+                                            ) : (
+                                                <div className="rounded-md border overflow-x-auto">
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead>Filename</TableHead>
+                                                                <TableHead>Created</TableHead>
+                                                                <TableHead>Size</TableHead>
+                                                                <TableHead className="text-right">Actions</TableHead>
+                                                            </TableRow>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {driveFiles.map((file) => (
+                                                                <TableRow key={file.id}>
+                                                                    <TableCell className="font-mono text-xs">{file.name}</TableCell>
+                                                                    <TableCell className="whitespace-nowrap text-sm">{formatDate(file.createdTime)}</TableCell>
+                                                                    <TableCell className="text-sm">{formatBytes(file.size)}</TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        <a
+                                                                            href={file.webViewLink}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-primary hover:underline"
+                                                                        >
+                                                                            <ExternalLink className="w-3 h-3" /> Open
+                                                                        </a>
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
                     )}
                 </CardContent>
             </Card>

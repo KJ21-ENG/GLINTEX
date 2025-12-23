@@ -36,6 +36,7 @@ apps/backend/.wwebjs_cache/
 # Temporary references
 temp_ref/
 apps/backend/backups/
+apps/backend/prisma/migrations_pre_baseline_*/
 
 # Dependency directories
 jspm_packages/

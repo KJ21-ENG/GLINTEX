@@ -12,7 +12,7 @@ model Item {
   id        String   @id @default(cuid())
   name      String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   lots      Lot[]
@@ -22,7 +22,7 @@ model Yarn {
   id        String   @id @default(cuid())
   name      String   @unique
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   issues    IssueToHoloMachine[]
@@ -32,7 +32,7 @@ model Cut {
   id           String   @id @default(cuid())
   name         String   @unique
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   receiveRows  ReceiveFromCutterMachineRow[]
@@ -43,7 +43,7 @@ model Twist {
   id         String   @id @default(cuid())
   name       String   @unique
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   holoIssues IssueToHoloMachine[]
@@ -53,7 +53,7 @@ model Firm {
   id        String   @id @default(cuid())
   name      String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   lots      Lot[]
@@ -63,7 +63,7 @@ model Supplier {
   id        String   @id @default(cuid())
   name      String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   lots      Lot[]
@@ -79,7 +79,7 @@ model Lot {
   totalPieces Int
   totalWeight Float
   createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  updatedAt   DateTime   @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   item        Item       @relation(fields: [itemId], references: [id])
@@ -96,7 +96,7 @@ model InboundItem {
   seq       Int
   barcode   String  @unique
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -106,7 +106,7 @@ model Machine {
   name                  String
   processType           String                  @default("all")
   createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
+  updatedAt             DateTime                @default(now()) @updatedAt
   createdByUserId       String?
   updatedByUserId       String?
   issueToCutterMachines IssueToCutterMachine[]
@@ -120,7 +120,7 @@ model Operator {
   role                  String                              @default("operator")
   processType           String                              @default("all")
   createdAt             DateTime                            @default(now())
-  updatedAt             DateTime                            @updatedAt
+  updatedAt             DateTime                            @default(now()) @updatedAt
   createdByUserId       String?
   updatedByUserId       String?
   issueToCutterMachines IssueToCutterMachine[]
@@ -139,7 +139,7 @@ model Bobbin {
   name        String
   weight      Float?                          // Weight in kg (BoxWt)
   createdAt   DateTime                        @default(now())
-  updatedAt   DateTime                        @updatedAt
+  updatedAt   DateTime                        @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   receiveRows ReceiveFromCutterMachineRow[]
@@ -163,7 +163,7 @@ model IssueToHoloMachine {
   receivedRowRefs     Json     @default("[]")
   rollsProducedEstimate Int?
   createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  updatedAt           DateTime @default(now()) @updatedAt
   createdByUserId     String?
   updatedByUserId     String?
   machine             Machine?  @relation(fields: [machineId], references: [id])
@@ -190,7 +190,7 @@ model ReceiveFromHoloMachineRow {
   notes       String?
   createdBy   String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
@@ -216,7 +216,7 @@ model RollType {
   name      String   @unique
   weight    Float?
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   receiveRows ReceiveFromHoloMachineRow[]
@@ -227,7 +227,7 @@ model ConeType {
   name      String   @unique
   weight    Float?
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -236,7 +236,7 @@ model Wrapper {
   id        String   @id @default(cuid())
   name      String   @unique
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -267,7 +267,7 @@ model IssueToConingMachine {
   expectedCones  Float     @default(0)
   receivedRowRefs Json     @default("[]")
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   machine         Machine?  @relation(fields: [machineId], references: [id])
@@ -292,7 +292,7 @@ model ReceiveFromConingMachineRow {
   notes       String?
   createdBy   String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   issue       IssueToConingMachine @relation("IssueConingRelation", fields: [issueId], references: [id])
@@ -327,7 +327,7 @@ model IssueToCutterMachine {
   operatorId  String?
   barcode     String  @unique
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   cut         Cut?      @relation(fields: [cutId], references: [id])
@@ -340,7 +340,7 @@ model ReceiveFromCutterMachineUpload {
   originalFilename String
   uploadedAt       DateTime                            @default(now())
   createdAt        DateTime                            @default(now())
-  updatedAt        DateTime                            @updatedAt
+  updatedAt        DateTime                            @default(now()) @updatedAt
   createdByUserId  String?
   updatedByUserId  String?
   rowCount         Int                                 @default(0)
@@ -385,7 +385,7 @@ model ReceiveFromCutterMachineRow {
   createdBy     String?
   modifiedBy    String?
   createdAt     DateTime                            @default(now())
-  updatedAt     DateTime                            @updatedAt
+  updatedAt     DateTime                            @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   upload        ReceiveFromCutterMachineUpload      @relation(fields: [uploadId], references: [id], onDelete: Cascade)
@@ -418,7 +418,7 @@ model Settings {
   whatsappGroupIds String[] @default([])
   backupTime   String @default("03:00")
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -431,14 +431,14 @@ model GoogleDriveCredential {
   email        String?
   folderId     String?
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
 }
 
 model Sequence {
   id        String @id @default("lot_sequence")
   nextValue Int    @default(1)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -447,7 +447,7 @@ model HoloIssueSequence {
   id        String @id @default("holo_issue_seq")
   nextValue Int    @default(1)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -456,7 +456,7 @@ model ConingIssueSequence {
   id        String @id @default("coning_issue_seq")
   nextValue Int    @default(1)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -469,7 +469,7 @@ model WhatsappTemplate {
   sendToPrimary Boolean @default(true)
   groupIds String[] @default([])
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }
@@ -480,7 +480,7 @@ model Box {
   weight      Float
   processType String                          @default("all")
   createdAt   DateTime                        @default(now())
-  updatedAt   DateTime                        @updatedAt
+  updatedAt   DateTime                        @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   receiveRows ReceiveFromCutterMachineRow[]
@@ -508,7 +508,7 @@ model Role {
   name        String
   description String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   users       User[]
@@ -523,7 +523,7 @@ model User {
   isActive     Boolean  @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   role         Role     @relation(fields: [roleId], references: [id])

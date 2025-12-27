@@ -78,8 +78,8 @@ export function CutterReceiveForm() {
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
     // Compute inbound weight and total received for the current issue
-    const { inboundWeight, totalReceived, totalReceivedBobbins } = useMemo(() => {
-        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0 };
+    const { inboundWeight, totalReceived, totalReceivedBobbins, pendingWeight } = useMemo(() => {
+        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0, pendingWeight: 0 };
         const pieceIds = issueRecord.pieceIds;
 
         // Get inbound weight from inbound_items
@@ -88,38 +88,34 @@ export function CutterReceiveForm() {
             return sum + (piece?.weight || 0);
         }, 0);
 
-        // Get total received from piece totals (database)
-        const receivedFromDb = pieceIds.reduce((sum, pid) => {
+        // Get totals from piece totals (database)
+        let receivedFromDb = 0;
+        let wastageFromDb = 0;
+        let bobbinsFromDb = 0;
+
+        pieceIds.forEach((pid) => {
             const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
-            return sum + (tot?.totalNetWeight || 0);
-        }, 0);
+            receivedFromDb += Number(tot?.totalNetWeight || 0);
+            wastageFromDb += Number(tot?.wastageNetWeight || 0);
+            bobbinsFromDb += Number(tot?.totalBob || 0);
+        });
 
-        // Get total received bobbins from piece totals
-        const bobbinsFromDb = pieceIds.reduce((sum, pid) => {
-            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
-            return sum + (tot?.totalBob || 0);
-        }, 0);
+        // Add cart items' net weights and bobbins for real-time update
+        let receivedInCart = 0;
+        let bobbinsInCart = 0;
 
-        // Add cart items' net weights for real-time update
-        const receivedInCart = cart.reduce((sum, entry) => {
+        cart.forEach((entry) => {
             if (pieceIds.includes(entry.pieceId)) {
-                return sum + (Number(entry.netWeight) || 0);
+                receivedInCart += Number(entry.netWeight) || 0;
+                bobbinsInCart += Number(entry.bobbinQty) || 0;
             }
-            return sum;
-        }, 0);
-
-        // Add cart items' bobbins for real-time update
-        const bobbinsInCart = cart.reduce((sum, entry) => {
-            if (pieceIds.includes(entry.pieceId)) {
-                return sum + (Number(entry.bobbinQty) || 0);
-            }
-            return sum;
-        }, 0);
+        });
 
         return {
             inboundWeight: inboundWt,
             totalReceived: receivedFromDb + receivedInCart,
-            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart
+            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart,
+            pendingWeight: Math.max(0, inboundWt - receivedFromDb - wastageFromDb - receivedInCart)
         };
     }, [issueRecord, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
 
@@ -318,12 +314,12 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-8 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
                             <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
-                            <div><span className="font-semibold">Inbound Wt:</span> {formatKg(inboundWeight)}</div>
+                            <div><span className="font-semibold">Inbound:</span> {formatKg(inboundWeight)}</div>
                             <div>
                                 <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
                                 <InfoPopover
@@ -369,6 +365,9 @@ export function CutterReceiveForm() {
                                     buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
                                     align="right"
                                 />
+                            </div>
+                            <div>
+                                <span className="font-semibold">Pending:</span> {formatKg(pendingWeight)}
                             </div>
                             <div>
                                 <span className="font-semibold">Bobbins:</span> {totalReceivedBobbins}

@@ -397,7 +397,7 @@ export function CutterReceiveForm() {
                                 <Label>Helper (Optional)</Label>
                                 <Select value={helperId} onChange={e => setHelperId(e.target.value)}>
                                     <option value="">Select Helper</option>
-                                    {db.helpers?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                    {(db.helpers || []).filter(h => h.processType === 'all' || h.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                 </Select>
                             </div>
                             <div>

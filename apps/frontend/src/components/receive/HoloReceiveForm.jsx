@@ -179,7 +179,7 @@ export function HoloReceiveForm() {
                                 <Select
                                     value={form.machineId}
                                     onChange={e => setForm({ ...form, machineId: e.target.value })}
-                                    options={(db?.machines || []).map(m => ({ id: m.id, name: m.name }))}
+                                    options={(db?.machines || []).filter(m => m.processType === 'all' || m.processType === 'holo').map(m => ({ id: m.id, name: m.name }))}
                                     labelKey="name"
                                     valueKey="id"
                                     placeholder="Select Machine"
@@ -191,7 +191,7 @@ export function HoloReceiveForm() {
                                 <Select
                                     value={form.operatorId}
                                     onChange={e => setForm({ ...form, operatorId: e.target.value })}
-                                    options={(db?.operators || []).map(o => ({ id: o.id, name: o.name }))}
+                                    options={(db?.operators || []).filter(o => o.processType === 'all' || o.processType === 'holo').map(o => ({ id: o.id, name: o.name }))}
                                     labelKey="name"
                                     valueKey="id"
                                     placeholder="Select Operator"
@@ -218,7 +218,7 @@ export function HoloReceiveForm() {
                                 <Select
                                     value={form.boxId}
                                     onChange={e => setForm({ ...form, boxId: e.target.value })}
-                                    options={(db?.boxes || []).map(b => ({ id: b.id, name: b.name }))}
+                                    options={(db?.boxes || []).filter(b => b.processType === 'all' || b.processType === 'holo').map(b => ({ id: b.id, name: b.name }))}
                                     labelKey="name"
                                     valueKey="id"
                                     placeholder="Select Box"

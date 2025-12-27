@@ -607,7 +607,7 @@ export function OpeningStock() {
                 <Label>Helper (Optional)</Label>
                 <Select value={cutterEntry.helperId} onChange={e => setCutterEntry(prev => ({ ...prev, helperId: e.target.value }))}>
                   <option value="">Select Helper</option>
-                  {db.helpers?.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                  {filterByProcess(db.helpers, 'cutter').map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -716,14 +716,14 @@ export function OpeningStock() {
                 <Label>Machine (Optional)</Label>
                 <Select value={holoIssue.machineId} onChange={e => setHoloIssue(prev => ({ ...prev, machineId: e.target.value }))}>
                   <option value="">Select Machine</option>
-                  {db.machines?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {filterByProcess(db.machines, 'holo').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Operator (Optional)</Label>
                 <Select value={holoIssue.operatorId} onChange={e => setHoloIssue(prev => ({ ...prev, operatorId: e.target.value }))}>
                   <option value="">Select Operator</option>
-                  {db.operators?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  {filterByProcess(db.operators, 'holo').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -754,7 +754,7 @@ export function OpeningStock() {
                 <Label>Box (Optional)</Label>
                 <Select value={holoEntry.boxId} onChange={e => setHoloEntry(prev => ({ ...prev, boxId: e.target.value }))}>
                   <option value="">Select Box</option>
-                  {db.boxes?.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {filterByProcess(db.boxes, 'holo').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">

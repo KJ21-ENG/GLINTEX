@@ -277,7 +277,7 @@ export function IssueToConing() {
                             <Select
                                 value={form.boxId}
                                 onChange={e => setForm({ ...form, boxId: e.target.value })}
-                                options={(db.boxes || []).map(x => ({ id: x.id, name: x.name }))}
+                                options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(x => ({ id: x.id, name: x.name }))}
                                 labelKey="name"
                                 valueKey="id"
                                 placeholder="Select Box"

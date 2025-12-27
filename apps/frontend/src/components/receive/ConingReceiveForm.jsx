@@ -340,6 +340,7 @@ export function ConingReceiveForm() {
                                         <TableHead>Cones</TableHead>
                                         <TableHead>Gross</TableHead>
                                         <TableHead>Net (Calc)</TableHead>
+                                        <TableHead>Per Cone Wt</TableHead>
                                         <TableHead>Operator</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
@@ -371,6 +372,14 @@ export function ConingReceiveForm() {
                                             </TableCell>
                                             <TableCell className="">
                                                 {formatKg(calcRowNet(row))}
+                                            </TableCell>
+                                            <TableCell className="text-sm">
+                                                {(function () {
+                                                    const net = calcRowNet(row);
+                                                    const c = Number(row.coneCount || 0);
+                                                    if (c <= 0) return '—';
+                                                    return `${((net * 1000) / c).toFixed(1)} g`;
+                                                })()}
                                             </TableCell>
                                             <TableCell>
                                                 <Select

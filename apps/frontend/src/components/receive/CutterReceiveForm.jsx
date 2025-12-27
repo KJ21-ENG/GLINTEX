@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
@@ -10,6 +11,8 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const navigate = useNavigate();
     const [barcode, setBarcode] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -36,6 +39,41 @@ export function CutterReceiveForm() {
     useEffect(() => {
         barcodeInputRef.current?.focus();
     }, []);
+
+    // Auto-scan barcode from URL query param (from "Go to Receive" button)
+    useEffect(() => {
+        const barcodeFromUrl = searchParams.get('barcode');
+        if (barcodeFromUrl && !issueRecord) {
+            // Set barcode and trigger scan
+            setBarcode(barcodeFromUrl);
+            setLoading(true);
+            api.getIssueByCutterBarcode(barcodeFromUrl)
+                .then(res => {
+                    if (res && res.id) {
+                        setIssueRecord(res);
+                        setCutId(res.cutId || '');
+                        setHelperId('');
+                        setBobbinId('');
+                        setBoxId('');
+                        setBobbinQty('');
+                        setGrossWeight('');
+                        setIsWastage(false);
+                    } else {
+                        alert('Barcode not found or invalid');
+                        setIssueRecord(null);
+                    }
+                })
+                .catch(err => {
+                    alert(err.message || 'Failed to fetch barcode details');
+                })
+                .finally(() => {
+                    setLoading(false);
+                    // Clear the URL param to prevent re-scan on refresh
+                    setSearchParams({}, { replace: true });
+                });
+        }
+    }, [searchParams, issueRecord, setSearchParams]);
+
 
     const handleScan = async (e) => {
         e.preventDefault();

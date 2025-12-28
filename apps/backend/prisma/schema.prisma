@@ -384,17 +384,49 @@ model ReceiveFromCutterMachineRow {
   totalKg       Float?
   createdBy     String?
   modifiedBy    String?
+  challanId     String?
+  isDeleted     Boolean                            @default(false)
+  deletedAt     DateTime?
+  deletedByUserId String?
   createdAt     DateTime                            @default(now())
   updatedAt     DateTime                            @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   upload        ReceiveFromCutterMachineUpload      @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  challan       ReceiveFromCutterMachineChallan?    @relation(fields: [challanId], references: [id])
   bobbin        Bobbin?                              @relation(fields: [bobbinId], references: [id])
   box           Box?                                 @relation(fields: [boxId], references: [id])
   operator      Operator?                            @relation("OperatorReceiveRows", fields: [operatorId], references: [id])
   helper        Operator?                            @relation("HelperReceiveRows", fields: [helperId], references: [id])
   cutId         String?
   cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
+}
+
+model ReceiveFromCutterMachineChallan {
+  id              String   @id @default(cuid())
+  challanNo       String   @unique
+  sequence        Int
+  fiscalYear      String
+  pieceId         String
+  lotNo           String
+  itemId          String?
+  date            String?
+  totalNetWeight  Float    @default(0)
+  totalBobbinQty  Int      @default(0)
+  operatorId      String?
+  helperId        String?
+  cutId           String?
+  wastageNetWeight Float   @default(0)
+  wastageNote     String?
+  changeLog       Json     @default("[]")
+  isDeleted       Boolean  @default(false)
+  deletedAt       DateTime?
+  deletedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  rows            ReceiveFromCutterMachineRow[]
 }
 
 model ReceiveFromCutterMachinePieceTotal {

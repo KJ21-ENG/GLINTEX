@@ -189,7 +189,7 @@ export function ConingReceiveForm() {
                                         if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
                                         const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                         if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === hRefs[0].rowId);
+                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
                                             if (cutterRow) {
                                                 cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                             }

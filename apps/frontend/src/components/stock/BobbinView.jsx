@@ -35,41 +35,43 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
 
   // 3. Calculate Bobbin Crates (Rows)
   const bobbinCrates = useMemo(() => {
-    return (db.receive_from_cutter_machine_rows || []).map((row) => {
-      const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
-      const lotNo = row?.lotNo || piece?.lotNo || '';
-      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+    return (db.receive_from_cutter_machine_rows || [])
+      .filter(row => !row.isDeleted)
+      .map((row) => {
+        const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
+        const lotNo = row?.lotNo || piece?.lotNo || '';
+        const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
 
-      const bobbinQty = Number(row?.bobbinQuantity || 0);
-      const issuedBobbins = Number(row?.issuedBobbins || 0);
-      const availableBobbins = Math.max(0, bobbinQty - issuedBobbins);
+        const bobbinQty = Number(row?.bobbinQuantity || 0);
+        const issuedBobbins = Number(row?.issuedBobbins || 0);
+        const availableBobbins = Math.max(0, bobbinQty - issuedBobbins);
 
-      const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
-      const issuedWeight = Number(row?.issuedBobbinWeight || 0);
-      const availableWeight = Number.isFinite(netWeight) ? Math.max(0, netWeight - issuedWeight) : 0;
+        const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
+        const issuedWeight = Number(row?.issuedBobbinWeight || 0);
+        const availableWeight = Number.isFinite(netWeight) ? Math.max(0, netWeight - issuedWeight) : 0;
 
-      const cutName = row.cut || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+        const cutName = row.cut || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
 
-      return {
-        ...row,
-        lotNo,
-        date: row.date || row.createdAt || '',
-        itemId: piece?.itemId || lotMeta?.itemId || '',
-        firmId: lotMeta?.firmId || '',
-        supplierId: lotMeta?.supplierId || '',
-        itemName: lotMeta?.itemName || '—',
-        firmName: lotMeta?.firmName || '—',
-        supplierName: lotMeta?.supplierName || '—',
-        cutName,
-        bobbinQty,
-        issuedBobbins,
-        availableBobbins,
-        netWeight,
-        issuedWeight,
-        availableWeight,
-        bobbinName: row.bobbin?.name || row.pcsTypeName || '—',
-      };
-    });
+        return {
+          ...row,
+          lotNo,
+          date: row.date || row.createdAt || '',
+          itemId: piece?.itemId || lotMeta?.itemId || '',
+          firmId: lotMeta?.firmId || '',
+          supplierId: lotMeta?.supplierId || '',
+          itemName: lotMeta?.itemName || '—',
+          firmName: lotMeta?.firmName || '—',
+          supplierName: lotMeta?.supplierName || '—',
+          cutName,
+          bobbinQty,
+          issuedBobbins,
+          availableBobbins,
+          netWeight,
+          issuedWeight,
+          availableWeight,
+          bobbinName: row.bobbin?.name || row.pcsTypeName || '—',
+        };
+      });
   }, [db.receive_from_cutter_machine_rows, inboundPieceMap, lotMetaMap, db.cuts]);
 
   // 4. Aggregate into Lots

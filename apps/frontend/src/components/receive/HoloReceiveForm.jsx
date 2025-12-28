@@ -106,7 +106,7 @@ export function HoloReceiveForm() {
                         const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
                         if (Array.isArray(refs) && refs.length > 0) {
                             const firstRowId = refs[0].rowId;
-                            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => r.id === firstRowId);
+                            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
                             if (sourceRow) {
                                 cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
                             }

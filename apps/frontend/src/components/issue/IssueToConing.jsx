@@ -156,7 +156,7 @@ export function IssueToConing() {
                                     const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                     if (Array.isArray(refs) && refs.length > 0) {
                                         const cutterRowId = refs[0].rowId;
-                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === cutterRowId);
+                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
                                         if (cutterRow) {
                                             cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                         }

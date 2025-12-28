@@ -83,7 +83,7 @@ export function IssueHistory({ db, refreshDb }) {
 
             // Get cut and bobbin type from first ref's source row
             const firstRef = refs[0];
-            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === firstRef.rowId);
+            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
               cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
@@ -160,7 +160,7 @@ export function IssueHistory({ db, refreshDb }) {
                 // Get cut from cutter receive row
                 const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                 if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === holoRefs[0].rowId);
+                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
                   if (cutterRow) {
                     cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                   }

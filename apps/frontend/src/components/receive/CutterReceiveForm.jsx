@@ -204,11 +204,12 @@ export function CutterReceiveForm() {
     }, [pieceIdToUse, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
 
     const effectiveNetWeight = isWastage ? pieceStatus.pendingWeight : netWeight;
-    const receivingBlocked = pieceStatus.hasWastageInDb || pieceStatus.hasWastageInCart;
+    const isWastageClosed = pieceStatus.pendingWeight <= 0 && pieceStatus.hasWastageInDb;
+    const receivingBlocked = pieceStatus.hasWastageInCart || isWastageClosed;
     const receiveFieldsDisabled = isWastage || receivingBlocked;
 
     const computeNextBarcode = (pieceId, lotNo, seq) => {
-        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId);
+        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId && !row.isDeleted);
         const existingMax = existing.reduce((max, row) => {
             const idx = parseReceiveCrateIndex(row.barcode);
             if (idx != null && idx > max) return idx;
@@ -227,7 +228,7 @@ export function CutterReceiveForm() {
             return;
         }
 
-        if (pieceStatus.hasWastageInDb) {
+        if (isWastageClosed) {
             alert('This piece is already marked as wastage. Receiving is closed.');
             return;
         }
@@ -388,34 +389,28 @@ export function CutterReceiveForm() {
         if (cart.length === 0) return;
         setSaving(true);
         try {
-            const receiveEntries = cart.filter(entry => !entry.isWastage);
-            const wastageEntries = cart.filter(entry => entry.isWastage);
+            const entries = cart.map(entry => ({
+                pieceId: entry.pieceId,
+                lotNo: entry.lotNo,
+                bobbinId: entry.bobbinId,
+                boxId: entry.boxId,
+                bobbinQuantity: Number(entry.bobbinQty),
+                grossWeight: Number(entry.grossWeight),
+                receiveDate: entry.receiveDate,
+                operatorId: entry.operatorId,
+                cutId: entry.cutId,
+                helperId: entry.helperId,
+                shift: entry.shift,
+                isWastage: entry.isWastage
+            }));
 
-            for (const entry of receiveEntries) {
-                await api.manualReceiveFromMachine({
-                    pieceId: entry.pieceId,
-                    lotNo: entry.lotNo,
-                    bobbinId: entry.bobbinId,
-                    boxId: entry.boxId,
-                    bobbinQuantity: Number(entry.bobbinQty),
-                    grossWeight: Number(entry.grossWeight),
-                    receiveDate: entry.receiveDate,
-                    operatorId: entry.operatorId, // Pass operatorId
-                    cutId: entry.cutId,
-                    helperId: entry.helperId,
-                    shift: entry.shift
-                });
-            }
-
-            const wastagePieceIds = Array.from(new Set(wastageEntries.map(entry => entry.pieceId)));
-            for (const pieceId of wastagePieceIds) {
-                await api.markPieceWastage({ pieceId });
-            }
+            const res = await api.createCutterReceiveChallan({ entries });
             await refreshDb();
             setCart([]);
             setIssueRecord(null);
             setBarcode('');
-            alert('Received successfully');
+            const challanNo = res?.challan?.challanNo;
+            alert(challanNo ? `Received successfully. Challan ${challanNo} generated.` : 'Received successfully');
             barcodeInputRef.current?.focus();
         } catch (e) {
             alert(e.message);
@@ -454,7 +449,7 @@ export function CutterReceiveForm() {
                                 <InfoPopover
                                     title="Received Crates"
                                     items={(db.receive_from_cutter_machine_rows || []).filter(row =>
-                                        issueRecord?.pieceIds?.includes(row.pieceId)
+                                        !row.isDeleted && issueRecord?.pieceIds?.includes(row.pieceId)
                                     )}
                                     renderContent={(items) => (
                                         <table className="w-full text-xs">
@@ -497,7 +492,7 @@ export function CutterReceiveForm() {
                             </div>
                             <div>
                                 <span className="font-semibold">Pending:</span> {formatKg(pendingWeight)}
-                                {pieceStatus.hasWastageInDb ? (
+                                {isWastageClosed ? (
                                     <div className="text-xs text-destructive">
                                         ({formatKg(pieceStatus.wastageWeight)}kg wastage)
                                     </div>
@@ -555,13 +550,13 @@ export function CutterReceiveForm() {
                 </CardContent>
             </Card>
 
-            {issueRecord && pieceStatus.hasWastageInDb && (
+            {issueRecord && isWastageClosed && (
                 <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                     Wastage already marked. Receiving is closed.
                 </div>
             )}
 
-            {issueRecord && !pieceStatus.hasWastageInDb && (
+            {issueRecord && !isWastageClosed && (
                 <Card className="fade-in">
                     <CardHeader><CardTitle>Receive Details</CardTitle></CardHeader>
                     <CardContent className="space-y-4">

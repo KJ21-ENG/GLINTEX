@@ -186,6 +186,54 @@ async function logCrudWithActor(req, args) {
   });
 }
 
+function getFiscalYearLabel(dateInput) {
+  const date = dateInput ? new Date(dateInput) : new Date();
+  if (Number.isNaN(date.getTime())) return getFiscalYearLabel();
+  const year = date.getFullYear();
+  const month = date.getMonth(); // 0-based
+  const startYear = month >= 3 ? year : year - 1; // FY starts in April
+  const endYear = startYear + 1;
+  return `${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+}
+
+function formatCutterChallanNo(sequence, fiscalYear) {
+  const padded = String(sequence || 0).padStart(3, '0');
+  return `CUT/CH/${padded}/${fiscalYear}`;
+}
+
+async function allocateCutterChallanNumber(tx, actorUserId, dateInput) {
+  const fiscalYear = getFiscalYearLabel(dateInput);
+  const seqId = `cutter_challan_seq_${fiscalYear.replace('-', '_')}`;
+  const seq = await tx.sequence.upsert({
+    where: { id: seqId },
+    update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+    create: { id: seqId, nextValue: 1, ...actorCreateFields(actorUserId) },
+  });
+  return {
+    challanNo: formatCutterChallanNo(seq.nextValue, fiscalYear),
+    sequence: seq.nextValue,
+    fiscalYear,
+  };
+}
+
+function appendChangeLog(existing, entry) {
+  const list = Array.isArray(existing) ? existing.slice() : [];
+  list.push(entry);
+  return list;
+}
+
+async function findWastageNoteChallans({ pieceId, referenceDate, includeSelf = false }) {
+  return await prisma.receiveFromCutterMachineChallan.findMany({
+    where: {
+      pieceId,
+      isDeleted: false,
+      wastageNote: { not: null },
+      createdAt: includeSelf ? { gte: referenceDate } : { gt: referenceDate },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
 // Helper: Get or create bobbin by name (normalize to "Bobbin" if empty/null)
 async function getOrCreateBobbin(pcsTypeName) {
   if (!pcsTypeName || !String(pcsTypeName).trim()) {
@@ -916,6 +964,10 @@ router.get('/api/db', async (req, res) => {
       },
     },
   });
+  const receive_from_cutter_machine_challans = await prisma.receiveFromCutterMachineChallan.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECEIVE_ROWS_FETCH_LIMIT,
+  });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
   const receive_from_holo_machine_rows = await prisma.receiveFromHoloMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
@@ -964,6 +1016,7 @@ router.get('/api/db', async (req, res) => {
     settings,
     receive_from_cutter_machine_uploads,
     receive_from_cutter_machine_rows,
+    receive_from_cutter_machine_challans,
     receive_from_cutter_machine_piece_totals,
     receive_from_holo_machine_rows,
     receive_from_holo_machine_piece_totals,
@@ -984,7 +1037,7 @@ router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', async 
     }
 
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
-      where: { pieceId },
+      where: { pieceId, isDeleted: false },
       select: { id: true, barcode: true },
     });
 
@@ -1064,7 +1117,7 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
     const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
     const rows = rowIds.length > 0
       ? await prisma.receiveFromCutterMachineRow.findMany({
-        where: { id: { in: rowIds } },
+        where: { id: { in: rowIds }, isDeleted: false },
         select: {
           id: true,
           pieceId: true,
@@ -2396,6 +2449,306 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
   }
 });
 
+// Bulk manual receive for cutter with challan generation
+router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const entriesRaw = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    if (entriesRaw.length === 0) {
+      return res.status(400).json({ error: 'No entries provided' });
+    }
+
+    const normalizedEntries = entriesRaw.map((entry) => ({
+      ...entry,
+      pieceId: typeof entry.pieceId === 'string' ? entry.pieceId.trim() : '',
+      bobbinId: typeof entry.bobbinId === 'string' ? entry.bobbinId.trim() : '',
+      boxId: typeof entry.boxId === 'string' ? entry.boxId.trim() : '',
+      operatorId: typeof entry.operatorId === 'string' ? entry.operatorId.trim() : '',
+      helperId: typeof entry.helperId === 'string' ? entry.helperId.trim() : '',
+      cutId: typeof entry.cutId === 'string' ? entry.cutId.trim() : '',
+      shift: typeof entry.shift === 'string' ? entry.shift.trim() : '',
+    }));
+
+    const pieceIds = new Set(normalizedEntries.map(e => e.pieceId).filter(Boolean));
+    if (pieceIds.size !== 1) {
+      return res.status(400).json({ error: 'Entries must belong to a single piece' });
+    }
+    const pieceId = Array.from(pieceIds)[0];
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Piece not found' });
+
+    const receiveEntries = normalizedEntries.filter(e => !e.isWastage);
+    const wastageEntries = normalizedEntries.filter(e => e.isWastage);
+    if (wastageEntries.length > 1) {
+      return res.status(400).json({ error: 'Only one wastage entry is allowed per challan' });
+    }
+    if (receiveEntries.length === 0 && wastageEntries.length === 0) {
+      return res.status(400).json({ error: 'No valid entries provided' });
+    }
+
+    const operatorIds = new Set(normalizedEntries.map(e => e.operatorId).filter(Boolean));
+    if (operatorIds.size !== 1) {
+      return res.status(400).json({ error: 'All entries must use the same operator' });
+    }
+    const operatorId = Array.from(operatorIds)[0];
+    if (!operatorId) {
+      return res.status(400).json({ error: 'Missing operator' });
+    }
+
+    const operatorRec = await prisma.operator.findUnique({ where: { id: operatorId } });
+    if (!operatorRec || normalizeWorkerRole(operatorRec.role) !== 'operator') {
+      return res.status(400).json({ error: 'Invalid operator selected' });
+    }
+
+    const helperIds = new Set(normalizedEntries.map(e => e.helperId).filter(Boolean));
+    if (helperIds.size > 1) {
+      return res.status(400).json({ error: 'All entries must use the same helper' });
+    }
+    const helperId = helperIds.size === 1 ? Array.from(helperIds)[0] : null;
+    let helperRec = null;
+    if (helperId) {
+      helperRec = await prisma.operator.findUnique({ where: { id: helperId } });
+      if (!helperRec || normalizeWorkerRole(helperRec.role) !== 'helper') {
+        return res.status(400).json({ error: 'Invalid helper selected' });
+      }
+    }
+
+    const cutIds = new Set(normalizedEntries.map(e => e.cutId).filter(Boolean));
+    if (cutIds.size > 1) {
+      return res.status(400).json({ error: 'All entries must use the same cut' });
+    }
+    const cutId = cutIds.size === 1 ? Array.from(cutIds)[0] : null;
+    let cutRecord = null;
+    if (cutId) {
+      cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
+      if (!cutRecord) {
+        return res.status(404).json({ error: 'Selected cut was not found' });
+      }
+    }
+
+    const receiveDateStr = toOptionalString(normalizedEntries[0]?.receiveDate) || new Date().toISOString().slice(0, 10);
+
+    const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
+    const inboundWeight = Number(piece.weight || 0);
+    const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
+    const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
+    let pendingRemaining = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+
+    if (pendingRemaining <= 0 && receiveEntries.length > 0) {
+      return res.status(400).json({ error: 'Piece has no pending weight remaining' });
+    }
+
+    const bobbinIds = Array.from(new Set(receiveEntries.map(e => e.bobbinId).filter(Boolean)));
+    const boxIds = Array.from(new Set(receiveEntries.map(e => e.boxId).filter(Boolean)));
+    const bobbins = bobbinIds.length ? await prisma.bobbin.findMany({ where: { id: { in: bobbinIds } } }) : [];
+    const boxes = boxIds.length ? await prisma.box.findMany({ where: { id: { in: boxIds } } }) : [];
+    const bobbinMap = new Map(bobbins.map(b => [b.id, b]));
+    const boxMap = new Map(boxes.map(b => [b.id, b]));
+
+    const existingRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { pieceId, isDeleted: false },
+      select: { barcode: true },
+    });
+    let maxCrateIndex = 0;
+    for (const row of existingRows) {
+      const idx = parseReceiveCrateIndex(row.barcode);
+      if (idx != null && idx > maxCrateIndex) {
+        maxCrateIndex = idx;
+      }
+    }
+
+    const rowsToCreate = [];
+    let totalNetWeight = 0;
+    let totalBobbinQty = 0;
+    let crateIndex = maxCrateIndex;
+
+    for (const entry of receiveEntries) {
+      if (!entry.bobbinId) return res.status(400).json({ error: 'Missing bobbin selection' });
+      if (!entry.boxId) return res.status(400).json({ error: 'Missing box selection' });
+
+      const bobbinQty = Math.max(0, toInt(entry.bobbinQuantity ?? entry.bobbinQty) || 0);
+      if (bobbinQty <= 0) {
+        return res.status(400).json({ error: 'Bobbin quantity must be greater than zero' });
+      }
+      const gross = toNumber(entry.grossWeight);
+      if (gross === null || !Number.isFinite(gross) || gross <= 0) {
+        return res.status(400).json({ error: 'Gross weight must be a positive number' });
+      }
+
+      const bobbin = bobbinMap.get(entry.bobbinId);
+      if (!bobbin) return res.status(404).json({ error: 'Bobbin not found' });
+      const box = boxMap.get(entry.boxId);
+      if (!box) return res.status(404).json({ error: 'Box not found' });
+
+      const bobbinWeight = Number(bobbin.weight);
+      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+        return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
+      }
+      const boxWeight = Number(box.weight);
+      if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+      }
+
+      const tare = roundTo3Decimals(boxWeight + bobbinWeight * bobbinQty);
+      const net = roundTo3Decimals(gross - tare);
+      if (!Number.isFinite(net) || net <= 0) {
+        return res.status(400).json({ error: 'Computed net weight must be positive. Check weights and quantity.' });
+      }
+      if (net - pendingRemaining > 1e-6) {
+        return res.status(400).json({ error: 'Net weight exceeds pending weight' });
+      }
+
+      pendingRemaining = roundTo3Decimals(pendingRemaining - net);
+      totalNetWeight = roundTo3Decimals(totalNetWeight + net);
+      totalBobbinQty += bobbinQty;
+      crateIndex += 1;
+
+      rowsToCreate.push({
+        pieceId,
+        vchNo: `MAN-${randomUUID().slice(0, 8)}`,
+        date: receiveDateStr,
+        grossWt: roundTo3Decimals(gross),
+        tareWt: tare,
+        netWt: net,
+        totalKg: net,
+        pktTypeName: box.name,
+        pcsTypeName: bobbin.name,
+        bobbinId: bobbin.id,
+        boxId: box.id,
+        operatorId: operatorRec.id,
+        helperId: helperId || null,
+        bobbinQuantity: bobbinQty,
+        employee: operatorRec.name,
+        shift: entry.shift || null,
+        helperName: helperRec ? helperRec.name : null,
+        cutId: cutRecord ? cutRecord.id : null,
+        cut: cutRecord ? cutRecord.name : null,
+        narration: 'Manual entry',
+        createdBy: 'manual',
+        barcode: makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex }),
+      });
+    }
+
+    let wastageToMark = 0;
+    let wastageNote = null;
+    if (wastageEntries.length > 0) {
+      if (pendingRemaining <= 0) {
+        return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
+      }
+      wastageToMark = roundTo3Decimals(pendingRemaining);
+      wastageNote = `Wastage marked: ${wastageToMark.toFixed(3)} kg`;
+      pendingRemaining = 0;
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      const upload = await tx.receiveFromCutterMachineUpload.create({
+        data: {
+          originalFilename: 'manual-challan',
+          rowCount: rowsToCreate.length,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const challanMeta = await allocateCutterChallanNumber(tx, actorUserId, receiveDateStr);
+      const challan = await tx.receiveFromCutterMachineChallan.create({
+        data: {
+          challanNo: challanMeta.challanNo,
+          sequence: challanMeta.sequence,
+          fiscalYear: challanMeta.fiscalYear,
+          pieceId,
+          lotNo: piece.lotNo,
+          itemId: piece.itemId || null,
+          date: receiveDateStr,
+          totalNetWeight,
+          totalBobbinQty,
+          operatorId: operatorRec.id,
+          helperId: helperId || null,
+          cutId: cutRecord ? cutRecord.id : null,
+          wastageNetWeight: wastageToMark,
+          wastageNote,
+          changeLog: [
+            {
+              at: new Date().toISOString(),
+              action: 'create',
+              actorUserId,
+              details: { totalNetWeight, totalBobbinQty, wastageNetWeight: wastageToMark },
+            },
+          ],
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const createdRows = [];
+      for (const row of rowsToCreate) {
+        const createdRow = await tx.receiveFromCutterMachineRow.create({
+          data: {
+            ...row,
+            uploadId: upload.id,
+            challanId: challan.id,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        createdRows.push(createdRow);
+      }
+
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalNetWeight: { increment: totalNetWeight },
+          totalBob: { increment: totalBobbinQty },
+          ...(wastageToMark > 0 ? { wastageNetWeight: { increment: wastageToMark } } : {}),
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId,
+          totalNetWeight,
+          totalBob: totalBobbinQty,
+          wastageNetWeight: wastageToMark,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      return { challan, upload, rows: createdRows };
+    });
+
+    if (wastageToMark > 0) {
+      try {
+        const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
+        const itemName = itemRec ? itemRec.name || '' : '';
+        const wastageFormatted = Number(wastageToMark).toFixed(3);
+        const wastagePercent = inboundWeight > 0 ? ((wastageToMark / inboundWeight) * 100).toFixed(2) : '0.00';
+        sendNotification('piece_wastage_marked', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent });
+      } catch (e) {
+        console.error('notify piece wastage error', e);
+      }
+    }
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_challan',
+      entityId: created.challan.id,
+      action: 'create',
+      payload: {
+        challanNo: created.challan.challanNo,
+        pieceId,
+        totalNetWeight,
+        totalBobbinQty,
+        wastageNetWeight: wastageToMark,
+      },
+    });
+
+    res.json({
+      ok: true,
+      challan: created.challan,
+      rowsCreated: created.rows.length,
+      wastageMarked: wastageToMark,
+    });
+  } catch (err) {
+    console.error('Failed to record bulk receive', err);
+    res.status(500).json({ error: err.message || 'Failed to record bulk receive' });
+  }
+});
+
 router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
@@ -2509,7 +2862,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       });
 
       const previousCrates = await tx.receiveFromCutterMachineRow.findMany({
-        where: { pieceId: resolvedPieceId },
+        where: { pieceId: resolvedPieceId, isDeleted: false },
         select: { barcode: true },
       });
       let maxCrateIndex = 0;
@@ -2606,6 +2959,440 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to record manual receive' });
   }
 });
+
+router.get('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Missing challan id' });
+    const challan = await prisma.receiveFromCutterMachineChallan.findUnique({ where: { id } });
+    if (!challan || challan.isDeleted) return res.status(404).json({ error: 'Challan not found' });
+
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { challanId: id, isDeleted: false },
+      include: {
+        bobbin: { select: { id: true, name: true, weight: true } },
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+        cutMaster: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({ ok: true, challan, rows });
+  } catch (err) {
+    console.error('Failed to load challan', err);
+    res.status(500).json({ error: err.message || 'Failed to load challan' });
+  }
+});
+
+router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const challanId = req.params.id;
+    const updatesRaw = Array.isArray(req.body?.updates) ? req.body.updates : [];
+    const removedRaw = Array.isArray(req.body?.removedRowIds) ? req.body.removedRowIds : [];
+    const confirmCascade = Boolean(req.body?.confirmCascade);
+
+    if (!challanId) return res.status(400).json({ error: 'Missing challan id' });
+    if (updatesRaw.length === 0 && removedRaw.length === 0) {
+      return res.status(400).json({ error: 'No changes provided' });
+    }
+
+    const challan = await prisma.receiveFromCutterMachineChallan.findUnique({ where: { id: challanId } });
+    if (!challan || challan.isDeleted) return res.status(404).json({ error: 'Challan not found' });
+
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { challanId, isDeleted: false },
+    });
+    const rowMap = new Map(rows.map(r => [r.id, r]));
+
+    const removedRowIds = Array.from(new Set(removedRaw.map(id => String(id || '').trim()).filter(Boolean)));
+    for (const rowId of removedRowIds) {
+      if (!rowMap.has(rowId)) {
+        return res.status(404).json({ error: `Row not found in challan: ${rowId}` });
+      }
+    }
+
+    const updates = updatesRaw.map((u) => ({
+      rowId: String(u?.rowId || u?.id || '').trim(),
+      grossWeight: u?.grossWeight,
+      bobbinQuantity: u?.bobbinQuantity ?? u?.bobbinQty,
+      boxId: typeof u?.boxId === 'string' ? u.boxId.trim() : u?.boxId,
+    })).filter(u => u.rowId);
+
+    if (updates.length === 0 && removedRowIds.length === 0) {
+      return res.status(400).json({ error: 'No valid changes provided' });
+    }
+
+    for (const update of updates) {
+      if (!rowMap.has(update.rowId)) {
+        return res.status(404).json({ error: `Row not found in challan: ${update.rowId}` });
+      }
+      if (removedRowIds.includes(update.rowId)) {
+        return res.status(400).json({ error: 'Cannot update and remove the same row' });
+      }
+    }
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: challan.pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Piece not found' });
+
+    const pieceTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: challan.pieceId } });
+    const currentTotalNet = Number(pieceTotals?.totalNetWeight || 0);
+    const currentTotalBob = Number(pieceTotals?.totalBob || 0);
+    const currentWastage = Number(pieceTotals?.wastageNetWeight || 0);
+
+    const requiredBobbinIds = new Set();
+    const requiredBoxIds = new Set();
+    for (const update of updates) {
+      const row = rowMap.get(update.rowId);
+      if (!row) continue;
+      if (row.bobbinId) requiredBobbinIds.add(row.bobbinId);
+      if (update.boxId || row.boxId) requiredBoxIds.add(update.boxId || row.boxId);
+    }
+
+    const bobbins = requiredBobbinIds.size
+      ? await prisma.bobbin.findMany({ where: { id: { in: Array.from(requiredBobbinIds) } } })
+      : [];
+    const boxes = requiredBoxIds.size
+      ? await prisma.box.findMany({ where: { id: { in: Array.from(requiredBoxIds) } } })
+      : [];
+    const bobbinMap = new Map(bobbins.map(b => [b.id, b]));
+    const boxMap = new Map(boxes.map(b => [b.id, b]));
+
+    let deltaNetWeight = 0;
+    let deltaBobbinQty = 0;
+    const updatesToApply = [];
+
+    for (const update of updates) {
+      const row = rowMap.get(update.rowId);
+      if (!row) continue;
+      const bobbin = row.bobbinId ? bobbinMap.get(row.bobbinId) : null;
+      if (!bobbin) return res.status(404).json({ error: 'Bobbin not found for row' });
+      const boxId = update.boxId || row.boxId;
+      const box = boxId ? boxMap.get(boxId) : null;
+      if (!box) return res.status(404).json({ error: 'Box not found for row' });
+
+      const bobbinQty = Math.max(0, toInt(update.bobbinQuantity ?? row.bobbinQuantity) || 0);
+      if (bobbinQty <= 0) {
+        return res.status(400).json({ error: 'Bobbin quantity must be greater than zero' });
+      }
+      const gross = toNumber(update.grossWeight ?? row.grossWt);
+      if (gross === null || !Number.isFinite(gross) || gross <= 0) {
+        return res.status(400).json({ error: 'Gross weight must be a positive number' });
+      }
+
+      const bobbinWeight = Number(bobbin.weight);
+      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+        return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
+      }
+      const boxWeight = Number(box.weight);
+      if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+      }
+
+      const tare = roundTo3Decimals(boxWeight + bobbinWeight * bobbinQty);
+      const net = roundTo3Decimals(gross - tare);
+      if (!Number.isFinite(net) || net <= 0) {
+        return res.status(400).json({ error: 'Computed net weight must be positive. Check weights and quantity.' });
+      }
+
+      const prevNet = Number(row.netWt || 0);
+      deltaNetWeight = roundTo3Decimals(deltaNetWeight + (net - prevNet));
+      deltaBobbinQty += bobbinQty - Number(row.bobbinQuantity || 0);
+
+      updatesToApply.push({
+        id: row.id,
+        data: {
+          grossWt: roundTo3Decimals(gross),
+          tareWt: tare,
+          netWt: net,
+          totalKg: net,
+          bobbinQuantity: bobbinQty,
+          boxId,
+          pktTypeName: box.name,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+    }
+
+    for (const rowId of removedRowIds) {
+      const row = rowMap.get(rowId);
+      if (!row) continue;
+      deltaNetWeight = roundTo3Decimals(deltaNetWeight - Number(row.netWt || 0));
+      deltaBobbinQty -= Number(row.bobbinQuantity || 0);
+    }
+
+    const nextTotalNet = roundTo3Decimals(currentTotalNet + deltaNetWeight);
+    const nextTotalBob = currentTotalBob + deltaBobbinQty;
+    if (nextTotalNet < -1e-6 || nextTotalBob < 0) {
+      return res.status(400).json({ error: 'Invalid totals after update' });
+    }
+
+    const inboundWeight = Number(piece.weight || 0);
+    if (nextTotalNet + currentWastage - inboundWeight > 1e-6) {
+      return res.status(400).json({ error: 'Net weight exceeds inbound weight' });
+    }
+
+    const pendingAfter = Math.max(0, inboundWeight - nextTotalNet - currentWastage);
+    let affectedChallans = [];
+    if (pendingAfter > 0) {
+      affectedChallans = await findWastageNoteChallans({
+        pieceId: challan.pieceId,
+        referenceDate: challan.createdAt,
+        includeSelf: true,
+      });
+    }
+
+    if (affectedChallans.length > 0 && !confirmCascade) {
+      return res.status(409).json({
+        error: 'wastage_note_conflict',
+        affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+      });
+    }
+
+    const changeEntry = {
+      at: new Date().toISOString(),
+      action: 'update',
+      actorUserId,
+      details: {
+        deltaNetWeight,
+        deltaBobbinQty,
+        updatedRows: updatesToApply.length,
+        removedRows: removedRowIds.length,
+      },
+    };
+
+    const updated = await prisma.$transaction(async (tx) => {
+      for (const update of updatesToApply) {
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: update.id },
+          data: update.data,
+        });
+      }
+
+      if (removedRowIds.length > 0) {
+        await tx.receiveFromCutterMachineRow.updateMany({
+          where: { id: { in: removedRowIds }, isDeleted: false },
+          data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedByUserId: actorUserId || null,
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+      }
+
+      if (deltaNetWeight !== 0 || deltaBobbinQty !== 0) {
+        await tx.receiveFromCutterMachinePieceTotal.update({
+          where: { pieceId: challan.pieceId },
+          data: {
+            totalNetWeight: { increment: deltaNetWeight },
+            totalBob: { increment: deltaBobbinQty },
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+      }
+
+      const updatedChallan = await tx.receiveFromCutterMachineChallan.update({
+        where: { id: challanId },
+        data: {
+          totalNetWeight: { increment: deltaNetWeight },
+          totalBobbinQty: { increment: deltaBobbinQty },
+          changeLog: appendChangeLog(challan.changeLog, changeEntry),
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+
+      if (affectedChallans.length > 0) {
+        for (const affected of affectedChallans) {
+          if (affected.id === challanId && affected.isDeleted) continue;
+          await tx.receiveFromCutterMachineChallan.update({
+            where: { id: affected.id },
+            data: {
+              wastageNote: null,
+              changeLog: appendChangeLog(affected.changeLog, {
+                at: new Date().toISOString(),
+                action: 'wastage_note_removed',
+                actorUserId,
+                details: { sourceChallanId: challanId, reason: 'pending_opened' },
+              }),
+              ...actorUpdateFields(actorUserId),
+            },
+          });
+        }
+      }
+
+      return updatedChallan;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_challan',
+      entityId: updated.id,
+      action: 'update',
+      payload: {
+        deltaNetWeight,
+        deltaBobbinQty,
+        updatedRows: updatesToApply.length,
+        removedRows: removedRowIds.length,
+      },
+    });
+
+    res.json({
+      ok: true,
+      challan: updated,
+      pendingAfter,
+      affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+    });
+  } catch (err) {
+    console.error('Failed to update challan', err);
+    res.status(500).json({ error: err.message || 'Failed to update challan' });
+  }
+});
+
+router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const challanId = req.params.id;
+    const confirmCascade = Boolean(req.body?.confirmCascade);
+    if (!challanId) return res.status(400).json({ error: 'Missing challan id' });
+
+    const challan = await prisma.receiveFromCutterMachineChallan.findUnique({ where: { id: challanId } });
+    if (!challan || challan.isDeleted) return res.status(404).json({ error: 'Challan not found' });
+
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { challanId, isDeleted: false },
+    });
+    const totalNetWeight = roundTo3Decimals(rows.reduce((sum, row) => sum + Number(row.netWt || 0), 0));
+    const totalBobbinQty = rows.reduce((sum, row) => sum + Number(row.bobbinQuantity || 0), 0);
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: challan.pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Piece not found' });
+
+    const pieceTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: challan.pieceId } });
+    const currentTotalNet = Number(pieceTotals?.totalNetWeight || 0);
+    const currentTotalBob = Number(pieceTotals?.totalBob || 0);
+    const currentWastage = Number(pieceTotals?.wastageNetWeight || 0);
+
+    const deltaNetWeight = roundTo3Decimals(-totalNetWeight);
+    const deltaBobbinQty = -totalBobbinQty;
+    const deltaWastage = roundTo3Decimals(Number(challan.wastageNetWeight || 0));
+
+    const nextTotalNet = roundTo3Decimals(currentTotalNet + deltaNetWeight);
+    const nextTotalBob = currentTotalBob + deltaBobbinQty;
+    const nextWastage = roundTo3Decimals(currentWastage - deltaWastage);
+
+    if (nextTotalNet < -1e-6 || nextTotalBob < 0 || nextWastage < -1e-6) {
+      return res.status(400).json({ error: 'Invalid totals after delete' });
+    }
+
+    const inboundWeight = Number(piece.weight || 0);
+    const pendingAfter = Math.max(0, inboundWeight - nextTotalNet - nextWastage);
+    let affectedChallans = [];
+    if (pendingAfter > 0) {
+      affectedChallans = await findWastageNoteChallans({
+        pieceId: challan.pieceId,
+        referenceDate: challan.createdAt,
+        includeSelf: false,
+      });
+    }
+
+    if (affectedChallans.length > 0 && !confirmCascade) {
+      return res.status(409).json({
+        error: 'wastage_note_conflict',
+        affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+      });
+    }
+
+    const changeEntry = {
+      at: new Date().toISOString(),
+      action: 'delete',
+      actorUserId,
+      details: {
+        totalNetWeight,
+        totalBobbinQty,
+        wastageNetWeight: deltaWastage,
+      },
+    };
+
+    const deleted = await prisma.$transaction(async (tx) => {
+      if (rows.length > 0) {
+        await tx.receiveFromCutterMachineRow.updateMany({
+          where: { challanId, isDeleted: false },
+          data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedByUserId: actorUserId || null,
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+      }
+
+      await tx.receiveFromCutterMachinePieceTotal.update({
+        where: { pieceId: challan.pieceId },
+        data: {
+          totalNetWeight: { increment: deltaNetWeight },
+          totalBob: { increment: deltaBobbinQty },
+          ...(deltaWastage > 0 ? { wastageNetWeight: { increment: -deltaWastage } } : {}),
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+
+      const updatedChallan = await tx.receiveFromCutterMachineChallan.update({
+        where: { id: challanId },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedByUserId: actorUserId || null,
+          changeLog: appendChangeLog(challan.changeLog, changeEntry),
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+
+      if (affectedChallans.length > 0) {
+        for (const affected of affectedChallans) {
+          await tx.receiveFromCutterMachineChallan.update({
+            where: { id: affected.id },
+            data: {
+              wastageNote: null,
+              changeLog: appendChangeLog(affected.changeLog, {
+                at: new Date().toISOString(),
+                action: 'wastage_note_removed',
+                actorUserId,
+                details: { sourceChallanId: challanId, reason: 'pending_opened' },
+              }),
+              ...actorUpdateFields(actorUserId),
+            },
+          });
+        }
+      }
+
+      return updatedChallan;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_challan',
+      entityId: deleted.id,
+      action: 'delete',
+      payload: {
+        totalNetWeight,
+        totalBobbinQty,
+        wastageNetWeight: deltaWastage,
+      },
+    });
+
+    res.json({
+      ok: true,
+      challan: deleted,
+      pendingAfter,
+      affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+    });
+  } catch (err) {
+    console.error('Failed to delete challan', err);
+    res.status(500).json({ error: err.message || 'Failed to delete challan' });
+  }
+});
+
 router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
   try {
     const { filename, content } = req.body || {};
@@ -2683,7 +3470,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
       return res.status(400).json({ error: 'Duplicate crates were scanned. Remove duplicates and try again.' });
     }
     const receiveRows = await prisma.receiveFromCutterMachineRow.findMany({
-      where: { id: { in: rowIds } },
+      where: { id: { in: rowIds }, isDeleted: false },
       select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
     });
     if (receiveRows.length !== normalizedCrates.length) {
@@ -3626,7 +4413,7 @@ router.delete('/api/cuts/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Cut not found' });
     }
-    const usage = await prisma.receiveFromCutterMachineRow.count({ where: { cutId: id } });
+    const usage = await prisma.receiveFromCutterMachineRow.count({ where: { cutId: id, isDeleted: false } });
     if (usage > 0) {
       return res.status(400).json({ error: 'Cut is in use and cannot be deleted' });
     }
@@ -3880,6 +4667,7 @@ router.delete('/api/operators/:id', async (req, res) => {
           { operatorId: id },
           { helperId: id },
         ],
+        isDeleted: false,
       },
     }));
   if (usage > 0) {
@@ -3943,7 +4731,7 @@ router.delete('/api/bobbins/:id', async (req, res) => {
   const { id } = req.params;
   const existingBobbin = await prisma.bobbin.findUnique({ where: { id } });
   if (!existingBobbin) return res.status(404).json({ error: 'Bobbin not found' });
-  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { bobbinId: id } });
+  const usage = await prisma.receiveFromCutterMachineRow.count({ where: { bobbinId: id, isDeleted: false } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Bobbin is referenced and cannot be deleted' });
   }
@@ -4080,7 +4868,7 @@ router.delete('/api/boxes/:id', async (req, res) => {
   const { id } = req.params;
   const existingBox = await prisma.box.findUnique({ where: { id } });
   if (!existingBox) return res.status(404).json({ error: 'Box not found' });
-  const usage = (await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id } }))
+  const usage = (await prisma.receiveFromCutterMachineRow.count({ where: { boxId: id, isDeleted: false } }))
     + (await prisma.receiveFromHoloMachineRow.count({ where: { boxId: id } }))
     + (await prisma.receiveFromConingMachineRow.count({ where: { boxId: id } }));
   if (usage > 0) {
@@ -4269,7 +5057,7 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
     const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
     const cleanPieceIds = pieceIds.map(p => String(p).trim()).filter(Boolean);
     if (cleanPieceIds.length > 0) {
-      const receiveCount = await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: { in: cleanPieceIds } } });
+      const receiveCount = await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: { in: cleanPieceIds }, isDeleted: false } });
       if (receiveCount > 0) {
         return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
       }

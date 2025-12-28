@@ -203,7 +203,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Piece</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -260,7 +260,7 @@ export function OnMachineTable({ db, process }) {
                                     <TableRow key={entry.id}>
                                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(entry.date)}</TableCell>
                                         <TableCell>{itemNameById.get(entry.itemId)}</TableCell>
-                                        <TableCell>{entry.lotNo}</TableCell>
+                                        <TableCell className="max-w-[120px] truncate" title={entry.pieceIds || ''}>{entry.pieceIds || '—'}</TableCell>
                                         <TableCell>{machineNameById.get(entry.machineId)}</TableCell>
                                         <TableCell>{operatorNameById.get(entry.operatorId)}</TableCell>
                                         <TableCell>{formatKg(entry.issuedWeight)}</TableCell>

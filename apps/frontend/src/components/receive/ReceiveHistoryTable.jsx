@@ -107,6 +107,122 @@ export function ReceiveHistoryTable() {
         }
     };
 
+    const computeNetWeight = (bobbinId, boxId, bobbinQty, grossWeight) => {
+        const bobbinWeight = Number(bobbinMap.get(bobbinId)?.weight || 0);
+        const boxWeight = Number(boxMap.get(boxId)?.weight || 0);
+        const qty = Number(bobbinQty || 0);
+        const gross = Number(grossWeight || 0);
+        const net = gross - (boxWeight + bobbinWeight * qty);
+        return Number.isFinite(net) ? net : 0;
+    };
+
+    const roundTo3Decimals = (val) => {
+        const num = Number(val);
+        if (!Number.isFinite(num)) return 0;
+        return Math.round(num * 1000) / 1000;
+    };
+
+    const extractWastageFromNote = (note) => {
+        if (!note) return 0;
+        const match = String(note).match(/([0-9]+(?:\.[0-9]+)?)/);
+        if (!match) return 0;
+        const value = Number(match[1].replace(/,/g, ''));
+        return Number.isFinite(value) ? roundTo3Decimals(value) : 0;
+    };
+
+    const resolveWastageResetAmount = ({ pieceId, affected, serverAmount }) => {
+        const serverValue = Number(serverAmount);
+        if (Number.isFinite(serverValue)) return serverValue;
+
+        const pieceTotals = (db.receive_from_cutter_machine_piece_totals || [])
+            .find(total => total.pieceId === pieceId);
+        const pieceWastage = Number(pieceTotals?.wastageNetWeight || 0);
+        if (pieceWastage > 0) return pieceWastage;
+
+        if (!Array.isArray(affected) || affected.length === 0) return 0;
+        const challanMap = new Map(
+            (db.receive_from_cutter_machine_challans || []).map(challan => [challan.id, challan])
+        );
+        const total = affected.reduce((sum, entry) => {
+            const challan = challanMap.get(entry.id);
+            if (!challan) return sum;
+            const numeric = Number(challan.wastageNetWeight || 0);
+            if (numeric > 0) return sum + numeric;
+            return sum + extractWastageFromNote(challan.wastageNote);
+        }, 0);
+        return roundTo3Decimals(total);
+    };
+
+    const resolvePieceWeights = (pieceId) => {
+        if (!pieceId) return { inboundWeight: null, receivedWeight: null };
+        const piece = (db.inbound_items || []).find(p => p.id === pieceId);
+        const inboundWeight = Number(piece?.weight);
+        const pieceTotals = (db.receive_from_cutter_machine_piece_totals || [])
+            .find(total => total.pieceId === pieceId);
+        const receivedWeight = Number(pieceTotals?.totalNetWeight);
+        return {
+            inboundWeight: Number.isFinite(inboundWeight) ? inboundWeight : null,
+            receivedWeight: Number.isFinite(receivedWeight) ? receivedWeight : null,
+        };
+    };
+
+    const getWastageResetCheck = ({ entryWeightBack, wastageAmount, inboundWeight, receivedWeight }) => {
+        const inbound = Number(inboundWeight);
+        const received = Number(receivedWeight);
+        if (!Number.isFinite(inbound) || !Number.isFinite(received)) return null;
+        const entryWeight = Number(entryWeightBack || 0);
+        const wastageWeight = Number(wastageAmount || 0);
+        const remainingReceived = Math.max(0, roundTo3Decimals(received - entryWeight));
+        const accountedTotal = roundTo3Decimals(remainingReceived + entryWeight + wastageWeight);
+        return {
+            inbound,
+            received,
+            remainingReceived,
+            accountedTotal,
+            exceedsInbound: accountedTotal - inbound > 1e-6,
+        };
+    };
+
+    const buildWastageResetConfirmMessage = ({ affected, wastageAmount, entryWeightBack, inboundWeight, receivedWeight }) => {
+        const lines = [];
+        const entryWeight = Number(entryWeightBack || 0);
+        const wastageWeight = Number(wastageAmount || 0);
+        const totalWeight = entryWeight + wastageWeight;
+
+        lines.push('Wastage will be cleared and made available to receive again.');
+        lines.push(
+            `Entries back to receive: ${formatKg(entryWeight)} kg + `
+            + `Wastage back to receive: ${formatKg(wastageWeight)} kg = `
+            + `Total: ${formatKg(totalWeight)} kg`
+        );
+
+        const check = getWastageResetCheck({
+            entryWeightBack,
+            wastageAmount,
+            inboundWeight,
+            receivedWeight,
+        });
+        if (check) {
+            lines.push(
+                `Check: Remaining received ${formatKg(check.remainingReceived)} kg + `
+                + `Entries back ${formatKg(entryWeight)} kg + `
+                + `Wastage back ${formatKg(wastageWeight)} kg = `
+                + `${formatKg(check.accountedTotal)} kg (Inbound ${formatKg(check.inbound)} kg).`
+            );
+            if (check.exceedsInbound) {
+                lines.push('Warning: This exceeds the inbound weight. Please re-check the piece totals.');
+            }
+        }
+
+        if (affected.length > 0) {
+            const list = affected.map(c => c.challanNo).join(', ');
+            lines.push(`This will also remove the wastage note from challan(s): ${list}. Please reprint them.`);
+        }
+
+        lines.push('Continue?');
+        return lines.join('\n\n');
+    };
+
     const handleReprint = async (row) => {
         try {
             let stageKey, data;
@@ -384,9 +500,50 @@ export function ReceiveHistoryTable() {
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
-                const list = affected.map(c => c.challanNo).join(', ');
+                const entryWeightBack = editRows.reduce((sum, row) => {
+                    if (removedRowIds.has(row.id)) {
+                        const net = Number(row.netWeight || computeNetWeight(row.bobbinId, row.boxId, row.bobbinQty, row.grossWeight));
+                        return sum + (Number.isFinite(net) ? Math.max(0, net) : 0);
+                    }
+
+                    const changed = row.boxId !== row.original.boxId
+                        || row.bobbinQty !== row.original.bobbinQty
+                        || row.grossWeight !== row.original.grossWeight;
+                    if (!changed) return sum;
+
+                    const originalNet = computeNetWeight(row.bobbinId, row.original.boxId, row.original.bobbinQty, row.original.grossWeight);
+                    const currentNet = Number(row.netWeight || computeNetWeight(row.bobbinId, row.boxId, row.bobbinQty, row.grossWeight));
+                    const diff = originalNet - currentNet;
+                    return diff > 0 ? sum + diff : sum;
+                }, 0);
+                const wastageAmount = resolveWastageResetAmount({
+                    pieceId: editingChallan?.pieceId,
+                    affected,
+                    serverAmount: err.details?.wastageAmount,
+                });
+                const { inboundWeight, receivedWeight } = resolvePieceWeights(editingChallan?.pieceId);
+                const check = getWastageResetCheck({
+                    entryWeightBack,
+                    wastageAmount,
+                    inboundWeight,
+                    receivedWeight,
+                });
+                if (check?.exceedsInbound) {
+                    alert(
+                        `Cannot continue: accounted weight (${formatKg(check.accountedTotal)} kg) `
+                        + `exceeds inbound weight (${formatKg(check.inbound)} kg).`
+                    );
+                    return;
+                }
+
                 const ok = window.confirm(
-                    `This change will remove the wastage note from challan(s): ${list}. Please reprint them. Continue?`
+                    buildWastageResetConfirmMessage({
+                        affected,
+                        wastageAmount,
+                        entryWeightBack,
+                        inboundWeight,
+                        receivedWeight,
+                    })
                 );
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
@@ -410,9 +567,35 @@ export function ReceiveHistoryTable() {
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
-                const list = affected.map(c => c.challanNo).join(', ');
+                const rows = await resolveChallanRows(challan.id);
+                const entryWeightBack = rows.reduce((sum, row) => sum + Number(row.netWt || 0), 0);
+                const wastageAmount = resolveWastageResetAmount({
+                    pieceId: challan?.pieceId,
+                    affected,
+                    serverAmount: err.details?.wastageAmount,
+                });
+                const { inboundWeight, receivedWeight } = resolvePieceWeights(challan?.pieceId);
+                const check = getWastageResetCheck({
+                    entryWeightBack,
+                    wastageAmount,
+                    inboundWeight,
+                    receivedWeight,
+                });
+                if (check?.exceedsInbound) {
+                    alert(
+                        `Cannot continue: accounted weight (${formatKg(check.accountedTotal)} kg) `
+                        + `exceeds inbound weight (${formatKg(check.inbound)} kg).`
+                    );
+                    return;
+                }
                 const confirm = window.confirm(
-                    `This delete will remove the wastage note from challan(s): ${list}. Please reprint them. Continue?`
+                    buildWastageResetConfirmMessage({
+                        affected,
+                        wastageAmount,
+                        entryWeightBack,
+                        inboundWeight,
+                        receivedWeight,
+                    })
                 );
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });

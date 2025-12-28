@@ -67,6 +67,17 @@ function roundTo3Decimals(val) {
   return Math.round(num * 1000) / 1000;
 }
 
+function extractWastageFromNote(note) {
+  if (!note) return 0;
+  const raw = String(note);
+  const match = raw.match(/([0-9]+(?:\.[0-9]+)?)/);
+  if (!match) return 0;
+  const cleaned = match[1].replace(/,/g, '');
+  const value = Number(cleaned);
+  if (!Number.isFinite(value)) return 0;
+  return roundTo3Decimals(value);
+}
+
 const OPENING_LOT_SEQUENCE_ID = 'opening_lot_sequence';
 
 function formatOpeningLotNo(nextVal) {
@@ -227,7 +238,10 @@ async function findWastageNoteChallans({ pieceId, referenceDate, includeSelf = f
     where: {
       pieceId,
       isDeleted: false,
-      wastageNote: { not: null },
+      OR: [
+        { wastageNote: { not: null } },
+        { wastageNetWeight: { gt: 0 } },
+      ],
       createdAt: includeSelf ? { gte: referenceDate } : { gt: referenceDate },
     },
     orderBy: { createdAt: 'asc' },
@@ -3135,19 +3149,25 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
     }
 
     const pendingAfter = Math.max(0, inboundWeight - nextTotalNet - currentWastage);
-    let affectedChallans = [];
-    if (pendingAfter > 0) {
-      affectedChallans = await findWastageNoteChallans({
-        pieceId: challan.pieceId,
-        referenceDate: challan.createdAt,
-        includeSelf: true,
-      });
-    }
+    const affectedChallans = await findWastageNoteChallans({
+      pieceId: challan.pieceId,
+      referenceDate: challan.createdAt,
+      includeSelf: true,
+    });
 
-    if (affectedChallans.length > 0 && !confirmCascade) {
+    const affectedWastage = affectedChallans.reduce((sum, c) => {
+      const numeric = Number(c.wastageNetWeight || 0);
+      if (numeric > 0) return sum + numeric;
+      return sum + extractWastageFromNote(c.wastageNote);
+    }, 0);
+    const wastageAmountToReset = currentWastage > 0 ? currentWastage : affectedWastage;
+    const shouldResetWastage = wastageAmountToReset > 0 || affectedChallans.length > 0;
+    if ((affectedChallans.length > 0 || shouldResetWastage) && !confirmCascade) {
       return res.status(409).json({
         error: 'wastage_note_conflict',
         affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+        wastageReset: shouldResetWastage,
+        wastageAmount: wastageAmountToReset,
       });
     }
 
@@ -3160,6 +3180,7 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
         deltaBobbinQty,
         updatedRows: updatesToApply.length,
         removedRows: removedRowIds.length,
+        wastageResetWeight: shouldResetWastage ? wastageAmountToReset : 0,
       },
     };
 
@@ -3183,12 +3204,13 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
         });
       }
 
-      if (deltaNetWeight !== 0 || deltaBobbinQty !== 0) {
+      if (deltaNetWeight !== 0 || deltaBobbinQty !== 0 || shouldResetWastage) {
         await tx.receiveFromCutterMachinePieceTotal.update({
           where: { pieceId: challan.pieceId },
           data: {
-            totalNetWeight: { increment: deltaNetWeight },
-            totalBob: { increment: deltaBobbinQty },
+            ...(deltaNetWeight !== 0 ? { totalNetWeight: { increment: deltaNetWeight } } : {}),
+            ...(deltaBobbinQty !== 0 ? { totalBob: { increment: deltaBobbinQty } } : {}),
+            ...(shouldResetWastage ? { wastageNetWeight: 0 } : {}),
             ...actorUpdateFields(actorUserId),
           },
         });
@@ -3211,11 +3233,16 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
             where: { id: affected.id },
             data: {
               wastageNote: null,
+              wastageNetWeight: 0,
               changeLog: appendChangeLog(affected.changeLog, {
                 at: new Date().toISOString(),
-                action: 'wastage_note_removed',
+                action: 'wastage_reset',
                 actorUserId,
-                details: { sourceChallanId: challanId, reason: 'pending_opened' },
+                details: {
+                  sourceChallanId: challanId,
+                  reason: 'pending_opened',
+                  previousWastageNetWeight: affected.wastageNetWeight || 0,
+                },
               }),
               ...actorUpdateFields(actorUserId),
             },
@@ -3238,11 +3265,16 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
       },
     });
 
+    const pendingAfterFinal = shouldResetWastage
+      ? Math.max(0, inboundWeight - nextTotalNet)
+      : pendingAfter;
+
     res.json({
       ok: true,
       challan: updated,
-      pendingAfter,
+      pendingAfter: pendingAfterFinal,
       affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+      wastageReset: shouldResetWastage,
     });
   } catch (err) {
     console.error('Failed to update challan', err);
@@ -3288,19 +3320,26 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
 
     const inboundWeight = Number(piece.weight || 0);
     const pendingAfter = Math.max(0, inboundWeight - nextTotalNet - nextWastage);
-    let affectedChallans = [];
-    if (pendingAfter > 0) {
-      affectedChallans = await findWastageNoteChallans({
-        pieceId: challan.pieceId,
-        referenceDate: challan.createdAt,
-        includeSelf: false,
-      });
-    }
+    const affectedChallans = await findWastageNoteChallans({
+      pieceId: challan.pieceId,
+      referenceDate: challan.createdAt,
+      includeSelf: false,
+    });
 
-    if (affectedChallans.length > 0 && !confirmCascade) {
+    const affectedWastage = affectedChallans.reduce((sum, c) => {
+      const numeric = Number(c.wastageNetWeight || 0);
+      if (numeric > 0) return sum + numeric;
+      return sum + extractWastageFromNote(c.wastageNote);
+    }, 0);
+    const wastageAmountToReset = currentWastage > 0 ? currentWastage : affectedWastage;
+    const shouldResetWastage = wastageAmountToReset > 0 || affectedChallans.length > 0;
+
+    if ((affectedChallans.length > 0 || shouldResetWastage) && !confirmCascade) {
       return res.status(409).json({
         error: 'wastage_note_conflict',
         affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+        wastageReset: shouldResetWastage,
+        wastageAmount: wastageAmountToReset,
       });
     }
 
@@ -3312,6 +3351,7 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
         totalNetWeight,
         totalBobbinQty,
         wastageNetWeight: deltaWastage,
+        wastageResetWeight: shouldResetWastage ? wastageAmountToReset : 0,
       },
     };
 
@@ -3331,9 +3371,9 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
       await tx.receiveFromCutterMachinePieceTotal.update({
         where: { pieceId: challan.pieceId },
         data: {
-          totalNetWeight: { increment: deltaNetWeight },
-          totalBob: { increment: deltaBobbinQty },
-          ...(deltaWastage > 0 ? { wastageNetWeight: { increment: -deltaWastage } } : {}),
+          ...(deltaNetWeight !== 0 ? { totalNetWeight: { increment: deltaNetWeight } } : {}),
+          ...(deltaBobbinQty !== 0 ? { totalBob: { increment: deltaBobbinQty } } : {}),
+          ...(shouldResetWastage ? { wastageNetWeight: 0 } : (deltaWastage > 0 ? { wastageNetWeight: { increment: -deltaWastage } } : {})),
           ...actorUpdateFields(actorUserId),
         },
       });
@@ -3355,11 +3395,16 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
             where: { id: affected.id },
             data: {
               wastageNote: null,
+              wastageNetWeight: 0,
               changeLog: appendChangeLog(affected.changeLog, {
                 at: new Date().toISOString(),
-                action: 'wastage_note_removed',
+                action: 'wastage_reset',
                 actorUserId,
-                details: { sourceChallanId: challanId, reason: 'pending_opened' },
+                details: {
+                  sourceChallanId: challanId,
+                  reason: 'pending_opened',
+                  previousWastageNetWeight: affected.wastageNetWeight || 0,
+                },
               }),
               ...actorUpdateFields(actorUserId),
             },
@@ -3381,11 +3426,16 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
       },
     });
 
+    const pendingAfterFinal = shouldResetWastage
+      ? Math.max(0, inboundWeight - nextTotalNet)
+      : pendingAfter;
+
     res.json({
       ok: true,
       challan: deleted,
-      pendingAfter,
+      pendingAfter: pendingAfterFinal,
       affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
+      wastageReset: shouldResetWastage,
     });
   } catch (err) {
     console.error('Failed to delete challan', err);

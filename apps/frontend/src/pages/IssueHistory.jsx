@@ -350,12 +350,11 @@ export function IssueHistory({ db, refreshDb }) {
                 <>
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
-                  <TableHead>Lot</TableHead>
+                  <TableHead>Piece</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Weight (kg)</TableHead>
-                  <TableHead>Pieces</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
@@ -404,12 +403,11 @@ export function IssueHistory({ db, refreshDb }) {
                     <>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{r.lotNo}</TableCell>
+                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
                       <TableCell>{r.count}</TableCell>
                       <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
                       <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
                       <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
                     </>

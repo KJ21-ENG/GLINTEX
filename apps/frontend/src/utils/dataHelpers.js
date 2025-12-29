@@ -49,6 +49,7 @@ export function normalizeDb(raw) {
   const issueToConingMachine = ensureArr(raw?.issue_to_coning_machine);
   const receiveUploads = ensureArr(raw?.receive_from_cutter_machine_uploads);
   const receiveRows = ensureArr(raw?.receive_from_cutter_machine_rows);
+  const receiveChallans = ensureArr(raw?.receive_from_cutter_machine_challans);
   const receivePieceTotals = ensureArr(raw?.receive_from_cutter_machine_piece_totals);
   return {
     items,
@@ -74,6 +75,7 @@ export function normalizeDb(raw) {
     settings,
     receive_from_cutter_machine_uploads: receiveUploads,
     receive_from_cutter_machine_rows: receiveRows,
+    receive_from_cutter_machine_challans: receiveChallans,
     receive_from_cutter_machine_piece_totals: receivePieceTotals,
     receive_from_holo_machine_rows: ensureArr(raw?.receive_from_holo_machine_rows),
     receive_from_coning_machine_rows: ensureArr(raw?.receive_from_coning_machine_rows),

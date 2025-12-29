@@ -86,6 +86,10 @@ export async function createIssueToMachine(payload) { return await createIssueTo
 export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
 export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }
+export async function createCutterReceiveChallan(payload) { return await request('/api/receive_from_cutter_machine/bulk', { method: 'POST', body: payload }); }
+export async function getCutterReceiveChallan(id) { return await request(`/api/receive_from_cutter_machine/challans/${encodeURIComponent(id)}`); }
+export async function updateCutterReceiveChallan(id, payload) { return await request(`/api/receive_from_cutter_machine/challans/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
+export async function deleteCutterReceiveChallan(id, payload = {}) { return await request(`/api/receive_from_cutter_machine/challans/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload }); }
 export async function getReceiveCrateStats(pieceId) {
   if (!pieceId) throw new Error('pieceId is required');
   return await request(`/api/receive_from_cutter_machine/piece/${encodeURIComponent(pieceId)}/crate_stats`);
@@ -225,6 +229,10 @@ export default {
   manualReceiveFromMachine,
   manualReceiveFromHoloMachine,
   manualReceiveFromConingMachine,
+  createCutterReceiveChallan,
+  getCutterReceiveChallan,
+  updateCutterReceiveChallan,
+  deleteCutterReceiveChallan,
   getReceiveCrateStats,
   markPieceWastage,
   updateInboundItem,

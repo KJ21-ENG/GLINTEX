@@ -189,7 +189,7 @@ export function ConingReceiveForm() {
                                         if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
                                         const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                         if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === hRefs[0].rowId);
+                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
                                             if (cutterRow) {
                                                 cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                             }
@@ -340,6 +340,7 @@ export function ConingReceiveForm() {
                                         <TableHead>Cones</TableHead>
                                         <TableHead>Gross</TableHead>
                                         <TableHead>Net (Calc)</TableHead>
+                                        <TableHead>Per Cone Wt</TableHead>
                                         <TableHead>Operator</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
@@ -371,6 +372,14 @@ export function ConingReceiveForm() {
                                             </TableCell>
                                             <TableCell className="">
                                                 {formatKg(calcRowNet(row))}
+                                            </TableCell>
+                                            <TableCell className="text-sm">
+                                                {(function () {
+                                                    const net = calcRowNet(row);
+                                                    const c = Number(row.coneCount || 0);
+                                                    if (c <= 0) return '—';
+                                                    return `${((net * 1000) / c).toFixed(1)} g`;
+                                                })()}
                                             </TableCell>
                                             <TableCell>
                                                 <Select

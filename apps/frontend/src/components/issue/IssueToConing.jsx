@@ -156,7 +156,7 @@ export function IssueToConing() {
                                     const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                     if (Array.isArray(refs) && refs.length > 0) {
                                         const cutterRowId = refs[0].rowId;
-                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === cutterRowId);
+                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
                                         if (cutterRow) {
                                             cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                         }
@@ -277,7 +277,7 @@ export function IssueToConing() {
                             <Select
                                 value={form.boxId}
                                 onChange={e => setForm({ ...form, boxId: e.target.value })}
-                                options={(db.boxes || []).map(x => ({ id: x.id, name: x.name }))}
+                                options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(x => ({ id: x.id, name: x.name }))}
                                 labelKey="name"
                                 valueKey="id"
                                 placeholder="Select Box"

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
@@ -10,6 +11,8 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function CutterReceiveForm() {
     const { db, refreshDb } = useInventory();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const navigate = useNavigate();
     const [barcode, setBarcode] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -36,6 +39,41 @@ export function CutterReceiveForm() {
     useEffect(() => {
         barcodeInputRef.current?.focus();
     }, []);
+
+    // Auto-scan barcode from URL query param (from "Go to Receive" button)
+    useEffect(() => {
+        const barcodeFromUrl = searchParams.get('barcode');
+        if (barcodeFromUrl && !issueRecord) {
+            // Set barcode and trigger scan
+            setBarcode(barcodeFromUrl);
+            setLoading(true);
+            api.getIssueByCutterBarcode(barcodeFromUrl)
+                .then(res => {
+                    if (res && res.id) {
+                        setIssueRecord(res);
+                        setCutId(res.cutId || '');
+                        setHelperId('');
+                        setBobbinId('');
+                        setBoxId('');
+                        setBobbinQty('');
+                        setGrossWeight('');
+                        setIsWastage(false);
+                    } else {
+                        alert('Barcode not found or invalid');
+                        setIssueRecord(null);
+                    }
+                })
+                .catch(err => {
+                    alert(err.message || 'Failed to fetch barcode details');
+                })
+                .finally(() => {
+                    setLoading(false);
+                    // Clear the URL param to prevent re-scan on refresh
+                    setSearchParams({}, { replace: true });
+                });
+        }
+    }, [searchParams, issueRecord, setSearchParams]);
+
 
     const handleScan = async (e) => {
         e.preventDefault();
@@ -78,8 +116,8 @@ export function CutterReceiveForm() {
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
     // Compute inbound weight and total received for the current issue
-    const { inboundWeight, totalReceived, totalReceivedBobbins } = useMemo(() => {
-        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0 };
+    const { inboundWeight, totalReceived, totalReceivedBobbins, pendingWeight } = useMemo(() => {
+        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0, pendingWeight: 0 };
         const pieceIds = issueRecord.pieceIds;
 
         // Get inbound weight from inbound_items
@@ -88,49 +126,96 @@ export function CutterReceiveForm() {
             return sum + (piece?.weight || 0);
         }, 0);
 
-        // Get total received from piece totals (database)
-        const receivedFromDb = pieceIds.reduce((sum, pid) => {
+        // Get totals from piece totals (database)
+        let receivedFromDb = 0;
+        let wastageFromDb = 0;
+        let bobbinsFromDb = 0;
+
+        pieceIds.forEach((pid) => {
             const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
-            return sum + (tot?.totalNetWeight || 0);
-        }, 0);
+            receivedFromDb += Number(tot?.totalNetWeight || 0);
+            wastageFromDb += Number(tot?.wastageNetWeight || 0);
+            bobbinsFromDb += Number(tot?.totalBob || 0);
+        });
 
-        // Get total received bobbins from piece totals
-        const bobbinsFromDb = pieceIds.reduce((sum, pid) => {
-            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
-            return sum + (tot?.totalBob || 0);
-        }, 0);
+        // Add cart items' net weights and bobbins for real-time update
+        let receivedInCart = 0;
+        let bobbinsInCart = 0;
+        let wastageInCart = 0;
 
-        // Add cart items' net weights for real-time update
-        const receivedInCart = cart.reduce((sum, entry) => {
-            if (pieceIds.includes(entry.pieceId)) {
-                return sum + (Number(entry.netWeight) || 0);
+        cart.forEach((entry) => {
+            if (!pieceIds.includes(entry.pieceId)) return;
+            if (entry.isWastage) {
+                wastageInCart += Number(entry.netWeight) || 0;
+                return;
             }
-            return sum;
-        }, 0);
-
-        // Add cart items' bobbins for real-time update
-        const bobbinsInCart = cart.reduce((sum, entry) => {
-            if (pieceIds.includes(entry.pieceId)) {
-                return sum + (Number(entry.bobbinQty) || 0);
-            }
-            return sum;
-        }, 0);
+            receivedInCart += Number(entry.netWeight) || 0;
+            bobbinsInCart += Number(entry.bobbinQty) || 0;
+        });
 
         return {
             inboundWeight: inboundWt,
             totalReceived: receivedFromDb + receivedInCart,
-            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart
+            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart,
+            pendingWeight: Math.max(0, inboundWt - receivedFromDb - wastageFromDb - receivedInCart - wastageInCart)
         };
     }, [issueRecord, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
 
+    const pieceIdToUse = issueRecord?.pieceIds?.[0] || '';
+
+    const pieceStatus = useMemo(() => {
+        if (!pieceIdToUse) {
+            return {
+                inboundWeight: 0,
+                receivedWeight: 0,
+                wastageWeight: 0,
+                pendingWeight: 0,
+                hasWastageInDb: false,
+                hasWastageInCart: false,
+            };
+        }
+
+        const pieceMeta = db.inbound_items?.find(p => p.id === pieceIdToUse);
+        const inboundWeight = Number(pieceMeta?.weight || 0);
+        const pieceTotals = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pieceIdToUse);
+        const receivedDb = Number(pieceTotals?.totalNetWeight || 0);
+        const wastageDb = Number(pieceTotals?.wastageNetWeight || 0);
+
+        const cartReceived = cart.reduce((sum, entry) => {
+            if (entry.pieceId !== pieceIdToUse || entry.isWastage) return sum;
+            return sum + (Number(entry.netWeight) || 0);
+        }, 0);
+
+        const cartWastage = cart.reduce((sum, entry) => {
+            if (entry.pieceId !== pieceIdToUse || !entry.isWastage) return sum;
+            return sum + (Number(entry.netWeight) || 0);
+        }, 0);
+
+        const pendingWeight = Math.max(0, inboundWeight - receivedDb - wastageDb - cartReceived - cartWastage);
+
+        return {
+            inboundWeight,
+            receivedWeight: receivedDb + cartReceived,
+            wastageWeight: wastageDb + cartWastage,
+            pendingWeight,
+            hasWastageInDb: wastageDb > 0,
+            hasWastageInCart: cartWastage > 0,
+        };
+    }, [pieceIdToUse, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
+
+    const effectiveNetWeight = isWastage ? pieceStatus.pendingWeight : netWeight;
+    const isWastageClosed = pieceStatus.pendingWeight <= 0 && pieceStatus.hasWastageInDb;
+    const receivingBlocked = pieceStatus.hasWastageInCart || isWastageClosed;
+    const receiveFieldsDisabled = isWastage || receivingBlocked;
+
     const computeNextBarcode = (pieceId, lotNo, seq) => {
-        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId);
+        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId && !row.isDeleted);
         const existingMax = existing.reduce((max, row) => {
             const idx = parseReceiveCrateIndex(row.barcode);
             if (idx != null && idx > max) return idx;
             return max;
         }, 0);
-        const inCartCount = cart.filter((c) => c.pieceId === pieceId).length;
+        const inCartCount = cart.filter((c) => c.pieceId === pieceId && !c.isWastage).length;
         const nextIndex = existingMax + inCartCount + 1;
         return makeReceiveBarcode({ lotNo, seq, crateIndex: nextIndex });
     };
@@ -138,15 +223,64 @@ export function CutterReceiveForm() {
     async function handleAdd() {
         if (!issueRecord) return;
 
-        // Validation: Cut, Bobbin, Box, Qty, Gross Weight are mandatory. Helper and Shift are optional.
-        if (!cutId || !bobbinId || !boxId || !bobbinQty || !grossWeight) {
-            alert('Please fill all fields (Cut, Bobbin, Box, Qty, Gross Weight)');
+        if (!pieceIdToUse) {
+            alert('No piece ID found in issue record');
             return;
         }
 
-        const pieceIdToUse = issueRecord.pieceIds?.[0];
-        if (!pieceIdToUse) {
-            alert('No piece ID found in issue record');
+        if (isWastageClosed) {
+            alert('This piece is already marked as wastage. Receiving is closed.');
+            return;
+        }
+
+        if (pieceStatus.hasWastageInCart) {
+            alert('Wastage is already queued for this piece. Remove it to continue.');
+            return;
+        }
+
+        if (isWastage) {
+            if (pieceStatus.pendingWeight <= 0) {
+                alert('Piece has no pending weight remaining.');
+                return;
+            }
+
+            setCart(prev => [...prev, {
+                id: uid(),
+                issueId: issueRecord.id,
+                pieceId: pieceIdToUse,
+                lotNo: issueRecord.lotNo,
+                itemId: issueRecord.itemId,
+                operatorId: issueRecord.operatorId,
+                cutId: '',
+                helperId: '',
+                shift: '',
+                bobbinId: '',
+                boxId: '',
+                bobbinQty: '',
+                grossWeight: '',
+                isWastage: true,
+                receiveDate,
+                netWeight: pieceStatus.pendingWeight,
+                barcode: '',
+
+                // Display Names
+                itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
+                cutName: '',
+                cut: '',
+                helperName: '',
+                shiftName: '',
+                operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
+                bobbinName: '',
+                boxName: ''
+            }]);
+
+            setIsWastage(false);
+            return;
+        }
+
+        // Validation: Cut, Bobbin, Box, Qty, Gross Weight are mandatory. Helper and Shift are optional.
+        if (!cutId || !bobbinId || !boxId || !bobbinQty || !grossWeight) {
+            alert('Please fill all fields (Cut, Bobbin, Box, Qty, Gross Weight)');
             return;
         }
 
@@ -172,18 +306,7 @@ export function CutterReceiveForm() {
 
         // Validate net weight doesn't exceed pending weight
         const pieceMeta = db.inbound_items.find((p) => p.id === pieceIdToUse);
-        const pieceInboundWeight = Number(pieceMeta?.weight || 0);
-        const pieceTotals = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pieceIdToUse);
-        const alreadyReceivedDb = Number(pieceTotals?.totalNetWeight || 0);
-        const existingWastage = Number(pieceTotals?.wastageNetWeight || 0);
-        // Include cart items for this piece that are not yet saved
-        const cartReceivedForPiece = cart.reduce((sum, entry) => {
-            if (entry.pieceId === pieceIdToUse) {
-                return sum + (Number(entry.netWeight) || 0);
-            }
-            return sum;
-        }, 0);
-        const pendingWeight = Math.max(0, pieceInboundWeight - alreadyReceivedDb - existingWastage - cartReceivedForPiece);
+        const pendingWeight = pieceStatus.pendingWeight;
 
         if (pendingWeight <= 0) {
             alert('Piece has no pending weight remaining.');
@@ -266,31 +389,28 @@ export function CutterReceiveForm() {
         if (cart.length === 0) return;
         setSaving(true);
         try {
-            for (const entry of cart) {
-                await api.manualReceiveFromMachine({
-                    pieceId: entry.pieceId,
-                    lotNo: entry.lotNo,
-                    bobbinId: entry.bobbinId,
-                    boxId: entry.boxId,
-                    bobbinQuantity: Number(entry.bobbinQty),
-                    grossWeight: Number(entry.grossWeight),
-                    receiveDate: entry.receiveDate,
-                    operatorId: entry.operatorId, // Pass operatorId
-                    cutId: entry.cutId,
-                    helperId: entry.helperId,
-                    shift: entry.shift,
-                    isWastage: entry.isWastage
-                });
+            const entries = cart.map(entry => ({
+                pieceId: entry.pieceId,
+                lotNo: entry.lotNo,
+                bobbinId: entry.bobbinId,
+                boxId: entry.boxId,
+                bobbinQuantity: Number(entry.bobbinQty),
+                grossWeight: Number(entry.grossWeight),
+                receiveDate: entry.receiveDate,
+                operatorId: entry.operatorId,
+                cutId: entry.cutId,
+                helperId: entry.helperId,
+                shift: entry.shift,
+                isWastage: entry.isWastage
+            }));
 
-                if (entry.isWastage) {
-                    await api.markPieceWastage({ pieceId: entry.pieceId });
-                }
-            }
+            const res = await api.createCutterReceiveChallan({ entries });
             await refreshDb();
             setCart([]);
             setIssueRecord(null);
             setBarcode('');
-            alert('Received successfully');
+            const challanNo = res?.challan?.challanNo;
+            alert(challanNo ? `Received successfully. Challan ${challanNo} generated.` : 'Received successfully');
             barcodeInputRef.current?.focus();
         } catch (e) {
             alert(e.message);
@@ -318,18 +438,18 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-8 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
                             <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
-                            <div><span className="font-semibold">Inbound Wt:</span> {formatKg(inboundWeight)}</div>
+                            <div><span className="font-semibold">Inbound:</span> {formatKg(inboundWeight)}</div>
                             <div>
                                 <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
                                 <InfoPopover
                                     title="Received Crates"
                                     items={(db.receive_from_cutter_machine_rows || []).filter(row =>
-                                        issueRecord?.pieceIds?.includes(row.pieceId)
+                                        !row.isDeleted && issueRecord?.pieceIds?.includes(row.pieceId)
                                     )}
                                     renderContent={(items) => (
                                         <table className="w-full text-xs">
@@ -371,6 +491,58 @@ export function CutterReceiveForm() {
                                 />
                             </div>
                             <div>
+                                <span className="font-semibold">Pending:</span> {formatKg(pendingWeight)}
+                                {isWastageClosed ? (
+                                    <div className="text-xs text-destructive">
+                                        ({formatKg(pieceStatus.wastageWeight)}kg wastage)
+                                    </div>
+                                ) : (
+                                    <InfoPopover
+                                        title="Piece Close"
+                                        items={[pieceStatus]}
+                                        renderContent={() => {
+                                            if (!pieceIdToUse) {
+                                                return (
+                                                    <div className="text-muted-foreground">
+                                                        Scan an issue barcode to manage piece wastage.
+                                                    </div>
+                                                );
+                                            }
+
+                                            return (
+                                                <div className="space-y-2 text-xs">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-muted-foreground">Piece</span>
+                                                        <span className="font-mono">{pieceIdToUse}</span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-muted-foreground">Pending to close</span>
+                                                        <span className="font-medium">{formatKg(pieceStatus.pendingWeight)}</span>
+                                                    </div>
+                                                    {pieceStatus.hasWastageInCart && (
+                                                        <div className="text-muted-foreground">
+                                                            Wastage is queued in the list. Remove it to continue.
+                                                        </div>
+                                                    )}
+                                                    <label className="flex items-start gap-2 cursor-pointer">
+                                                        <Checkbox
+                                                            checked={isWastage}
+                                                            onCheckedChange={setIsWastage}
+                                                            disabled={!pieceIdToUse || pieceStatus.pendingWeight <= 0 || receivingBlocked}
+                                                        />
+                                                        <span className="leading-snug">Close piece (mark remaining as wastage)</span>
+                                                    </label>
+                                                </div>
+                                            );
+                                        }}
+                                        widthClassName="w-64"
+                                        bodyClassName="text-xs"
+                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
+                                        align="right"
+                                    />
+                                )}
+                            </div>
+                            <div>
                                 <span className="font-semibold">Bobbins:</span> {totalReceivedBobbins}
                             </div>
                         </div>
@@ -378,79 +550,81 @@ export function CutterReceiveForm() {
                 </CardContent>
             </Card>
 
-            {issueRecord && (
+            {issueRecord && isWastageClosed && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    Wastage already marked. Receiving is closed.
+                </div>
+            )}
+
+            {issueRecord && !isWastageClosed && (
                 <Card className="fade-in">
                     <CardHeader><CardTitle>Receive Details</CardTitle></CardHeader>
                     <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
                                 <Label>Date</Label>
-                                <Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} />
+                                <Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} disabled={receiveFieldsDisabled} />
                             </div>
                             <div>
                                 <Label>Cut</Label>
-                                <Select value={cutId} onChange={e => setCutId(e.target.value)}>
+                                <Select value={cutId} onChange={e => setCutId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Cut</option>
                                     {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </Select>
                             </div>
                             <div>
                                 <Label>Helper (Optional)</Label>
-                                <Select value={helperId} onChange={e => setHelperId(e.target.value)}>
+                                <Select value={helperId} onChange={e => setHelperId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Helper</option>
-                                    {db.helpers?.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                    {(db.helpers || []).filter(h => h.processType === 'all' || h.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                 </Select>
                             </div>
                             <div>
                                 <Label>Shift (Optional)</Label>
-                                <Select value={shift} onChange={e => setShift(e.target.value)}>
+                                <Select value={shift} onChange={e => setShift(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Shift</option>
                                     <option value="Day">Day</option>
                                     <option value="Night">Night</option>
                                 </Select>
-                            </div>
-                            <div className="flex items-end pb-2">
-                                <label className="flex items-center space-x-2 cursor-pointer">
-                                    <Checkbox checked={isWastage} onCheckedChange={setIsWastage} />
-                                    <span className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Mark remaining as Wastage</span>
-                                </label>
                             </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
                                 <Label>Bobbin Type</Label>
-                                <Select value={bobbinId} onChange={e => setBobbinId(e.target.value)}>
+                                <Select value={bobbinId} onChange={e => setBobbinId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Bobbin</option>
                                     {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>
                                 <Label>Box Type</Label>
-                                <Select value={boxId} onChange={e => setBoxId(e.target.value)}>
+                                <Select value={boxId} onChange={e => setBoxId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Box</option>
                                     {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>
                                 <Label>Bobbin Qty</Label>
-                                <Input type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} />
+                                <Input type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} disabled={receiveFieldsDisabled} />
                             </div>
                             <div>
                                 <Label>Gross Weight</Label>
                                 <div className="flex gap-2">
-                                    <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" />
-                                    <CatchWeightButton onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))} />
+                                    <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" disabled={receiveFieldsDisabled} />
+                                    <CatchWeightButton onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))} disabled={receiveFieldsDisabled} />
                                 </div>
                             </div>
                         </div>
 
                         <div className="flex justify-between items-center pt-2">
                             <div className="text-sm font-medium">
-                                {`Calculated Net Weight: ${formatKg(netWeight)}`}
+                                {isWastage
+                                    ? `Wastage Weight (Pending): ${formatKg(effectiveNetWeight)}`
+                                    : `Calculated Net Weight: ${formatKg(effectiveNetWeight)}`}
                             </div>
-                            <Button onClick={handleAdd} disabled={!netWeight}>
-                                <Plus className="w-4 h-4 mr-2" /> Add to List
+                            <Button onClick={handleAdd} disabled={receivingBlocked || !effectiveNetWeight}>
+                                <Plus className="w-4 h-4 mr-2" /> {isWastage ? 'Add Wastage to List' : 'Add to List'}
                             </Button>
                         </div>
                     </CardContent>
@@ -475,7 +649,10 @@ export function CutterReceiveForm() {
                                         <TableCell>{entry.lotNo}</TableCell>
                                         <TableCell className="text-xs text-muted-foreground">
                                             {entry.isWastage ? (
-                                                <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
+                                                    <span>{formatKg(entry.netWeight)}</span>
+                                                </div>
                                             ) : (
                                                 <div>
                                                     {entry.bobbinQty} x {entry.bobbinName}

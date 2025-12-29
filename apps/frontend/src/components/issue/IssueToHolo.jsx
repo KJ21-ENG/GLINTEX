@@ -47,7 +47,7 @@ export function IssueToHolo() {
 
         // Lookup in cutter receive rows
         const normalized = scanInput.trim().toUpperCase();
-        const row = (db.receive_from_cutter_machine_rows || []).find(r => (r.barcode || '').toUpperCase() === normalized);
+        const row = (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && (r.barcode || '').toUpperCase() === normalized);
 
         if (!row) {
             alert('Barcode not found in Cutter Receive rows');
@@ -140,7 +140,9 @@ export function IssueToHolo() {
                     const yarnName = db.yarns?.find((y) => y.id === form.yarnId)?.name;
 
                     // Get bobbin info from the first crate's source row
-                    const firstCrateRow = crates[0] ? (db.receive_from_cutter_machine_rows || []).find(r => r.id === crates[0].rowId) : null;
+                    const firstCrateRow = crates[0]
+                        ? (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && r.id === crates[0].rowId)
+                        : null;
                     const bobbinType = firstCrateRow?.bobbin?.name || firstCrateRow?.pcsTypeName || '';
                     const cut = firstCrateRow?.cut || firstCrateRow?.cutMaster?.name || '';
 

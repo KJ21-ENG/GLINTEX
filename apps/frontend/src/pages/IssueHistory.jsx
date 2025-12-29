@@ -83,7 +83,7 @@ export function IssueHistory({ db, refreshDb }) {
 
             // Get cut and bobbin type from first ref's source row
             const firstRef = refs[0];
-            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === firstRef.rowId);
+            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
               cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
@@ -160,7 +160,7 @@ export function IssueHistory({ db, refreshDb }) {
                 // Get cut from cutter receive row
                 const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                 if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => r.id === holoRefs[0].rowId);
+                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
                   if (cutterRow) {
                     cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                   }
@@ -350,12 +350,11 @@ export function IssueHistory({ db, refreshDb }) {
                 <>
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
-                  <TableHead>Lot</TableHead>
+                  <TableHead>Piece</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Weight (kg)</TableHead>
-                  <TableHead>Pieces</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
@@ -404,12 +403,11 @@ export function IssueHistory({ db, refreshDb }) {
                     <>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{r.lotNo}</TableCell>
+                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
                       <TableCell>{r.count}</TableCell>
                       <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
                       <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
                       <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
                     </>

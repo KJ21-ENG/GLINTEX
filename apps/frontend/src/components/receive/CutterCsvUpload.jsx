@@ -165,7 +165,7 @@ export function CutterCsvUpload() {
   }, [db.receive_from_cutter_machine_uploads]);
 
   const latestRows = useMemo(() => {
-    const rows = (db.receive_from_cutter_machine_rows || []).slice();
+    const rows = (db.receive_from_cutter_machine_rows || []).filter(row => !row.isDeleted);
     rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     return rows.slice(0, 50);
   }, [db.receive_from_cutter_machine_rows]);

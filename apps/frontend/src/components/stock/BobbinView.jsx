@@ -8,7 +8,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
   // --- Data Prep ---
-  
+
   // 1. Map Inbound Pieces
   const inboundPieceMap = useMemo(() => {
     const map = new Map();
@@ -35,39 +35,44 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
 
   // 3. Calculate Bobbin Crates (Rows)
   const bobbinCrates = useMemo(() => {
-    return (db.receive_from_cutter_machine_rows || []).map((row) => {
-      const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
-      const lotNo = row?.lotNo || piece?.lotNo || '';
-      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
-      
-      const bobbinQty = Number(row?.bobbinQuantity || 0);
-      const issuedBobbins = Number(row?.issuedBobbins || 0);
-      const availableBobbins = Math.max(0, bobbinQty - issuedBobbins);
-      
-      const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
-      const issuedWeight = Number(row?.issuedBobbinWeight || 0);
-      const availableWeight = Number.isFinite(netWeight) ? Math.max(0, netWeight - issuedWeight) : 0;
+    return (db.receive_from_cutter_machine_rows || [])
+      .filter(row => !row.isDeleted)
+      .map((row) => {
+        const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
+        const lotNo = row?.lotNo || piece?.lotNo || '';
+        const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
 
-      return {
-        ...row,
-        lotNo,
-        date: row.date || row.createdAt || '',
-        itemId: piece?.itemId || lotMeta?.itemId || '',
-        firmId: lotMeta?.firmId || '',
-        supplierId: lotMeta?.supplierId || '',
-        itemName: lotMeta?.itemName || '—',
-        firmName: lotMeta?.firmName || '—',
-        supplierName: lotMeta?.supplierName || '—',
-        bobbinQty,
-        issuedBobbins,
-        availableBobbins,
-        netWeight,
-        issuedWeight,
-        availableWeight,
-        bobbinName: row.bobbin?.name || row.pcsTypeName || '—',
-      };
-    });
-  }, [db.receive_from_cutter_machine_rows, inboundPieceMap, lotMetaMap]);
+        const bobbinQty = Number(row?.bobbinQuantity || 0);
+        const issuedBobbins = Number(row?.issuedBobbins || 0);
+        const availableBobbins = Math.max(0, bobbinQty - issuedBobbins);
+
+        const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
+        const issuedWeight = Number(row?.issuedBobbinWeight || 0);
+        const availableWeight = Number.isFinite(netWeight) ? Math.max(0, netWeight - issuedWeight) : 0;
+
+        const cutName = row.cut || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+
+        return {
+          ...row,
+          lotNo,
+          date: row.date || row.createdAt || '',
+          itemId: piece?.itemId || lotMeta?.itemId || '',
+          firmId: lotMeta?.firmId || '',
+          supplierId: lotMeta?.supplierId || '',
+          itemName: lotMeta?.itemName || '—',
+          firmName: lotMeta?.firmName || '—',
+          supplierName: lotMeta?.supplierName || '—',
+          cutName,
+          bobbinQty,
+          issuedBobbins,
+          availableBobbins,
+          netWeight,
+          issuedWeight,
+          availableWeight,
+          bobbinName: row.bobbin?.name || row.pcsTypeName || '—',
+        };
+      });
+  }, [db.receive_from_cutter_machine_rows, inboundPieceMap, lotMetaMap, db.cuts]);
 
   // 4. Aggregate into Lots
   const bobbinLots = useMemo(() => {
@@ -81,6 +86,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         firmId: crate.firmId,
         supplierId: crate.supplierId,
         itemName: crate.itemName,
+        cutName: crate.cutName,
         firmName: crate.firmName,
         supplierName: crate.supplierName,
         totalBobbins: 0,
@@ -91,7 +97,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         availableWeight: 0,
         crates: [],
       };
-      
+
       existing.crates.push(crate);
       existing.totalBobbins += crate.bobbinQty;
       existing.issuedBobbins += crate.issuedBobbins;
@@ -99,7 +105,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
       existing.totalWeight += crate.netWeight;
       existing.issuedWeight += crate.issuedWeight;
       existing.availableWeight += crate.availableWeight;
-      
+
       map.set(lotNo, existing);
     });
     return Array.from(map.values());
@@ -108,21 +114,21 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
   // 5. Filter & Sort
   const filteredLots = useMemo(() => {
     return bobbinLots.filter(l => {
-        if (search) {
-          const s = search.toLowerCase();
-          const hit = [l.lotNo, l.itemName, l.firmName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
-          if (!hit) return false;
-        }
-        if (filters.item && l.itemId !== filters.item) return false;
-        if (filters.firm && l.firmId !== filters.firm) return false;
-        if (filters.supplier && l.supplierId !== filters.supplier) return false;
-        if (filters.from && l.date < filters.from) return false;
-        if (filters.to && l.date > filters.to) return false;
-        
-        if (filters.status === 'active' && l.availableBobbins <= 0) return false;
-        if (filters.status === 'inactive' && l.availableBobbins > 0) return false;
-        
-        return true;
+      if (search) {
+        const s = search.toLowerCase();
+        const hit = [l.lotNo, l.itemName, l.cutName, l.firmName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
+        if (!hit) return false;
+      }
+      if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.firm && l.firmId !== filters.firm) return false;
+      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.from && l.date < filters.from) return false;
+      if (filters.to && l.date > filters.to) return false;
+
+      if (filters.status === 'active' && l.availableBobbins <= 0) return false;
+      if (filters.status === 'inactive' && l.availableBobbins > 0) return false;
+
+      return true;
     }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
   }, [bobbinLots, filters, search]);
 
@@ -135,6 +141,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         lotNo: '', // display dash for grouped rows
         itemId: lot.itemId,
         itemName: lot.itemName,
+        cutName: lot.cutName,
         firmId: lot.firmId,
         firmName: lot.firmName,
         supplierName: lot.supplierName,
@@ -161,83 +168,87 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
   }, [filteredLots, groupBy]);
 
   return (
-        <div className="space-y-4">
-        <div className="rounded-md border bg-card">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-[30px]"></TableHead>
-                        <TableHead>Lot No</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Item</TableHead>
-                        {!groupBy ? <TableHead>Firm</TableHead> : null}
-                        <TableHead>Supplier</TableHead>
-                        <TableHead className="">Bobbins (Avail/Total)</TableHead>
-                        <TableHead className="">Weight (Avail/Total)</TableHead>
-                        <TableHead className="">Crates</TableHead>
+    <div className="space-y-4">
+      <div className="rounded-md border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[30px]"></TableHead>
+              <TableHead>Lot No</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead>Item</TableHead>
+              <TableHead>Cut</TableHead>
+              {!groupBy ? <TableHead>Firm</TableHead> : null}
+              <TableHead>Supplier</TableHead>
+              <TableHead className="">Bobbins (Avail/Total)</TableHead>
+              <TableHead className="">Weight (Avail/Total)</TableHead>
+              <TableHead className="">Crates</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {displayData.length === 0 ? (
+              <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
+            ) : (
+              displayData.map((l, idx) => {
+                const isExpanded = !groupBy && expandedLot === l.lotNo;
+                const rowKey = l.lotNo || idx;
+                return (
+                  <React.Fragment key={rowKey}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
+                      <TableCell>
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
+                      </TableCell>
+                      <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
+                      <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
+                      <TableCell>{l.itemName}</TableCell>
+                      <TableCell>{l.cutName || '—'}</TableCell>
+                      {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
+                      <TableCell>{l.supplierName}</TableCell>
+                      <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
+                      <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
+                      <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>
                     </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {displayData.length === 0 ? (
-                        <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
-                    ) : (
-                        displayData.map((l, idx) => {
-                            const isExpanded = !groupBy && expandedLot === l.lotNo;
-                            const rowKey = l.lotNo || idx;
-                            return (
-                                <React.Fragment key={rowKey}>
-                                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
-                                        <TableCell>
-                                            {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
-                                        </TableCell>
-                                        <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
-                                        <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
-                                        <TableCell>{l.itemName}</TableCell>
-                                        {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
-                                        <TableCell>{l.supplierName}</TableCell>
-                                        <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
-                                        <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
-                                        <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>
-                                    </TableRow>
-                                    {isExpanded && !groupBy && (
-                                        <TableRow className="bg-muted/30">
-                                            <TableCell colSpan={9} className="p-4">
-                                                <div className="border rounded-md bg-background">
-                                                    <Table>
-                                                        <TableHeader>
-                                                            <TableRow>
-                                                                <TableHead>Barcode</TableHead>
-                                                                <TableHead>Date</TableHead>
-                                                                <TableHead>Bobbin Type</TableHead>
-                                                                <TableHead className="">Bobbins (Avail)</TableHead>
-                                                                <TableHead className="">Weight (Avail)</TableHead>
-                                                                <TableHead>Operator</TableHead>
-                                                            </TableRow>
-                                                        </TableHeader>
-                                                        <TableBody>
-                                                            {l.crates.map(c => (
-                                                                <TableRow key={c.id}>
-                                                                    <TableCell className="font-mono text-xs">{c.barcode}</TableCell>
-                                                                    <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
-                                                                    <TableCell>{c.bobbinName}</TableCell>
-                                                                    <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
-                                                                    <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
-                                                                    <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
-                                                                </TableRow>
-                                                            ))}
-                                                        </TableBody>
-                                                    </Table>
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    )}
-                                </React.Fragment>
-                            )
-                        })
+                    {isExpanded && !groupBy && (
+                      <TableRow className="bg-muted/30">
+                        <TableCell colSpan={9} className="p-4">
+                          <div className="border rounded-md bg-background">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Barcode</TableHead>
+                                  <TableHead>Date</TableHead>
+                                  <TableHead>Cut</TableHead>
+                                  <TableHead>Bobbin Type</TableHead>
+                                  <TableHead className="">Bobbins (Avail)</TableHead>
+                                  <TableHead className="">Weight (Avail)</TableHead>
+                                  <TableHead>Operator</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {l.crates.map(c => (
+                                  <TableRow key={c.id}>
+                                    <TableCell className="font-mono text-xs">{c.barcode}</TableCell>
+                                    <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
+                                    <TableCell>{c.cutName || '—'}</TableCell>
+                                    <TableCell>{c.bobbinName}</TableCell>
+                                    <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
+                                    <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
+                                    <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     )}
-                </TableBody>
-            </Table>
-        </div>
+                  </React.Fragment>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

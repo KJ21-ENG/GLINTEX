@@ -161,7 +161,13 @@ export async function updateBox(id, name, weight, processType) { return await re
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToCutterMachine(id) { return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'DELETE' }); }
-export async function deleteIssueToMachine(id) { return await deleteIssueToCutterMachine(id); }
+export async function deleteIssueToHoloMachine(id) { return await request(`/api/issue_to_holo_machine/${id}`, { method: 'DELETE' }); }
+export async function deleteIssueToConingMachine(id) { return await request(`/api/issue_to_coning_machine/${id}`, { method: 'DELETE' }); }
+export async function deleteIssueToMachine(id, process = 'cutter') {
+  if (process === 'holo') return await deleteIssueToHoloMachine(id);
+  if (process === 'coning') return await deleteIssueToConingMachine(id);
+  return await deleteIssueToCutterMachine(id);
+}
 export async function deleteInboundItem(id) { return await request(`/api/inbound_items/${id}`, { method: 'DELETE' }); }
 export async function getInboundByBarcode(code) { return await request(`/api/inbound_items/barcode/${encodeURIComponent(code)}`); }
 export async function getIssueByCutterBarcode(code) { return await request(`/api/issue_to_cutter_machine/lookup?barcode=${encodeURIComponent(code)}`); }

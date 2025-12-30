@@ -16,7 +16,7 @@ export function IssueHistory({ db, refreshDb }) {
     }
     setDeletingId(issueId);
     try {
-      await api.deleteIssueToMachine(issueId);
+      await api.deleteIssueToMachine(issueId, process);
       await refreshDb();
       alert('Issue record deleted.');
     } catch (err) {

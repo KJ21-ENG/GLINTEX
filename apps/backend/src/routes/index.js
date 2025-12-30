@@ -5156,6 +5156,146 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   }
 });
 
+// Delete an issue_to_holo_machine record (safe delete)
+router.delete('/api/issue_to_holo_machine/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+
+    // Find the issue record
+    const issueRecord = await prisma.issueToHoloMachine.findUnique({ where: { id } });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to Holo machine record not found' });
+    }
+
+    // Check if any receives exist for this issue
+    const receiveCount = await prisma.receiveFromHoloMachineRow.count({ where: { issueId: id } });
+    if (receiveCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: receive records exist for this issue' });
+    }
+
+    // Parse receivedRowRefs to get source cutter rows that need reversal
+    let refs = [];
+    try {
+      refs = typeof issueRecord.receivedRowRefs === 'string'
+        ? JSON.parse(issueRecord.receivedRowRefs)
+        : issueRecord.receivedRowRefs;
+      if (!Array.isArray(refs)) refs = [];
+    } catch (e) {
+      refs = [];
+    }
+
+    // Use transaction to ensure atomicity
+    await prisma.$transaction(async (tx) => {
+      // Revert bobbin counts on source cutter receive rows
+      for (const ref of refs) {
+        if (!ref.rowId) continue;
+        const bobbinsToRevert = Number(ref.issuedBobbins || 0);
+        const weightToRevert = Number(ref.issuedBobbinWeight || 0);
+        if (bobbinsToRevert > 0 || weightToRevert > 0) {
+          await tx.receiveFromCutterMachineRow.update({
+            where: { id: ref.rowId },
+            data: {
+              issuedBobbins: { decrement: bobbinsToRevert },
+              issuedBobbinWeight: { decrement: weightToRevert },
+              ...actorUpdateFields(actorUserId),
+            },
+          });
+        }
+      }
+
+      // Delete the issue record
+      await tx.issueToHoloMachine.delete({ where: { id } });
+
+      await logCrudWithActor(req, {
+        entityType: 'issue_to_holo_machine',
+        entityId: id,
+        action: 'delete',
+        payload: {
+          issue: issueRecord,
+          revertedRefs: refs,
+        },
+        client: tx,
+      });
+    });
+
+    res.json({ ok: true });
+    // Notify issue_to_holo_machine deleted
+    try {
+      const itemName = issueRecord.itemId ? (await prisma.item.findUnique({ where: { id: issueRecord.itemId } }))?.name : '';
+      const machineRec = issueRecord.machineId ? await prisma.machine.findUnique({ where: { id: issueRecord.machineId } }) : null;
+      const operatorRec = issueRecord.operatorId ? await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } }) : null;
+      sendNotification('issue_to_holo_machine_deleted', {
+        itemName,
+        lotNo: issueRecord.lotNo,
+        date: issueRecord.date,
+        metallicBobbins: issueRecord.metallicBobbins,
+        metallicBobbinsWeight: issueRecord.metallicBobbinsWeight,
+        machineName: machineRec?.name || '',
+        operatorName: operatorRec?.name || '',
+      });
+    } catch (e) { console.error('notify issue_to_holo_machine deleted error', e); }
+  } catch (err) {
+    console.error('Failed to delete issue_to_holo_machine record', err);
+    res.status(500).json({ error: err.message || 'Failed to delete issue_to_holo_machine record' });
+  }
+});
+
+// Delete an issue_to_coning_machine record (safe delete)
+router.delete('/api/issue_to_coning_machine/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+
+    // Find the issue record
+    const issueRecord = await prisma.issueToConingMachine.findUnique({ where: { id } });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to Coning machine record not found' });
+    }
+
+    // Check if any receives exist for this issue
+    const receiveCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId: id } });
+    if (receiveCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: receive records exist for this issue' });
+    }
+
+    // Use transaction to ensure atomicity
+    await prisma.$transaction(async (tx) => {
+      // Delete the issue record (no source row updates needed for coning)
+      await tx.issueToConingMachine.delete({ where: { id } });
+
+      await logCrudWithActor(req, {
+        entityType: 'issue_to_coning_machine',
+        entityId: id,
+        action: 'delete',
+        payload: {
+          issue: issueRecord,
+        },
+        client: tx,
+      });
+    });
+
+    res.json({ ok: true });
+    // Notify issue_to_coning_machine deleted
+    try {
+      const itemName = issueRecord.itemId ? (await prisma.item.findUnique({ where: { id: issueRecord.itemId } }))?.name : '';
+      const machineRec = issueRecord.machineId ? await prisma.machine.findUnique({ where: { id: issueRecord.machineId } }) : null;
+      const operatorRec = issueRecord.operatorId ? await prisma.operator.findUnique({ where: { id: issueRecord.operatorId } }) : null;
+      sendNotification('issue_to_coning_machine_deleted', {
+        itemName,
+        lotNo: issueRecord.lotNo,
+        date: issueRecord.date,
+        rollsIssued: issueRecord.rollsIssued,
+        machineName: machineRec?.name || '',
+        operatorName: operatorRec?.name || '',
+      });
+    } catch (e) { console.error('notify issue_to_coning_machine deleted error', e); }
+  } catch (err) {
+    console.error('Failed to delete issue_to_coning_machine record', err);
+    res.status(500).json({ error: err.message || 'Failed to delete issue_to_coning_machine record' });
+  }
+});
+
 // Delete a single inbound item (piece)
 router.delete('/api/inbound_items/:id', async (req, res) => {
   try {

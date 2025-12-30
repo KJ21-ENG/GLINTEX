@@ -96,6 +96,7 @@ export async function getReceiveCrateStats(pieceId) {
 }
 export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
 export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
+export async function createOpeningInbound(payload) { return await request('/api/opening_stock/inbound', { method: 'POST', body: payload }); }
 export async function createOpeningCutterReceive(payload) { return await request('/api/opening_stock/cutter_receive', { method: 'POST', body: payload }); }
 export async function createOpeningHoloReceive(payload) { return await request('/api/opening_stock/holo_receive', { method: 'POST', body: payload }); }
 export async function createOpeningConingReceive(payload) { return await request('/api/opening_stock/coning_receive', { method: 'POST', body: payload }); }
@@ -227,6 +228,7 @@ export default {
   createIssueToCutterMachine,
   createIssueToHoloMachine,
   createIssueToConingMachine,
+  createOpeningInbound,
   createOpeningCutterReceive,
   createOpeningHoloReceive,
   createOpeningConingReceive,

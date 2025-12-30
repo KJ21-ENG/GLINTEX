@@ -1242,6 +1242,89 @@ router.get('/api/opening_stock/sequence/next', async (req, res) => {
   }
 });
 
+router.post('/api/opening_stock/inbound', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { date, itemId, firmId, supplierId, pieces } = req.body || {};
+    if (!date || !itemId || !firmId || !supplierId) {
+      return res.status(400).json({ error: 'Missing required opening stock fields' });
+    }
+    if (!Array.isArray(pieces) || pieces.length === 0) {
+      return res.status(400).json({ error: 'Add at least one piece' });
+    }
+
+    const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
+      prisma.item.findUnique({ where: { id: itemId } }),
+      prisma.firm.findUnique({ where: { id: firmId } }),
+      prisma.supplier.findUnique({ where: { id: supplierId } }),
+    ]);
+    if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const lotNo = await allocateOpeningLot(tx, actorUserId);
+      const totalWeight = pieces.reduce((sum, p) => sum + (toNumber(p.weight) || 0), 0);
+
+      const lot = await tx.lot.create({
+        data: {
+          lotNo,
+          date,
+          itemId,
+          firmId,
+          supplierId,
+          totalPieces: pieces.length,
+          totalWeight: roundTo3Decimals(totalWeight),
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      const inboundItems = [];
+      for (let i = 0; i < pieces.length; i++) {
+        const piece = pieces[i];
+        const seq = i + 1;
+        const weight = toNumber(piece.weight) || 0;
+        const isConsumed = Boolean(piece.isConsumed);
+        const status = isConsumed ? 'consumed' : 'available';
+        const consumptionDate = piece.consumptionDate || null;
+
+        const pieceId = `${lotNo}-${seq}`;
+        const barcode = makeInboundBarcode({ lotNo, seq });
+
+        const created = await tx.inboundItem.create({
+          data: {
+            id: pieceId,
+            lotNo,
+            itemId,
+            weight: roundTo3Decimals(weight),
+            status,
+            seq,
+            barcode,
+            consumptionDate,
+            isOpeningStock: true,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        inboundItems.push(created);
+      }
+
+      return { lot, rows: inboundItems };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'lot',
+      entityId: result.lot.lotNo,
+      action: 'create_opening_inbound',
+      payload: { date, itemId, firmId, supplierId, pieceCount: pieces.length },
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to save opening inbound', err);
+    res.status(500).json({ error: err.message || 'Failed to save opening inbound stock' });
+  }
+});
+
 router.post('/api/opening_stock/cutter_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;

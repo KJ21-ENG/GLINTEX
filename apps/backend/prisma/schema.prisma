@@ -88,15 +88,17 @@ model Lot {
 }
 
 model InboundItem {
-  id        String  @id
-  lotNo     String
-  itemId    String
-  weight    Float
-  status    String
-  seq       Int
-  barcode   String  @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
+  id              String   @id
+  lotNo           String
+  itemId          String
+  weight          Float
+  status          String
+  seq             Int
+  barcode         String   @unique
+  consumptionDate String?
+  isOpeningStock  Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
 }

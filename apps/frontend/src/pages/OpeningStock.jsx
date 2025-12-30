@@ -22,6 +22,7 @@ import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate } from '../utils/lab
 import { Plus, Save, Trash2 } from 'lucide-react';
 
 const STAGE_OPTIONS = [
+  { id: 'inbound', label: 'Inbound (Raw rolls)' },
   { id: 'cutter', label: 'Cutter Receive (Bobbins)' },
   { id: 'holo', label: 'Holo Receive (Rolls)' },
   { id: 'coning', label: 'Coning Receive (Cones)' },
@@ -43,13 +44,20 @@ const round3 = (val) => {
 
 export function OpeningStock() {
   const { db, refreshDb } = useInventory();
-  const [stage, setStage] = useState('cutter');
+  const [stage, setStage] = useState('inbound');
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState('');
   const [firmId, setFirmId] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [previewLotNo, setPreviewLotNo] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const [inboundEntry, setInboundEntry] = useState({
+    weight: '',
+    isConsumed: false,
+    consumptionDate: todayISO(),
+  });
+  const [inboundCart, setInboundCart] = useState([]);
 
   const [cutterEntry, setCutterEntry] = useState({
     bobbinId: '',
@@ -112,6 +120,7 @@ export function OpeningStock() {
     setCutterCart([]);
     setHoloCart([]);
     setConingCart([]);
+    setInboundCart([]);
   }, [itemId, firmId, supplierId, date]);
 
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
@@ -187,7 +196,33 @@ export function OpeningStock() {
     }, { totalNet: 0, totalCones: 0 });
   }, [coningCart]);
 
+  const inboundTotals = useMemo(() => {
+    return inboundCart.reduce((acc, row) => {
+      acc.totalWeight += Number(row.weight || 0);
+      if (row.isConsumed) acc.totalConsumed += 1;
+      else acc.totalAvailable += 1;
+      return acc;
+    }, { totalWeight: 0, totalConsumed: 0, totalAvailable: 0 });
+  }, [inboundCart]);
+
   const canSaveCommon = date && itemId && firmId && supplierId;
+
+  const addInboundPiece = () => {
+    const w = Number(inboundEntry.weight || 0);
+    if (w <= 0) return;
+    setInboundCart(prev => [
+      ...prev,
+      {
+        id: uid('piece'),
+        ...inboundEntry,
+        weight: w,
+      }
+    ]);
+    setInboundEntry(prev => ({
+      ...prev,
+      weight: '',
+    }));
+  };
 
   const addCutterCrate = () => {
     if (!cutterEntry.cutId) {
@@ -295,6 +330,57 @@ export function OpeningStock() {
       coneCount: '',
       grossWeight: '',
     }));
+  };
+
+  const handleSaveInbound = async () => {
+    if (!canSaveCommon || inboundCart.length === 0) return;
+    setSaving(true);
+    try {
+      const payload = {
+        date,
+        itemId,
+        firmId,
+        supplierId,
+        pieces: inboundCart.map(p => ({
+          weight: p.weight,
+          isConsumed: p.isConsumed,
+          consumptionDate: p.isConsumed ? p.consumptionDate : null,
+        })),
+      };
+      const result = await api.createOpeningInbound(payload);
+      const template = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
+      if (template && result?.rows?.length) {
+        // Only print labels for available (not consumed) pieces
+        const availableRows = result.rows.filter(r => r.status === 'available');
+        if (availableRows.length > 0) {
+          const confirmPrint = window.confirm(`Print ${availableRows.length} available inbound stickers? (Consumed pieces will be skipped)`);
+          if (confirmPrint) {
+            for (const row of availableRows) {
+              await printStageTemplate(
+                LABEL_STAGE_KEYS.INBOUND,
+                {
+                  lotNo: result.lot.lotNo,
+                  itemName,
+                  pieceId: row.id,
+                  seq: row.seq,
+                  weight: row.weight,
+                  barcode: row.barcode,
+                  date: result.lot.date,
+                },
+                { template },
+              );
+            }
+          }
+        }
+      }
+      await refreshDb();
+      setInboundCart([]);
+      await fetchOpeningPreview();
+    } catch (err) {
+      alert(err.message || 'Failed to save opening inbound stock');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleRemove = (setter, id) => {
@@ -566,6 +652,101 @@ export function OpeningStock() {
           </div>
         </CardContent>
       </Card>
+
+      {stage === 'inbound' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Opening Inbound Stock</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div className="space-y-2">
+                <Label>Piece Weight (kg)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={inboundEntry.weight}
+                  onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
+                  onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
+                />
+              </div>
+              <div className="flex items-center space-x-2 h-10">
+                <input
+                  type="checkbox"
+                  id="isConsumed"
+                  className="w-4 h-4"
+                  checked={inboundEntry.isConsumed}
+                  onChange={e => setInboundEntry(prev => ({ ...prev, isConsumed: e.target.checked }))}
+                />
+                <Label htmlFor="isConsumed" className="cursor-pointer">Mark as Consumed</Label>
+              </div>
+              <div className="space-y-2">
+                <Label>Consumption Date (if consumed)</Label>
+                <Input
+                  type="date"
+                  disabled={!inboundEntry.isConsumed}
+                  value={inboundEntry.consumptionDate}
+                  onChange={e => setInboundEntry(prev => ({ ...prev, consumptionDate: e.target.value }))}
+                />
+              </div>
+              <Button onClick={addInboundPiece} className="gap-2">
+                <Plus className="w-4 h-4" /> Add Piece
+              </Button>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={handleSaveInbound} disabled={!canSaveCommon || inboundCart.length === 0 || saving} className="gap-2">
+                {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
+              </Button>
+            </div>
+
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Seq</TableHead>
+                    <TableHead>Weight (kg)</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Consumption Date</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {inboundCart.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">No pieces added.</TableCell>
+                    </TableRow>
+                  ) : inboundCart.map((row, idx) => (
+                    <TableRow key={row.id}>
+                      <TableCell>{idx + 1}</TableCell>
+                      <TableCell>{formatKg(row.weight)}</TableCell>
+                      <TableCell>
+                        <span className={row.isConsumed ? 'text-orange-600 font-medium' : 'text-green-600 font-medium'}>
+                          {row.isConsumed ? 'Consumed' : 'Available'}
+                        </span>
+                      </TableCell>
+                      <TableCell>{row.isConsumed ? row.consumptionDate : '—'}</TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => handleRemove(setInboundCart, row.id)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {inboundCart.length > 0 && (
+              <div className="flex justify-between text-sm text-muted-foreground font-medium">
+                <div>Total: {inboundCart.length} pieces</div>
+                <div>Available: {inboundTotals.totalAvailable} | Consumed: {inboundTotals.totalConsumed}</div>
+                <div>Total Weight: {formatKg(inboundTotals.totalWeight)} kg</div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {stage === 'cutter' && (
         <Card>

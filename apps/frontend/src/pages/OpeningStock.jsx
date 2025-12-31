@@ -18,8 +18,9 @@ import {
   TableRow,
 } from '../components/ui';
 import { formatKg, todayISO, uid } from '../utils';
-import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate } from '../utils/labelPrint';
+import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
 import { Plus, Save, Trash2 } from 'lucide-react';
+import { CatchWeightButton } from '../components/common/CatchWeightButton';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -77,7 +78,6 @@ export function OpeningStock() {
     rollCount: '',
     boxId: '',
     grossWeight: '',
-    crateTareWeight: '',
   });
   const [holoCart, setHoloCart] = useState([]);
   const [holoIssue, setHoloIssue] = useState({
@@ -154,8 +154,7 @@ export function OpeningStock() {
     const gross = Number(entry.grossWeight || 0);
     const rollWeight = Number(rollType?.weight || 0);
     const boxWeight = Number(box?.weight || 0);
-    const crateTare = Number(entry.crateTareWeight || 0);
-    const tare = rollWeight * rollCount + boxWeight + crateTare;
+    const tare = rollWeight * rollCount + boxWeight;
     const net = round3(gross - tare);
     return { net, tare };
   };
@@ -205,7 +204,7 @@ export function OpeningStock() {
     }, { totalWeight: 0, totalConsumed: 0, totalAvailable: 0 });
   }, [inboundCart]);
 
-  const canSaveCommon = date && itemId && firmId && supplierId;
+  const canSaveCommon = date && itemId && supplierId;
 
   const addInboundPiece = () => {
     const w = Number(inboundEntry.weight || 0);
@@ -224,7 +223,7 @@ export function OpeningStock() {
     }));
   };
 
-  const addCutterCrate = () => {
+  const addCutterCrate = async () => {
     if (!cutterEntry.cutId) {
       alert('Cut is required.');
       return;
@@ -244,17 +243,56 @@ export function OpeningStock() {
       alert('Net weight must be positive.');
       return;
     }
-    setCutterCart(prev => [
-      ...prev,
-      {
-        id: uid('crate'),
-        ...cutterEntry,
-        bobbinQuantity: bobbinQty,
-        grossWeight: gross,
-        netWeight: net,
-        tareWeight: tare,
+
+    // Generate barcode for immediate printing using preview lot
+    const crateIndex = cutterCart.length + 1;
+    const barcode = makeReceiveBarcode({ lotNo: previewLotNo || 'OP-XXX', seq: 1, crateIndex });
+
+    const newCrate = {
+      id: uid('crate'),
+      ...cutterEntry,
+      bobbinQuantity: bobbinQty,
+      grossWeight: gross,
+      netWeight: net,
+      tareWeight: tare,
+      barcode,
+    };
+
+    setCutterCart(prev => [...prev, newCrate]);
+
+    // Immediate sticker printing
+    const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+    if (template) {
+      const confirmPrint = window.confirm('Print sticker for this crate?');
+      if (confirmPrint) {
+        const cutName = cutterEntry.cutId ? getCut(cutterEntry.cutId)?.name || '' : '';
+        const operatorName = cutterEntry.operatorId ? getOperator(cutterEntry.operatorId)?.name || '' : '';
+        const helperName = cutterEntry.helperId ? getHelper(cutterEntry.helperId)?.name || '' : '';
+        const machineName = cutterEntry.machineId ? getMachine(cutterEntry.machineId)?.name || '' : '';
+        await printStageTemplate(
+          LABEL_STAGE_KEYS.CUTTER_RECEIVE,
+          {
+            lotNo: previewLotNo || 'OP-XXX',
+            itemName,
+            pieceId: `${previewLotNo || 'OP-XXX'}-1`,
+            barcode,
+            netWeight: net,
+            grossWeight: gross,
+            tareWeight: tare,
+            bobbinQty,
+            bobbinName: bobbin?.name,
+            boxName: box?.name,
+            cutName,
+            machineName,
+            helperName,
+            operatorName,
+            date,
+          },
+          { template },
+        );
       }
-    ]);
+    }
+
     setCutterEntry(prev => ({
       ...prev,
       bobbinQuantity: '',
@@ -262,7 +300,7 @@ export function OpeningStock() {
     }));
   };
 
-  const addHoloCrate = () => {
+  const addHoloCrate = async () => {
     if (!holoEntry.rollTypeId) return;
     const rollType = getRollType(holoEntry.rollTypeId);
     if (!Number(rollType?.weight)) {
@@ -277,26 +315,62 @@ export function OpeningStock() {
       alert('Net weight must be positive.');
       return;
     }
-    setHoloCart(prev => [
-      ...prev,
-      {
-        id: uid('crate'),
-        ...holoEntry,
-        rollCount,
-        grossWeight: gross,
-        netWeight: net,
-        tareWeight: tare,
+
+    // Generate barcode for immediate printing using preview lot
+    const crateIndex = holoCart.length + 1;
+    const barcode = makeHoloReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+
+    const newCrate = {
+      id: uid('crate'),
+      ...holoEntry,
+      rollCount,
+      grossWeight: gross,
+      netWeight: net,
+      tareWeight: tare,
+      barcode,
+    };
+
+    setHoloCart(prev => [...prev, newCrate]);
+
+    // Immediate sticker printing
+    const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
+    if (template) {
+      const confirmPrint = window.confirm('Print sticker for this crate?');
+      if (confirmPrint) {
+        const rollTypeName = rollType?.name || '';
+        const boxName = holoEntry.boxId ? getBox(holoEntry.boxId)?.name || '' : '';
+        const operatorName = holoIssue.operatorId ? getOperator(holoIssue.operatorId)?.name || '' : '';
+        const yarnName = holoIssue.yarnId ? db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '' : '';
+        await printStageTemplate(
+          LABEL_STAGE_KEYS.HOLO_RECEIVE,
+          {
+            lotNo: previewLotNo || 'OP-XXX',
+            itemName,
+            rollCount,
+            grossWeight: gross,
+            tareWeight: tare,
+            netWeight: net,
+            rollType: rollTypeName,
+            boxName,
+            yarnName,
+            machineName: holoIssue.machineId ? getMachine(holoIssue.machineId)?.name || '' : '',
+            operatorName,
+            date,
+            barcode,
+          },
+          { template },
+        );
       }
-    ]);
+    }
+
     setHoloEntry(prev => ({
       ...prev,
       rollCount: '',
       grossWeight: '',
-      crateTareWeight: '',
     }));
   };
 
-  const addConingCrate = () => {
+  const addConingCrate = async () => {
     if (!coningIssue.coneTypeId) {
       alert('Select cone type first.');
       return;
@@ -314,17 +388,54 @@ export function OpeningStock() {
       alert('Net weight must be positive.');
       return;
     }
-    setConingCart(prev => [
-      ...prev,
-      {
-        id: uid('crate'),
-        ...coningEntry,
-        coneCount,
-        grossWeight: gross,
-        netWeight: net,
-        tareWeight: tare,
+
+    // Generate barcode for immediate printing using preview lot
+    const crateIndex = coningCart.length + 1;
+    const barcode = makeConingReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+
+    const newCrate = {
+      id: uid('crate'),
+      ...coningEntry,
+      coneCount,
+      grossWeight: gross,
+      netWeight: net,
+      tareWeight: tare,
+      barcode,
+    };
+
+    setConingCart(prev => [...prev, newCrate]);
+
+    // Immediate sticker printing
+    const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+    if (template) {
+      const confirmPrint = window.confirm('Print sticker for this crate?');
+      if (confirmPrint) {
+        const coneTypeName = coneType?.name || '';
+        const wrapperName = coningIssue.wrapperId ? getWrapper(coningIssue.wrapperId)?.name || '' : '';
+        const boxName = coningEntry.boxId ? getBox(coningEntry.boxId)?.name || '' : '';
+        const operatorName = coningIssue.operatorId ? getOperator(coningIssue.operatorId)?.name || '' : '';
+        await printStageTemplate(
+          LABEL_STAGE_KEYS.CONING_RECEIVE,
+          {
+            lotNo: previewLotNo || 'OP-XXX',
+            itemName,
+            coneCount,
+            grossWeight: gross,
+            tareWeight: tare,
+            netWeight: net,
+            coneType: coneTypeName,
+            wrapperName,
+            boxName,
+            operatorName,
+            shift: coningIssue.shift || '',
+            date,
+            barcode,
+          },
+          { template },
+        );
       }
-    ]);
+    }
+
     setConingEntry(prev => ({
       ...prev,
       coneCount: '',
@@ -633,7 +744,7 @@ export function OpeningStock() {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Firm</Label>
+            <Label>Firm (Optional)</Label>
             <Select value={firmId} onChange={e => setFirmId(e.target.value)}>
               <option value="">Select Firm</option>
               {db.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
@@ -662,14 +773,18 @@ export function OpeningStock() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="space-y-2">
                 <Label>Piece Weight (kg)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  value={inboundEntry.weight}
-                  onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
-                  onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={inboundEntry.weight}
+                    onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
+                    onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
+                    className="flex-1"
+                  />
+                  <CatchWeightButton onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))} />
+                </div>
               </div>
               <div className="flex items-center space-x-2 h-10">
                 <input
@@ -759,7 +874,7 @@ export function OpeningStock() {
                 <Label>Bobbin</Label>
                 <Select value={cutterEntry.bobbinId} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinId: e.target.value }))}>
                   <option value="">Select Bobbin</option>
-                  {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -770,12 +885,15 @@ export function OpeningStock() {
                 <Label>Box</Label>
                 <Select value={cutterEntry.boxId} onChange={e => setCutterEntry(prev => ({ ...prev, boxId: e.target.value }))}>
                   <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'cutter').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {filterByProcess(db.boxes, 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Gross Weight (kg)</Label>
-                <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} />
+                <div className="flex gap-2">
+                  <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                  <CatchWeightButton onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                </div>
               </div>
               <div className="space-y-2">
                 <Label>Operator (Optional)</Label>
@@ -819,6 +937,13 @@ export function OpeningStock() {
                 </Select>
               </div>
             </div>
+            {/* Live weight preview */}
+            {cutterEntry.bobbinId && cutterEntry.boxId && cutterEntry.bobbinQuantity && cutterEntry.grossWeight && (
+              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                Tare: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).tare)}</span> |
+                Net: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).net)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <Button onClick={addCutterCrate} className="gap-2">
                 <Plus className="w-4 h-4" /> Add Crate
@@ -919,12 +1044,12 @@ export function OpeningStock() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
               <div className="space-y-2">
                 <Label>Roll Type</Label>
                 <Select value={holoEntry.rollTypeId} onChange={e => setHoloEntry(prev => ({ ...prev, rollTypeId: e.target.value }))}>
                   <option value="">Select Roll Type</option>
-                  {db.rollTypes?.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  {db.rollTypes?.map(r => <option key={r.id} value={r.id}>{r.name} ({r.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -935,18 +1060,24 @@ export function OpeningStock() {
                 <Label>Box (Optional)</Label>
                 <Select value={holoEntry.boxId} onChange={e => setHoloEntry(prev => ({ ...prev, boxId: e.target.value }))}>
                   <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'holo').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {filterByProcess(db.boxes, 'holo').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Crate Tare (Optional)</Label>
-                <Input type="number" min="0" step="0.001" value={holoEntry.crateTareWeight} onChange={e => setHoloEntry(prev => ({ ...prev, crateTareWeight: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
                 <Label>Gross Weight (kg)</Label>
-                <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} />
+                <div className="flex gap-2">
+                  <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                  <CatchWeightButton onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                </div>
               </div>
             </div>
+            {/* Live weight preview */}
+            {holoEntry.rollTypeId && holoEntry.rollCount && holoEntry.grossWeight && (
+              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                Tare: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).tare)}</span> |
+                Net: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).net)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <Button onClick={addHoloCrate} className="gap-2">
                 <Plus className="w-4 h-4" /> Add Crate
@@ -1009,7 +1140,7 @@ export function OpeningStock() {
                 <Label>Cone Type</Label>
                 <Select value={coningIssue.coneTypeId} onChange={e => setConingIssue(prev => ({ ...prev, coneTypeId: e.target.value }))}>
                   <option value="">Select Cone Type</option>
-                  {db.cone_types?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {db.cone_types?.map(c => <option key={c.id} value={c.id}>{c.name} ({c.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -1045,7 +1176,7 @@ export function OpeningStock() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <div className="space-y-2">
                 <Label>Cone Count</Label>
                 <Input type="number" min="0" value={coningEntry.coneCount} onChange={e => setConingEntry(prev => ({ ...prev, coneCount: e.target.value }))} />
@@ -1054,14 +1185,24 @@ export function OpeningStock() {
                 <Label>Box (Optional)</Label>
                 <Select value={coningEntry.boxId} onChange={e => setConingEntry(prev => ({ ...prev, boxId: e.target.value }))}>
                   <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'coning').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {filterByProcess(db.boxes, 'coning').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Gross Weight (kg)</Label>
-                <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} />
+                <div className="flex gap-2">
+                  <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                  <CatchWeightButton onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                </div>
               </div>
             </div>
+            {/* Live weight preview */}
+            {coningIssue.coneTypeId && coningEntry.coneCount && coningEntry.grossWeight && (
+              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                Tare: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).tare)}</span> |
+                Net: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).net)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <Button onClick={addConingCrate} className="gap-2">
                 <Plus className="w-4 h-4" /> Add Crate

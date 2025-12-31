@@ -1246,7 +1246,7 @@ router.post('/api/opening_stock/inbound', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, pieces } = req.body || {};
-    if (!date || !itemId || !firmId || !supplierId) {
+    if (!date || !itemId || !supplierId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(pieces) || pieces.length === 0) {
@@ -1255,11 +1255,11 @@ router.post('/api/opening_stock/inbound', async (req, res) => {
 
     const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
       prisma.item.findUnique({ where: { id: itemId } }),
-      prisma.firm.findUnique({ where: { id: firmId } }),
+      firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
       prisma.supplier.findUnique({ where: { id: supplierId } }),
     ]);
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
     if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
 
     const result = await prisma.$transaction(async (tx) => {
@@ -1271,7 +1271,7 @@ router.post('/api/opening_stock/inbound', async (req, res) => {
           lotNo,
           date,
           itemId,
-          firmId,
+          firmId: firmId || null,
           supplierId,
           totalPieces: pieces.length,
           totalWeight: roundTo3Decimals(totalWeight),
@@ -1329,7 +1329,7 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, crates } = req.body || {};
-    if (!date || !itemId || !firmId || !supplierId) {
+    if (!date || !itemId || !supplierId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(crates) || crates.length === 0) {
@@ -1338,11 +1338,11 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
 
     const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
       prisma.item.findUnique({ where: { id: itemId } }),
-      prisma.firm.findUnique({ where: { id: firmId } }),
+      firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
       prisma.supplier.findUnique({ where: { id: supplierId } }),
     ]);
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
     if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
 
     const bobbinIds = Array.from(new Set(crates.map(c => c?.bobbinId).filter(Boolean)));
@@ -1431,7 +1431,7 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
           lotNo,
           date,
           itemId,
-          firmId,
+          firmId: firmId || null,
           supplierId,
           totalPieces: 1,
           totalWeight: totalNetWeight,
@@ -1542,7 +1542,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, twistId, yarnId, machineId, operatorId, shift, crates } = req.body || {};
-    if (!date || !itemId || !firmId || !supplierId || !twistId) {
+    if (!date || !itemId || !supplierId || !twistId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(crates) || crates.length === 0) {
@@ -1551,12 +1551,12 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
 
     const [itemRecord, firmRecord, supplierRecord, twistRecord] = await Promise.all([
       prisma.item.findUnique({ where: { id: itemId } }),
-      prisma.firm.findUnique({ where: { id: firmId } }),
+      firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
       prisma.supplier.findUnique({ where: { id: supplierId } }),
       prisma.twist.findUnique({ where: { id: twistId } }),
     ]);
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
     if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
     if (!twistRecord) return res.status(404).json({ error: 'Twist not found' });
 
@@ -1626,7 +1626,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
           lotNo,
           date,
           itemId,
-          firmId,
+          firmId: firmId || null,
           supplierId,
           totalPieces: 1,
           totalWeight: totalNetWeight,
@@ -1746,7 +1746,7 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, crates } = req.body || {};
-    if (!date || !itemId || !firmId || !supplierId || !coneTypeId) {
+    if (!date || !itemId || !supplierId || !coneTypeId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(crates) || crates.length === 0) {
@@ -1755,12 +1755,12 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
 
     const [itemRecord, firmRecord, supplierRecord, coneTypeRecord] = await Promise.all([
       prisma.item.findUnique({ where: { id: itemId } }),
-      prisma.firm.findUnique({ where: { id: firmId } }),
+      firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
       prisma.supplier.findUnique({ where: { id: supplierId } }),
       prisma.coneType.findUnique({ where: { id: coneTypeId } }),
     ]);
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-    if (!firmRecord) return res.status(404).json({ error: 'Firm not found' });
+    if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
     if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
     if (!coneTypeRecord) return res.status(404).json({ error: 'Cone type not found' });
     if (wrapperId) {
@@ -1825,7 +1825,7 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
           lotNo,
           date,
           itemId,
-          firmId,
+          firmId: firmId || null,
           supplierId,
           totalPieces: 1,
           totalWeight: totalNetWeight,

@@ -74,7 +74,7 @@ model Lot {
   lotNo       String     @unique
   date        String
   itemId      String
-  firmId      String
+  firmId      String?
   supplierId  String?
   totalPieces Int
   totalWeight Float
@@ -83,7 +83,7 @@ model Lot {
   createdByUserId String?
   updatedByUserId String?
   item        Item       @relation(fields: [itemId], references: [id])
-  firm        Firm       @relation(fields: [firmId], references: [id])
+  firm        Firm?      @relation(fields: [firmId], references: [id])
   supplier    Supplier?  @relation(fields: [supplierId], references: [id])
 }
 

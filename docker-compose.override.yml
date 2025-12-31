@@ -19,6 +19,11 @@ services:
       backend:
         condition: service_started
 
+  backend:
+    volumes:
+      - ./apps/backend:/app
+      - /app/node_modules
+
 volumes:
   frontend-dev-node_modules:
 

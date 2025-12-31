@@ -60,8 +60,8 @@ export function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-background">
-      <Card className="w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-background">
+      <Card className="w-full max-w-[400px] shadow-lg">
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
         </CardHeader>

@@ -128,7 +128,7 @@ export function Inbound() {
                     <CardTitle>New Lot Entry</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
                         <div className="space-y-2">
                             <Label>Date</Label>
                             <Input type="date" value={date} onChange={e => { setDate(e.target.value); setCart([]); }} />
@@ -178,22 +178,22 @@ export function Inbound() {
                         </div>
                     </div>
 
-                    <div className="mt-6 flex justify-between items-end">
-                        <div className="flex gap-2">
-                            <Button onClick={addPiece} disabled={!canAdd} className="gap-2">
+                    <div className="mt-6 flex flex-col sm:flex-row justify-between items-end gap-4 sm:gap-0">
+                        <div className="flex w-full sm:w-auto gap-2">
+                            <Button onClick={addPiece} disabled={!canAdd} className="flex-1 sm:flex-none gap-2">
                                 <Plus className="w-4 h-4" /> Add Piece
                             </Button>
-                            <Button variant="outline" onClick={() => setCart([])} disabled={cart.length === 0} className="text-destructive hover:text-destructive">
+                            <Button variant="outline" onClick={() => setCart([])} disabled={cart.length === 0} className="flex-1 sm:flex-none text-destructive hover:text-destructive">
                                 Clear
                             </Button>
                         </div>
-                        <Button onClick={handleSaveLot} disabled={!canSave || refreshing} className="gap-2 min-w-[120px]">
+                        <Button onClick={handleSaveLot} disabled={!canSave || refreshing} className="w-full sm:w-auto gap-2 min-w-[120px]">
                             {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Lot</>}
                         </Button>
                     </div>
 
                     {/* Cart Table */}
-                    <div className="mt-6 rounded-md border">
+                    <div className="mt-6 rounded-md border overflow-x-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -339,9 +339,9 @@ function RecentLotsTable({ db }) {
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <CardTitle>Recent Lots</CardTitle>
-                <div className="relative w-64">
+                <div className="relative w-full sm:w-64">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Filter lots..."
@@ -352,7 +352,7 @@ function RecentLotsTable({ db }) {
                 </div>
             </CardHeader>
             <CardContent>
-                <div className="rounded-md border">
+                <div className="rounded-md border overflow-x-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -410,7 +410,7 @@ function RecentLotsTable({ db }) {
                                                 <TableCell colSpan={9} className="bg-muted/30 p-0">
                                                     <div className="p-4">
                                                         <h4 className="font-medium text-sm mb-2">Pieces in Lot {l.lotNo}</h4>
-                                                        <div className="rounded-md border bg-background">
+                                                        <div className="rounded-md border bg-background overflow-x-auto">
                                                             <Table>
                                                                 <TableHeader>
                                                                     <TableRow>

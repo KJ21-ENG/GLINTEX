@@ -1004,7 +1004,7 @@ export function ReceiveHistoryTable() {
             </CardHeader>
             <CardContent>
                 {showHistory && (
-                    <div className="rounded-md border max-h-[600px] overflow-y-auto">
+                    <div className="rounded-md border max-h-[600px] overflow-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -1128,7 +1128,7 @@ export function ReceiveHistoryTable() {
                 )}
 
                 {showChallans && (
-                    <div className="rounded-md border max-h-[600px] overflow-y-auto">
+                    <div className="rounded-md border max-h-[600px] overflow-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>

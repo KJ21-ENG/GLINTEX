@@ -1590,7 +1590,7 @@ const LabelDesigner = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Label width (mm)</Label>
                 <Input
@@ -2154,18 +2154,20 @@ const LabelDesigner = () => {
               </div>
             )}
 
-            <LabelPreview
-              dimensions={dimensions}
-              content={content}
-              setContent={setContent}
-              setContentWithHistory={setContentWithHistory}
-              pushHistory={pushHistory}
-              selectedIds={selectedIds}
-              setSelectedIds={setSelectedIds}
-              snapEnabled={snapEnabled}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
-            />
+            <div className="overflow-x-auto border rounded-lg p-4 bg-muted/10">
+              <LabelPreview
+                dimensions={dimensions}
+                content={content}
+                setContent={setContent}
+                setContentWithHistory={setContentWithHistory}
+                pushHistory={pushHistory}
+                selectedIds={selectedIds}
+                setSelectedIds={setSelectedIds}
+                snapEnabled={snapEnabled}
+                clipboard={clipboard}
+                setClipboard={setClipboard}
+              />
+            </div>
 
             <div className="border rounded-lg bg-card p-4 space-y-2">
               <button

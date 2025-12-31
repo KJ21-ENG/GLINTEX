@@ -639,7 +639,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                     <CardTitle>Connection Status</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
                             <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                             <div className="flex flex-col">
@@ -647,15 +647,15 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                                 {whatsappStatus.mobile && <span className="text-xs text-muted-foreground">+{whatsappStatus.mobile}</span>}
                             </div>
                         </div>
-                        <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={() => { setGroups([]); }} disabled={!isConnected || working} title="Refresh Groups">
+                        <div className="flex gap-2 w-full sm:w-auto">
+                            <Button size="sm" variant="outline" onClick={() => { setGroups([]); }} disabled={!isConnected || working} title="Refresh Groups" className="flex-1 sm:flex-none">
                                 <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
                             </Button>
-                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected}>
+                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected} className="flex-1 sm:flex-none">
                                 {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
                             </Button>
                             {isConnected && (
-                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working}>
+                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working} className="flex-1 sm:flex-none">
                                     <LogOut className="w-4 h-4 mr-2" /> Logout
                                 </Button>
                             )}
@@ -787,7 +787,7 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
             <Card>
                 <CardHeader><CardTitle>Branding</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <Label>Primary Color (Hex)</Label>
                             <Input value={localBrand.primary} onChange={e => setLocalBrand({ ...localBrand, primary: e.target.value })} />
@@ -1049,10 +1049,10 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
             )}
 
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <CardTitle>Database Backups</CardTitle>
                     {isAdmin && (
-                        <Button onClick={handleCreateBackup} disabled={creating} size="sm">
+                        <Button onClick={handleCreateBackup} disabled={creating} size="sm" className="w-full sm:w-auto">
                             <Plus className="w-4 h-4 mr-2" />
                             {creating ? 'Creating...' : 'Create Backup'}
                         </Button>
@@ -1169,12 +1169,12 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                             ) : (
                                 <>
                                     <div className="space-y-3 rounded-md border p-4">
-                                        <div className="flex items-center justify-between">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                             <div className="flex items-center gap-2">
                                                 <Cloud className="w-4 h-4 text-muted-foreground" />
                                                 <h4 className="text-sm font-semibold">Google Drive</h4>
                                             </div>
-                                            <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${driveBadgeClass}`}>
+                                            <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded inline-block w-fit ${driveBadgeClass}`}>
                                                 {driveLabel}
                                             </span>
                                         </div>

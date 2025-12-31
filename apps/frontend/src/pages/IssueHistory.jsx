@@ -342,7 +342,7 @@ export function IssueHistory({ db, refreshDb }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-md border max-h-[600px] overflow-y-auto">
+      <div className="rounded-md border max-h-[600px] overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>

@@ -220,9 +220,9 @@ export function IssueToCutter() {
                 <div className="flex-1 space-y-6">
                     <Card>
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-base flex justify-between items-center">
+                            <CardTitle className="text-base flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                                 <span>Select Pieces</span>
-                                <form onSubmit={handleScan} className="flex gap-2 w-64">
+                                <form onSubmit={handleScan} className="flex gap-2 w-full sm:w-64">
                                     <div className="relative flex-1">
                                         <QrCode className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                                         <Input
@@ -247,7 +247,7 @@ export function IssueToCutter() {
                                     <Button size="sm" variant="ghost" onClick={() => setSelected([])}>None</Button>
                                 </div>
                             </div>
-                            <div className="max-h-[400px] overflow-y-auto border rounded-md">
+                            <div className="max-h-[400px] overflow-auto border rounded-md">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>

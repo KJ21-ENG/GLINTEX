@@ -391,28 +391,28 @@ export function Stock() {
     <div className="space-y-6 fade-in">
       {/* Header & Controls */}
       <div className="flex flex-col gap-4">
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <h1 className="text-2xl font-bold tracking-tight">Stock & Inventory</h1>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 w-full md:w-auto">
             {/* View Toggles */}
             {isCutter ? (
-              <div className="flex p-1 bg-muted rounded-lg">
+              <div className="flex p-1 bg-muted rounded-lg flex-1 md:flex-none">
                 <button
                   onClick={() => setView('jumbo')}
-                  className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view === 'jumbo' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
+                  className={cn("flex-1 md:flex-none px-3 py-1 text-sm font-medium rounded-md transition-all", view === 'jumbo' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
                 >
                   Jumbo Rolls
                 </button>
                 <button
                   onClick={() => setView('bobbins')}
-                  className={cn("px-3 py-1 text-sm font-medium rounded-md transition-all", view === 'bobbins' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
+                  className={cn("flex-1 md:flex-none px-3 py-1 text-sm font-medium rounded-md transition-all", view === 'bobbins' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}
                 >
                   Bobbins
                 </button>
               </div>
             ) : null}
             {/* Export Button */}
-            <Button variant="outline" size="icon" onClick={() => exportXlsx(filteredLots, {})}>
+            <Button variant="outline" size="icon" onClick={() => exportXlsx(filteredLots, {})} className="ml-auto md:ml-0">
               <Download className="w-4 h-4" />
             </Button>
           </div>
@@ -420,8 +420,8 @@ export function Stock() {
 
         {/* Filter Bar */}
         <Card className="bg-muted/40 border-none shadow-none">
-          <CardContent className="p-4 flex flex-wrap gap-3 items-end">
-            <div className="flex-1 min-w-[200px]">
+          <CardContent className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 items-end">
+            <div className="sm:col-span-2 lg:col-span-2 min-w-[200px]">
               <Label className="text-xs mb-1 block">Search</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -433,45 +433,45 @@ export function Stock() {
                 />
               </div>
             </div>
-            <div className="w-[140px]">
+            <div>
               <Label className="text-xs mb-1 block">Item</Label>
-              <Select className="bg-background" value={filters.item} onChange={e => setFilters(f => ({ ...f, item: e.target.value }))}>
+              <Select className="bg-background w-full" value={filters.item} onChange={e => setFilters(f => ({ ...f, item: e.target.value }))}>
                 <option value="">All Items</option>
                 {db?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
               </Select>
             </div>
-            <div className="w-[140px]">
+            <div>
               <Label className="text-xs mb-1 block">Firm</Label>
-              <Select className="bg-background" value={filters.firm} onChange={e => setFilters(f => ({ ...f, firm: e.target.value }))}>
+              <Select className="bg-background w-full" value={filters.firm} onChange={e => setFilters(f => ({ ...f, firm: e.target.value }))}>
                 <option value="">All Firms</option>
                 {db?.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
               </Select>
             </div>
-            <div className="w-[160px]">
+            <div>
               <Label className="text-xs mb-1 block">Supplier</Label>
-              <Select className="bg-background" value={filters.supplier} onChange={e => setFilters(f => ({ ...f, supplier: e.target.value }))}>
+              <Select className="bg-background w-full" value={filters.supplier} onChange={e => setFilters(f => ({ ...f, supplier: e.target.value }))}>
                 <option value="">All Suppliers</option>
                 {db?.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </Select>
             </div>
-            <div className="w-[140px]">
+            <div>
               <Label className="text-xs mb-1 block">Status</Label>
-              <Select className="bg-background" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
+              <Select className="bg-background w-full" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
                 <option value="active">Active Only</option>
                 <option value="inactive">Inactive Only</option>
                 {isCutter && <option value="available_to_issue">Available to issue</option>}
                 <option value="all">All</option>
               </Select>
             </div>
-            <div className="w-[130px]">
+            <div>
               <Label className="text-xs mb-1 block">From</Label>
-              <Input type="date" className="bg-background" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
+              <Input type="date" className="bg-background w-full" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
             </div>
-            <div className="w-[130px]">
+            <div>
               <Label className="text-xs mb-1 block">To</Label>
-              <Input type="date" className="bg-background" value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
+              <Input type="date" className="bg-background w-full" value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
             </div>
-            <div className="flex items-center gap-2 ml-auto pb-1">
+            <div className="flex items-center gap-2 pb-2 sm:col-span-2 lg:col-span-1 lg:ml-auto">
               <Label className="text-xs cursor-pointer flex items-center gap-2">
                 <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
                 Group by Item
@@ -489,7 +489,7 @@ export function Stock() {
       ) : showBobbins ? (
         <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : (
-        <div className="rounded-md border bg-card">
+        <div className="rounded-md border bg-card overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -639,7 +639,7 @@ export function Stock() {
       {/* Issue Modal */}
       <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>
         <DialogContent title="Issue Pieces to Machine" onOpenChange={setIssueModalOpen}>
-          <div className="grid gap-4 py-4">
+          <div className="grid gap-4 py-4 max-h-[80vh] overflow-y-auto">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <Label>Date</Label>

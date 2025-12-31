@@ -150,22 +150,22 @@ export function HoloReceiveForm() {
     return (
         <div className="space-y-6">
             <Card>
-                <CardHeader className="flex flex-row justify-between items-center">
+                <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Issue</CardTitle>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Issue Barcode (HLO-...)"
                             value={scanInput}
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
-                            className="w-64"
+                            className="flex-1 sm:w-64"
                         />
                         <Button onClick={handleScan}>Load</Button>
                     </div>
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="flex gap-4 p-4 bg-muted rounded-md text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-md text-sm">
                             <div><strong>Lot:</strong> {issue.lotNo}</div>
                             <div><strong>Item:</strong> {issue.itemId}</div>
                             <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name}</div>
@@ -238,11 +238,11 @@ export function HoloReceiveForm() {
                             </div>
                         </div>
 
-                        <div className="flex justify-between items-center pt-4 border-t">
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center pt-4 border-t gap-4">
                             <div className="text-sm">
                                 Tare: {formatKg(tareWeight)} | <span className="font-bold">Net: {formatKg(netWeight)}</span>
                             </div>
-                            <Button onClick={handleSubmit} disabled={submitting || !netWeight}>Save Receive</Button>
+                            <Button onClick={handleSubmit} disabled={submitting || !netWeight} className="w-full sm:w-auto">Save Receive</Button>
                         </div>
                     </CardContent>
                 )}

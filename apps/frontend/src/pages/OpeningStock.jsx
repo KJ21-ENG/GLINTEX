@@ -635,7 +635,7 @@ export function OpeningStock() {
             <CardTitle>Opening Inbound Stock</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
               <div className="space-y-2">
                 <Label>Piece Weight (kg)</Label>
                 <div className="flex gap-2">
@@ -681,7 +681,7 @@ export function OpeningStock() {
               </Button>
             </div>
 
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -734,7 +734,7 @@ export function OpeningStock() {
             <CardTitle>Opening Cutter Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="space-y-2">
                 <Label>Bobbin</Label>
                 <Select value={cutterEntry.bobbinId} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinId: e.target.value }))}>
@@ -817,7 +817,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -951,7 +951,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1076,7 +1076,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

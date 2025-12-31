@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Input, Button } from '../ui';
 import { formatKg } from '../../utils';
 import * as api from '../../api';
-import { Check, X, Edit2, AlertTriangle, MoreVertical } from 'lucide-react';
+import { Check, X, Edit2, AlertTriangle, MoreVertical, Trash2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export function PieceRow({
@@ -13,7 +13,9 @@ export function PieceRow({
   pendingWeight = 0,
   isIssued = false,
   wastageWeight = 0,
-  totalUnits = 0
+  totalUnits = 0,
+  onDelete,
+  isDeleting = false
 }) {
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -55,6 +57,7 @@ export function PieceRow({
   }
 
   const canEdit = !isWastageMarked && !isIssued;
+  const canDelete = !isWastageMarked && !isIssued && p.status !== 'consumed';
 
   return (
     <tr className={cn(
@@ -129,6 +132,13 @@ export function PieceRow({
                 disabled={!canEdit}
               >
                 <Edit2 className="mr-2 h-3 w-3" /> Edit Weight
+              </button>
+              <button
+                className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-destructive/10 text-destructive disabled:opacity-50"
+                onClick={() => { onDelete && onDelete(p.id); setMenuOpen(false); }}
+                disabled={!canDelete || isDeleting}
+              >
+                <Trash2 className="mr-2 h-3 w-3" /> {isDeleting ? 'Deleting...' : 'Delete Piece'}
               </button>
             </div>
           )}

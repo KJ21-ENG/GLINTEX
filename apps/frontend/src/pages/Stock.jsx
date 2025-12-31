@@ -202,6 +202,7 @@ export function Stock() {
     note: '',
   });
   const [issuing, setIssuing] = useState(false);
+  const [deletingPieces, setDeletingPieces] = useState(() => new Set());
 
   // Keep view aligned with process (match main-branch behaviour)
   useEffect(() => {
@@ -221,6 +222,20 @@ export function Stock() {
 
   useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
 
+  async function handleDeletePiece(pieceId) {
+    if (!pieceId) return;
+    const ok = window.confirm(`Delete piece ${pieceId}? This action cannot be undone.`);
+    if (!ok) return;
+    setDeletingPieces(prev => new Set(prev).add(pieceId));
+    try {
+      await api.deleteInboundItem(pieceId);
+      await refreshDb();
+    } catch (err) {
+      alert(err.message || 'Failed to delete piece');
+    } finally {
+      setDeletingPieces(prev => { const s = new Set(prev); s.delete(pieceId); return s; });
+    }
+  }
 
   function togglePiece(lotNo, pieceId) {
     setSelectedByLot(prev => {
@@ -531,6 +546,8 @@ export function Stock() {
                                       pendingWeight={p.pendingWeight}
                                       wastageWeight={p.wastageWeight}
                                       totalUnits={p.totalUnits}
+                                      onDelete={handleDeletePiece}
+                                      isDeleting={deletingPieces.has(p.id)}
                                     />
                                   ))}
                                 </TableBody>

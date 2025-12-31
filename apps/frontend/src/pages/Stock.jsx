@@ -51,7 +51,7 @@ export function Stock() {
     item: "",
     firm: "",
     supplier: "",
-    status: "active", // 'active', 'inactive', 'all'
+    status: (process || 'cutter') === 'cutter' ? "available_to_issue" : "active",
     from: "",
     to: ""
   });
@@ -171,8 +171,12 @@ export function Stock() {
 
       // Status
       if (filters.status !== 'all') {
-        const status = l.statusType || lotStatus(l);
-        if (status !== filters.status) return false;
+        if (filters.status === 'available_to_issue') {
+          if ((l.availableCount || 0) <= 0) return false;
+        } else {
+          const status = l.statusType || lotStatus(l);
+          if (status !== filters.status) return false;
+        }
       }
       return true;
     }).sort((a, b) => {
@@ -247,6 +251,12 @@ export function Stock() {
   }, [isCutter, isHolo, view]);
 
   useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
+  useEffect(() => {
+    setFilters(f => ({
+      ...f,
+      status: isCutter ? 'available_to_issue' : 'active'
+    }));
+  }, [isCutter]);
 
   async function handleDeletePiece(pieceId) {
     if (!pieceId) return;
@@ -449,6 +459,7 @@ export function Stock() {
               <Select className="bg-background" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
                 <option value="active">Active Only</option>
                 <option value="inactive">Inactive Only</option>
+                {isCutter && <option value="available_to_issue">Available to issue</option>}
                 <option value="all">All</option>
               </Select>
             </div>
@@ -490,12 +501,12 @@ export function Stock() {
                 <TableHead>Supplier</TableHead>
                 <TableHead className="">Pieces</TableHead>
                 <TableHead className="">Total Wt</TableHead>
-                <TableHead className="">Pending Wt</TableHead>
+                {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {displayedLots.length === 0 ? (
-                <TableRow><TableCell colSpan={groupByItem ? 8 : 9} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={(groupByItem ? 8 : 9) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
               ) : (
                 displayedLots.map((l, idx) => {
                   const isExpanded = !groupByItem && expandedLot === l.lotNo;
@@ -533,13 +544,15 @@ export function Stock() {
                           {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
                         </TableCell>
                         <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
-                        <TableCell className="font-bold">
-                          {formatKg(l.pendingWeight)}
-                        </TableCell>
+                        {filters.status !== 'available_to_issue' && (
+                          <TableCell className="font-bold">
+                            {formatKg(l.pendingWeight)}
+                          </TableCell>
+                        )}
                       </TableRow>
                       {isExpanded && !groupByItem && (
                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                          <TableCell colSpan={9} className="p-4">
+                          <TableCell colSpan={filters.status === 'available_to_issue' ? 8 : 9} className="p-4">
                             <div className="bg-background border rounded-lg p-4 shadow-sm">
                               <div className="flex justify-between items-center mb-4">
                                 <div className="flex gap-2">
@@ -587,7 +600,7 @@ export function Stock() {
                                     <TableHead>Barcode</TableHead>
                                     <TableHead>Seq</TableHead>
                                     <TableHead className="">Weight</TableHead>
-                                    <TableHead className="">Pending</TableHead>
+                                    {filters.status !== 'available_to_issue' && <TableHead className="">Pending</TableHead>}
                                     <TableHead className="">Total Units</TableHead>
                                     <TableHead className="w-[50px]"></TableHead>
                                   </TableRow>
@@ -605,6 +618,7 @@ export function Stock() {
                                       totalUnits={p.totalUnits}
                                       onDelete={handleDeletePiece}
                                       isDeleting={deletingPieces.has(p.id)}
+                                      hidePending={filters.status === 'available_to_issue'}
                                     />
                                   ))}
                                 </TableBody>

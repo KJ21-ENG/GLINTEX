@@ -15,7 +15,8 @@ export function PieceRow({
   wastageWeight = 0,
   totalUnits = 0,
   onDelete,
-  isDeleting = false
+  isDeleting = false,
+  hidePending = false
 }) {
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -108,15 +109,17 @@ export function PieceRow({
         </div>
       </td>
       <td className="py-2 pr-2 text-sm">
-        <div className="flex flex-col items-end">
-          <span>{formatKg(pendingWeight)}</span>
-          {wastageWeight > 0 && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3 text-amber-500" />
-              {formatKg(wastageWeight)} kg ({((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(1)}%)
-            </span>
-          )}
-        </div>
+        {!hidePending && (
+          <div className="flex flex-col items-end">
+            <span>{formatKg(pendingWeight)}</span>
+            {wastageWeight > 0 && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 text-amber-500" />
+                {formatKg(wastageWeight)} kg ({((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(1)}%)
+              </span>
+            )}
+          </div>
+        )}
       </td>
       <td className="py-2 pr-2 text-sm">{totalUnits || 0}</td>
       <td className="py-2 pr-2 relative">

@@ -150,6 +150,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
 
       if (filters.status === 'active' && l.availableBobbins <= 0) return false;
       if (filters.status === 'inactive' && l.availableBobbins > 0) return false;
+      if (filters.status === 'available_to_issue' && l.availableBobbins <= 0) return false;
 
       return true;
     }).sort((a, b) => {

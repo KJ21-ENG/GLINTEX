@@ -247,12 +247,17 @@ export function Stock() {
     });
   }
 
-  function selectAll(lotNo) {
-    setSelectedByLot(prev => ({ ...prev, [lotNo]: (lotsMap[lotNo].pieces || []).map(p => p.id) }));
-  }
-
-  function clearSel(lotNo) {
-    setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+  function toggleAllPieces(lotNo) {
+    const availablePieces = (lotsMap[lotNo]?.pieces || []).filter(p => p.status === 'available').map(p => p.id);
+    const currentSelected = selectedByLot[lotNo] || [];
+    const allSelected = availablePieces.length > 0 && availablePieces.every(id => currentSelected.includes(id));
+    if (allSelected) {
+      // Deselect all
+      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+    } else {
+      // Select all available
+      setSelectedByLot(prev => ({ ...prev, [lotNo]: availablePieces }));
+    }
   }
 
   async function handleDeleteLot(lotNo, e) {
@@ -502,15 +507,14 @@ export function Stock() {
                             <div className="bg-background border rounded-lg p-4 shadow-sm">
                               <div className="flex justify-between items-center mb-4">
                                 <div className="flex gap-2">
-                                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); selectAll(l.lotNo); }}>Select All</Button>
-                                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); clearSel(l.lotNo); }}>Clear</Button>
-                                  <Button
-                                    size="sm"
-                                    onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
-                                    disabled={!(selectedByLot[l.lotNo] || []).length}
-                                  >
-                                    Issue Selected
-                                  </Button>
+                                  {(selectedByLot[l.lotNo] || []).length === 1 && (
+                                    <Button
+                                      size="sm"
+                                      onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
+                                    >
+                                      Issue Selected
+                                    </Button>
+                                  )}
                                 </div>
                                 <Button
                                   size="sm"
@@ -525,7 +529,24 @@ export function Stock() {
                               <Table>
                                 <TableHeader>
                                   <TableRow className="bg-muted/50">
-                                    <TableHead className="w-[30px]"></TableHead>
+                                    <TableHead className="w-[30px]">
+                                      {(() => {
+                                        const availablePieces = (l.pieces || []).filter(p => p.status === 'available');
+                                        const currentSelected = selectedByLot[l.lotNo] || [];
+                                        const allSelected = availablePieces.length > 0 && availablePieces.every(p => currentSelected.includes(p.id));
+                                        const someSelected = currentSelected.length > 0 && !allSelected;
+                                        return (
+                                          <input
+                                            type="checkbox"
+                                            checked={allSelected}
+                                            ref={el => { if (el) el.indeterminate = someSelected; }}
+                                            onChange={(e) => { e.stopPropagation(); toggleAllPieces(l.lotNo); }}
+                                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            disabled={availablePieces.length === 0}
+                                          />
+                                        );
+                                      })()}
+                                    </TableHead>
                                     <TableHead>Piece ID</TableHead>
                                     <TableHead>Barcode</TableHead>
                                     <TableHead>Seq</TableHead>

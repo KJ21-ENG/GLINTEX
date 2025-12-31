@@ -459,31 +459,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningInbound(payload);
-      const template = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
-      if (template && result?.rows?.length) {
-        // Only print labels for available (not consumed) pieces
-        const availableRows = result.rows.filter(r => r.status === 'available');
-        if (availableRows.length > 0) {
-          const confirmPrint = window.confirm(`Print ${availableRows.length} available inbound stickers? (Consumed pieces will be skipped)`);
-          if (confirmPrint) {
-            for (const row of availableRows) {
-              await printStageTemplate(
-                LABEL_STAGE_KEYS.INBOUND,
-                {
-                  lotNo: result.lot.lotNo,
-                  itemName,
-                  pieceId: row.id,
-                  seq: row.seq,
-                  weight: row.weight,
-                  barcode: row.barcode,
-                  date: result.lot.date,
-                },
-                { template },
-              );
-            }
-          }
-        }
-      }
       await refreshDb();
       setInboundCart([]);
       await fetchOpeningPreview();
@@ -524,44 +499,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningCutterReceive(payload);
-      const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
-      if (template && result?.rows?.length) {
-        const confirmPrint = window.confirm(`Print ${result.rows.length} cutter receive stickers?`);
-        if (confirmPrint) {
-          for (let i = 0; i < result.rows.length; i += 1) {
-            const row = cutterCart[i];
-            const barcode = result.rows[i]?.barcode || '';
-            const bobbinName = getBobbin(row.bobbinId)?.name || '';
-            const boxName = getBox(row.boxId)?.name || '';
-            const cutName = row.cutId ? getCut(row.cutId)?.name || '' : '';
-            const operatorName = row.operatorId ? getOperator(row.operatorId)?.name || '' : '';
-            const helperName = row.helperId ? getHelper(row.helperId)?.name || '' : '';
-            const machineName = row.machineId ? getMachine(row.machineId)?.name || '' : '';
-            await printStageTemplate(
-              LABEL_STAGE_KEYS.CUTTER_RECEIVE,
-              {
-                lotNo: result.lotNo,
-                itemName,
-                pieceId: result.pieceId,
-                seq: 1,
-                netWeight: row.netWeight,
-                grossWeight: row.grossWeight,
-                tareWeight: row.tareWeight,
-                bobbinQty: row.bobbinQuantity,
-                bobbinName,
-                boxName,
-                cutName,
-                machineName,
-                helperName,
-                operatorName,
-                date,
-                barcode,
-              },
-              { template },
-            );
-          }
-        }
-      }
       await refreshDb();
       setCutterCart([]);
       await fetchOpeningPreview();
@@ -596,40 +533,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
-      const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
-      if (template && result?.rows?.length) {
-        const confirmPrint = window.confirm(`Print ${result.rows.length} holo receive stickers?`);
-        if (confirmPrint) {
-          for (let i = 0; i < result.rows.length; i += 1) {
-            const row = holoCart[i];
-            const barcode = result.rows[i]?.barcode || '';
-            const rollTypeName = getRollType(row.rollTypeId)?.name || '';
-            const boxName = row.boxId ? getBox(row.boxId)?.name || '' : '';
-            const operatorName = holoIssue.operatorId ? getOperator(holoIssue.operatorId)?.name || '' : '';
-            const yarnName = holoIssue.yarnId ? db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '' : '';
-            await printStageTemplate(
-              LABEL_STAGE_KEYS.HOLO_RECEIVE,
-              {
-                lotNo: result.lotNo,
-                itemName,
-                rollCount: row.rollCount,
-                grossWeight: row.grossWeight,
-                tareWeight: row.tareWeight,
-                netWeight: row.netWeight,
-                rollType: rollTypeName,
-                boxName,
-                cut: '',
-                yarnName,
-                machineName: holoIssue.machineId ? db.machines?.find(m => m.id === holoIssue.machineId)?.name || '' : '',
-                operatorName,
-                date,
-                barcode,
-              },
-              { template },
-            );
-          }
-        }
-      }
       await refreshDb();
       setHoloCart([]);
       await fetchOpeningPreview();
@@ -662,44 +565,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
-      const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
-      if (template && result?.rows?.length) {
-        const confirmPrint = window.confirm(`Print ${result.rows.length} coning receive stickers?`);
-        if (confirmPrint) {
-          for (let i = 0; i < result.rows.length; i += 1) {
-            const row = coningCart[i];
-            const barcode = result.rows[i]?.barcode || '';
-            const coneTypeName = getConeType(coningIssue.coneTypeId)?.name || '';
-            const wrapperName = coningIssue.wrapperId ? getWrapper(coningIssue.wrapperId)?.name || '' : '';
-            const boxName = row.boxId ? getBox(row.boxId)?.name || '' : '';
-            const operatorName = coningIssue.operatorId ? getOperator(coningIssue.operatorId)?.name || '' : '';
-            await printStageTemplate(
-              LABEL_STAGE_KEYS.CONING_RECEIVE,
-              {
-                lotNo: result.lotNo,
-                itemName,
-                coneCount: row.coneCount,
-                grossWeight: row.grossWeight,
-                tareWeight: row.tareWeight,
-                netWeight: row.netWeight,
-                coneType: coneTypeName,
-                wrapperName,
-                issueBarcode: result.issueBarcode || '',
-                boxName,
-                operatorName,
-                shift: coningIssue.shift || '',
-                date,
-                barcode,
-                rollCount: '',
-                cut: '',
-                yarnName: '',
-                rollType: '',
-              },
-              { template },
-            );
-          }
-        }
-      }
       await refreshDb();
       setConingCart([]);
       await fetchOpeningPreview();

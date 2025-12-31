@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
@@ -196,6 +196,9 @@ export function Settings() {
                         <button onClick={() => setActiveTab('backup')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'backup' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
                             <HardDrive className="w-4 h-4" /> Backup
                         </button>
+                        <button onClick={() => setActiveTab('challan')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'challan' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
+                            <FileText className="w-4 h-4" /> Challan Settings
+                        </button>
                         <button
                             onClick={() => navigate('/app/settings/label-designer')}
                             className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
@@ -251,6 +254,7 @@ export function Settings() {
                 {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
                 {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} db={db} updateSettings={updateSettings} />}
+                {activeTab === 'challan' && <ChallanSettings db={db} updateSettings={updateSettings} refreshDb={refreshDb} />}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
@@ -1324,6 +1328,141 @@ function RawTable({ title, data }) {
                     </TableBody>
                 </Table>
             </div>
+        </div>
+    );
+}
+
+function ChallanSettings({ db, updateSettings, refreshDb }) {
+    const [working, setWorking] = useState(false);
+    const [fromDetails, setFromDetails] = useState({
+        name: '',
+        address: '',
+        mobile: ''
+    });
+    const [fieldsConfig, setFieldsConfig] = useState({
+        showFromName: true,
+        showFromAddress: true,
+        showFromMobile: true,
+        showToDetails: true,
+        showDate: true,
+        showLotNo: true,
+        showItem: true,
+        showOperator: true,
+        showHelper: true,
+        showCut: true,
+        showWastageNote: true,
+        showTotals: true
+    });
+
+    useEffect(() => {
+        const settings = db?.settings?.[0];
+        if (settings) {
+            setFromDetails({
+                name: settings.challanFromName || '',
+                address: settings.challanFromAddress || '',
+                mobile: settings.challanFromMobile || ''
+            });
+            if (settings.challanFieldsConfig) {
+                setFieldsConfig(prev => ({ ...prev, ...settings.challanFieldsConfig }));
+            }
+        }
+    }, [db]);
+
+    const handleSave = async () => {
+        setWorking(true);
+        try {
+            await updateSettings({
+                challanFromName: fromDetails.name,
+                challanFromAddress: fromDetails.address,
+                challanFromMobile: fromDetails.mobile,
+                challanFieldsConfig: fieldsConfig
+            });
+            alert('Challan settings saved');
+            refreshDb();
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setWorking(false);
+        }
+    };
+
+    const toggleField = (key) => {
+        setFieldsConfig(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const fieldLabels = {
+        showFromName: 'Show From Name',
+        showFromAddress: 'Show From Address',
+        showFromMobile: 'Show From Mobile',
+        showToDetails: 'Show To Details (Firm Info)',
+        showDate: 'Show Date',
+        showLotNo: 'Show Lot No',
+        showItem: 'Show Item Name',
+        showOperator: 'Show Operator Name',
+        showHelper: 'Show Helper Name',
+        showCut: 'Show Cut Name',
+        showWastageNote: 'Show Wastage Note',
+        showTotals: 'Show Summary Totals'
+    };
+
+    return (
+        <div className="space-y-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Challan "From" Details</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <Label>Name / Business Name</Label>
+                        <Input
+                            value={fromDetails.name}
+                            onChange={e => setFromDetails({ ...fromDetails, name: e.target.value })}
+                            placeholder="e.g. GLINTEX INDUSTRIES"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Address</Label>
+                        <textarea
+                            className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            value={fromDetails.address}
+                            onChange={e => setFromDetails({ ...fromDetails, address: e.target.value })}
+                            placeholder="Enter full address..."
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Mobile / Contact Number</Label>
+                        <Input
+                            value={fromDetails.mobile}
+                            onChange={e => setFromDetails({ ...fromDetails, mobile: e.target.value })}
+                            placeholder="e.g. +91 98765 43210"
+                        />
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Visibility Settings</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {Object.entries(fieldLabels).map(([key, label]) => (
+                            <label key={key} className="flex items-center gap-3 p-3 border rounded-md hover:bg-muted/50 cursor-pointer transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={fieldsConfig[key]}
+                                    onChange={() => toggleField(key)}
+                                    className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                />
+                                <span className="text-sm font-medium">{label}</span>
+                            </label>
+                        ))}
+                    </div>
+                    <Button className="w-full mt-6" onClick={handleSave} disabled={working}>
+                        <Save className="w-4 h-4 mr-2" /> Save Challan Settings
+                    </Button>
+                </CardContent>
+            </Card>
         </div>
     );
 }

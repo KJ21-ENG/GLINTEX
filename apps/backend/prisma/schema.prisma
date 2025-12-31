@@ -451,6 +451,10 @@ model Settings {
   whatsappNumber String?
   whatsappGroupIds String[] @default([])
   backupTime   String @default("03:00")
+  challanFromName    String?
+  challanFromAddress String?
+  challanFromMobile  String?
+  challanFieldsConfig Json   @default("{}")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
   createdByUserId String?

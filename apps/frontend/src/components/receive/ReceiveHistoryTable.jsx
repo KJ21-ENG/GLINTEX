@@ -608,21 +608,40 @@ export function ReceiveHistoryTable() {
     };
 
     const buildChallanPrintHtml = (challan, rows) => {
+        const settings = db?.settings?.[0] || {};
+        const fieldsConfig = settings.challanFieldsConfig || {};
         const meta = getCutterChallanMeta(challan);
         const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
-        const note = challan.wastageNote ? `<div class="note"><strong>Note:</strong> ${challan.wastageNote}</div>` : '';
+
+        // Fetch "To" details (from Firm associated with the Lot)
+        const lot = db.lots?.find(l => l.lotNo === challan.lotNo);
+        const firm = lot ? db.firms?.find(f => f.id === lot.firmId) : null;
+        const toDetails = {
+            name: firm?.name || '—',
+            address: firm?.address || '',
+            mobile: firm?.mobileNo || ''
+        };
+
+        const note = (fieldsConfig.showWastageNote !== false && challan.wastageNote)
+            ? `<div class="note"><strong>Note:</strong> ${challan.wastageNote}</div>`
+            : '';
+
         const bodyRows = rows.map((row, idx) => `
             <tr>
-              <td>${idx + 1}</td>
-              <td>${row.barcode || ''}</td>
+              <td style="text-align: center;">${idx + 1}</td>
+              <td style="font-family: monospace;">${row.barcode || ''}</td>
               <td class="num">${formatKg(row.grossWt)}</td>
               <td class="num">${formatKg(row.tareWt)}</td>
               <td class="num">${formatKg(row.netWt)}</td>
-              <td class="num">${row.bobbinQuantity || 0}</td>
+              <td class="num" style="text-align: center;">${row.bobbinQuantity || 0}</td>
               <td>${row.bobbin?.name || row.pcsTypeName || ''}</td>
               <td>${row.box?.name || row.pktTypeName || ''}</td>
             </tr>
         `).join('');
+
+        const logoHtml = settings.logoDataUrl
+            ? `<img src="${settings.logoDataUrl}" style="max-height: 60px; max-width: 200px; margin-bottom: 10px;" />`
+            : '';
 
         return `
 <!doctype html>
@@ -631,51 +650,158 @@ export function ReceiveHistoryTable() {
   <meta charset="utf-8" />
   <title>Challan ${challan.challanNo}</title>
   <style>
-    body { font-family: Arial, sans-serif; color: #111; margin: 24px; }
-    h1 { font-size: 20px; margin-bottom: 8px; }
-    .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px; font-size: 13px; margin-bottom: 12px; }
-    .meta div { display: flex; justify-content: space-between; gap: 8px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
-    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
-    th { background: #f5f5f5; }
-    .num { text-align: right; }
-    .summary { margin-top: 10px; font-size: 13px; display: flex; justify-content: flex-end; gap: 16px; }
-    .note { margin-top: 10px; padding: 8px; background: #fff7ed; border: 1px solid #fed7aa; font-size: 12px; }
+    @page { margin: 10mm; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1f2937; margin: 0; padding: 20px; line-height: 1.4; font-size: 12px; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
+    .header-left { flex: 1; }
+    .header-right { text-align: right; flex: 1; }
+    .challan-title { font-size: 24px; font-weight: bold; color: #1e3a8a; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
+    .challan-no { font-size: 14px; font-weight: bold; color: #3b82f6; margin-top: 5px; }
+    
+    .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 20px; }
+    .details-box { border: 1px solid #e5e7eb; padding: 12px; border-radius: 6px; background: #f9fafb; }
+    .details-title { font-size: 10px; font-weight: bold; text-transform: uppercase; color: #6b7280; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+    .details-content p { margin: 2px 0; font-size: 12px; }
+    .details-content strong { color: #111827; }
+
+    .meta-inline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; background: #f3f4f6; padding: 10px; border-radius: 6px; }
+    .meta-item { display: flex; flex-direction: column; }
+    .meta-label { font-size: 9px; text-transform: uppercase; color: #6b7280; font-weight: bold; }
+    .meta-value { font-size: 12px; font-weight: 600; color: #1f2937; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 1px solid #e5e7eb; }
+    th { background: #1e3a8a; color: white; padding: 10px 8px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { border-bottom: 1px solid #e5e7eb; padding: 8px; font-size: 11px; color: #374151; }
+    tr:nth-child(even) { background: #f8fafc; }
+    .num { text-align: right; font-family: 'Courier New', Courier, monospace; font-weight: 600; }
+    
+    .summary-section { margin-top: 20px; display: flex; justify-content: flex-end; }
+    .summary-table { width: 250px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+    .summary-row { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
+    .summary-row:last-child { border-bottom: none; background: #1e3a8a; color: white; font-weight: bold; font-size: 13px; }
+    .summary-label { font-weight: 500; }
+    
+    .footer { margin-top: 40px; border-top: 1px solid #e5e7eb; padding-top: 20px; display: flex; justify-content: space-between; }
+    .signature-box { text-align: center; width: 150px; }
+    .signature-line { border-top: 1px solid #374151; margin-top: 40px; padding-top: 5px; font-size: 10px; font-weight: bold; }
+    
+    .note { margin-top: 15px; padding: 10px; background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 6px; font-size: 11px; color: #92400e; }
   </style>
 </head>
 <body>
-  <h1>Receive Challan</h1>
-  <div class="meta">
-    <div><span>Challan No</span><strong>${challan.challanNo}</strong></div>
-    <div><span>Date</span><strong>${dateDisplay}</strong></div>
-    <div><span>Lot</span><strong>${challan.lotNo || '—'}</strong></div>
-    <div><span>Item</span><strong>${meta.itemName}</strong></div>
-    <div><span>Operator</span><strong>${meta.operatorName}</strong></div>
-    <div><span>Cut</span><strong>${meta.cutName}</strong></div>
-    <div><span>Helper</span><strong>${meta.helperName}</strong></div>
+  <div class="header">
+    <div class="header-left">
+      ${logoHtml}
+      <h1 class="challan-title">Delivery Challan</h1>
+      <div class="challan-no">No: ${challan.challanNo}</div>
+    </div>
+    <div class="header-right">
+      <div style="font-size: 14px; font-weight: bold; color: #111827; margin-bottom: 4px;">${fieldsConfig.showDate !== false ? 'Date: ' + dateDisplay : ''}</div>
+      <div style="font-size: 11px; color: #6b7280;">Generated on: ${new Date().toLocaleString()}</div>
+    </div>
   </div>
+
+  <div class="details-grid">
+    <div class="details-box">
+      <div class="details-title">From (Consigner)</div>
+      <div class="details-content">
+        ${fieldsConfig.showFromName !== false ? `<p><strong>${settings.challanFromName || 'Our Warehouse'}</strong></p>` : ''}
+        ${fieldsConfig.showFromAddress !== false ? `<p style="white-space: pre-wrap;">${settings.challanFromAddress || ''}</p>` : ''}
+        ${fieldsConfig.showFromMobile !== false ? `<p>Mobile: ${settings.challanFromMobile || '—'}</p>` : ''}
+      </div>
+    </div>
+    <div class="details-box">
+      <div class="details-title">To (Consignee)</div>
+      <div class="details-content">
+        ${fieldsConfig.showToDetails !== false ? `
+          <p><strong>${toDetails.name}</strong></p>
+          <p style="white-space: pre-wrap;">${toDetails.address}</p>
+          <p>Contact: ${toDetails.mobile || '—'}</p>
+        ` : '<p>—</p>'}
+      </div>
+    </div>
+  </div>
+
+  <div class="meta-inline">
+    ${fieldsConfig.showLotNo !== false ? `
+      <div class="meta-item">
+        <span class="meta-label">Lot Number</span>
+        <span class="meta-value">${challan.lotNo || '—'}</span>
+      </div>
+    ` : ''}
+    ${fieldsConfig.showItem !== false ? `
+      <div class="meta-item">
+        <span class="meta-label">Item Description</span>
+        <span class="meta-value">${meta.itemName}</span>
+      </div>
+    ` : ''}
+    ${fieldsConfig.showOperator !== false ? `
+      <div class="meta-item">
+        <span class="meta-label">Operator</span>
+        <span class="meta-value">${meta.operatorName}</span>
+      </div>
+    ` : ''}
+    ${fieldsConfig.showCut !== false ? `
+      <div class="meta-item">
+        <span class="meta-label">Cut Type</span>
+        <span class="meta-value">${meta.cutName}</span>
+      </div>
+    ` : ''}
+    ${fieldsConfig.showHelper !== false ? `
+      <div class="meta-item">
+        <span class="meta-label">Helper</span>
+        <span class="meta-value">${meta.helperName}</span>
+      </div>
+    ` : ''}
+  </div>
+
   <table>
     <thead>
       <tr>
-        <th>#</th>
-        <th>Barcode</th>
+        <th style="width: 30px; text-align: center;">#</th>
+        <th>Barcode / Piece ID</th>
         <th class="num">Gross (kg)</th>
         <th class="num">Tare (kg)</th>
         <th class="num">Net (kg)</th>
-        <th class="num">Bobbins</th>
-        <th>Bobbin</th>
-        <th>Box</th>
+        <th style="width: 60px; text-align: center;">Bobbins</th>
+        <th>Bobbin Type</th>
+        <th>Box/Pkg</th>
       </tr>
     </thead>
     <tbody>
-      ${bodyRows || '<tr><td colspan="8">No entries</td></tr>'}
+      ${bodyRows || '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #9ca3af;">No entries found for this challan</td></tr>'}
     </tbody>
   </table>
-  <div class="summary">
-    <div><strong>Total Net:</strong> ${formatKg(challan.totalNetWeight)} kg</div>
-    <div><strong>Total Bobbins:</strong> ${challan.totalBobbinQty || 0}</div>
-  </div>
+
+  ${fieldsConfig.showTotals !== false ? `
+    <div class="summary-section">
+      <div class="summary-table">
+        <div class="summary-row">
+          <span class="summary-label">Total Bobbin Qty:</span>
+          <span class="num">${challan.totalBobbinQty || 0}</span>
+        </div>
+        <div class="summary-row">
+          <span class="summary-label">Total Net Weight:</span>
+          <span class="num">${formatKg(challan.totalNetWeight)} kg</span>
+        </div>
+      </div>
+    </div>
+  ` : ''}
+
   ${note}
+
+  <div class="footer">
+    <div class="signature-box">
+      <div class="signature-line">Receiver's Signature</div>
+    </div>
+    <div class="signature-box">
+      <div class="signature-line">Authorized Signatory</div>
+    </div>
+  </div>
+
+  <div style="margin-top: 30px; text-align: center; font-size: 9px; color: #9ca3af; border-top: 1px solid #f3f4f6; padding-top: 10px;">
+    This is a computer-generated delivery challan and does not require a physical signature.
+  </div>
 </body>
 </html>`;
     };

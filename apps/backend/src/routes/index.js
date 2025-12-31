@@ -5442,7 +5442,7 @@ router.put('/api/settings', async (req, res) => {
     const body = req.body || {};
     const brandPrimary = body.brandPrimary ?? body.primary;
     const brandGold = body.brandGold ?? body.gold;
-    const { logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds, backupTime } = body;
+    const { logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds, backupTime, challanFromName, challanFromAddress, challanFromMobile, challanFieldsConfig } = body;
     const hasBrandPrimary = Object.prototype.hasOwnProperty.call(body, 'brandPrimary') || Object.prototype.hasOwnProperty.call(body, 'primary');
     const hasBrandGold = Object.prototype.hasOwnProperty.call(body, 'brandGold') || Object.prototype.hasOwnProperty.call(body, 'gold');
     const hasLogoDataUrl = Object.prototype.hasOwnProperty.call(body, 'logoDataUrl');
@@ -5450,6 +5450,10 @@ router.put('/api/settings', async (req, res) => {
     const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(body, 'whatsappNumber');
     const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(body, 'whatsappGroupIds');
     const hasBackupTime = Object.prototype.hasOwnProperty.call(body, 'backupTime');
+    const hasChallanFromName = Object.prototype.hasOwnProperty.call(body, 'challanFromName');
+    const hasChallanFromAddress = Object.prototype.hasOwnProperty.call(body, 'challanFromAddress');
+    const hasChallanFromMobile = Object.prototype.hasOwnProperty.call(body, 'challanFromMobile');
+    const hasChallanFieldsConfig = Object.prototype.hasOwnProperty.call(body, 'challanFieldsConfig');
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
     if (hasBackupTime && req.user?.roleKey !== 'admin') {
       return res.status(403).json({ error: 'forbidden' });
@@ -5481,6 +5485,10 @@ router.put('/api/settings', async (req, res) => {
       if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
       if (hasBackupTime) updateData.backupTime = normalizedBackupTime;
+      if (hasChallanFromName) updateData.challanFromName = challanFromName || null;
+      if (hasChallanFromAddress) updateData.challanFromAddress = challanFromAddress || null;
+      if (hasChallanFromMobile) updateData.challanFromMobile = challanFromMobile || null;
+      if (hasChallanFieldsConfig) updateData.challanFieldsConfig = challanFieldsConfig || {};
 
       const createData = {
         id: 1,
@@ -5493,6 +5501,10 @@ router.put('/api/settings', async (req, res) => {
       if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
       createData.backupTime = hasBackupTime ? normalizedBackupTime : '03:00';
+      createData.challanFromName = hasChallanFromName ? (challanFromName || null) : null;
+      createData.challanFromAddress = hasChallanFromAddress ? (challanFromAddress || null) : null;
+      createData.challanFromMobile = hasChallanFromMobile ? (challanFromMobile || null) : null;
+      createData.challanFieldsConfig = hasChallanFieldsConfig ? (challanFieldsConfig || {}) : {};
 
       const settings = await prisma.settings.upsert({
         where: { id: 1 },
@@ -5524,6 +5536,11 @@ router.put('/api/settings', async (req, res) => {
       if (hasBrandGold) fallbackUpdate.brandGold = brandGold || '#D4AF37';
       if (hasLogoDataUrl) fallbackUpdate.logoDataUrl = logoDataUrl || null;
       if (hasFaviconDataUrl) fallbackUpdate.faviconDataUrl = faviconDataUrl || null;
+      if (hasChallanFromName) fallbackUpdate.challanFromName = challanFromName || null;
+      if (hasChallanFromAddress) fallbackUpdate.challanFromAddress = challanFromAddress || null;
+      if (hasChallanFromMobile) fallbackUpdate.challanFromMobile = challanFromMobile || null;
+      if (hasChallanFieldsConfig) fallbackUpdate.challanFieldsConfig = challanFieldsConfig || {};
+
       const fallbackCreate = {
         id: 1,
         brandPrimary: hasBrandPrimary ? (brandPrimary || '#2E4CA6') : '#2E4CA6',
@@ -5532,6 +5549,10 @@ router.put('/api/settings', async (req, res) => {
         ...actorCreateFields(actorUserId),
       };
       if (hasFaviconDataUrl) fallbackCreate.faviconDataUrl = faviconDataUrl || null;
+      fallbackCreate.challanFromName = hasChallanFromName ? (challanFromName || null) : null;
+      fallbackCreate.challanFromAddress = hasChallanFromAddress ? (challanFromAddress || null) : null;
+      fallbackCreate.challanFromMobile = hasChallanFromMobile ? (challanFromMobile || null) : null;
+      fallbackCreate.challanFieldsConfig = hasChallanFieldsConfig ? (challanFieldsConfig || {}) : {};
 
       const settings = await prisma.settings.upsert({
         where: { id: 1 },

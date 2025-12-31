@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { HighlightMatch } from '../common/HighlightMatch';
 
 export function BobbinView({ db, filters, search = '', groupBy = false }) {
   const [expandedLot, setExpandedLot] = useState(null);
@@ -113,12 +114,34 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
 
   // 5. Filter & Sort
   const filteredLots = useMemo(() => {
-    return bobbinLots.filter(l => {
+    let list = bobbinLots.map(l => {
+      let score = 0;
       if (search) {
-        const s = search.toLowerCase();
-        const hit = [l.lotNo, l.itemName, l.cutName, l.firmName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
-        if (!hit) return false;
+        const formattedDate = formatDateDDMMYYYY(l.date);
+        const searchableFields = [
+          'lotNo', 'itemName', 'cutName', 'firmName', 'supplierName', 'bobbinName',
+          'totalBobbins', 'availableBobbins', 'totalWeight', 'availableWeight'
+        ];
+        const tempItem = {
+          ...l,
+          dateStr: formattedDate,
+          totalBobbins: String(l.totalBobbins || 0),
+          availableBobbins: String(l.availableBobbins || 0),
+          totalWeight: String(l.totalWeight || 0),
+          availableWeight: String(l.availableWeight || 0)
+        };
+        score = calculateMultiTermScore(tempItem, search, [...searchableFields, 'dateStr']);
+      } else {
+        score = 1;
       }
+      return { ...l, searchScore: score };
+    });
+
+    if (search) {
+      list = list.filter(l => l.searchScore > 0);
+    }
+
+    return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -129,7 +152,12 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
       if (filters.status === 'inactive' && l.availableBobbins > 0) return false;
 
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
+    }).sort((a, b) => {
+      if (search && a.searchScore !== b.searchScore) {
+        return b.searchScore - a.searchScore;
+      }
+      return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
+    });
   }, [bobbinLots, filters, search]);
 
   const displayData = useMemo(() => {
@@ -198,12 +226,26 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
-                      <TableCell className="font-medium">{groupBy ? '—' : (l.lotNo || '—')}</TableCell>
+                      <TableCell className="font-medium">
+                        {groupBy ? '—' : (
+                          <HighlightMatch text={l.lotNo || '—'} query={search} />
+                        )}
+                      </TableCell>
                       <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
-                      <TableCell>{l.itemName}</TableCell>
-                      <TableCell>{l.cutName || '—'}</TableCell>
-                      {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
-                      <TableCell>{l.supplierName}</TableCell>
+                      <TableCell>
+                        <HighlightMatch text={l.itemName} query={search} />
+                      </TableCell>
+                      <TableCell>
+                        <HighlightMatch text={l.cutName || '—'} query={search} />
+                      </TableCell>
+                      {!groupBy ? (
+                        <TableCell>
+                          <HighlightMatch text={l.firmName} query={search} />
+                        </TableCell>
+                      ) : null}
+                      <TableCell>
+                        <HighlightMatch text={l.supplierName} query={search} />
+                      </TableCell>
                       <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
                       <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
                       <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>

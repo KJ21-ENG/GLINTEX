@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
 export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
@@ -98,20 +99,45 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   }, [coningRows]);
 
   const filteredLots = useMemo(() => {
-    return coningLots.filter((lot) => {
+    let list = coningLots.map(l => {
+      let score = 0;
       if (search) {
-        const s = search.toLowerCase();
-        const hit = [lot.lotNo, lot.itemName, lot.firmName, lot.supplierName].some(v => (v || '').toLowerCase().includes(s));
-        if (!hit) return false;
+        const formattedDate = formatDateDDMMYYYY(l.date);
+        const searchableFields = [
+          'lotNo', 'itemName', 'firmName', 'supplierName', 'machineName', 'operatorName', 'coneType', 'boxName',
+          'totalCones', 'totalWeight'
+        ];
+        const tempItem = {
+          ...l,
+          dateStr: formattedDate,
+          totalCones: String(l.totalCones || 0),
+          totalWeight: String(l.totalWeight || 0)
+        };
+        score = calculateMultiTermScore(tempItem, search, [...searchableFields, 'dateStr']);
+      } else {
+        score = 1;
       }
-      if (filters.item && lot.itemId !== filters.item) return false;
-      if (filters.firm && lot.firmId !== filters.firm) return false;
-      if (filters.supplier && lot.supplierId !== filters.supplier) return false;
-      if (filters.from && lot.date < filters.from) return false;
-      if (filters.to && lot.date > filters.to) return false;
-      if (filters.status !== 'all' && lot.statusType !== filters.status) return false;
+      return { ...l, searchScore: score };
+    });
+
+    if (search) {
+      list = list.filter(l => l.searchScore > 0);
+    }
+
+    return list.filter(l => {
+      if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.firm && l.firmId !== filters.firm) return false;
+      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.from && l.date < filters.from) return false;
+      if (filters.to && l.date > filters.to) return false;
+      if (filters.status !== 'all' && l.statusType !== filters.status) return false;
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
+    }).sort((a, b) => {
+      if (search && a.searchScore !== b.searchScore) {
+        return b.searchScore - a.searchScore;
+      }
+      return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
+    });
   }, [coningLots, filters, search]);
 
   const displayLots = useMemo(() => {
@@ -176,12 +202,22 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                     <TableCell className="font-medium">
                       {groupBy ? (
                         <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
-                      ) : (lot.lotNo || '—')}
+                      ) : (
+                        <HighlightMatch text={lot.lotNo || '—'} query={search} />
+                      )}
                     </TableCell>
                     <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
-                    <TableCell>{lot.itemName}</TableCell>
-                    {!groupBy ? <TableCell>{lot.firmName}</TableCell> : null}
-                    <TableCell>{lot.supplierName}</TableCell>
+                    <TableCell>
+                      <HighlightMatch text={lot.itemName} query={search} />
+                    </TableCell>
+                    {!groupBy ? (
+                      <TableCell>
+                        <HighlightMatch text={lot.firmName} query={search} />
+                      </TableCell>
+                    ) : null}
+                    <TableCell>
+                      <HighlightMatch text={lot.supplierName} query={search} />
+                    </TableCell>
                     <TableCell className="">{lot.totalCones}</TableCell>
                     <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
                   </TableRow>

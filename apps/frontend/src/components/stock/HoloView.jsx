@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
@@ -96,12 +97,32 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
   // 5. Filter
   const filteredLots = useMemo(() => {
-    return holoLots.filter(l => {
+    let list = holoLots.map(l => {
+      let score = 0;
       if (search) {
-        const s = search.toLowerCase();
-        const hit = [l.lotNo, l.itemName, l.yarnName, l.twistName, l.supplierName].some(v => (v || '').toLowerCase().includes(s));
-        if (!hit) return false;
+        const formattedDate = formatDateDDMMYYYY(l.date);
+        const searchableFields = [
+          'lotNo', 'itemName', 'yarnName', 'twistName', 'firmName', 'supplierName',
+          'totalRolls', 'totalWeight'
+        ];
+        const tempItem = {
+          ...l,
+          dateStr: formattedDate,
+          totalRolls: String(l.totalRolls || 0),
+          totalWeight: String(l.totalWeight || 0)
+        };
+        score = calculateMultiTermScore(tempItem, search, [...searchableFields, 'dateStr']);
+      } else {
+        score = 1;
       }
+      return { ...l, searchScore: score };
+    });
+
+    if (search) {
+      list = list.filter(l => l.searchScore > 0);
+    }
+
+    return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -109,7 +130,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
+    }).sort((a, b) => {
+      if (search && a.searchScore !== b.searchScore) {
+        return b.searchScore - a.searchScore;
+      }
+      return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
+    });
   }, [holoLots, filters, search]);
 
   const displayLots = useMemo(() => {
@@ -179,13 +205,29 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                     <TableCell className="font-medium">
                       {groupBy ? (
                         <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
-                      ) : (l.lotNo || '—')}
+                      ) : (
+                        <HighlightMatch text={l.lotNo || '—'} query={search} />
+                      )}
                     </TableCell>
                     <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
-                    <TableCell>{l.itemName}</TableCell>
-                    <TableCell>{l.yarnName} / {l.twistName}</TableCell>
-                    {!groupBy ? <TableCell>{l.firmName}</TableCell> : null}
-                    <TableCell>{l.supplierName}</TableCell>
+                    <TableCell>
+                      <HighlightMatch text={l.itemName} query={search} />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <HighlightMatch text={l.yarnName} query={search} />
+                        <span>/</span>
+                        <HighlightMatch text={l.twistName} query={search} />
+                      </div>
+                    </TableCell>
+                    {!groupBy ? (
+                      <TableCell>
+                        <HighlightMatch text={l.firmName} query={search} />
+                      </TableCell>
+                    ) : null}
+                    <TableCell>
+                      <HighlightMatch text={l.supplierName} query={search} />
+                    </TableCell>
                     <TableCell className="">{l.totalRolls}</TableCell>
                     <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                   </TableRow>

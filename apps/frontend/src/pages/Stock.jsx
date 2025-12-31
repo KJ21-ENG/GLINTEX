@@ -11,6 +11,8 @@ import * as api from '../api';
 import { exportXlsx, exportCsv, exportPdf } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
+import { fuzzyScore, calculateMultiTermScore } from '../utils';
+import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
@@ -131,16 +133,35 @@ export function Stock() {
 
   // Filtered Lots
   const filteredLots = useMemo(() => {
-    return allLots.filter(l => {
-      // Search
+    let list = allLots.map(l => {
+      let score = 0;
       if (search) {
-        const terms = search.toLowerCase().split(/[\s,]+/).filter(Boolean);
-        const match = terms.some(term =>
-          l.lotNo.toLowerCase().includes(term) ||
-          l.itemName.toLowerCase().includes(term)
-        );
-        if (!match) return false;
+        // Pre-format fields for search
+        const formattedDate = formatDateDDMMYYYY(l.date);
+        const searchableFields = [
+          'lotNo', 'itemName', 'firmName', 'supplierName', 'statusType',
+          'totalWeight', 'pendingWeight', 'availableCount', 'totalPieces'
+        ];
+        const tempItem = {
+          ...l,
+          dateStr: formattedDate,
+          totalWeight: String(l.totalWeight || 0),
+          pendingWeight: String(l.pendingWeight || 0),
+          availableCount: String(l.availableCount || 0),
+          totalPieces: String(l.totalPieces || 0)
+        };
+        score = calculateMultiTermScore(tempItem, search, [...searchableFields, 'dateStr']);
+      } else {
+        score = 1; // Default score when no search
       }
+      return { ...l, searchScore: score };
+    });
+
+    if (search) {
+      list = list.filter(l => l.searchScore > 0);
+    }
+
+    return list.filter(l => {
       // Filters
       if (filters.item && l.itemId !== filters.item) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
@@ -154,7 +175,12 @@ export function Stock() {
         if (status !== filters.status) return false;
       }
       return true;
-    }).sort((a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true }));
+    }).sort((a, b) => {
+      if (search && a.searchScore !== b.searchScore) {
+        return b.searchScore - a.searchScore;
+      }
+      return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
+    });
   }, [allLots, search, filters]);
 
   const displayedLots = useMemo(() => {
@@ -487,12 +513,22 @@ export function Stock() {
                         <TableCell className="font-medium">
                           {groupByItem ? (
                             <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
-                          ) : (l.lotNo || '—')}
+                          ) : (
+                            <HighlightMatch text={l.lotNo || '—'} query={search} />
+                          )}
                         </TableCell>
                         <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
-                        <TableCell>{l.itemName}</TableCell>
-                        {!groupByItem ? <TableCell>{l.firmName}</TableCell> : null}
-                        <TableCell>{l.supplierName}</TableCell>
+                        <TableCell>
+                          <HighlightMatch text={l.itemName} query={search} />
+                        </TableCell>
+                        {!groupByItem ? (
+                          <TableCell>
+                            <HighlightMatch text={l.firmName} query={search} />
+                          </TableCell>
+                        ) : null}
+                        <TableCell>
+                          <HighlightMatch text={l.supplierName} query={search} />
+                        </TableCell>
                         <TableCell className="">
                           {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
                         </TableCell>

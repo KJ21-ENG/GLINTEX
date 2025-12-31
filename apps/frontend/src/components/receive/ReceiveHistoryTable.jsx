@@ -619,7 +619,7 @@ export function ReceiveHistoryTable() {
         const toDetails = {
             name: firm?.name || '—',
             address: firm?.address || '',
-            mobile: firm?.mobileNo || ''
+            mobile: firm?.mobile || ''
         };
 
         const noteContent = (fieldsConfig.showWastageNote !== false && challan.wastageNote)

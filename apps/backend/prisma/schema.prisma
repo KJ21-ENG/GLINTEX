@@ -52,6 +52,8 @@ model Twist {
 model Firm {
   id        String   @id @default(cuid())
   name      String
+  address   String?
+  mobile    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?

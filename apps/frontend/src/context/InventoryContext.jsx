@@ -155,8 +155,8 @@ export const InventoryProvider = ({ children }) => {
     deleteTwist: async (id) => { await api.deleteTwist(id); await refreshDb(); },
 
     // Masters - Firms
-    createFirm: async (name) => { await api.createFirm(name); await refreshDb(); },
-    updateFirm: async (id, name) => { await api.updateFirm(id, name); await refreshDb(); },
+    createFirm: async (name, address, mobile) => { await api.createFirm(name, address, mobile); await refreshDb(); },
+    updateFirm: async (id, name, address, mobile) => { await api.updateFirm(id, name, address, mobile); await refreshDb(); },
     deleteFirm: async (id) => { await api.deleteFirm(id); await refreshDb(); },
 
     // Masters - Suppliers

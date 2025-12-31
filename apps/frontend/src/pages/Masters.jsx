@@ -41,7 +41,7 @@ export function Masters() {
             case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} />;
             case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
             case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
-            case 'firms': return <SimpleMasterCrud title="Firms" data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
+            case 'firms': return <FirmsMasterCrud data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
             case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
             case 'machines': return <MachinesMasterCrud data={db.machines || []} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
             case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
@@ -596,6 +596,120 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                         ) : (
                                             <div className="flex justify-end gap-1">
                                                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newAddress, setNewAddress] = useState('');
+    const [newMobile, setNewMobile] = useState('');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editAddress, setEditAddress] = useState('');
+    const [editMobile, setEditMobile] = useState('');
+
+    const filtered = (data || []).filter(i =>
+        i.name.toLowerCase().includes(search.toLowerCase()) ||
+        (i.address || '').toLowerCase().includes(search.toLowerCase()) ||
+        (i.mobile || '').toLowerCase().includes(search.toLowerCase())
+    );
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, newAddress, newMobile);
+        setNewName('');
+        setNewAddress('');
+        setNewMobile('');
+    }
+
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, editAddress, editMobile);
+        setEditingId(null);
+    }
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Firms</CardTitle>
+                <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <Input placeholder="Firm Name" value={newName} onChange={e => setNewName(e.target.value)} />
+                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} />
+                    <Input placeholder="Mobile/Contact" value={newMobile} onChange={e => setNewMobile(e.target.value)} />
+                </div>
+                <div className="flex justify-end">
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Firm</Button>
+                </div>
+
+                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Firm Details</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <div className="space-y-2 py-1">
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Name</Label>
+                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Address</Label>
+                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Mobile</Label>
+                                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="py-1">
+                                                <div className="font-bold text-sm text-primary">{item.name}</div>
+                                                <div className="text-xs text-muted-foreground mt-0.5">{item.address || 'No address added'}</div>
+                                                <div className="text-xs font-mono mt-0.5">{item.mobile || 'No contact added'}</div>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                    setEditingId(item.id);
+                                                    setEditName(item.name);
+                                                    setEditAddress(item.address || '');
+                                                    setEditMobile(item.mobile || '');
+                                                }}><Edit2 className="w-4 h-4" /></Button>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
                                             </div>
                                         )}

@@ -124,9 +124,9 @@ export async function createTwist(name) { return await request('/api/twists', { 
 export async function deleteTwist(id) { return await request(`/api/twists/${id}`, { method: 'DELETE' }); }
 export async function updateTwist(id, name) { return await request(`/api/twists/${id}`, { method: 'PUT', body: { name } }); }
 export async function listFirms() { return await request('/api/firms'); }
-export async function createFirm(name) { return await request('/api/firms', { method: 'POST', body: { name } }); }
+export async function createFirm(name, address, mobile) { return await request('/api/firms', { method: 'POST', body: { name, address, mobile } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
-export async function updateFirm(id, name) { return await request(`/api/firms/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateFirm(id, name, address, mobile) { return await request(`/api/firms/${id}`, { method: 'PUT', body: { name, address, mobile } }); }
 export async function listSuppliers() { return await request('/api/suppliers'); }
 export async function createSupplier(name) { return await request('/api/suppliers', { method: 'POST', body: { name } }); }
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }

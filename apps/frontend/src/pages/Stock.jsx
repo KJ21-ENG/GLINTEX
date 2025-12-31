@@ -191,7 +191,6 @@ export function Stock() {
 
   // --- Handlers ---
 
-  const [markingPieces, setMarkingPieces] = useState(() => new Set());
   const [issueModalOpen, setIssueModalOpen] = useState(false);
   const [issueModalData, setIssueModalData] = useState({
     lotNo: '',
@@ -222,20 +221,6 @@ export function Stock() {
 
   useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
 
-  async function handleMarkWastage(pieceId) {
-    if (!pieceId) return;
-    const ok = window.confirm(`Mark remaining pending weight for ${pieceId} as wastage? This cannot be undone.`);
-    if (!ok) return;
-    setMarkingPieces(prev => new Set(prev).add(pieceId));
-    try {
-      await api.markPieceWastage({ pieceId });
-      await refreshDb();
-    } catch (err) {
-      alert(err.message || 'Failed to mark wastage');
-    } finally {
-      setMarkingPieces(prev => { const s = new Set(prev); s.delete(pieceId); return s; });
-    }
-  }
 
   function togglePiece(lotNo, pieceId) {
     setSelectedByLot(prev => {
@@ -546,8 +531,6 @@ export function Stock() {
                                       pendingWeight={p.pendingWeight}
                                       wastageWeight={p.wastageWeight}
                                       totalUnits={p.totalUnits}
-                                      onMarkWastage={handleMarkWastage}
-                                      isMarking={markingPieces.has(p.id)}
                                     />
                                   ))}
                                 </TableBody>

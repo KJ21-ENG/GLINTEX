@@ -5,17 +5,15 @@ import * as api from '../../api';
 import { Check, X, Edit2, AlertTriangle, MoreVertical } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export function PieceRow({ 
-  p, 
-  selected, 
-  onToggle, 
-  onSaved, 
-  pendingWeight = 0, 
-  isIssued = false, 
-  wastageWeight = 0, 
-  totalUnits = 0, 
-  onMarkWastage, 
-  isMarking = false 
+export function PieceRow({
+  p,
+  selected,
+  onToggle,
+  onSaved,
+  pendingWeight = 0,
+  isIssued = false,
+  wastageWeight = 0,
+  totalUnits = 0
 }) {
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -24,7 +22,7 @@ export function PieceRow({
   const menuRef = useRef(null);
 
   useEffect(() => { setWeight(p.weight); }, [p.weight]);
-  
+
   // Close menu on click outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -40,9 +38,9 @@ export function PieceRow({
   const isAvailable = p.status === 'available';
 
   async function save() {
-    if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) { 
-        alert('Weight must be positive'); 
-        return; 
+    if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) {
+      alert('Weight must be positive');
+      return;
     }
     setSaving(true);
     try {
@@ -57,20 +55,19 @@ export function PieceRow({
   }
 
   const canEdit = !isWastageMarked && !isIssued;
-  const canMarkWastage = isIssued && pendingWeight > 0 && wastageWeight === 0;
 
   return (
     <tr className={cn(
-        "border-t transition-colors hover:bg-muted/50",
-        isWastageMarked && "opacity-50 bg-muted"
+      "border-t transition-colors hover:bg-muted/50",
+      isWastageMarked && "opacity-50 bg-muted"
     )}>
       <td className="py-2 pr-2 pl-4">
-        <input 
-            type="checkbox" 
-            checked={selected} 
-            onChange={onToggle} 
-            disabled={!isAvailable}
-            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          disabled={!isAvailable}
+          className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
         />
       </td>
       <td className="py-2 pr-2 font-mono text-xs">{p.id}</td>
@@ -86,11 +83,11 @@ export function PieceRow({
         <div className="flex items-center justify-end gap-2 h-9">
           {editing ? (
             <div className="flex items-center gap-1 animate-in fade-in zoom-in-95 duration-200">
-              <Input 
-                type="number" 
-                step="0.001" 
-                value={weight} 
-                onChange={e=>setWeight(e.target.value)} 
+              <Input
+                type="number"
+                step="0.001"
+                value={weight}
+                onChange={e => setWeight(e.target.value)}
                 className="w-20 h-8 text-xs"
               />
               <Button size="icon" variant="ghost" onClick={() => { setEditing(false); setWeight(p.weight); }} className="h-7 w-7">
@@ -102,46 +99,39 @@ export function PieceRow({
             </div>
           ) : (
             <span className={cn("text-sm", isWastageMarked && "line-through")}>
-                {formatKg(p.weight)}
+              {formatKg(p.weight)}
             </span>
           )}
         </div>
       </td>
       <td className="py-2 pr-2 text-sm">
         <div className="flex flex-col items-end">
-             <span>{formatKg(pendingWeight)}</span>
-             {wastageWeight > 0 && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3 text-amber-500" />
-                    {formatKg(wastageWeight)} kg ({((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(1)}%)
-                </span>
-             )}
+          <span>{formatKg(pendingWeight)}</span>
+          {wastageWeight > 0 && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 text-amber-500" />
+              {formatKg(wastageWeight)} kg ({((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(1)}%)
+            </span>
+          )}
         </div>
       </td>
       <td className="py-2 pr-2 text-sm">{totalUnits || 0}</td>
       <td className="py-2 pr-2 relative">
         <div ref={menuRef}>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMenuOpen(!menuOpen)}>
-                <MoreVertical className="w-4 h-4" />
-            </Button>
-            {menuOpen && (
-                <div className="absolute right-8 top-0 z-50 w-40 rounded-md border bg-popover p-1 shadow-md animate-in fade-in zoom-in-95 duration-100">
-                    <button 
-                        className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                        onClick={() => { setEditing(true); setMenuOpen(false); }}
-                        disabled={!canEdit}
-                    >
-                        <Edit2 className="mr-2 h-3 w-3" /> Edit Weight
-                    </button>
-                    <button 
-                        className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50 text-amber-600"
-                        onClick={() => { onMarkWastage(p.id); setMenuOpen(false); }}
-                        disabled={!canMarkWastage || isMarking}
-                    >
-                        <AlertTriangle className="mr-2 h-3 w-3" /> Mark Wastage
-                    </button>
-                </div>
-            )}
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMenuOpen(!menuOpen)}>
+            <MoreVertical className="w-4 h-4" />
+          </Button>
+          {menuOpen && (
+            <div className="absolute right-8 top-0 z-50 w-40 rounded-md border bg-popover p-1 shadow-md animate-in fade-in zoom-in-95 duration-100">
+              <button
+                className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                onClick={() => { setEditing(true); setMenuOpen(false); }}
+                disabled={!canEdit}
+              >
+                <Edit2 className="mr-2 h-3 w-3" /> Edit Weight
+              </button>
+            </div>
+          )}
         </div>
       </td>
     </tr>

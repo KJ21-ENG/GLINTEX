@@ -424,15 +424,15 @@ export function CutterReceiveForm() {
             <Card>
                 <CardHeader><CardTitle>Scan Barcode (Cutter)</CardTitle></CardHeader>
                 <CardContent>
-                    <form onSubmit={handleScan} className="flex gap-4">
+                    <form onSubmit={handleScan} className="flex flex-col sm:flex-row gap-4">
                         <Input
                             ref={barcodeInputRef}
                             value={barcode}
                             onChange={e => setBarcode(e.target.value)}
                             placeholder="Scan Issue Barcode..."
-                            className="text-lg"
+                            className="text-lg flex-1"
                         />
-                        <Button type="submit" disabled={loading}>
+                        <Button type="submit" disabled={loading} className="w-full sm:w-auto">
                             {loading ? 'Scanning...' : <><Scan className="w-4 h-4 mr-2" /> Scan</>}
                         </Button>
                     </form>
@@ -617,13 +617,13 @@ export function CutterReceiveForm() {
                             </div>
                         </div>
 
-                        <div className="flex justify-between items-center pt-2">
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 pt-2">
                             <div className="text-sm font-medium">
                                 {isWastage
                                     ? `Wastage Weight (Pending): ${formatKg(effectiveNetWeight)}`
                                     : `Calculated Net Weight: ${formatKg(effectiveNetWeight)}`}
                             </div>
-                            <Button onClick={handleAdd} disabled={receivingBlocked || !effectiveNetWeight}>
+                            <Button onClick={handleAdd} disabled={receivingBlocked || !effectiveNetWeight} className="w-full sm:w-auto">
                                 <Plus className="w-4 h-4 mr-2" /> {isWastage ? 'Add Wastage to List' : 'Add to List'}
                             </Button>
                         </div>
@@ -634,43 +634,45 @@ export function CutterReceiveForm() {
             {cart.length > 0 && (
                 <Card className="fade-in">
                     <CardContent className="pt-6">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Lot</TableHead>
-                                    <TableHead>Details</TableHead>
-                                    <TableHead className="">Net Weight</TableHead>
-                                    <TableHead className="w-[50px]"></TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {cart.map((entry) => (
-                                    <TableRow key={entry.id}>
-                                        <TableCell>{entry.lotNo}</TableCell>
-                                        <TableCell className="text-xs text-muted-foreground">
-                                            {entry.isWastage ? (
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
-                                                    <span>{formatKg(entry.netWeight)}</span>
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    {entry.bobbinQty} x {entry.bobbinName}
-                                                    {entry.cutName && ` | ${entry.cutName}`}
-                                                    {entry.helperName && ` | ${entry.helperName}`}
-                                                </div>
-                                            )}
-                                        </TableCell>
-                                        <TableCell className="">{formatKg(entry.netWeight)}</TableCell>
-                                        <TableCell>
-                                            <Button variant="ghost" size="icon" onClick={() => setCart(c => c.filter(x => x.id !== entry.id))} className="h-6 w-6 text-destructive">
-                                                <Trash2 className="w-4 h-4" />
-                                            </Button>
-                                        </TableCell>
+                        <div className="overflow-x-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Lot</TableHead>
+                                        <TableHead>Details</TableHead>
+                                        <TableHead className="">Net Weight</TableHead>
+                                        <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
+                                </TableHeader>
+                                <TableBody>
+                                    {cart.map((entry) => (
+                                        <TableRow key={entry.id}>
+                                            <TableCell>{entry.lotNo}</TableCell>
+                                            <TableCell className="text-xs text-muted-foreground">
+                                                {entry.isWastage ? (
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
+                                                        <span>{formatKg(entry.netWeight)}</span>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        {entry.bobbinQty} x {entry.bobbinName}
+                                                        {entry.cutName && ` | ${entry.cutName}`}
+                                                        {entry.helperName && ` | ${entry.helperName}`}
+                                                    </div>
+                                                )}
+                                            </TableCell>
+                                            <TableCell className="">{formatKg(entry.netWeight)}</TableCell>
+                                            <TableCell>
+                                                <Button variant="ghost" size="icon" onClick={() => setCart(c => c.filter(x => x.id !== entry.id))} className="h-6 w-6 text-destructive">
+                                                    <Trash2 className="w-4 h-4" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
                         <div className="mt-4 flex justify-end">
                             <Button onClick={handleSave} disabled={saving}>
                                 {saving ? 'Saving...' : <><Save className="w-4 h-4 mr-2" /> Save All</>}

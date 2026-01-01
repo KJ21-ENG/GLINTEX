@@ -11,6 +11,19 @@ const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp
 const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
 const LOCK_FILE = path.join(AUTH_DIR, 'SingletonLock');
 const STALE_LOCK_AGE_MS = 10 * 60 * 1000;
+const DEFAULT_WWEB_VERSION = process.env.WWEBJS_WEB_VERSION || '2.3000.1031548524';
+const WWEB_CACHE_PATH = process.env.WWEBJS_WEB_CACHE_PATH || path.resolve(process.cwd(), '.wwebjs_cache');
+
+function envFlag(name, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  const val = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(val)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(val)) return false;
+  return defaultValue;
+}
+
+const WWEB_CACHE_STRICT = envFlag('WWEBJS_WEB_CACHE_STRICT', process.env.NODE_ENV === 'production');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -169,7 +182,12 @@ class WhatsappService {
         const client = new Client({
           authStrategy: new LocalAuth({ clientId: 'glintex' }),
           puppeteer: puppeteerOpts,
-          // Removed webVersionCache to let #main handle it automatically
+          webVersion: DEFAULT_WWEB_VERSION,
+          webVersionCache: {
+            type: 'local',
+            path: WWEB_CACHE_PATH,
+            strict: WWEB_CACHE_STRICT,
+          },
         });
 
         client.on('qr', async (qr) => {

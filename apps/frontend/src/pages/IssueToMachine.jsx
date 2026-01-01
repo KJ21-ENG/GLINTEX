@@ -27,23 +27,23 @@ export function IssueToMachine() {
       {/* Issue History / On Machine Section */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <CardTitle>Issue Tracking</CardTitle>
-            <div className="flex gap-1 bg-muted p-1 rounded-lg">
+            <div className="flex gap-1 bg-muted p-1 rounded-lg w-full sm:w-auto">
               <button
                 onClick={() => setActiveTab('on-machine')}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'on-machine'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
+                className={`flex-1 sm:flex-none px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'on-machine'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
                   }`}
               >
                 On Machine
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'history'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
+                className={`flex-1 sm:flex-none px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'history'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
                   }`}
               >
                 History

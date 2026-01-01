@@ -24,10 +24,10 @@ export function ReceiveFromMachine() {
       ) : process === 'cutter' ? (
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            <Button variant={cutterMode === 'scan' ? 'default' : 'outline'} onClick={() => setCutterMode('scan')}>
+            <Button variant={cutterMode === 'scan' ? 'default' : 'outline'} onClick={() => setCutterMode('scan')} className="flex-1 sm:flex-none">
               Manual / Barcode
             </Button>
-            <Button variant={cutterMode === 'csv' ? 'default' : 'outline'} onClick={() => setCutterMode('csv')}>
+            <Button variant={cutterMode === 'csv' ? 'default' : 'outline'} onClick={() => setCutterMode('csv')} className="flex-1 sm:flex-none">
               CSV Upload
             </Button>
           </div>

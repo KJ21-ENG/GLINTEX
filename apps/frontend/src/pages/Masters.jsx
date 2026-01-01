@@ -151,7 +151,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -231,7 +231,7 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -322,7 +322,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -434,7 +434,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -551,7 +551,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -659,7 +659,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Firm</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-y-auto">
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>

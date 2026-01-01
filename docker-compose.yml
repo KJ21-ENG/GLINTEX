@@ -29,8 +29,12 @@ services:
       GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID}
       GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}
       GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI}
+      WWEBJS_WEB_VERSION: ${WWEBJS_WEB_VERSION:-2.3000.1031548524}
+      WWEBJS_WEB_CACHE_STRICT: ${WWEBJS_WEB_CACHE_STRICT:-true}
+      WWEBJS_WEB_CACHE_PATH: ${WWEBJS_WEB_CACHE_PATH:-/app/.wwebjs_cache}
     volumes:
       - ./apps/backend/.wwebjs_auth:/app/.wwebjs_auth
+      - ./apps/backend/.wwebjs_cache:/app/.wwebjs_cache
       - ./apps/backend/backups:/app/backups
     shm_size: '1gb'
     ports:

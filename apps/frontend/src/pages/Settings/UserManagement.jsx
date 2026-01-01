@@ -281,7 +281,7 @@ export default function UserManagement() {
           <CardTitle>Users</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             <div className="space-y-2">
               <Label>Username</Label>
               <Input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder="e.g. operator1" />

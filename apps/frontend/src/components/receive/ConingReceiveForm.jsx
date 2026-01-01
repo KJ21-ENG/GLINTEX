@@ -243,15 +243,15 @@ export function ConingReceiveForm() {
     return (
         <div className="space-y-6">
             <Card>
-                <CardHeader className="flex flex-row justify-between items-center">
+                <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Coning Issue</CardTitle>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Issue (CN-...)"
                             value={scanInput}
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
-                            className="w-64"
+                            className="flex-1 sm:w-64"
                         />
                         <Button onClick={handleScan}>Load</Button>
                     </div>
@@ -332,7 +332,7 @@ export function ConingReceiveForm() {
                             </div>
                         </div>
 
-                        <div className="border rounded-md">
+                        <div className="border rounded-md overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -401,7 +401,7 @@ export function ConingReceiveForm() {
                             </Table>
                         </div>
 
-                        <div className="flex justify-between items-center pt-4 border-t">
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center pt-4 border-t gap-4">
                             <div className="text-sm">
                                 {cart.length > 0 && (
                                     <>
@@ -410,7 +410,7 @@ export function ConingReceiveForm() {
                                     </>
                                 )}
                             </div>
-                            <Button onClick={handleSubmit} disabled={submitting || cart.length === 0}>Save Receive</Button>
+                            <Button onClick={handleSubmit} disabled={submitting || cart.length === 0} className="w-full sm:w-auto">Save Receive</Button>
                         </div>
                     </CardContent>
                 )}

@@ -299,21 +299,21 @@ export function IssueToConing() {
             </Card>
 
             <Card>
-                <CardHeader className="flex flex-row justify-between items-center">
+                <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Holo Crates</CardTitle>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Barcode"
                             value={scanInput}
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
-                            className="w-48"
+                            className="flex-1 sm:w-48"
                         />
                         <Button onClick={handleScan}>Add</Button>
                     </div>
                 </CardHeader>
                 <CardContent>
-                    <div className="border rounded-md">
+                    <div className="border rounded-md overflow-x-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -350,11 +350,11 @@ export function IssueToConing() {
                             </TableBody>
                         </Table>
                     </div>
-                    <div className="mt-4 flex justify-between items-center">
+                    <div className="mt-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                         <div className="text-sm font-medium">
                             Total Rolls: {coningMeta.totalRolls} | Total Net: {formatKg(coningMeta.totalNet)}
                         </div>
-                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0}>
+                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0} className="w-full sm:w-auto">
                             {submitting ? 'Issuing...' : 'Confirm Issue'}
                         </Button>
                     </div>

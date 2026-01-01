@@ -18,6 +18,27 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return map;
   }, [db.issue_to_holo_machine]);
 
+  const cutByIssueId = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_holo_machine || []).forEach((issue) => {
+      if (!issue?.id) return;
+      let cutName = '';
+      try {
+        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+        if (Array.isArray(refs) && refs.length > 0) {
+          const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
+          if (sourceRow) {
+            cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+          }
+        }
+      } catch (e) {
+        cutName = '';
+      }
+      map.set(issue.id, cutName || '—');
+    });
+    return map;
+  }, [db.issue_to_holo_machine, db.receive_from_cutter_machine_rows, db.cuts]);
+
   // 2. Map Lot Metadata
   const lotMetaMap = useMemo(() => {
     const map = new Map();
@@ -56,11 +77,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         supplierName: lotMeta?.supplierName || '—',
         yarnName: yarn?.name || '—',
         twistName: twist?.name || '—',
+        cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
         rollCount: Number(row.rollCount || 0),
         rollWeight: Number(row.rollWeight || 0),
       };
     });
-  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.yarns, db.twists]);
+  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.yarns, db.twists, cutByIssueId]);
 
   // 4. Group by Lot
   const holoLots = useMemo(() => {
@@ -78,6 +100,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         supplierName: row.supplierName,
         yarnName: row.yarnName,
         twistName: row.twistName,
+        cutNames: new Set(),
         totalRolls: 0,
         totalWeight: 0,
         rows: []
@@ -86,13 +109,19 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.rows.push(row);
       existing.totalRolls += row.rollCount;
       existing.totalWeight += row.rollWeight;
+      existing.cutNames.add(row.cutName || '—');
       map.set(lotKey, existing);
     });
-    return Array.from(map.values()).map((lot) => ({
-      ...lot,
-      statusType: lot.totalRolls > 0 ? 'active' : 'inactive',
-      date: lot.rows?.[0]?.date || lot.rows?.[0]?.createdAt || '',
-    }));
+    return Array.from(map.values()).map((lot) => {
+      const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
+      const { cutNames, ...rest } = lot;
+      return {
+        ...rest,
+        cutName,
+        statusType: rest.totalRolls > 0 ? 'active' : 'inactive',
+        date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
+      };
+    });
   }, [holoRows]);
 
   // 5. Filter
@@ -102,7 +131,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       if (search) {
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
-          'lotNo', 'itemName', 'yarnName', 'twistName', 'firmName', 'supplierName',
+          'lotNo', 'itemName', 'cutName', 'yarnName', 'twistName', 'firmName', 'supplierName',
           'totalRolls', 'totalWeight'
         ];
         const tempItem = {
@@ -153,6 +182,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         supplierName: lot.supplierName,
         yarnName: lot.yarnName,
         twistName: lot.twistName,
+        cutNames: new Set(),
         totalRolls: 0,
         totalWeight: 0,
         rows: [],
@@ -164,12 +194,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.statusType = existing.totalRolls > 0 ? 'active' : 'inactive';
       existing.rows = []; // collapse detail when grouped
       existing.lots.push(lot.lotNo);
+      existing.cutNames.add(lot.cutName || '—');
       map.set(key, existing);
     });
-    return Array.from(map.values());
+    return Array.from(map.values()).map((lot) => {
+      const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
+      const { cutNames, ...rest } = lot;
+      return { ...rest, cutName };
+    });
   }, [filteredLots, groupBy]);
 
-  const tableColumnCount = groupBy ? 8 : 9;
+  const tableColumnCount = groupBy ? 9 : 10;
 
   return (
     <div className="rounded-md border bg-card">
@@ -180,6 +215,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
             <TableHead>Lot No</TableHead>
             <TableHead>Date</TableHead>
             <TableHead>Item</TableHead>
+            <TableHead>Cut</TableHead>
             <TableHead>Yarn / Twist</TableHead>
             {!groupBy ? <TableHead>Firm</TableHead> : null}
             <TableHead>Supplier</TableHead>
@@ -214,6 +250,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       <HighlightMatch text={l.itemName} query={search} />
                     </TableCell>
                     <TableCell>
+                      <HighlightMatch text={l.cutName || '—'} query={search} />
+                    </TableCell>
+                    <TableCell>
                       <div className="flex gap-1">
                         <HighlightMatch text={l.yarnName} query={search} />
                         <span>/</span>
@@ -233,7 +272,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                   </TableRow>
                   {isExpanded && (
                     <TableRow className="bg-muted/30">
-                      <TableCell colSpan={9} className="p-4">
+                      <TableCell colSpan={10} className="p-4">
                         <div className="border rounded-md bg-background">
                           <Table>
                             <TableHeader>

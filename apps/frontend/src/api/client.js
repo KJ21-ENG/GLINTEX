@@ -98,6 +98,8 @@ export async function createIssueToHoloMachine(payload) { return await request('
 export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
 export async function createOpeningInbound(payload) { return await request('/api/opening_stock/inbound', { method: 'POST', body: payload }); }
 export async function createOpeningCutterReceive(payload) { return await request('/api/opening_stock/cutter_receive', { method: 'POST', body: payload }); }
+export async function uploadOpeningStock(stage, payload) { return await request(`/api/opening_stock/upload/${stage}`, { method: 'POST', body: payload }); }
+export async function previewOpeningStock(stage, payload) { return await request(`/api/opening_stock/preview/${stage}`, { method: 'POST', body: payload }); }
 export async function createOpeningHoloReceive(payload) { return await request('/api/opening_stock/holo_receive', { method: 'POST', body: payload }); }
 export async function createOpeningConingReceive(payload) { return await request('/api/opening_stock/coning_receive', { method: 'POST', body: payload }); }
 export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }

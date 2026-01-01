@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import * as api from '../api';
 import {
@@ -19,7 +19,7 @@ import {
 } from '../components/ui';
 import { formatKg, todayISO, uid } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
-import { Plus, Save, Trash2 } from 'lucide-react';
+import { Plus, Save, Trash2, Upload, Download, X } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 
 const STAGE_OPTIONS = [
@@ -52,6 +52,125 @@ export function OpeningStock() {
   const [supplierId, setSupplierId] = useState('');
   const [previewLotNo, setPreviewLotNo] = useState('');
   const [saving, setSaving] = useState(false);
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleDownloadTemplate = async () => {
+    try {
+      // Build API base URL - same logic as api/client.js
+      const apiBase = import.meta.env.VITE_API_BASE || `${window.location.protocol}//${window.location.hostname}:4001`;
+      const res = await fetch(`${apiBase}/api/opening_stock/template?stage=${stage}`, {
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('Failed to download');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Dynamic filename based on stage
+      const stageName = stage.charAt(0).toUpperCase() + stage.slice(1);
+      a.download = `Opening_Stock_${stageName}_Template.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to download template');
+    }
+  };
+
+  const handleBulkUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSaving(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        try {
+          const content = evt.target.result;
+          const payload = {
+            fileContent: content,
+            fileType: file.name.endsWith('.csv') ? 'csv' : 'xlsx',
+            date, itemId, firmId, supplierId,
+            twistId: stage === 'holo' ? holoIssue.twistId : undefined,
+            yarnId: stage === 'holo' ? holoIssue.yarnId : undefined,
+            machineId: stage === 'holo' ? holoIssue.machineId : (stage === 'coning' ? coningIssue.machineId : undefined),
+            operatorId: stage === 'holo' ? holoIssue.operatorId : (stage === 'coning' ? coningIssue.operatorId : undefined),
+            shift: stage === 'holo' ? holoIssue.shift : (stage === 'coning' ? coningIssue.shift : undefined),
+            coneTypeId: stage === 'coning' ? coningIssue.coneTypeId : undefined,
+            wrapperId: stage === 'coning' ? coningIssue.wrapperId : undefined,
+          };
+
+          // First, get preview of what will be created
+          const preview = await api.previewOpeningStock(stage, payload);
+
+          // Build confirmation message - show errors at TOP for visibility
+          let confirmMsg = `📦 File: ${file.name}\n`;
+
+          // Always show errors line - show details only when actual errors exist
+          if (preview.errors && preview.errors.length > 0) {
+            confirmMsg += `❌ Errors: ${preview.errors.length}${preview.hasMoreErrors ? '+' : ''} rows have issues!\n`;
+            preview.errors.slice(0, 5).forEach(err => { confirmMsg += `   • ${err}\n`; });
+            if (preview.errors.length > 5) confirmMsg += `   ... and ${preview.errors.length - 5} more errors\n`;
+            confirmMsg += '\n';
+          } else {
+            confirmMsg += `✅ Errors: None\n`;
+          }
+
+          // Show warnings (missing masters like Twist, Yarn, Cut)
+          if (preview.warnings && preview.warnings.length > 0) {
+            confirmMsg += `⚠️ Warnings: ${preview.warnings.length}${preview.hasMoreWarnings ? '+' : ''} missing masters\n`;
+            preview.warnings.slice(0, 3).forEach(w => { confirmMsg += `   • ${w}\n`; });
+            if (preview.warnings.length > 3) confirmMsg += `   ... and ${preview.warnings.length - 3} more\n`;
+          }
+          confirmMsg += '\n';
+          confirmMsg += `📊 Total Rows: ${preview.totalRows}\n`;
+          confirmMsg += `🏷️ Lots to Create: ${preview.lotsToCreate}\n\n`;
+
+          if (preview.lotAssignments && preview.lotAssignments.length > 0) {
+            const showCount = Math.min(preview.lotAssignments.length, 8); // Show max 8 lots
+            confirmMsg += `── Lot Assignments ──\n`;
+            preview.lotAssignments.slice(0, showCount).forEach(a => {
+              confirmMsg += `• ${a.lotNo}: ${a.itemName} + ${a.supplierName} (${a.rowCount})\n`;
+            });
+            if (preview.lotAssignments.length > showCount) {
+              confirmMsg += `... and ${preview.lotAssignments.length - showCount} more lots\n`;
+            }
+          }
+
+          confirmMsg += `\nProceed with upload?`;
+
+          if (!window.confirm(confirmMsg)) {
+            setSaving(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+          }
+
+          // Proceed with actual upload
+          const res = await api.uploadOpeningStock(stage, payload);
+          const message = res.lotsCreated > 1
+            ? `Uploaded successfully! Created ${res.lotsCreated} Lots: ${res.lotNos.join(', ')} (Total: ${res.totalCount} entries)`
+            : `Uploaded successfully! Lot: ${res.lotNos?.[0] || res.lotNo}, Count: ${res.totalCount || res.count}`;
+          alert(message);
+          await refreshDb();
+          await fetchOpeningPreview();
+        } catch (err) {
+          console.error(err);
+          alert(`Upload failed: ${err.message || 'Unknown error'}`);
+        } finally {
+          setSaving(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setSaving(false);
+      alert('Failed to read file');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const [inboundEntry, setInboundEntry] = useState({
     weight: '',
@@ -575,14 +694,120 @@ export function OpeningStock() {
     }
   };
 
+  const currentStageName = STAGE_OPTIONS.find(s => s.id === stage)?.label || stage;
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedFile(file);
+      // Clear input value so selecting the same file again triggers onChange
+      e.target.value = '';
+    }
+  };
+
+  const handleModalUpload = async () => {
+    if (!selectedFile) return;
+    // Create a synthetic event to match existing handleBulkUpload signature
+    const syntheticEvent = { target: { files: [selectedFile], value: selectedFile.name } };
+    await handleBulkUpload(syntheticEvent);
+    setSelectedFile(null);
+    setShowBulkModal(false);
+  };
+
   return (
     <div className="space-y-6 fade-in">
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept=".csv,.xlsx,.xls"
+        onChange={handleFileSelect}
+      />
       <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Opening Stock</h1>
           <p className="text-sm text-muted-foreground">Create OP lots and print stickers to continue normal flow.</p>
         </div>
+        <Button variant="outline" onClick={() => setShowBulkModal(true)} className="gap-2">
+          <Upload className="w-4 h-4" /> Bulk Upload
+        </Button>
       </div>
+
+      {/* Bulk Upload Modal */}
+      {showBulkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { setShowBulkModal(false); setSelectedFile(null); }}>
+          <div className="bg-background rounded-lg shadow-xl w-full max-w-2xl mx-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b">
+              <h2 className="text-lg font-semibold">Bulk Upload — {currentStageName}</h2>
+              <Button variant="ghost" size="icon" onClick={() => { setShowBulkModal(false); setSelectedFile(null); }}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x">
+              {/* Left Panel: Download */}
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Download className="w-5 h-5" />
+                  <span className="font-medium">Download Template</span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Download the Excel template for the selected stage. Fill in your data and upload it on the right.
+                </p>
+                <div className="text-sm bg-muted/50 rounded-md px-3 py-2">
+                  Current Stage: <span className="font-medium">{currentStageName}</span>
+                </div>
+                <Button variant="outline" onClick={handleDownloadTemplate} className="w-full gap-2">
+                  <Download className="w-4 h-4" /> Download Template
+                </Button>
+              </div>
+              {/* Right Panel: Upload */}
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-2 text-primary">
+                  <Upload className="w-5 h-5" />
+                  <span className="font-medium">Upload File</span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Upload your filled template to create entries in bulk.
+                </p>
+                <div
+                  className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {selectedFile ? (
+                    <div className="space-y-1">
+                      <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary">
+                        <Upload className="w-5 h-5" />
+                      </div>
+                      <p className="font-medium text-primary text-sm truncate px-2">{selectedFile.name}</p>
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">File Selected — Click to Change</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center mx-auto text-muted-foreground">
+                        <Upload className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Click to select file</p>
+                        <p className="text-xs text-muted-foreground">.csv, .xlsx, .xls</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <Button
+                  onClick={handleModalUpload}
+                  disabled={!selectedFile || saving}
+                  className="w-full gap-2"
+                >
+                  {saving ? 'Uploading...' : <><Upload className="w-4 h-4" /> Upload</>}
+                </Button>
+                {!canSaveCommon && (
+                  <p className="text-xs text-amber-600 text-center">Note: Lot details not selected. Ensure Item Name and Supplier Name are in your file.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardHeader>

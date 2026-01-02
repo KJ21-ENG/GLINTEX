@@ -6694,4 +6694,1012 @@ router.get('/api/disk-usage', async (req, res) => {
   }
 });
 
+// ========== CUSTOMER ENDPOINTS ==========
+
+router.get('/api/customers', async (req, res) => {
+  try {
+    const customers = await prisma.customer.findMany({
+      orderBy: { name: 'asc' },
+    });
+    res.json({ customers });
+  } catch (err) {
+    console.error('Failed to fetch customers', err);
+    res.status(500).json({ error: 'Failed to fetch customers' });
+  }
+});
+
+router.post('/api/customers', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const name = String(req.body?.name || '').trim();
+    const phone = req.body?.phone ? String(req.body.phone).trim() : null;
+    const address = req.body?.address ? String(req.body.address).trim() : null;
+
+    if (!name) return res.status(400).json({ error: 'Customer name is required' });
+
+    // Check for duplicate customer name (case-insensitive)
+    const existingCustomer = await prisma.customer.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+    if (existingCustomer) {
+      return res.status(409).json({ error: 'A customer with this name already exists' });
+    }
+
+    const customer = await prisma.customer.create({
+      data: {
+        name,
+        phone,
+        address,
+        ...actorCreateFields(actor?.userId),
+      },
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'customer',
+      entityId: customer.id,
+      action: 'create',
+      payload: { name, phone, address },
+    });
+
+    res.json({ customer });
+  } catch (err) {
+    console.error('Failed to create customer', err);
+    res.status(500).json({ error: err.message || 'Failed to create customer' });
+  }
+});
+
+router.put('/api/customers/:id', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+    const existing = await prisma.customer.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Customer not found' });
+
+    const name = req.body?.name != null ? String(req.body.name).trim() : undefined;
+    const phone = req.body?.phone != null ? String(req.body.phone).trim() : undefined;
+    const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
+
+    const updated = await prisma.customer.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(phone !== undefined ? { phone } : {}),
+        ...(address !== undefined ? { address } : {}),
+        ...actorUpdateFields(actor?.userId),
+      },
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'customer',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+    });
+
+    res.json({ customer: updated });
+  } catch (err) {
+    console.error('Failed to update customer', err);
+    res.status(500).json({ error: err.message || 'Failed to update customer' });
+  }
+});
+
+router.delete('/api/customers/:id', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+    const existing = await prisma.customer.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Customer not found' });
+
+    // Check if customer has dispatches
+    const dispatchCount = await prisma.dispatch.count({ where: { customerId: id } });
+    if (dispatchCount > 0) {
+      return res.status(409).json({ error: 'Cannot delete customer with existing dispatches' });
+    }
+
+    await prisma.customer.delete({ where: { id } });
+
+    await logCrudWithActor(req, {
+      entityType: 'customer',
+      entityId: id,
+      action: 'delete',
+      payload: existing,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete customer', err);
+    res.status(500).json({ error: err.message || 'Failed to delete customer' });
+  }
+});
+
+// ========== DISPATCH ENDPOINTS ==========
+
+// Generate dispatch challan number
+async function allocateDispatchChallanNumber(tx, dateInput) {
+  const fiscalYear = getFiscalYearLabel(dateInput);
+  const seqId = `dispatch_seq_${fiscalYear.replace('-', '_')}`;
+
+  const seq = await tx.dispatchSequence.upsert({
+    where: { id: seqId },
+    create: { id: seqId, nextValue: 2 },
+    update: { nextValue: { increment: 1 } },
+  });
+
+  const num = seq.nextValue - 1;
+  return `DC/${fiscalYear}/${String(num).padStart(3, '0')}`;
+}
+
+// Get available items for dispatch at a specific stage
+router.get('/api/dispatch/available/:stage', async (req, res) => {
+  try {
+    const { stage } = req.params;
+    let items = [];
+
+    if (stage === 'inbound') {
+      // Get inbound items with remaining weight (weight - dispatchedWeight > 0)
+      const inboundItems = await prisma.inboundItem.findMany({
+        where: {
+          status: { not: 'consumed' },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      items = inboundItems
+        .map(item => ({
+          id: item.id,
+          barcode: item.barcode,
+          lotNo: item.lotNo,
+          weight: item.weight,
+          dispatchedWeight: item.dispatchedWeight || 0,
+          availableWeight: Math.max(0, item.weight - (item.dispatchedWeight || 0)),
+          stage: 'inbound',
+        }))
+        .filter(item => item.availableWeight > 0);
+    } else if (stage === 'cutter') {
+      // Get cutter receive rows with remaining weight
+      // Subtract both dispatchedWeight AND issuedBobbinWeight (weight already issued to Holo)
+      const cutterRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { isDeleted: false },
+        orderBy: { createdAt: 'desc' },
+      });
+      items = cutterRows
+        .map(row => {
+          const issuedToHolo = row.issuedBobbinWeight || 0;
+          const dispatched = row.dispatchedWeight || 0;
+          const netWt = row.netWt || 0;
+          return {
+            id: row.id,
+            barcode: row.barcode || row.vchNo,
+            pieceId: row.pieceId,
+            weight: netWt,
+            dispatchedWeight: dispatched,
+            issuedToHolo: issuedToHolo,
+            availableWeight: Math.max(0, netWt - dispatched - issuedToHolo),
+            stage: 'cutter',
+            bobbinQuantity: row.bobbinQuantity,
+          };
+        })
+        .filter(item => item.availableWeight > 0);
+    } else if (stage === 'holo') {
+      // Get holo receive rows with remaining weight
+      const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
+        include: { issue: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      items = holoRows
+        .map(row => {
+          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          return {
+            id: row.id,
+            barcode: row.barcode,
+            lotNo: row.issue?.lotNo,
+            weight: netWeight,
+            dispatchedWeight: row.dispatchedWeight || 0,
+            availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),
+            stage: 'holo',
+            rollCount: row.rollCount,
+          };
+        })
+        .filter(item => item.availableWeight > 0);
+    } else if (stage === 'coning') {
+      // Get coning receive rows with remaining weight
+      const coningRows = await prisma.receiveFromConingMachineRow.findMany({
+        include: { issue: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      items = coningRows
+        .map(row => ({
+          id: row.id,
+          barcode: row.barcode,
+          lotNo: row.issue?.lotNo,
+          weight: row.netWeight || 0,
+          dispatchedWeight: row.dispatchedWeight || 0,
+          availableWeight: Math.max(0, (row.netWeight || 0) - (row.dispatchedWeight || 0)),
+          stage: 'coning',
+          coneCount: row.coneCount,
+        }))
+        .filter(item => item.availableWeight > 0);
+    } else {
+      return res.status(400).json({ error: 'Invalid stage. Must be: inbound, cutter, holo, or coning' });
+    }
+
+    res.json({ items });
+  } catch (err) {
+    console.error('Failed to fetch available items for dispatch', err);
+    res.status(500).json({ error: 'Failed to fetch available items' });
+  }
+});
+
+// List all dispatches
+router.get('/api/dispatch', async (req, res) => {
+  try {
+    const { stage, customerId, from, to } = req.query;
+    const where = {};
+
+    if (stage) where.stage = stage;
+    if (customerId) where.customerId = customerId;
+    if (from || to) {
+      where.date = {};
+      if (from) where.date.gte = from;
+      if (to) where.date.lte = to;
+    }
+
+    const dispatches = await prisma.dispatch.findMany({
+      where,
+      include: { customer: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json({ dispatches });
+  } catch (err) {
+    console.error('Failed to fetch dispatches', err);
+    res.status(500).json({ error: 'Failed to fetch dispatches' });
+  }
+});
+
+// Get single dispatch
+router.get('/api/dispatch/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dispatch = await prisma.dispatch.findUnique({
+      where: { id },
+      include: { customer: true },
+    });
+
+    if (!dispatch) return res.status(404).json({ error: 'Dispatch not found' });
+    res.json({ dispatch });
+  } catch (err) {
+    console.error('Failed to fetch dispatch', err);
+    res.status(500).json({ error: 'Failed to fetch dispatch' });
+  }
+});
+
+// Create dispatch
+router.post('/api/dispatch', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { customerId, stage, stageItemId, weight, date, notes } = req.body;
+
+    if (!customerId) return res.status(400).json({ error: 'Customer is required' });
+    if (!stage) return res.status(400).json({ error: 'Stage is required' });
+    if (!stageItemId) return res.status(400).json({ error: 'Stage item is required' });
+    if (!weight || weight <= 0) return res.status(400).json({ error: 'Valid weight is required' });
+    if (!['inbound', 'cutter', 'holo', 'coning'].includes(stage)) {
+      return res.status(400).json({ error: 'Invalid stage' });
+    }
+
+    const dispatchDate = date || new Date().toISOString().split('T')[0];
+
+    // Verify customer exists (can be outside transaction as it's read-only)
+    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) return res.status(400).json({ error: 'Customer not found' });
+
+    // IMPORTANT: All source item validation and updates must be inside transaction
+    // to prevent race conditions where two concurrent requests could over-dispatch
+    const dispatch = await prisma.$transaction(async (tx) => {
+      let sourceItem;
+      let stageBarcode = '';
+      let availableWeight = 0;
+
+      // Fetch source item INSIDE transaction to get fresh data
+      if (stage === 'inbound') {
+        sourceItem = await tx.inboundItem.findUnique({ where: { id: stageItemId } });
+        if (!sourceItem) throw new Error('Inbound item not found');
+        stageBarcode = sourceItem.barcode;
+        availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0);
+      } else if (stage === 'cutter') {
+        sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
+        if (!sourceItem) throw new Error('Cutter receive row not found');
+        stageBarcode = sourceItem.barcode || sourceItem.vchNo;
+        // Subtract both dispatchedWeight AND issuedBobbinWeight (weight already issued to Holo)
+        const issuedToHolo = sourceItem.issuedBobbinWeight || 0;
+        availableWeight = (sourceItem.netWt || 0) - (sourceItem.dispatchedWeight || 0) - issuedToHolo;
+      } else if (stage === 'holo') {
+        sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
+        if (!sourceItem) throw new Error('Holo receive row not found');
+        stageBarcode = sourceItem.barcode || '';
+        const netWeight = sourceItem.rollWeight ? (sourceItem.rollWeight * sourceItem.rollCount) : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
+        availableWeight = netWeight - (sourceItem.dispatchedWeight || 0);
+      } else if (stage === 'coning') {
+        sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
+        if (!sourceItem) throw new Error('Coning receive row not found');
+        stageBarcode = sourceItem.barcode || '';
+        availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
+      }
+
+      // Validate weight INSIDE transaction to prevent race condition
+      if (weight > availableWeight + 0.001) {
+        throw new Error(`Dispatch weight (${weight}) exceeds available weight (${availableWeight.toFixed(3)})`);
+      }
+
+      const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
+
+      const created = await tx.dispatch.create({
+        data: {
+          challanNo,
+          date: dispatchDate,
+          customerId,
+          stage,
+          stageItemId,
+          stageBarcode,
+          weight: roundTo3Decimals(weight),
+          notes: notes || null,
+          ...actorCreateFields(actor?.userId),
+        },
+        include: { customer: true },
+      });
+
+      // Update dispatchedWeight on source item
+      if (stage === 'inbound') {
+        await tx.inboundItem.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+        });
+      } else if (stage === 'cutter') {
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+        });
+      } else if (stage === 'holo') {
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+        });
+      } else if (stage === 'coning') {
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+        });
+      }
+
+      return created;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: dispatch.id,
+      action: 'create',
+      payload: { challanNo: dispatch.challanNo, stage, weight, customerId },
+    });
+
+    res.json({ dispatch });
+  } catch (err) {
+    console.error('Failed to create dispatch', err);
+    res.status(500).json({ error: err.message || 'Failed to create dispatch' });
+  }
+});
+
+// Delete/cancel dispatch (restores weight)
+router.delete('/api/dispatch/:id', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+
+    const existing = await prisma.dispatch.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
+
+    // Delete dispatch and restore weight in transaction
+    await prisma.$transaction(async (tx) => {
+      await tx.dispatch.delete({ where: { id } });
+
+      // Restore dispatchedWeight on source item
+      const { stage, stageItemId, weight } = existing;
+
+      if (stage === 'inbound') {
+        await tx.inboundItem.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { decrement: weight } },
+        });
+      } else if (stage === 'cutter') {
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { decrement: weight } },
+        });
+      } else if (stage === 'holo') {
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { decrement: weight } },
+        });
+      } else if (stage === 'coning') {
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: stageItemId },
+          data: { dispatchedWeight: { decrement: weight } },
+        });
+      }
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: id,
+      action: 'delete',
+      payload: existing,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete dispatch', err);
+    res.status(500).json({ error: err.message || 'Failed to delete dispatch' });
+  }
+});
+
+// ========== REPORTS ENDPOINTS ==========
+
+// Barcode History - trace full lifecycle of a barcode
+router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
+  try {
+    const { barcode } = req.params;
+    const normalizedBarcode = normalizeBarcodeInput(barcode);
+
+    const history = {
+      barcode: normalizedBarcode,
+      found: false,
+      stages: [],
+    };
+
+    // 1. Check InboundItem
+    const inboundItem = await prisma.inboundItem.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+    });
+
+    if (inboundItem) {
+      history.found = true;
+      const lot = await prisma.lot.findUnique({ where: { lotNo: inboundItem.lotNo } });
+      const item = lot?.itemId ? await prisma.item.findUnique({ where: { id: lot.itemId } }) : null;
+
+      history.stages.push({
+        stage: 'inbound',
+        date: lot?.date || null,
+        data: {
+          pieceId: inboundItem.id,
+          barcode: inboundItem.barcode,
+          lotNo: inboundItem.lotNo,
+          itemName: item?.name || null,
+          weight: inboundItem.weight,
+          status: inboundItem.status,
+          seq: inboundItem.seq,
+          dispatchedWeight: inboundItem.dispatchedWeight || 0,
+        },
+      });
+
+      // 2. Check if issued to cutter
+      const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+        where: { pieceIds: { contains: inboundItem.id } },
+        include: { machine: true, operator: true, cut: true },
+      });
+
+      if (cutterIssue) {
+        history.stages.push({
+          stage: 'cutter_issue',
+          date: cutterIssue.date,
+          data: {
+            issueId: cutterIssue.id,
+            barcode: cutterIssue.barcode,
+            machineName: cutterIssue.machine?.name || null,
+            operatorName: cutterIssue.operator?.name || null,
+            cutName: cutterIssue.cut?.name || null,
+            totalWeight: cutterIssue.totalWeight,
+            pieceCount: cutterIssue.count,
+          },
+        });
+
+        // 3. Check cutter receive
+        const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+          where: { pieceId: inboundItem.id, isDeleted: false },
+          include: { challan: true, bobbin: true, operator: true },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        for (const recv of cutterReceives) {
+          history.stages.push({
+            stage: 'cutter_receive',
+            date: recv.date || recv.challan?.date,
+            data: {
+              receiveId: recv.id,
+              barcode: recv.barcode,
+              challanNo: recv.challan?.challanNo || null,
+              bobbinQuantity: recv.bobbinQuantity,
+              netWeight: recv.netWt,
+              operatorName: recv.operator?.name || null,
+              dispatchedWeight: recv.dispatchedWeight || 0,
+            },
+          });
+        }
+      }
+    }
+
+    // Also search by barcode in other tables
+    // Search Cutter Issue
+    const cutterIssueByBarcode = await prisma.issueToCutterMachine.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { machine: true, operator: true, cut: true },
+    });
+
+    if (cutterIssueByBarcode && !history.stages.find(s => s.stage === 'cutter_issue' && s.data.issueId === cutterIssueByBarcode.id)) {
+      history.found = true;
+      history.stages.push({
+        stage: 'cutter_issue',
+        date: cutterIssueByBarcode.date,
+        data: {
+          issueId: cutterIssueByBarcode.id,
+          barcode: cutterIssueByBarcode.barcode,
+          lotNo: cutterIssueByBarcode.lotNo,
+          machineName: cutterIssueByBarcode.machine?.name || null,
+          operatorName: cutterIssueByBarcode.operator?.name || null,
+          cutName: cutterIssueByBarcode.cut?.name || null,
+          totalWeight: cutterIssueByBarcode.totalWeight,
+          pieceCount: cutterIssueByBarcode.count,
+        },
+      });
+    }
+
+    // Search Holo Issue
+    const holoIssue = await prisma.issueToHoloMachine.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+    });
+
+    if (holoIssue) {
+      history.found = true;
+      history.stages.push({
+        stage: 'holo_issue',
+        date: holoIssue.date,
+        data: {
+          issueId: holoIssue.id,
+          barcode: holoIssue.barcode,
+          lotNo: holoIssue.lotNo,
+          machineName: holoIssue.machine?.name || null,
+          operatorName: holoIssue.operator?.name || null,
+          yarnName: holoIssue.yarn?.name || null,
+          twistName: holoIssue.twist?.name || null,
+          cutName: holoIssue.cut?.name || null,
+          metallicBobbins: holoIssue.metallicBobbins,
+          metallicBobbinsWeight: holoIssue.metallicBobbinsWeight,
+        },
+      });
+
+      // Check holo receives
+      const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+        where: { issueId: holoIssue.id },
+        include: { rollType: true, operator: true, box: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const recv of holoReceives) {
+        history.stages.push({
+          stage: 'holo_receive',
+          date: recv.date,
+          data: {
+            receiveId: recv.id,
+            barcode: recv.barcode,
+            rollCount: recv.rollCount,
+            rollWeight: recv.rollWeight,
+            grossWeight: recv.grossWeight,
+            tareWeight: recv.tareWeight,
+            rollTypeName: recv.rollType?.name || null,
+            operatorName: recv.operator?.name || null,
+            dispatchedWeight: recv.dispatchedWeight || 0,
+          },
+        });
+      }
+    }
+
+    // Search Holo Receive by barcode
+    const holoRecvByBarcode = await prisma.receiveFromHoloMachineRow.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { issue: true, rollType: true, operator: true },
+    });
+
+    if (holoRecvByBarcode && !history.stages.find(s => s.stage === 'holo_receive' && s.data.receiveId === holoRecvByBarcode.id)) {
+      history.found = true;
+      history.stages.push({
+        stage: 'holo_receive',
+        date: holoRecvByBarcode.date,
+        data: {
+          receiveId: holoRecvByBarcode.id,
+          barcode: holoRecvByBarcode.barcode,
+          lotNo: holoRecvByBarcode.issue?.lotNo || null,
+          rollCount: holoRecvByBarcode.rollCount,
+          rollWeight: holoRecvByBarcode.rollWeight,
+          grossWeight: holoRecvByBarcode.grossWeight,
+          tareWeight: holoRecvByBarcode.tareWeight,
+          rollTypeName: holoRecvByBarcode.rollType?.name || null,
+          operatorName: holoRecvByBarcode.operator?.name || null,
+          dispatchedWeight: holoRecvByBarcode.dispatchedWeight || 0,
+        },
+      });
+    }
+
+    // Search Coning Issue
+    const coningIssue = await prisma.issueToConingMachine.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { machine: true, operator: true },
+    });
+
+    if (coningIssue) {
+      history.found = true;
+      history.stages.push({
+        stage: 'coning_issue',
+        date: coningIssue.date,
+        data: {
+          issueId: coningIssue.id,
+          barcode: coningIssue.barcode,
+          lotNo: coningIssue.lotNo,
+          machineName: coningIssue.machine?.name || null,
+          operatorName: coningIssue.operator?.name || null,
+          rollsIssued: coningIssue.rollsIssued,
+          expectedCones: coningIssue.expectedCones,
+        },
+      });
+
+      // Check coning receives
+      const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
+        where: { issueId: coningIssue.id },
+        include: { operator: true, box: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const recv of coningReceives) {
+        history.stages.push({
+          stage: 'coning_receive',
+          date: recv.date,
+          data: {
+            receiveId: recv.id,
+            barcode: recv.barcode,
+            coneCount: recv.coneCount,
+            netWeight: recv.netWeight,
+            grossWeight: recv.grossWeight,
+            tareWeight: recv.tareWeight,
+            operatorName: recv.operator?.name || null,
+            dispatchedWeight: recv.dispatchedWeight || 0,
+          },
+        });
+      }
+    }
+
+    // Search Coning Receive by barcode
+    const coningRecvByBarcode = await prisma.receiveFromConingMachineRow.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { issue: true, operator: true },
+    });
+
+    if (coningRecvByBarcode && !history.stages.find(s => s.stage === 'coning_receive' && s.data.receiveId === coningRecvByBarcode.id)) {
+      history.found = true;
+      history.stages.push({
+        stage: 'coning_receive',
+        date: coningRecvByBarcode.date,
+        data: {
+          receiveId: coningRecvByBarcode.id,
+          barcode: coningRecvByBarcode.barcode,
+          lotNo: coningRecvByBarcode.issue?.lotNo || null,
+          coneCount: coningRecvByBarcode.coneCount,
+          netWeight: coningRecvByBarcode.netWeight,
+          grossWeight: coningRecvByBarcode.grossWeight,
+          tareWeight: coningRecvByBarcode.tareWeight,
+          operatorName: coningRecvByBarcode.operator?.name || null,
+          dispatchedWeight: coningRecvByBarcode.dispatchedWeight || 0,
+        },
+      });
+    }
+
+    // Search Dispatches by stageBarcode
+    const dispatches = await prisma.dispatch.findMany({
+      where: { stageBarcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { customer: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    for (const d of dispatches) {
+      history.found = true;
+      history.stages.push({
+        stage: 'dispatch',
+        date: d.date,
+        data: {
+          dispatchId: d.id,
+          challanNo: d.challanNo,
+          customerName: d.customer?.name || null,
+          weight: d.weight,
+          sourceStage: d.stage,
+          notes: d.notes,
+        },
+      });
+    }
+
+    // Sort stages by date
+    history.stages.sort((a, b) => {
+      if (!a.date) return -1;
+      if (!b.date) return 1;
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
+
+    res.json({ history });
+  } catch (err) {
+    console.error('Failed to fetch barcode history', err);
+    res.status(500).json({ error: 'Failed to fetch barcode history' });
+  }
+});
+
+// Production Report
+router.get('/api/reports/production', async (req, res) => {
+  try {
+    const { process, view, from, to } = req.query;
+
+    // Default to last 30 days
+    const toDate = to || new Date().toISOString().split('T')[0];
+    const fromDate = from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const report = {
+      process: process || 'all',
+      view: view || 'machine',
+      dateRange: { from: fromDate, to: toDate },
+      summary: {
+        totalIssued: 0,
+        totalReceived: 0,
+        totalWastage: 0,
+        efficiency: 0,
+      },
+      data: [],
+    };
+
+    // Helper to calculate efficiency using actual issued weight
+    const calcEfficiency = (issued, received) => {
+      if (!issued || issued === 0) return 0;
+      return Math.round((received / issued) * 100 * 10) / 10;
+    };
+
+    // Aggregate based on process type
+    if (process === 'cutter' || !process || process === 'all') {
+      // Get ACTUAL issued weight from IssueToCutterMachine
+      const cutterIssues = await prisma.issueToCutterMachine.findMany({
+        where: {
+          date: { gte: fromDate, lte: toDate },
+        },
+      });
+      const totalCutterIssued = cutterIssues.reduce((sum, i) => sum + (i.totalWeight || 0), 0);
+
+      // Get cutter receive data
+      const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+        where: {
+          isDeleted: false,
+          date: { gte: fromDate, lte: toDate },
+        },
+        include: { operator: true },
+      });
+
+      const cutterPieceTotals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
+      const totalCutterReceived = cutterPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
+      const totalCutterWastage = cutterPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+
+      if (!process || process === 'all' || process === 'cutter') {
+        report.summary.totalIssued += totalCutterIssued;
+        report.summary.totalReceived += totalCutterReceived;
+        report.summary.totalWastage += totalCutterWastage;
+      }
+
+      // Group by view type
+      if (view === 'operator') {
+        const byOperator = new Map();
+        for (const row of cutterReceives) {
+          const key = row.operatorId || 'unknown';
+          const current = byOperator.get(key) || { operatorId: key, operatorName: row.operator?.name || 'Unknown', received: 0, count: 0 };
+          current.received += row.netWt || 0;
+          current.count += 1;
+          byOperator.set(key, current);
+        }
+        if (process === 'cutter') {
+          report.data = Array.from(byOperator.values());
+        }
+      } else if (view === 'shift') {
+        const byShift = new Map();
+        for (const row of cutterReceives) {
+          const key = row.shift || 'Not Specified';
+          const current = byShift.get(key) || { shift: key, received: 0, count: 0 };
+          current.received += row.netWt || 0;
+          current.count += 1;
+          byShift.set(key, current);
+        }
+        if (process === 'cutter') {
+          report.data = Array.from(byShift.values());
+        }
+      } else {
+        // Machine-wise (default)
+        const byMachine = new Map();
+        for (const row of cutterReceives) {
+          const key = row.machineNo || 'unknown';
+          const current = byMachine.get(key) || { machineNo: key, received: 0, count: 0 };
+          current.received += row.netWt || 0;
+          current.count += 1;
+          byMachine.set(key, current);
+        }
+        if (process === 'cutter') {
+          report.data = Array.from(byMachine.values());
+        }
+      }
+    }
+
+    if (process === 'holo' || !process || process === 'all') {
+      // Get ACTUAL issued weight from IssueToHoloMachine
+      const holoIssues = await prisma.issueToHoloMachine.findMany({
+        where: {
+          date: { gte: fromDate, lte: toDate },
+        },
+      });
+      // Holo issued weight = metallicBobbinsWeight + yarnKg
+      const totalHoloIssued = holoIssues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0) + (i.yarnKg || 0), 0);
+
+      // Get holo receive data
+      const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+        where: {
+          date: { gte: fromDate, lte: toDate },
+        },
+        include: { operator: true, issue: { include: { machine: true } } },
+      });
+
+      const holoPieceTotals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
+      const totalHoloReceived = holoPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
+      const totalHoloWastage = holoPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+
+      if (!process || process === 'all' || process === 'holo') {
+        report.summary.totalIssued += totalHoloIssued;
+        report.summary.totalReceived += totalHoloReceived;
+        report.summary.totalWastage += totalHoloWastage;
+      }
+
+      if (view === 'operator' && process === 'holo') {
+        const byOperator = new Map();
+        for (const row of holoReceives) {
+          const key = row.operatorId || 'unknown';
+          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const current = byOperator.get(key) || { operatorId: key, operatorName: row.operator?.name || 'Unknown', received: 0, rollCount: 0 };
+          current.received += netWeight;
+          current.rollCount += row.rollCount || 0;
+          byOperator.set(key, current);
+        }
+        report.data = Array.from(byOperator.values());
+      } else if (view === 'shift' && process === 'holo') {
+        const byShift = new Map();
+        for (const row of holoReceives) {
+          const key = row.issue?.shift || 'Not Specified';
+          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const current = byShift.get(key) || { shift: key, received: 0, rollCount: 0 };
+          current.received += netWeight;
+          current.rollCount += row.rollCount || 0;
+          byShift.set(key, current);
+        }
+        report.data = Array.from(byShift.values());
+      } else if (process === 'holo') {
+        const byMachine = new Map();
+        for (const row of holoReceives) {
+          const key = row.issue?.machine?.name || row.machineNo || 'unknown';
+          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const current = byMachine.get(key) || { machineName: key, received: 0, rollCount: 0 };
+          current.received += netWeight;
+          current.rollCount += row.rollCount || 0;
+          byMachine.set(key, current);
+        }
+        report.data = Array.from(byMachine.values());
+      }
+    }
+
+    if (process === 'coning' || !process || process === 'all') {
+      // Get ACTUAL issued weight from IssueToConingMachine
+      // Coning issues weight = rollsIssued * (avg roll weight from holo) - but we need to calculate this differently
+      // For coning, the input is rolls from holo. We need to get the weight of rolled issued.
+      // The IssueToConingMachine has receivedRowRefs which references holo receive rows
+      const coningIssues = await prisma.issueToConingMachine.findMany({
+        where: {
+          date: { gte: fromDate, lte: toDate },
+        },
+      });
+
+      // Calculate coning issued weight by summing up requiredPerConeNetWeight * expectedCones  
+      // or we can use rollsIssued and lookup the actual roll weights
+      // Simpler approach: use expectedCones * requiredPerConeNetWeight as the target input
+      let totalConingIssued = 0;
+      for (const issue of coningIssues) {
+        // If we have receivedRowRefs, try to get actual weights from holo receives
+        try {
+          const refs = JSON.parse(issue.receivedRowRefs || '[]');
+          if (Array.isArray(refs) && refs.length > 0) {
+            const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
+              where: { id: { in: refs } },
+            });
+            const issuedWeight = holoRows.reduce((sum, r) => {
+              const netWeight = r.rollWeight ? (r.rollWeight * r.rollCount) : (r.grossWeight || 0) - (r.tareWeight || 0);
+              return sum + netWeight;
+            }, 0);
+            totalConingIssued += issuedWeight;
+          } else {
+            // Fallback: use expectedCones * requiredPerConeNetWeight
+            totalConingIssued += (issue.expectedCones || 0) * (issue.requiredPerConeNetWeight || 0);
+          }
+        } catch {
+          totalConingIssued += (issue.expectedCones || 0) * (issue.requiredPerConeNetWeight || 0);
+        }
+      }
+
+      // Get coning receive data
+      const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
+        where: {
+          date: { gte: fromDate, lte: toDate },
+        },
+        include: { operator: true, issue: { include: { machine: true } } },
+      });
+
+      const coningPieceTotals = await prisma.receiveFromConingMachinePieceTotal.findMany();
+      const totalConingReceived = coningPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
+      const totalConingWastage = coningPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+
+      if (!process || process === 'all' || process === 'coning') {
+        report.summary.totalIssued += totalConingIssued;
+        report.summary.totalReceived += totalConingReceived;
+        report.summary.totalWastage += totalConingWastage;
+      }
+
+      if (view === 'operator' && process === 'coning') {
+        const byOperator = new Map();
+        for (const row of coningReceives) {
+          const key = row.operatorId || 'unknown';
+          const current = byOperator.get(key) || { operatorId: key, operatorName: row.operator?.name || 'Unknown', received: 0, coneCount: 0 };
+          current.received += row.netWeight || 0;
+          current.coneCount += row.coneCount || 0;
+          byOperator.set(key, current);
+        }
+        report.data = Array.from(byOperator.values());
+      } else if (view === 'shift' && process === 'coning') {
+        const byShift = new Map();
+        for (const row of coningReceives) {
+          const key = row.issue?.shift || 'Not Specified';
+          const current = byShift.get(key) || { shift: key, received: 0, coneCount: 0 };
+          current.received += row.netWeight || 0;
+          current.coneCount += row.coneCount || 0;
+          byShift.set(key, current);
+        }
+        report.data = Array.from(byShift.values());
+      } else if (process === 'coning') {
+        const byMachine = new Map();
+        for (const row of coningReceives) {
+          const key = row.issue?.machine?.name || row.machineNo || 'unknown';
+          const current = byMachine.get(key) || { machineName: key, received: 0, coneCount: 0 };
+          current.received += row.netWeight || 0;
+          current.coneCount += row.coneCount || 0;
+          byMachine.set(key, current);
+        }
+        report.data = Array.from(byMachine.values());
+      }
+    }
+
+    // Calculate overall efficiency using ACTUAL issued weight as denominator
+    report.summary.efficiency = calcEfficiency(
+      report.summary.totalIssued,
+      report.summary.totalReceived
+    );
+
+
+    res.json({ report });
+  } catch (err) {
+    console.error('Failed to generate production report', err);
+    res.status(500).json({ error: 'Failed to generate production report' });
+  }
+});
+
 export default router;

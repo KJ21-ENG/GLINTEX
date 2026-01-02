@@ -208,6 +208,29 @@ export async function googleDriveFiles() { return await request('/api/google-dri
 // Disk Usage
 export async function getDiskUsage() { return await request('/api/disk-usage'); }
 
+// Customers
+export async function listCustomers() { return await request('/api/customers'); }
+export async function createCustomer(data) { return await request('/api/customers', { method: 'POST', body: data }); }
+export async function updateCustomer(id, data) { return await request(`/api/customers/${id}`, { method: 'PUT', body: data }); }
+export async function deleteCustomer(id) { return await request(`/api/customers/${id}`, { method: 'DELETE' }); }
+
+// Dispatch
+export async function listDispatches(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/dispatch${query ? '?' + query : ''}`);
+}
+export async function getDispatch(id) { return await request(`/api/dispatch/${id}`); }
+export async function createDispatch(data) { return await request('/api/dispatch', { method: 'POST', body: data }); }
+export async function deleteDispatch(id) { return await request(`/api/dispatch/${id}`, { method: 'DELETE' }); }
+export async function getDispatchAvailable(stage) { return await request(`/api/dispatch/available/${stage}`); }
+
+// Reports
+export async function getBarcodeHistory(barcode) { return await request(`/api/reports/barcode-history/${encodeURIComponent(barcode)}`); }
+export async function getProductionReport(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/reports/production${query ? '?' + query : ''}`);
+}
+
 export default {
   health,
   getDB,

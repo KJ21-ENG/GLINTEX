@@ -24,19 +24,19 @@ function formatDateDDMMYYYY(dateStr) {
 
 export function interpolateTemplate(template, ctx) {
   if (!template) return '';
-  
+
   const dateKeys = ['date', 'inboundDate', 'createdAt', 'updatedAt'];
   const weightKeys = [
     'weight', 'totalWeight', 'netWeight', 'grossWeight', 'tareWeight',
     'rollWeight', 'coneWeight', 'yarnKg', 'metallicBobbinsWeight',
-    'perConeTargetG', 'issuedBobbinWeight', 'wastage'
+    'perConeTargetG', 'issuedBobbinWeight', 'wastage', 'totalNetWeight'
   ];
 
   // Matches {{variable}} or @variable
   return template.replace(/(\{\{\s*([\w.]+)\s*\}\})|(@([\w.]+))/g, (match, p1, p2, p3, p4) => {
     const key = p2 || p4;
     let v = ctx && Object.prototype.hasOwnProperty.call(ctx, key) ? ctx[key] : '';
-    
+
     if (v === null || v === undefined) {
       // For certain keys, prefer a visible placeholder when empty
       if (['machineName', 'operatorName', 'machineNumber'].includes(key)) return '—';

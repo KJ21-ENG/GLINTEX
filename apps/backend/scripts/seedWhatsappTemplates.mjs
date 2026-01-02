@@ -1,13 +1,205 @@
 import prisma from '../src/lib/prisma.js';
 
 async function seed() {
+  // Migration: Rename old generic keys to new process-specific ones if they exist
+  const keyMigrations = [
+    { old: 'issue_to_machine_created', new: 'issue_to_cutter_machine_created' },
+    { old: 'receive_from_machine_created', new: 'receive_from_cutter_machine_created' },
+    { old: 'piece_wastage_marked', new: 'piece_wastage_marked_cutter' },
+    { old: 'issue_to_machine_deleted', new: 'issue_to_cutter_machine_deleted' },
+  ];
+
+  for (const m of keyMigrations) {
+    const existingOld = await prisma.whatsappTemplate.findUnique({ where: { event: m.old } });
+    if (existingOld) {
+      console.log(`Migrating old template key: ${m.old} -> ${m.new}`);
+      // If the new one doesn't exist, rename it. If it does, we just leave it (seed will update it anyway)
+      const existingNew = await prisma.whatsappTemplate.findUnique({ where: { event: m.new } });
+      if (!existingNew) {
+        await prisma.whatsappTemplate.update({
+          where: { event: m.old },
+          data: { event: m.new }
+        });
+      } else {
+        // If both exist, just delete the old one to cleanup
+        await prisma.whatsappTemplate.delete({ where: { event: m.old } });
+      }
+    }
+  }
+
   const defaults = [
-    { event: 'inbound_created', enabled: true, template: 'New inbound: {{itemName}} Lot {{lotNo}} - {{totalPieces}} pcs, total {{totalWeight}} kg on {{date}}' },
-    { event: 'issue_to_machine_created', enabled: true, template: 'Issued: {{itemName}} Lot {{lotNo}} - {{count}} pcs by {{operatorName}} on {{date}}' },
-    { event: 'issue_to_machine_deleted', enabled: true, template: 'Issue deleted: {{itemName}} Lot {{lotNo}} - {{count}} pcs on {{date}}' },
-    { event: 'inbound_piece_deleted', enabled: true, template: 'Inbound piece deleted: {{itemName}} Lot {{lotNo}} piece {{pieceId}}' },
-    { event: 'item_out_of_stock', enabled: true, template: 'Out of stock: {{itemName}} is now out of stock (available: {{available}})' },
-    { event: 'backup_failed', enabled: true, template: 'Backup failed on {{host}} at {{time}} ({{type}}). Error: {{error}}. File: {{filename}}' },
+    {
+      event: 'inbound_created',
+      enabled: true,
+      template: '*New Inbound Registered*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧩 *Pieces:* @totalPieces\n' +
+        '⚖️ *Weight:* @totalWeight kg\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'issue_to_cutter_machine_created',
+      enabled: true,
+      template: '*Cutter Issue Notification*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧩 *Pieces:* @count\n' +
+        '🏗️ *Machine:* @machineName\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '✂️ *Cut:* @cutName\n' +
+        '⚖️ *Weight:* @totalWeight kg\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'receive_from_cutter_machine_created',
+      enabled: true,
+      template: '*Cutter Receive Confirmation*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '⚖️ *Net Weight:* *@netWeight kg*\n' +
+        '🧶 *Bobbins:* @bobbinQuantity\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '🎫 *Challan:* @challanNo\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'issue_to_holo_machine_created',
+      enabled: true,
+      template: '*Holo Issue Notification*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧶 *Bobbins:* @metallicBobbins\n' +
+        '⚖️ *Bobbin Wt:* @metallicBobbinsWeight kg\n' +
+        '🧵 *Yarn:* @yarnKg kg\n' +
+        '🏗️ *Machine:* @machineName\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '🌀 *Twist:* @twistName\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'receive_from_holo_machine_created',
+      enabled: true,
+      template: '*Holo Receive Confirmation*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '⚖️ *Net Weight:* *@netWeight kg*\n' +
+        '📜 *Rolls:* @rollCount\n' +
+        '🏗️ *Machine:* @machineName\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '🏷️ *Barcode:* @barcode\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'issue_to_coning_machine_created',
+      enabled: true,
+      template: '*Coning Issue Notification*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '📜 *Rolls:* @rollsIssued\n' +
+        '🎯 *Target Cone:* @requiredPerConeNetWeight g\n' +
+        '🏗️ *Machine:* @machineName\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'receive_from_coning_machine_created',
+      enabled: true,
+      template: '*Coning Receive Confirmation*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '⚖️ *Net Weight:* *@netWeight kg*\n' +
+        '🍦 *Cones:* @coneCount\n' +
+        '🏗️ *Machine:* @machineName\n' +
+        '👤 *Operator:* @operatorName\n' +
+        '🏷️ *Barcode:* @barcode\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'piece_wastage_marked_cutter',
+      enabled: true,
+      template: '*Cutter Wastage Marked*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Piece:* @pieceId\n' +
+        '🗑️ *Wastage:* *@wastage kg*\n' +
+        '📉 *Percent:* @wastagePercent%'
+    },
+    {
+      event: 'piece_wastage_marked_holo',
+      enabled: true,
+      template: '*Holo Wastage Marked*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Piece:* @pieceId\n' +
+        '🗑️ *Wastage:* *@wastage kg*\n' +
+        '📉 *Percent:* @wastagePercent%'
+    },
+    {
+      event: 'piece_wastage_marked_coning',
+      enabled: true,
+      template: '*Coning Wastage Marked*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Piece:* @pieceId\n' +
+        '🗑️ *Wastage:* *@wastage kg*\n' +
+        '📉 *Percent:* @wastagePercent%'
+    },
+    {
+      event: 'issue_to_cutter_machine_deleted',
+      enabled: true,
+      template: '*Cutter Issue Deleted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧩 *Pieces:* @count\n' +
+        '⚖️ *Weight:* @totalWeight kg\n' +
+        '🏗️ *Machine:* @machineName'
+    },
+    {
+      event: 'issue_to_holo_machine_deleted',
+      enabled: true,
+      template: '*Holo Issue Deleted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧶 *Bobbins:* @metallicBobbins\n' +
+        '⚖️ *Weight:* @metallicBobbinsWeight kg\n' +
+        '🏗️ *Machine:* @machineName'
+    },
+    {
+      event: 'issue_to_coning_machine_deleted',
+      enabled: true,
+      template: '*Coning Issue Deleted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '📜 *Rolls:* @rollsIssued\n' +
+        '🏗️ *Machine:* @machineName'
+    },
+    {
+      event: 'lot_deleted',
+      enabled: true,
+      template: '*Lot Deleted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🧩 *Total Pieces:* @totalPieces\n' +
+        '📅 *Date:* @date'
+    },
+    {
+      event: 'item_out_of_stock',
+      enabled: true,
+      template: '🚨 *Stock Alert*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '⚠️ *Status:* OUT OF STOCK\n' +
+        '⚖️ *Available:* @available kg'
+    },
+    {
+      event: 'backup_failed',
+      enabled: true,
+      template: '❌ *Backup Failed*\n\n' +
+        '🖥️ *Host:* @host\n' +
+        '🕒 *Time:* @time\n' +
+        '📝 *Error:* @error\n' +
+        '📂 *File:* @filename'
+    },
   ];
 
   for (const t of defaults) {

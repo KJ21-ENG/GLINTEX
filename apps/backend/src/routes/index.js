@@ -7564,14 +7564,12 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
         // refs is array of objects with rowId property
         const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
-        console.log('traceFromConingIssue: issue.id=', issue.id, 'refIds=', refIds);
 
         if (refIds.length > 0) {
           const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
             where: { id: { in: refIds } },
             include: { operator: true, rollType: true, box: true },
           });
-          console.log('traceFromConingIssue: found holoReceives=', holoReceives.length);
 
           if (holoReceives.length > 0) {
             // Trace from first holo receive
@@ -7616,14 +7614,12 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
         // refs is array of objects with rowId property
         const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
-        console.log('traceFromHoloIssue: issue.id=', issue.id, 'refIds=', refIds);
 
         if (refIds.length > 0) {
           const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
             where: { id: { in: refIds }, isDeleted: false },
             include: { bobbin: true, operator: true, challan: true },
           });
-          console.log('traceFromHoloIssue: found cutterReceives=', cutterReceives.length);
 
           if (cutterReceives.length > 0) {
             // Trace from first cutter receive
@@ -7729,7 +7725,7 @@ router.get('/api/reports/production', async (req, res) => {
       });
       const totalCutterIssued = cutterIssues.reduce((sum, i) => sum + (i.totalWeight || 0), 0);
 
-      // Get cutter receive data
+      // Get cutter receive data - aggregate from actual rows with date filter (not lifetime PieceTotal)
       const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
         where: {
           isDeleted: false,
@@ -7738,9 +7734,10 @@ router.get('/api/reports/production', async (req, res) => {
         include: { operator: true },
       });
 
-      const cutterPieceTotals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
-      const totalCutterReceived = cutterPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
-      const totalCutterWastage = cutterPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+      // Calculate totals from date-filtered receive rows
+      const totalCutterReceived = cutterReceives.reduce((sum, r) => sum + (r.netWt || 0), 0);
+      // Wastage is calculated as difference between issued and received for the period
+      const totalCutterWastage = Math.max(0, totalCutterIssued - totalCutterReceived);
 
       if (!process || process === 'all' || process === 'cutter') {
         report.summary.totalIssued += totalCutterIssued;
@@ -7799,7 +7796,7 @@ router.get('/api/reports/production', async (req, res) => {
       // Holo issued weight = metallicBobbinsWeight + yarnKg
       const totalHoloIssued = holoIssues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0) + (i.yarnKg || 0), 0);
 
-      // Get holo receive data
+      // Get holo receive data - aggregate from actual rows with date filter
       const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
         where: {
           date: { gte: fromDate, lte: toDate },
@@ -7807,9 +7804,14 @@ router.get('/api/reports/production', async (req, res) => {
         include: { operator: true, issue: { include: { machine: true } } },
       });
 
-      const holoPieceTotals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
-      const totalHoloReceived = holoPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
-      const totalHoloWastage = holoPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+      // Calculate totals from date-filtered receive rows
+      // rollWeight is the total net weight for holo receives
+      const totalHoloReceived = holoReceives.reduce((sum, r) => {
+        const netWt = r.rollWeight || ((r.grossWeight || 0) - (r.tareWeight || 0));
+        return sum + netWt;
+      }, 0);
+      // Wastage is calculated as difference between issued and received for the period
+      const totalHoloWastage = Math.max(0, totalHoloIssued - totalHoloReceived);
 
       if (!process || process === 'all' || process === 'holo') {
         report.summary.totalIssued += totalHoloIssued;
@@ -7890,7 +7892,7 @@ router.get('/api/reports/production', async (req, res) => {
         }
       }
 
-      // Get coning receive data
+      // Get coning receive data - aggregate from actual rows with date filter
       const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
         where: {
           date: { gte: fromDate, lte: toDate },
@@ -7898,9 +7900,10 @@ router.get('/api/reports/production', async (req, res) => {
         include: { operator: true, issue: { include: { machine: true } } },
       });
 
-      const coningPieceTotals = await prisma.receiveFromConingMachinePieceTotal.findMany();
-      const totalConingReceived = coningPieceTotals.reduce((sum, t) => sum + (t.totalNetWeight || 0), 0);
-      const totalConingWastage = coningPieceTotals.reduce((sum, t) => sum + (t.wastageNetWeight || 0), 0);
+      // Calculate totals from date-filtered receive rows
+      const totalConingReceived = coningReceives.reduce((sum, r) => sum + (r.netWeight || 0), 0);
+      // Wastage is calculated as difference between issued and received for the period
+      const totalConingWastage = Math.max(0, totalConingIssued - totalConingReceived);
 
       if (!process || process === 'all' || process === 'coning') {
         report.summary.totalIssued += totalConingIssued;

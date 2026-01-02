@@ -1954,10 +1954,10 @@ function parseUploadBuffer(buffer, type) {
     return records;
   } else {
     // Treat as Excel/Binary
-    workbook = XLSX.read(buffer, { type: 'buffer' });
+    workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    return XLSX.utils.sheet_to_json(sheet);
+    return XLSX.utils.sheet_to_json(sheet, { raw: false, dateNF: 'yyyy-mm-dd' });
   }
 }
 

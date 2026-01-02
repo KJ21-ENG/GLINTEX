@@ -87,5 +87,8 @@ desktop.ini
 # Ignore project brand images (optional)
 /public/brand-logo.jpg
 
-#gemini
+# gemini
+
 .gemini-clipboard/
+
+

@@ -19,7 +19,8 @@
     "googleapis": "^133.0.0",
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.4",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",

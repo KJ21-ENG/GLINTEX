@@ -37,6 +37,7 @@ model Cut {
   updatedByUserId String?
   receiveRows  ReceiveFromCutterMachineRow[]
   cutterIssues IssueToCutterMachine[]
+  holoIssues   IssueToHoloMachine[]
 }
 
 model Twist {
@@ -158,6 +159,7 @@ model IssueToHoloMachine {
   twistId             String?
   machineId           String?
   operatorId          String?
+  cutId               String?
   barcode             String   @unique
   note                String?
   shift               String?
@@ -174,6 +176,7 @@ model IssueToHoloMachine {
   operator            Operator? @relation("IssueToHoloOperator", fields: [operatorId], references: [id])
   yarn                Yarn?      @relation(fields: [yarnId], references: [id])
   twist               Twist?     @relation(fields: [twistId], references: [id])
+  cut                 Cut?       @relation(fields: [cutId], references: [id])
   receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
 }
 

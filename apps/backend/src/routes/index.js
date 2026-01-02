@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
@@ -16,7 +17,7 @@ import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
 
 const router = Router();
-const RECEIVE_ROWS_FETCH_LIMIT = 500;
+const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
 
 let bootstrapToken = null;
@@ -989,7 +990,7 @@ router.get('/api/db', async (req, res) => {
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true } },
+      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true, cutId: true, cut: { select: { name: true } } } },
       rollType: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
     },
@@ -1938,6 +1939,778 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
     res.status(400).json({ error: err.message || 'Failed to create opening coning stock' });
   }
 });
+
+// Helper to parse uploaded buffer (CSV or Excel)
+function parseUploadBuffer(buffer, type) {
+  let workbook;
+  if (type === 'csv' || type === 'text/csv') {
+    // Treat as CSV text
+    const text = buffer.toString('utf-8');
+    const records = parse(text, {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+    });
+    return records;
+  } else {
+    // Treat as Excel/Binary
+    workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    return XLSX.utils.sheet_to_json(sheet, { raw: false, dateNF: 'yyyy-mm-dd' });
+  }
+}
+
+// Download Template Endpoint - accepts optional ?stage= query param
+router.get('/api/opening_stock/template', async (req, res) => {
+  try {
+    const { stage } = req.query;
+    const wb = XLSX.utils.book_new();
+
+    // Helper to add sheet
+    const addSheet = (name, headers) => {
+      const ws = XLSX.utils.aoa_to_sheet([headers]);
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+
+    // Stage-specific or all templates
+    const commonHeaders = ["Date", "Item Name", "Supplier Name", "Firm Name (Optional)"];
+
+    if (!stage || stage === 'inbound') {
+      addSheet("Inbound", [...commonHeaders, "Weight (kg)", "Is Consumed", "Consumption Date"]);
+    }
+    if (!stage || stage === 'cutter') {
+      addSheet("Cutter", [...commonHeaders, "Cut Name", "Machine Name", "Operator Name", "Helper Name", "Shift", "Bobbin Name", "Quantity", "Box Name", "Gross Weight (kg)"]);
+    }
+    if (!stage || stage === 'holo') {
+      addSheet("Holo", [...commonHeaders, "Cutter (Cut Name)", "Twist Name", "Yarn Name", "Machine Name", "Operator Name", "Shift", "Roll Type Name", "Roll Count", "Net Weight (kg)", "Notes"]);
+    }
+    if (!stage || stage === 'coning') {
+      addSheet("Coning", [...commonHeaders, "Machine Name", "Operator Name", "Shift", "Wrapper Name", "Cone Type Name", "Cone Count", "Gross Weight (kg)", "Box Name", "Notes"]);
+    }
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = stage ? `Opening_Stock_${stage.charAt(0).toUpperCase() + stage.slice(1)}_Template.xlsx` : "Opening_Stock_Templates.xlsx";
+
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Failed to download template', err);
+    res.status(500).json({ error: 'Failed to generate template' });
+  }
+});
+
+// ===== Opening Stock Bulk Upload =====
+
+// Preview endpoint - shows what lots will be created without actually creating them
+router.post('/api/opening_stock/preview/:stage', async (req, res) => {
+  try {
+    const { stage } = req.params;
+    const { fileContent, fileType, date: uiDate, itemId: uiItemId, firmId: uiFirmId, supplierId: uiSupplierId } = req.body;
+
+    if (!fileContent) return res.status(400).json({ error: 'Missing file content' });
+
+    // Decode and parse file
+    const base64Data = fileContent.replace(/^data:.*,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    const rows = parseUploadBuffer(buffer, fileType);
+    if (!rows || rows.length === 0) return res.status(400).json({ error: 'File is empty' });
+
+    // Collect unique names - including stage-specific fields
+    const uniqueItemNames = new Set();
+    const uniqueSupplierNames = new Set();
+    const uniqueTwistNames = new Set();
+    const uniqueYarnNames = new Set();
+    const uniqueCutNames = new Set();
+    rows.forEach(row => {
+      if (row['Item Name']) uniqueItemNames.add(String(row['Item Name']).trim());
+      if (row['Supplier Name']) uniqueSupplierNames.add(String(row['Supplier Name']).trim());
+      if (row['Twist Name']) uniqueTwistNames.add(String(row['Twist Name']).trim());
+      if (row['Yarn Name']) uniqueYarnNames.add(String(row['Yarn Name']).trim());
+      if (row['Cutter (Cut Name)']) uniqueCutNames.add(String(row['Cutter (Cut Name)']).trim());
+    });
+
+    // Fetch masters
+    const [items, suppliers, twists, yarns, cuts] = await Promise.all([
+      uniqueItemNames.size > 0 ? prisma.item.findMany({ where: { name: { in: Array.from(uniqueItemNames), mode: 'insensitive' } } }) : [],
+      uniqueSupplierNames.size > 0 ? prisma.supplier.findMany({ where: { name: { in: Array.from(uniqueSupplierNames), mode: 'insensitive' } } }) : [],
+      uniqueTwistNames.size > 0 ? prisma.twist.findMany({ where: { name: { in: Array.from(uniqueTwistNames), mode: 'insensitive' } } }) : [],
+      uniqueYarnNames.size > 0 ? prisma.yarn.findMany({ where: { name: { in: Array.from(uniqueYarnNames), mode: 'insensitive' } } }) : [],
+      uniqueCutNames.size > 0 ? prisma.cut.findMany({ where: { name: { in: Array.from(uniqueCutNames), mode: 'insensitive' } } }) : [],
+    ]);
+
+    const itemMap = new Map(items.map(x => [x.name.toLowerCase(), x]));
+    const supplierMap = new Map(suppliers.map(x => [x.name.toLowerCase(), x]));
+    const twistMap = new Map(twists.map(x => [x.name.toLowerCase(), x]));
+    const yarnMap = new Map(yarns.map(x => [x.name.toLowerCase(), x]));
+    const cutMap = new Map(cuts.map(x => [x.name.toLowerCase(), x]));
+
+    // Get item/supplier from UI if provided
+    let uiItemName = null;
+    let uiSupplierName = null;
+    if (uiItemId) {
+      const itm = await prisma.item.findUnique({ where: { id: uiItemId } });
+      if (itm) uiItemName = itm.name;
+    }
+    if (uiSupplierId) {
+      const sup = await prisma.supplier.findUnique({ where: { id: uiSupplierId } });
+      if (sup) uiSupplierName = sup.name;
+    }
+
+    // Group rows by Item + Supplier, also collect master validation errors
+    const groups = new Map();
+    const errors = [];
+    const warnings = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowIdx = i + 1;
+
+      let itemName = uiItemName;
+      let supplierName = uiSupplierName;
+
+      if (row['Item Name']) {
+        const name = String(row['Item Name']).trim();
+        const itm = itemMap.get(name.toLowerCase());
+        if (!itm) {
+          errors.push(`Row ${rowIdx}: Item '${name}' not found`);
+          continue;
+        }
+        itemName = itm.name;
+      }
+      if (!itemName) {
+        errors.push(`Row ${rowIdx}: Item Name is required`);
+        continue;
+      }
+
+      if (row['Supplier Name']) {
+        const name = String(row['Supplier Name']).trim();
+        const sup = supplierMap.get(name.toLowerCase());
+        if (!sup) {
+          errors.push(`Row ${rowIdx}: Supplier '${name}' not found`);
+          continue;
+        }
+        supplierName = sup.name;
+      }
+      if (!supplierName) {
+        errors.push(`Row ${rowIdx}: Supplier Name is required`);
+        continue;
+      }
+
+      // Validate Twist (for Holo)
+      if (row['Twist Name']) {
+        const name = String(row['Twist Name']).trim();
+        if (!twistMap.get(name.toLowerCase())) {
+          warnings.push(`Row ${rowIdx}: Twist '${name}' not found in masters`);
+        }
+      }
+
+      // Validate Yarn (for Holo)
+      if (row['Yarn Name']) {
+        const name = String(row['Yarn Name']).trim();
+        if (!yarnMap.get(name.toLowerCase())) {
+          warnings.push(`Row ${rowIdx}: Yarn '${name}' not found in masters`);
+        }
+      }
+
+      // Validate Cut (for Holo)
+      if (row['Cutter (Cut Name)']) {
+        const name = String(row['Cutter (Cut Name)']).trim();
+        if (!cutMap.get(name.toLowerCase())) {
+          warnings.push(`Row ${rowIdx}: Cut '${name}' not found in masters`);
+        }
+      }
+
+      const groupKey = `${itemName}::${supplierName}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { itemName, supplierName, rowCount: 0 });
+      }
+      groups.get(groupKey).rowCount++;
+    }
+
+    // Get next lot number preview
+    const seq = await prisma.sequence.findUnique({ where: { id: OPENING_LOT_SEQUENCE_ID } });
+    const nextValue = (seq ? seq.nextValue : 0) + 1;
+    const lotsCount = groups.size;
+
+    // Build preview response
+    const groupList = Array.from(groups.values());
+    const lotAssignments = groupList.map((g, idx) => ({
+      lotNo: formatOpeningLotNo(nextValue + idx),
+      itemName: g.itemName,
+      supplierName: g.supplierName,
+      rowCount: g.rowCount
+    }));
+
+    res.json({
+      totalRows: rows.length,
+      lotsToCreate: lotsCount,
+      lotAssignments,
+      errors: errors.length > 0 ? errors.slice(0, 10) : [],
+      hasMoreErrors: errors.length > 10,
+      warnings: warnings.length > 0 ? warnings.slice(0, 10) : [],
+      hasMoreWarnings: warnings.length > 10
+    });
+  } catch (err) {
+    console.error('Preview failed', err);
+    res.status(400).json({ error: err.message || 'Preview failed' });
+  }
+});
+
+router.post('/api/opening_stock/upload/:stage', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { stage } = req.params;
+    const { fileContent, fileType, date: uiDate, itemId: uiItemId, firmId: uiFirmId, supplierId: uiSupplierId, ...extraParams } = req.body;
+
+    if (!fileContent) return res.status(400).json({ error: 'Missing file content' });
+
+    // Decode base64 - frontend uses readAsDataURL which always encodes as base64
+    const base64Data = fileContent.replace(/^data:.*,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    const rows = parseUploadBuffer(buffer, fileType);
+    if (!rows || rows.length === 0) return res.status(400).json({ error: 'File is empty' });
+
+    // Collect all unique names from the file for bulk fetching
+    const uniqueItemNames = new Set();
+    const uniqueSupplierNames = new Set();
+    const uniqueFirmNames = new Set();
+    const uniqueTwistNames = new Set();
+    const uniqueYarnNames = new Set();
+    const uniqueMachineNames = new Set();
+    const uniqueOperatorNames = new Set();
+    const uniqueWrapperNames = new Set();
+    const uniqueCutNames = new Set();
+
+    rows.forEach(row => {
+      if (row['Item Name']) uniqueItemNames.add(String(row['Item Name']).trim());
+      if (row['Supplier Name']) uniqueSupplierNames.add(String(row['Supplier Name']).trim());
+      if (row['Firm Name (Optional)']) uniqueFirmNames.add(String(row['Firm Name (Optional)']).trim());
+      if (row['Twist Name']) uniqueTwistNames.add(String(row['Twist Name']).trim());
+      if (row['Yarn Name']) uniqueYarnNames.add(String(row['Yarn Name']).trim());
+      if (row['Machine Name']) uniqueMachineNames.add(String(row['Machine Name']).trim());
+      if (row['Operator Name']) uniqueOperatorNames.add(String(row['Operator Name']).trim());
+      if (row['Wrapper Name']) uniqueWrapperNames.add(String(row['Wrapper Name']).trim());
+      if (row['Cutter (Cut Name)']) uniqueCutNames.add(String(row['Cutter (Cut Name)']).trim());
+    });
+
+    // Prefetch all masters in bulk for performance
+    const [items, suppliers, firms, twists, yarns, machines, operators, wrappers, cuts] = await Promise.all([
+      uniqueItemNames.size > 0 ? prisma.item.findMany({ where: { name: { in: Array.from(uniqueItemNames), mode: 'insensitive' } } }) : [],
+      uniqueSupplierNames.size > 0 ? prisma.supplier.findMany({ where: { name: { in: Array.from(uniqueSupplierNames), mode: 'insensitive' } } }) : [],
+      uniqueFirmNames.size > 0 ? prisma.firm.findMany({ where: { name: { in: Array.from(uniqueFirmNames), mode: 'insensitive' } } }) : [],
+      uniqueTwistNames.size > 0 ? prisma.twist.findMany({ where: { name: { in: Array.from(uniqueTwistNames), mode: 'insensitive' } } }) : [],
+      uniqueYarnNames.size > 0 ? prisma.yarn.findMany({ where: { name: { in: Array.from(uniqueYarnNames), mode: 'insensitive' } } }) : [],
+      uniqueMachineNames.size > 0 ? prisma.machine.findMany({ where: { name: { in: Array.from(uniqueMachineNames), mode: 'insensitive' } } }) : [],
+      uniqueOperatorNames.size > 0 ? prisma.operator.findMany({ where: { name: { in: Array.from(uniqueOperatorNames), mode: 'insensitive' } } }) : [],
+      uniqueWrapperNames.size > 0 ? prisma.wrapper.findMany({ where: { name: { in: Array.from(uniqueWrapperNames), mode: 'insensitive' } } }) : [],
+      uniqueCutNames.size > 0 ? prisma.cut.findMany({ where: { name: { in: Array.from(uniqueCutNames), mode: 'insensitive' } } }) : [],
+    ]);
+
+    // Create lookup maps (case-insensitive)
+    const itemMap = new Map(items.map(x => [x.name.toLowerCase(), x]));
+    const supplierMap = new Map(suppliers.map(x => [x.name.toLowerCase(), x]));
+    const firmMap = new Map(firms.map(x => [x.name.toLowerCase(), x]));
+    const twistMap = new Map(twists.map(x => [x.name.toLowerCase(), x]));
+    const yarnMap = new Map(yarns.map(x => [x.name.toLowerCase(), x]));
+    const machineMap = new Map(machines.map(x => [x.name.toLowerCase(), x]));
+    const operatorMap = new Map(operators.map(x => [x.name.toLowerCase(), x]));
+    const wrapperMap = new Map(wrappers.map(x => [x.name.toLowerCase(), x]));
+    const cutMap = new Map(cuts.map(x => [x.name.toLowerCase(), x]));
+
+    // Group rows by (Item + Supplier) combination - each group becomes one Lot
+    const groupedRows = new Map();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowIdx = i + 1;
+
+      // Resolve Item
+      let rowItemId = uiItemId;
+      if (row['Item Name']) {
+        const itm = itemMap.get(String(row['Item Name']).trim().toLowerCase());
+        if (!itm) throw new Error(`Row ${rowIdx}: Item '${row['Item Name']}' not found in masters`);
+        rowItemId = itm.id;
+      }
+      if (!rowItemId) throw new Error(`Row ${rowIdx}: Item Name is required`);
+
+      // Resolve Supplier
+      let rowSupplierId = uiSupplierId;
+      if (row['Supplier Name']) {
+        const sup = supplierMap.get(String(row['Supplier Name']).trim().toLowerCase());
+        if (!sup) throw new Error(`Row ${rowIdx}: Supplier '${row['Supplier Name']}' not found in masters`);
+        rowSupplierId = sup.id;
+      }
+      if (!rowSupplierId) throw new Error(`Row ${rowIdx}: Supplier Name is required`);
+
+      // Resolve Firm (optional)
+      let rowFirmId = uiFirmId;
+      if (row['Firm Name (Optional)']) {
+        const frm = firmMap.get(String(row['Firm Name (Optional)']).trim().toLowerCase());
+        if (frm) rowFirmId = frm.id;
+      }
+
+      // Resolve Date
+      let rowDate = uiDate;
+      if (row['Date']) rowDate = String(row['Date']);
+      if (!rowDate) throw new Error(`Row ${rowIdx}: Date is required`);
+
+      // Group key = itemId + supplierId
+      const groupKey = `${rowItemId}::${rowSupplierId}`;
+      if (!groupedRows.has(groupKey)) {
+        groupedRows.set(groupKey, { itemId: rowItemId, supplierId: rowSupplierId, firmId: rowFirmId, date: rowDate, rows: [] });
+      }
+      groupedRows.get(groupKey).rows.push(row);
+    }
+
+    // Process each group as a separate Lot
+    const results = [];
+    for (const [groupKey, group] of groupedRows.entries()) {
+      const { itemId, supplierId, firmId, date, rows: groupRows } = group;
+      const common = { date, itemId, firmId, supplierId, actorUserId };
+
+      // Resolve process-specific fields from first row of each group
+      const firstRow = groupRows[0];
+      const twistId = extraParams.twistId || (firstRow['Twist Name'] ? twistMap.get(String(firstRow['Twist Name']).trim().toLowerCase())?.id : null);
+      const yarnId = extraParams.yarnId || (firstRow['Yarn Name'] ? yarnMap.get(String(firstRow['Yarn Name']).trim().toLowerCase())?.id : null);
+      const machineId = extraParams.machineId || (firstRow['Machine Name'] ? machineMap.get(String(firstRow['Machine Name']).trim().toLowerCase())?.id : null);
+      const operatorId = extraParams.operatorId || (firstRow['Operator Name'] ? operatorMap.get(String(firstRow['Operator Name']).trim().toLowerCase())?.id : null);
+      const shift = extraParams.shift || (firstRow['Shift'] ? String(firstRow['Shift']) : null);
+      const wrapperId = extraParams.wrapperId || (firstRow['Wrapper Name'] ? wrapperMap.get(String(firstRow['Wrapper Name']).trim().toLowerCase())?.id : null);
+      const cutId = extraParams.cutId || (firstRow['Cutter (Cut Name)'] ? cutMap.get(String(firstRow['Cutter (Cut Name)']).trim().toLowerCase())?.id : null);
+
+      let result;
+      if (stage === 'inbound') {
+        result = await processOpeningInboundUpload(groupRows, common);
+      } else if (stage === 'cutter') {
+        result = await processOpeningCutterUpload(groupRows, common);
+      } else if (stage === 'holo') {
+        result = await processOpeningHoloUpload(groupRows, { ...common, twistId, yarnId, machineId, operatorId, shift, cutId });
+      } else if (stage === 'coning') {
+        result = await processOpeningConingUpload(groupRows, { ...common, machineId, operatorId, shift, wrapperId, coneTypeId: extraParams.coneTypeId });
+      } else {
+        throw new Error('Invalid stage');
+      }
+      results.push(result);
+    }
+
+    // Return summary of all lots created
+    const lotNos = results.map(r => r.lotNo);
+    const totalCount = results.reduce((sum, r) => sum + r.count, 0);
+    res.json({ lotNos, lotsCreated: results.length, totalCount, details: results });
+  } catch (err) {
+    console.error(`Failed to upload opening stock for ${req.params.stage}`, err);
+    res.status(400).json({ error: err.message || 'Upload failed' });
+  }
+});
+
+// Helper functions for processing uploads
+async function processOpeningInboundUpload(rows, { date, itemId, firmId, supplierId, actorUserId }) {
+  const pieces = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const weight = toNumber(row['Weight (kg)'] || row['weight']);
+    if (!weight || weight <= 0) throw new Error(`Row ${i + 1}: Invalid weight`);
+    const isConsumed = String(row['Is Consumed'] || row['isConsumed']).toLowerCase();
+    const consumed = ['yes', 'y', 'true', '1'].includes(isConsumed);
+    const consumptionDate = row['Consumption Date'] || row['consumptionDate'] || null;
+    pieces.push({ weight, isConsumed: consumed, consumptionDate });
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const lotNo = await allocateOpeningLot(tx, actorUserId);
+    const totalWeight = pieces.reduce((sum, p) => sum + p.weight, 0);
+
+    const lot = await tx.lot.create({
+      data: {
+        lotNo, date, itemId, firmId: firmId || null, supplierId,
+        totalPieces: pieces.length, totalWeight: roundTo3Decimals(totalWeight),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    const inboundItems = [];
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i];
+      const seq = i + 1;
+      const pieceId = `${lotNo}-${seq}`;
+      const barcode = makeInboundBarcode({ lotNo, seq });
+
+      inboundItems.push({
+        id: pieceId, lotNo, itemId, weight: roundTo3Decimals(piece.weight),
+        status: piece.isConsumed ? 'consumed' : 'available',
+        consumptionDate: piece.consumptionDate,
+        seq, barcode, isOpeningStock: true,
+        ...actorCreateFields(actorUserId),
+      });
+    }
+    await tx.inboundItem.createMany({ data: inboundItems });
+    return { lotNo, count: pieces.length };
+  });
+}
+
+async function processOpeningCutterUpload(rows, { date, itemId, firmId, supplierId, actorUserId }) {
+  const uniqueNames = {
+    bobbins: new Set(), boxes: new Set(), cuts: new Set(),
+    operators: new Set(), helpers: new Set(), machines: new Set()
+  };
+
+  rows.forEach(r => {
+    if (r['Bobbin Name']) uniqueNames.bobbins.add(r['Bobbin Name']);
+    if (r['Box Name']) uniqueNames.boxes.add(r['Box Name']);
+    if (r['Cut Name']) uniqueNames.cuts.add(r['Cut Name']);
+    if (r['Operator Name']) uniqueNames.operators.add(r['Operator Name']);
+    if (r['Helper Name']) uniqueNames.helpers.add(r['Helper Name']);
+    if (r['Machine Name']) uniqueNames.machines.add(r['Machine Name']);
+  });
+
+  const [bobbins, boxes, cuts, operators, machines] = await Promise.all([
+    prisma.bobbin.findMany({ where: { name: { in: Array.from(uniqueNames.bobbins) } } }),
+    prisma.box.findMany({ where: { name: { in: Array.from(uniqueNames.boxes) }, processType: { in: ['cutter', 'all'] } } }),
+    prisma.cut.findMany({ where: { name: { in: Array.from(uniqueNames.cuts) } } }),
+    prisma.operator.findMany({ where: { name: { in: [...uniqueNames.operators, ...uniqueNames.helpers] }, processType: { in: ['cutter', 'all'] } } }),
+    prisma.machine.findMany({ where: { name: { in: Array.from(uniqueNames.machines) }, processType: { in: ['cutter', 'all'] } } }),
+  ]);
+
+  const mapByName = (arr) => new Map(arr.map(x => [x.name.toLowerCase(), x]));
+  const bobbinMap = mapByName(bobbins);
+  const boxMap = mapByName(boxes);
+  const cutMap = mapByName(cuts);
+  const operatorMap = mapByName(operators);
+  const machineMap = mapByName(machines);
+
+  const crates = [];
+  let totalNetWeight = 0;
+  let totalBobbins = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const idx = i + 1;
+    const bobbinName = String(row['Bobbin Name'] || '').trim();
+    const boxName = String(row['Box Name'] || '').trim();
+    const cutName = String(row['Cut Name'] || '').trim();
+    const qty = toInt(row['Quantity']);
+    const gross = toNumber(row['Gross Weight (kg)']);
+
+    if (!bobbinName) throw new Error(`Row ${idx}: Missing Bobbin Name`);
+    if (!boxName) throw new Error(`Row ${idx}: Missing Box Name`);
+    if (!cutName) throw new Error(`Row ${idx}: Missing Cut Name`);
+    if (qty <= 0) throw new Error(`Row ${idx}: Invalid Quantity`);
+    if (gross <= 0) throw new Error(`Row ${idx}: Invalid Gross Weight`);
+
+    const bobbin = bobbinMap.get(bobbinName.toLowerCase());
+    if (!bobbin) throw new Error(`Row ${idx}: Bobbin '${bobbinName}' not found`);
+    const box = boxMap.get(boxName.toLowerCase());
+    if (!box) throw new Error(`Row ${idx}: Box '${boxName}' not found (or not allowed for Cutter)`);
+    const cut = cutMap.get(cutName.toLowerCase());
+    if (!cut) throw new Error(`Row ${idx}: Cut '${cutName}' not found`);
+
+    const opName = String(row['Operator Name'] || '').trim();
+    const operator = opName ? operatorMap.get(opName.toLowerCase()) : null;
+    if (opName && !operator) throw new Error(`Row ${idx}: Operator '${opName}' not found`);
+
+    const helpName = String(row['Helper Name'] || '').trim();
+    const helper = helpName ? operatorMap.get(helpName.toLowerCase()) : null;
+    if (helpName && !helper) throw new Error(`Row ${idx}: Helper '${helpName}' not found`);
+
+    const machName = String(row['Machine Name'] || '').trim();
+    const machine = machName ? machineMap.get(machName.toLowerCase()) : null;
+    if (machName && !machine) throw new Error(`Row ${idx}: Machine '${machName}' not found`);
+
+    const bobbinWt = Number(bobbin.weight || 0);
+    const boxWt = Number(box.weight || 0);
+    const tare = (bobbinWt * qty) + boxWt;
+    const net = roundTo3Decimals(gross - tare);
+
+    if (net <= 0) throw new Error(`Row ${idx}: Net weight <= 0`);
+
+    crates.push({
+      bobbinId: bobbin.id, boxId: box.id, cutId: cut.id,
+      bobbinQuantity: qty, grossWeight: gross, tareWeight: tare, netWeight: net,
+      operatorId: operator?.id, helperId: helper?.id, machineNo: machine?.name, machineId: machine?.id,
+      shift: row['Shift'] || null
+    });
+    totalNetWeight += net;
+    totalBobbins += qty;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const lotNo = await allocateOpeningLot(tx, actorUserId);
+    const pieceId = `${lotNo}-1`;
+
+    await tx.lot.create({
+      data: {
+        lotNo, date, itemId, firmId: firmId || null, supplierId,
+        totalPieces: 1, totalWeight: roundTo3Decimals(totalNetWeight),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    await tx.inboundItem.create({
+      data: {
+        id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
+        status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    const upload = await tx.receiveFromCutterMachineUpload.create({
+      data: { originalFilename: 'bulk-opening', rowCount: crates.length, ...actorCreateFields(actorUserId) }
+    });
+
+    let crateIndex = 0;
+    const createdRows = [];
+    for (const crate of crates) {
+      crateIndex++;
+      const barcode = makeReceiveBarcode({ lotNo, seq: 1, crateIndex });
+      const created = await tx.receiveFromCutterMachineRow.create({
+        data: {
+          uploadId: upload.id, pieceId, vchNo: `OPEN-BLK-${randomUUID().slice(0, 6)}`,
+          date, grossWt: crate.grossWeight, tareWt: crate.tareWeight, netWt: crate.netWeight, totalKg: crate.netWeight,
+          bobbinId: crate.bobbinId, boxId: crate.boxId, cutId: crate.cutId,
+          bobbinQuantity: crate.bobbinQuantity,
+          operatorId: crate.operatorId, helperId: crate.helperId, machineNo: crate.machineNo,
+          shift: crate.shift, narration: 'Opening stock bulk', createdBy: 'opening_bulk', barcode,
+          ...actorCreateFields(actorUserId),
+        }
+      });
+      createdRows.push({ id: created.id, barcode });
+    }
+
+    await tx.receiveFromCutterMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: { totalNetWeight: { increment: totalNetWeight }, totalBob: { increment: totalBobbins } },
+      create: { pieceId, totalNetWeight, totalBob: totalBobbins, wastageNetWeight: 0 }
+    });
+
+    return { lotNo, count: crates.length };
+  });
+}
+
+async function processOpeningHoloUpload(rows, { date, itemId, firmId, supplierId, twistId, yarnId, machineId, operatorId, shift, cutId, actorUserId }) {
+  const uniqueNames = { rollTypes: new Set() };
+  rows.forEach(r => {
+    if (r['Roll Type Name']) uniqueNames.rollTypes.add(r['Roll Type Name']);
+  });
+
+  const rollTypes = await prisma.rollType.findMany({ where: { name: { in: Array.from(uniqueNames.rollTypes) } } });
+  const rollTypeMap = new Map(rollTypes.map(x => [x.name.toLowerCase(), x]));
+
+  const crates = [];
+  let totalNetWeight = 0;
+  let totalRolls = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const idx = i + 1;
+    const rtName = String(row['Roll Type Name'] || '').trim();
+    const count = toInt(row['Roll Count']);
+    const net = toNumber(row['Net Weight (kg)'] || row['netWeight'] || row['Net Weight']);
+
+    if (!rtName) throw new Error(`Row ${idx}: Missing Roll Type Name`);
+    if (count <= 0) throw new Error(`Row ${idx}: Invalid Roll Count`);
+    if (net <= 0) throw new Error(`Row ${idx}: Invalid Net Weight`);
+
+    const rt = rollTypeMap.get(rtName.toLowerCase());
+    if (!rt) throw new Error(`Row ${idx}: Roll Type '${rtName}' not found`);
+
+    crates.push({
+      rollTypeId: rt.id,
+      rollCount: count,
+      netWeight: net,
+      notes: row['Notes']
+    });
+    totalNetWeight += net;
+    totalRolls += count;
+  }
+
+
+  return prisma.$transaction(async (tx) => {
+    const lotNo = await allocateOpeningLot(tx, actorUserId);
+    const pieceId = `${lotNo}-1`;
+
+    await tx.lot.create({
+      data: {
+        lotNo, date, itemId, firmId: firmId || null, supplierId,
+        totalPieces: 1, totalWeight: roundTo3Decimals(totalNetWeight),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    await tx.inboundItem.create({
+      data: {
+        id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
+        status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    await ensureHoloIssueSequence(tx, actorUserId);
+    const holoSeq = await tx.holoIssueSequence.upsert({
+      where: { id: 'holo_issue_seq' },
+      update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+      create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+    });
+    const seriesNumber = holoSeq.nextValue - 1;
+
+    const issue = await tx.issueToHoloMachine.create({
+      data: {
+        date, itemId, lotNo, yarnId: yarnId || null, twistId,
+        machineId: machineId || null, operatorId: operatorId || null,
+        cutId: cutId || null,
+        barcode: makeHoloIssueBarcode({ series: seriesNumber }),
+        note: 'Opening Stock Bulk', shift: shift || null,
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    let crateIndex = 0;
+    for (const crate of crates) {
+      crateIndex++;
+      await tx.receiveFromHoloMachineRow.create({
+        data: {
+          issueId: issue.id, date,
+          rollCount: crate.rollCount, rollWeight: crate.netWeight,
+          rollTypeId: crate.rollTypeId,
+          createdBy: 'opening_bulk', barcode: makeHoloReceiveBarcode({ series: seriesNumber, crateIndex }),
+          notes: crate.notes, ...actorCreateFields(actorUserId),
+        }
+      });
+    }
+
+    await tx.receiveFromHoloMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: { totalRolls: { increment: totalRolls }, totalNetWeight: { increment: totalNetWeight } },
+      create: { pieceId, totalRolls, totalNetWeight, wastageNetWeight: 0 }
+    });
+
+    return { lotNo, count: crates.length };
+  });
+}
+
+async function processOpeningConingUpload(rows, { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, actorUserId }) {
+  const uniqueNames = { coneTypes: new Set(), boxes: new Set() };
+  rows.forEach(r => {
+    if (r['Cone Type Name']) uniqueNames.coneTypes.add(r['Cone Type Name']);
+    if (r['Box Name']) uniqueNames.boxes.add(r['Box Name']);
+  });
+
+  const [coneTypes, boxes] = await Promise.all([
+    prisma.coneType.findMany({ where: { name: { in: Array.from(uniqueNames.coneTypes) } } }),
+    prisma.box.findMany({ where: { name: { in: Array.from(uniqueNames.boxes) }, processType: { in: ['coning', 'all'] } } }),
+  ]);
+
+  const mapByName = (arr) => new Map(arr.map(x => [x.name.toLowerCase(), x]));
+  const coneTypeMap = mapByName(coneTypes);
+  const boxMap = mapByName(boxes);
+
+  const crates = [];
+  let totalNetWeight = 0;
+  let totalCones = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const idx = i + 1;
+    const ctName = String(row['Cone Type Name'] || '').trim();
+    const count = toInt(row['Cone Count']);
+    const gross = toNumber(row['Gross Weight (kg)']);
+    const boxName = String(row['Box Name'] || '').trim();
+
+    // Cone Type Name is required for every row
+    if (!ctName) {
+      throw new Error(`Row ${idx}: Cone Type Name is required`);
+    }
+    const ct = coneTypeMap.get(ctName.toLowerCase());
+    if (!ct) throw new Error(`Row ${idx}: Cone Type '${ctName}' not found`);
+
+    const box = boxName ? boxMap.get(boxName.toLowerCase()) : null;
+    if (boxName && !box) throw new Error(`Row ${idx}: Box '${boxName}' not found`);
+
+    if (count <= 0) throw new Error(`Row ${idx}: Invalid Cone Count`);
+    if (gross <= 0) throw new Error(`Row ${idx}: Invalid Gross Weight`);
+
+    const ctWt = Number(ct.weight || 0);
+    const boxWt = box ? Number(box.weight || 0) : 0;
+    const tare = (ctWt * count) + boxWt;
+    const net = roundTo3Decimals(gross - tare);
+
+    if (net <= 0) throw new Error(`Row ${idx}: Net weight <= 0`);
+
+    crates.push({
+      coneTypeId: ct.id, boxId: box?.id,
+      coneCount: count, grossWeight: gross, tareWeight: tare, netWeight: net,
+      notes: row['Notes']
+    });
+    totalNetWeight += net;
+    totalCones += count;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const lotNo = await allocateOpeningLot(tx, actorUserId);
+    const pieceId = `${lotNo}-1`;
+
+    await tx.lot.create({
+      data: {
+        lotNo, date, itemId, firmId: firmId || null, supplierId,
+        totalPieces: 1, totalWeight: roundTo3Decimals(totalNetWeight),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    await tx.inboundItem.create({
+      data: {
+        id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
+        status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    await ensureConingIssueSequence(tx, actorUserId);
+    const coningSeq = await tx.coningIssueSequence.upsert({
+      where: { id: 'coning_issue_seq' },
+      update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+      create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+    });
+    const seriesNumber = coningSeq.nextValue - 1;
+
+    const primaryConeTypeId = crates[0]?.coneTypeId || coneTypeId;
+
+    const issue = await tx.issueToConingMachine.create({
+      data: {
+        date, itemId, lotNo,
+        machineId: machineId || null, operatorId: operatorId || null,
+        barcode: makeConingIssueBarcode({ series: seriesNumber }),
+        note: 'Opening Stock Bulk', shift: shift || null,
+        receivedRowRefs: [{ coneTypeId: primaryConeTypeId, wrapperId: wrapperId || null }],
+        ...actorCreateFields(actorUserId),
+      },
+    });
+
+    let crateIndex = 0;
+    for (const crate of crates) {
+      crateIndex++;
+      await tx.receiveFromConingMachineRow.create({
+        data: {
+          issueId: issue.id, date,
+          coneCount: crate.coneCount, coneWeight: crate.netWeight,
+          grossWeight: crate.grossWeight, tareWeight: crate.tareWeight, netWeight: crate.netWeight,
+          boxId: crate.boxId, barcode: makeConingReceiveBarcode({ series: seriesNumber, crateIndex }),
+          notes: crate.notes, ...actorCreateFields(actorUserId),
+        }
+      });
+    }
+
+    await tx.receiveFromConingMachinePieceTotal.upsert({
+      where: { pieceId: issue.id },
+      update: { totalCones: { increment: totalCones }, totalNetWeight: { increment: totalNetWeight } },
+      create: { pieceId: issue.id, totalCones, totalNetWeight, wastageNetWeight: 0 }
+    });
+
+    return { lotNo, count: crates.length };
+  });
+}
 
 // Whatsapp control endpoints
 router.get('/api/whatsapp/status', async (req, res) => {

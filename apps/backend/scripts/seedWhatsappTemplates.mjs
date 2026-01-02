@@ -1,6 +1,32 @@
 import prisma from '../src/lib/prisma.js';
 
 async function seed() {
+  // Migration: Rename old generic keys to new process-specific ones if they exist
+  const keyMigrations = [
+    { old: 'issue_to_machine_created', new: 'issue_to_cutter_machine_created' },
+    { old: 'receive_from_machine_created', new: 'receive_from_cutter_machine_created' },
+    { old: 'piece_wastage_marked', new: 'piece_wastage_marked_cutter' },
+    { old: 'issue_to_machine_deleted', new: 'issue_to_cutter_machine_deleted' },
+  ];
+
+  for (const m of keyMigrations) {
+    const existingOld = await prisma.whatsappTemplate.findUnique({ where: { event: m.old } });
+    if (existingOld) {
+      console.log(`Migrating old template key: ${m.old} -> ${m.new}`);
+      // If the new one doesn't exist, rename it. If it does, we just leave it (seed will update it anyway)
+      const existingNew = await prisma.whatsappTemplate.findUnique({ where: { event: m.new } });
+      if (!existingNew) {
+        await prisma.whatsappTemplate.update({
+          where: { event: m.old },
+          data: { event: m.new }
+        });
+      } else {
+        // If both exist, just delete the old one to cleanup
+        await prisma.whatsappTemplate.delete({ where: { event: m.old } });
+      }
+    }
+  }
+
   const defaults = [
     {
       event: 'inbound_created',

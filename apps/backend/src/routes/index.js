@@ -7144,7 +7144,9 @@ router.delete('/api/dispatch/:id', async (req, res) => {
 
 // ========== REPORTS ENDPOINTS ==========
 
-// Barcode History - trace full lifecycle of a barcode
+// Barcode History - FULL BIRTH CHART / LINEAGE TRACING
+// When any barcode is scanned, trace the complete production chain:
+// Inbound → Cutter Issue → Cutter Receive → Holo Issue → Holo Receive → Coning Issue → Coning Receive → Dispatch
 router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
@@ -7152,184 +7154,30 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     const history = {
       barcode: normalizedBarcode,
+      searchedStage: null,
       found: false,
-      stages: [],
+      lineage: [],  // Complete lineage from Inbound to Dispatch
     };
 
-    // 1. Check InboundItem
-    const inboundItem = await prisma.inboundItem.findFirst({
+    // Helper to format stage data
+    const formatStageData = (stage, data) => ({ stage, ...data });
+
+    // ============ STEP 1: IDENTIFY WHICH STAGE THE BARCODE BELONGS TO ============
+
+    // Check Coning Receive
+    const coningRecv = await prisma.receiveFromConingMachineRow.findFirst({
       where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { operator: true, box: true },
     });
 
-    if (inboundItem) {
+    if (coningRecv) {
       history.found = true;
-      const lot = await prisma.lot.findUnique({ where: { lotNo: inboundItem.lotNo } });
-      const item = lot?.itemId ? await prisma.item.findUnique({ where: { id: lot.itemId } }) : null;
-
-      history.stages.push({
-        stage: 'inbound',
-        date: lot?.date || null,
-        data: {
-          pieceId: inboundItem.id,
-          barcode: inboundItem.barcode,
-          lotNo: inboundItem.lotNo,
-          itemName: item?.name || null,
-          weight: inboundItem.weight,
-          status: inboundItem.status,
-          seq: inboundItem.seq,
-          dispatchedWeight: inboundItem.dispatchedWeight || 0,
-        },
-      });
-
-      // 2. Check if issued to cutter
-      const cutterIssue = await prisma.issueToCutterMachine.findFirst({
-        where: { pieceIds: { contains: inboundItem.id } },
-        include: { machine: true, operator: true, cut: true },
-      });
-
-      if (cutterIssue) {
-        history.stages.push({
-          stage: 'cutter_issue',
-          date: cutterIssue.date,
-          data: {
-            issueId: cutterIssue.id,
-            barcode: cutterIssue.barcode,
-            machineName: cutterIssue.machine?.name || null,
-            operatorName: cutterIssue.operator?.name || null,
-            cutName: cutterIssue.cut?.name || null,
-            totalWeight: cutterIssue.totalWeight,
-            pieceCount: cutterIssue.count,
-          },
-        });
-
-        // 3. Check cutter receive
-        const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
-          where: { pieceId: inboundItem.id, isDeleted: false },
-          include: { challan: true, bobbin: true, operator: true },
-          orderBy: { createdAt: 'asc' },
-        });
-
-        for (const recv of cutterReceives) {
-          history.stages.push({
-            stage: 'cutter_receive',
-            date: recv.date || recv.challan?.date,
-            data: {
-              receiveId: recv.id,
-              barcode: recv.barcode,
-              challanNo: recv.challan?.challanNo || null,
-              bobbinQuantity: recv.bobbinQuantity,
-              netWeight: recv.netWt,
-              operatorName: recv.operator?.name || null,
-              dispatchedWeight: recv.dispatchedWeight || 0,
-            },
-          });
-        }
-      }
+      history.searchedStage = 'coning_receive';
+      await traceFromConingReceive(coningRecv, history);
+      return res.json({ history });
     }
 
-    // Also search by barcode in other tables
-    // Search Cutter Issue
-    const cutterIssueByBarcode = await prisma.issueToCutterMachine.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
-      include: { machine: true, operator: true, cut: true },
-    });
-
-    if (cutterIssueByBarcode && !history.stages.find(s => s.stage === 'cutter_issue' && s.data.issueId === cutterIssueByBarcode.id)) {
-      history.found = true;
-      history.stages.push({
-        stage: 'cutter_issue',
-        date: cutterIssueByBarcode.date,
-        data: {
-          issueId: cutterIssueByBarcode.id,
-          barcode: cutterIssueByBarcode.barcode,
-          lotNo: cutterIssueByBarcode.lotNo,
-          machineName: cutterIssueByBarcode.machine?.name || null,
-          operatorName: cutterIssueByBarcode.operator?.name || null,
-          cutName: cutterIssueByBarcode.cut?.name || null,
-          totalWeight: cutterIssueByBarcode.totalWeight,
-          pieceCount: cutterIssueByBarcode.count,
-        },
-      });
-    }
-
-    // Search Holo Issue
-    const holoIssue = await prisma.issueToHoloMachine.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
-      include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
-    });
-
-    if (holoIssue) {
-      history.found = true;
-      history.stages.push({
-        stage: 'holo_issue',
-        date: holoIssue.date,
-        data: {
-          issueId: holoIssue.id,
-          barcode: holoIssue.barcode,
-          lotNo: holoIssue.lotNo,
-          machineName: holoIssue.machine?.name || null,
-          operatorName: holoIssue.operator?.name || null,
-          yarnName: holoIssue.yarn?.name || null,
-          twistName: holoIssue.twist?.name || null,
-          cutName: holoIssue.cut?.name || null,
-          metallicBobbins: holoIssue.metallicBobbins,
-          metallicBobbinsWeight: holoIssue.metallicBobbinsWeight,
-        },
-      });
-
-      // Check holo receives
-      const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
-        where: { issueId: holoIssue.id },
-        include: { rollType: true, operator: true, box: true },
-        orderBy: { createdAt: 'asc' },
-      });
-
-      for (const recv of holoReceives) {
-        history.stages.push({
-          stage: 'holo_receive',
-          date: recv.date,
-          data: {
-            receiveId: recv.id,
-            barcode: recv.barcode,
-            rollCount: recv.rollCount,
-            rollWeight: recv.rollWeight,
-            grossWeight: recv.grossWeight,
-            tareWeight: recv.tareWeight,
-            rollTypeName: recv.rollType?.name || null,
-            operatorName: recv.operator?.name || null,
-            dispatchedWeight: recv.dispatchedWeight || 0,
-          },
-        });
-      }
-    }
-
-    // Search Holo Receive by barcode
-    const holoRecvByBarcode = await prisma.receiveFromHoloMachineRow.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
-      include: { issue: true, rollType: true, operator: true },
-    });
-
-    if (holoRecvByBarcode && !history.stages.find(s => s.stage === 'holo_receive' && s.data.receiveId === holoRecvByBarcode.id)) {
-      history.found = true;
-      history.stages.push({
-        stage: 'holo_receive',
-        date: holoRecvByBarcode.date,
-        data: {
-          receiveId: holoRecvByBarcode.id,
-          barcode: holoRecvByBarcode.barcode,
-          lotNo: holoRecvByBarcode.issue?.lotNo || null,
-          rollCount: holoRecvByBarcode.rollCount,
-          rollWeight: holoRecvByBarcode.rollWeight,
-          grossWeight: holoRecvByBarcode.grossWeight,
-          tareWeight: holoRecvByBarcode.tareWeight,
-          rollTypeName: holoRecvByBarcode.rollType?.name || null,
-          operatorName: holoRecvByBarcode.operator?.name || null,
-          dispatchedWeight: holoRecvByBarcode.dispatchedWeight || 0,
-        },
-      });
-    }
-
-    // Search Coning Issue
+    // Check Coning Issue
     const coningIssue = await prisma.issueToConingMachine.findFirst({
       where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
       include: { machine: true, operator: true },
@@ -7337,101 +7185,506 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     if (coningIssue) {
       history.found = true;
-      history.stages.push({
-        stage: 'coning_issue',
-        date: coningIssue.date,
+      history.searchedStage = 'coning_issue';
+      await traceFromConingIssue(coningIssue, history);
+      return res.json({ history });
+    }
+
+    // Check Holo Receive
+    const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { operator: true, rollType: true, box: true },
+    });
+
+    if (holoRecv) {
+      history.found = true;
+      history.searchedStage = 'holo_receive';
+      await traceFromHoloReceive(holoRecv, history);
+      return res.json({ history });
+    }
+
+    // Check Holo Issue
+    const holoIssue = await prisma.issueToHoloMachine.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+    });
+
+    if (holoIssue) {
+      history.found = true;
+      history.searchedStage = 'holo_issue';
+      await traceFromHoloIssue(holoIssue, history);
+      return res.json({ history });
+    }
+
+    // Check Cutter Receive (by vchNo or barcode)
+    const cutterRecv = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: {
+        isDeleted: false,
+        OR: [
+          { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+          { vchNo: { equals: normalizedBarcode, mode: 'insensitive' } },
+        ],
+      },
+      include: { bobbin: true, operator: true, challan: true },
+    });
+
+    if (cutterRecv) {
+      history.found = true;
+      history.searchedStage = 'cutter_receive';
+      await traceFromCutterReceive(cutterRecv, history);
+      return res.json({ history });
+    }
+
+    // Check Cutter Issue
+    const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      include: { machine: true, operator: true, cut: true },
+    });
+
+    if (cutterIssue) {
+      history.found = true;
+      history.searchedStage = 'cutter_issue';
+      await traceFromCutterIssue(cutterIssue, history);
+      return res.json({ history });
+    }
+
+    // Check Inbound
+    const inboundItem = await prisma.inboundItem.findFirst({
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+    });
+
+    if (inboundItem) {
+      history.found = true;
+      history.searchedStage = 'inbound';
+      await traceFromInbound(inboundItem, history);
+      return res.json({ history });
+    }
+
+    // Not found
+    res.json({ history });
+
+    // ============ HELPER FUNCTIONS FOR TRACING ============
+
+    async function traceFromInbound(item, history) {
+      const lot = await prisma.lot.findUnique({ where: { lotNo: item.lotNo } });
+      const itemMaster = lot?.itemId ? await prisma.item.findUnique({ where: { id: lot.itemId } }) : null;
+      const firm = lot?.firmId ? await prisma.firm.findUnique({ where: { id: lot.firmId } }) : null;
+      const supplier = lot?.supplierId ? await prisma.supplier.findUnique({ where: { id: lot.supplierId } }) : null;
+
+      history.lineage.push({
+        stage: 'inbound',
+        date: lot?.date || null,
+        barcode: item.barcode,
         data: {
-          issueId: coningIssue.id,
-          barcode: coningIssue.barcode,
-          lotNo: coningIssue.lotNo,
-          machineName: coningIssue.machine?.name || null,
-          operatorName: coningIssue.operator?.name || null,
-          rollsIssued: coningIssue.rollsIssued,
-          expectedCones: coningIssue.expectedCones,
+          pieceId: item.id,
+          lotNo: item.lotNo,
+          itemName: itemMaster?.name || null,
+          firmName: firm?.name || null,
+          supplierName: supplier?.name || null,
+          weight: item.weight,
+          status: item.status,
+          dispatchedWeight: item.dispatchedWeight || 0,
         },
       });
 
-      // Check coning receives
+      // Forward trace: Check if issued to cutter
+      const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+        where: { pieceIds: { contains: item.id } },
+        include: { machine: true, operator: true, cut: true },
+      });
+
+      if (cutterIssue) {
+        await addCutterIssueAndForward(cutterIssue, item.id, history);
+      }
+
+      // Check if directly dispatched
+      await addDispatchesForItem(item.barcode, 'inbound', history);
+    }
+
+    async function addCutterIssueAndForward(issue, pieceId, history) {
+      history.lineage.push({
+        stage: 'cutter_issue',
+        date: issue.date,
+        barcode: issue.barcode,
+        data: {
+          issueId: issue.id,
+          machineName: issue.machine?.name || null,
+          operatorName: issue.operator?.name || null,
+          cutName: issue.cut?.name || null,
+          totalWeight: issue.totalWeight,
+          pieceCount: issue.count,
+          lotNo: issue.lotNo,
+        },
+      });
+
+      // Forward trace: Check cutter receives
+      const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: pieceId, isDeleted: false },
+        include: { bobbin: true, operator: true, challan: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const recv of cutterReceives) {
+        await addCutterReceiveAndForward(recv, history);
+      }
+    }
+
+    async function addCutterReceiveAndForward(recv, history) {
+      history.lineage.push({
+        stage: 'cutter_receive',
+        date: recv.date || recv.challan?.date,
+        barcode: recv.barcode || recv.vchNo,
+        data: {
+          receiveId: recv.id,
+          challanNo: recv.challan?.challanNo || null,
+          bobbinQuantity: recv.bobbinQuantity,
+          netWeight: recv.netWt,
+          operatorName: recv.operator?.name || null,
+          bobbinName: recv.bobbin?.name || null,
+          dispatchedWeight: recv.dispatchedWeight || 0,
+          issuedToHoloWeight: recv.issuedBobbinWeight || 0,
+        },
+      });
+
+      // Forward trace: Check if used in holo issue
+      const holoIssues = await prisma.issueToHoloMachine.findMany({
+        include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+      });
+
+      for (const holoIssue of holoIssues) {
+        try {
+          // receivedRowRefs is a Prisma Json field - might be already parsed or a string
+          let refs = holoIssue.receivedRowRefs;
+          if (typeof refs === 'string') {
+            refs = JSON.parse(refs || '[]');
+          }
+          refs = refs || [];
+          // refs is array of objects with rowId property
+          const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+          if (refIds.includes(recv.id)) {
+            await addHoloIssueAndForward(holoIssue, history);
+          }
+        } catch { }
+      }
+
+      // Check if directly dispatched
+      await addDispatchesForItem(recv.barcode || recv.vchNo, 'cutter', history);
+    }
+
+    async function addHoloIssueAndForward(issue, history) {
+      // Avoid duplicates
+      if (history.lineage.find(l => l.stage === 'holo_issue' && l.data.issueId === issue.id)) return;
+
+      history.lineage.push({
+        stage: 'holo_issue',
+        date: issue.date,
+        barcode: issue.barcode,
+        data: {
+          issueId: issue.id,
+          lotNo: issue.lotNo,
+          machineName: issue.machine?.name || null,
+          operatorName: issue.operator?.name || null,
+          yarnName: issue.yarn?.name || null,
+          twistName: issue.twist?.name || null,
+          cutName: issue.cut?.name || null,
+          metallicBobbins: issue.metallicBobbins,
+          metallicBobbinsWeight: issue.metallicBobbinsWeight,
+          shift: issue.shift,
+        },
+      });
+
+      // Forward trace: Check holo receives
+      const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+        where: { issueId: issue.id },
+        include: { operator: true, rollType: true, box: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const recv of holoReceives) {
+        await addHoloReceiveAndForward(recv, history);
+      }
+    }
+
+    async function addHoloReceiveAndForward(recv, history) {
+      // Avoid duplicates
+      if (history.lineage.find(l => l.stage === 'holo_receive' && l.data.receiveId === recv.id)) return;
+
+      // rollWeight is the TOTAL net weight (not per-roll), so use it directly if available
+      // Otherwise calculate from gross - tare
+      const netWeight = recv.rollWeight || ((recv.grossWeight || 0) - (recv.tareWeight || 0));
+
+      history.lineage.push({
+        stage: 'holo_receive',
+        date: recv.date,
+        barcode: recv.barcode,
+        data: {
+          receiveId: recv.id,
+          rollCount: recv.rollCount,
+          netWeight: netWeight,
+          rollTypeName: recv.rollType?.name || null,
+          operatorName: recv.operator?.name || null,
+          boxName: recv.box?.name || null,
+          dispatchedWeight: recv.dispatchedWeight || 0,
+        },
+      });
+
+      // Forward trace: Check if used in coning issue
+      const coningIssues = await prisma.issueToConingMachine.findMany({
+        include: { machine: true, operator: true },
+      });
+
+      for (const coningIssue of coningIssues) {
+        try {
+          // receivedRowRefs is a Prisma Json field - might be already parsed or a string
+          let refs = coningIssue.receivedRowRefs;
+          if (typeof refs === 'string') {
+            refs = JSON.parse(refs || '[]');
+          }
+          refs = refs || [];
+          // refs is array of objects with rowId property
+          const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+          if (refIds.includes(recv.id)) {
+            await addConingIssueAndForward(coningIssue, history);
+          }
+        } catch { }
+      }
+
+      // Check if directly dispatched
+      if (recv.barcode) {
+        await addDispatchesForItem(recv.barcode, 'holo', history);
+      }
+    }
+
+    async function addConingIssueAndForward(issue, history) {
+      // Avoid duplicates
+      if (history.lineage.find(l => l.stage === 'coning_issue' && l.data.issueId === issue.id)) return;
+
+      history.lineage.push({
+        stage: 'coning_issue',
+        date: issue.date,
+        barcode: issue.barcode,
+        data: {
+          issueId: issue.id,
+          lotNo: issue.lotNo,
+          machineName: issue.machine?.name || null,
+          operatorName: issue.operator?.name || null,
+          rollsIssued: issue.rollsIssued,
+          expectedCones: issue.expectedCones,
+          shift: issue.shift,
+        },
+      });
+
+      // Forward trace: Check coning receives
       const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
-        where: { issueId: coningIssue.id },
+        where: { issueId: issue.id },
         include: { operator: true, box: true },
         orderBy: { createdAt: 'asc' },
       });
 
       for (const recv of coningReceives) {
-        history.stages.push({
-          stage: 'coning_receive',
-          date: recv.date,
+        await addConingReceive(recv, history);
+      }
+    }
+
+    async function addConingReceive(recv, history) {
+      // Avoid duplicates
+      if (history.lineage.find(l => l.stage === 'coning_receive' && l.data.receiveId === recv.id)) return;
+
+      history.lineage.push({
+        stage: 'coning_receive',
+        date: recv.date,
+        barcode: recv.barcode,
+        data: {
+          receiveId: recv.id,
+          coneCount: recv.coneCount,
+          netWeight: recv.netWeight,
+          coneWeight: recv.coneWeight,
+          operatorName: recv.operator?.name || null,
+          boxName: recv.box?.name || null,
+          dispatchedWeight: recv.dispatchedWeight || 0,
+        },
+      });
+
+      // Check if dispatched
+      if (recv.barcode) {
+        await addDispatchesForItem(recv.barcode, 'coning', history);
+      }
+    }
+
+    async function addDispatchesForItem(barcode, stage, history) {
+      if (!barcode) return;
+      const dispatches = await prisma.dispatch.findMany({
+        where: { stageBarcode: { equals: barcode, mode: 'insensitive' }, stage },
+        include: { customer: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const d of dispatches) {
+        if (history.lineage.find(l => l.stage === 'dispatch' && l.data.dispatchId === d.id)) continue;
+        history.lineage.push({
+          stage: 'dispatch',
+          date: d.date,
+          barcode: d.stageBarcode,
           data: {
-            receiveId: recv.id,
-            barcode: recv.barcode,
-            coneCount: recv.coneCount,
-            netWeight: recv.netWeight,
-            grossWeight: recv.grossWeight,
-            tareWeight: recv.tareWeight,
-            operatorName: recv.operator?.name || null,
-            dispatchedWeight: recv.dispatchedWeight || 0,
+            dispatchId: d.id,
+            challanNo: d.challanNo,
+            customerName: d.customer?.name || null,
+            weight: d.weight,
+            sourceStage: d.stage,
           },
         });
       }
     }
 
-    // Search Coning Receive by barcode
-    const coningRecvByBarcode = await prisma.receiveFromConingMachineRow.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
-      include: { issue: true, operator: true },
-    });
+    // ============ BACKWARD TRACING FUNCTIONS ============
 
-    if (coningRecvByBarcode && !history.stages.find(s => s.stage === 'coning_receive' && s.data.receiveId === coningRecvByBarcode.id)) {
-      history.found = true;
-      history.stages.push({
-        stage: 'coning_receive',
-        date: coningRecvByBarcode.date,
-        data: {
-          receiveId: coningRecvByBarcode.id,
-          barcode: coningRecvByBarcode.barcode,
-          lotNo: coningRecvByBarcode.issue?.lotNo || null,
-          coneCount: coningRecvByBarcode.coneCount,
-          netWeight: coningRecvByBarcode.netWeight,
-          grossWeight: coningRecvByBarcode.grossWeight,
-          tareWeight: coningRecvByBarcode.tareWeight,
-          operatorName: coningRecvByBarcode.operator?.name || null,
-          dispatchedWeight: coningRecvByBarcode.dispatchedWeight || 0,
-        },
+    async function traceFromConingReceive(recv, history) {
+      const issue = await prisma.issueToConingMachine.findUnique({
+        where: { id: recv.issueId },
+        include: { machine: true, operator: true },
       });
+
+      if (issue) {
+        await traceFromConingIssue(issue, history);
+      }
+
+      // Add current coning receive at correct position
+      await addConingReceive(recv, history);
     }
 
-    // Search Dispatches by stageBarcode
-    const dispatches = await prisma.dispatch.findMany({
-      where: { stageBarcode: { equals: normalizedBarcode, mode: 'insensitive' } },
-      include: { customer: true },
-      orderBy: { createdAt: 'asc' },
-    });
+    async function traceFromConingIssue(issue, history) {
+      // Get holo receives referenced
+      try {
+        // receivedRowRefs is a Prisma Json field - might be already parsed or a string
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') {
+          refs = JSON.parse(refs || '[]');
+        }
+        refs = refs || [];
 
-    for (const d of dispatches) {
-      history.found = true;
-      history.stages.push({
-        stage: 'dispatch',
-        date: d.date,
-        data: {
-          dispatchId: d.id,
-          challanNo: d.challanNo,
-          customerName: d.customer?.name || null,
-          weight: d.weight,
-          sourceStage: d.stage,
-          notes: d.notes,
-        },
-      });
+        // refs is array of objects with rowId property
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        console.log('traceFromConingIssue: issue.id=', issue.id, 'refIds=', refIds);
+
+        if (refIds.length > 0) {
+          const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+            where: { id: { in: refIds } },
+            include: { operator: true, rollType: true, box: true },
+          });
+          console.log('traceFromConingIssue: found holoReceives=', holoReceives.length);
+
+          if (holoReceives.length > 0) {
+            // Trace from first holo receive
+            await traceFromHoloReceive(holoReceives[0], history);
+            // Add other holo receives
+            for (let i = 1; i < holoReceives.length; i++) {
+              await addHoloReceiveAndForward(holoReceives[i], history);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('traceFromConingIssue error:', err);
+      }
+
+      // Add coning issue
+      await addConingIssueAndForward(issue, history);
     }
 
-    // Sort stages by date
-    history.stages.sort((a, b) => {
-      if (!a.date) return -1;
-      if (!b.date) return 1;
-      return new Date(a.date).getTime() - new Date(b.date).getTime();
-    });
+    async function traceFromHoloReceive(recv, history) {
+      const issue = await prisma.issueToHoloMachine.findUnique({
+        where: { id: recv.issueId },
+        include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+      });
 
-    res.json({ history });
+      if (issue) {
+        await traceFromHoloIssue(issue, history);
+      }
+
+      // Add current holo receive
+      await addHoloReceiveAndForward(recv, history);
+    }
+
+    async function traceFromHoloIssue(issue, history) {
+      // Get cutter receives referenced
+      try {
+        // receivedRowRefs is a Prisma Json field - might be already parsed or a string
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') {
+          refs = JSON.parse(refs || '[]');
+        }
+        refs = refs || [];
+
+        // refs is array of objects with rowId property
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        console.log('traceFromHoloIssue: issue.id=', issue.id, 'refIds=', refIds);
+
+        if (refIds.length > 0) {
+          const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+            where: { id: { in: refIds }, isDeleted: false },
+            include: { bobbin: true, operator: true, challan: true },
+          });
+          console.log('traceFromHoloIssue: found cutterReceives=', cutterReceives.length);
+
+          if (cutterReceives.length > 0) {
+            // Trace from first cutter receive
+            await traceFromCutterReceive(cutterReceives[0], history);
+            // Add other cutter receives
+            for (let i = 1; i < cutterReceives.length; i++) {
+              await addCutterReceiveAndForward(cutterReceives[i], history);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('traceFromHoloIssue error:', err);
+      }
+
+      // Add holo issue
+      await addHoloIssueAndForward(issue, history);
+    }
+
+    async function traceFromCutterReceive(recv, history) {
+      // Get the inbound item (pieceId)
+      const inboundItem = await prisma.inboundItem.findUnique({
+        where: { id: recv.pieceId },
+      });
+
+      if (inboundItem) {
+        await traceFromInbound(inboundItem, history);
+      } else {
+        // Just add cutter receive
+        await addCutterReceiveAndForward(recv, history);
+      }
+    }
+
+    async function traceFromCutterIssue(issue, history) {
+      // Get piece IDs
+      const pieceIds = issue.pieceIds.split(',').map(p => p.trim()).filter(Boolean);
+
+      if (pieceIds.length > 0) {
+        // Trace from first piece
+        const firstPiece = await prisma.inboundItem.findUnique({ where: { id: pieceIds[0] } });
+        if (firstPiece) {
+          await traceFromInbound(firstPiece, history);
+        }
+      } else {
+        // Just add cutter issue  
+        history.lineage.push({
+          stage: 'cutter_issue',
+          date: issue.date,
+          barcode: issue.barcode,
+          data: {
+            issueId: issue.id,
+            lotNo: issue.lotNo,
+            machineName: issue.machine?.name || null,
+            operatorName: issue.operator?.name || null,
+            cutName: issue.cut?.name || null,
+            totalWeight: issue.totalWeight,
+            pieceCount: issue.count,
+          },
+        });
+      }
+    }
+
   } catch (err) {
     console.error('Failed to fetch barcode history', err);
     res.status(500).json({ error: 'Failed to fetch barcode history' });

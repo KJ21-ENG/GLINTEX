@@ -60,8 +60,8 @@ function BarcodeHistory() {
             const res = await api.getBarcodeHistory(barcode.trim());
             setHistory(res.history);
             // Expand all stages by default
-            if (res.history?.stages) {
-                setExpandedStages(new Set(res.history.stages.map((_, i) => i)));
+            if (res.history?.lineage) {
+                setExpandedStages(new Set(res.history.lineage.map((_, i) => i)));
             }
         } catch (err) {
             alert(err.message || 'Failed to fetch barcode history');
@@ -152,7 +152,7 @@ function BarcodeHistory() {
                     <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-border" />
 
                     <div className="space-y-4">
-                        {history.stages.map((stage, index) => {
+                        {history.lineage.map((stage, index) => {
                             const Icon = STAGE_ICONS[stage.stage] || Package;
                             const isExpanded = expandedStages.has(index);
                             const colorClass = STAGE_COLORS[stage.stage] || 'bg-gray-500';
@@ -201,9 +201,9 @@ function BarcodeHistory() {
                                                         {formatKg(stage.data.netWeight)}
                                                     </Badge>
                                                 )}
-                                                {stage.data?.barcode && (
+                                                {stage.barcode && (
                                                     <span className="font-mono text-sm text-muted-foreground">
-                                                        {stage.data.barcode}
+                                                        {stage.barcode}
                                                     </span>
                                                 )}
                                                 {isExpanded ? (

@@ -3092,7 +3092,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
       const cutName = issueRecord.cutId ? (await prisma.cut.findUnique({ where: { id: issueRecord.cutId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-      sendNotification('issue_to_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
+      sendNotification('issue_to_cutter_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
       // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
@@ -3300,7 +3300,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
       const wastageFormatted = Number(remaining).toFixed(3);
       const inboundWeight = Number(inbound.weight || 0);
       const wastagePercent = inboundWeight > 0 ? ((remaining / inboundWeight) * 100).toFixed(2) : '0.00';
-      sendNotification('piece_wastage_marked', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
+      sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
     } catch (e) { console.error('notify piece wastage error', e); }
 
     await logCrudWithActor(req, {
@@ -3588,7 +3588,7 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
         const itemName = itemRec ? itemRec.name || '' : '';
         const wastageFormatted = Number(wastageToMark).toFixed(3);
         const wastagePercent = inboundWeight > 0 ? ((wastageToMark / inboundWeight) * 100).toFixed(2) : '0.00';
-        sendNotification('piece_wastage_marked', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent });
+        sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent });
       } catch (e) {
         console.error('notify piece wastage error', e);
       }
@@ -3613,6 +3613,24 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
       rowsCreated: created.rows.length,
       wastageMarked: wastageToMark,
     });
+
+    // Notify receive_from_cutter_machine created
+    try {
+      const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
+      const itemName = itemRec ? itemRec.name || '' : '';
+      const operatorRec = normalizedEntries[0].operatorId ? await prisma.operator.findUnique({ where: { id: normalizedEntries[0].operatorId } }) : null;
+      const operatorName = operatorRec ? operatorRec.name : '';
+
+      sendNotification('receive_from_cutter_machine_created', {
+        itemName,
+        lotNo: piece.lotNo,
+        date: new Date().toISOString().slice(0, 10),
+        netWeight: totalNetWeight,
+        bobbinQuantity: totalBobbinQty,
+        operatorName,
+        challanNo: created.challan.challanNo,
+      });
+    } catch (e) { console.error('notify receive_from_cutter_machine bulk error', e); }
   } catch (err) {
     console.error('Failed to record bulk receive', err);
     res.status(500).json({ error: err.message || 'Failed to record bulk receive' });
@@ -3824,6 +3842,22 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       pendingAfter,
       receiveBarcode: txResult.receiveBarcode,
     });
+
+    // Notify receive_from_cutter_machine created (manual)
+    try {
+      const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
+      const itemName = itemRec ? itemRec.name || '' : '';
+
+      sendNotification('receive_from_cutter_machine_created', {
+        itemName,
+        lotNo: piece.lotNo,
+        date: receiveDateStr,
+        netWeight: net,
+        bobbinQuantity: bobbinQty,
+        operatorName: operatorRec.name,
+        challanNo: 'N/A (Manual)',
+      });
+    } catch (e) { console.error('notify receive_from_cutter_machine manual error', e); }
   } catch (err) {
     console.error('Failed to record manual receive', err);
     res.status(500).json({ error: err.message || 'Failed to record manual receive' });
@@ -4494,6 +4528,28 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     });
 
     res.json({ ok: true, issueToHoloMachine: created });
+
+    // Notify issue_to_holo_machine created
+    try {
+      const itemRec = await prisma.item.findUnique({ where: { id: created.itemId } });
+      const itemName = itemRec ? itemRec.name : '';
+      const machineRec = created.machineId ? await prisma.machine.findUnique({ where: { id: created.machineId } }) : null;
+      const operatorRec = created.operatorId ? await prisma.operator.findUnique({ where: { id: created.operatorId } }) : null;
+      const twistRec = await prisma.twist.findUnique({ where: { id: created.twistId } });
+
+      sendNotification('issue_to_holo_machine_created', {
+        itemName,
+        lotNo: created.lotNo,
+        date: created.date,
+        metallicBobbins: created.metallicBobbins,
+        metallicBobbinsWeight: created.metallicBobbinsWeight,
+        yarnKg: created.yarnKg,
+        machineName: machineRec ? machineRec.name : '',
+        operatorName: operatorRec ? operatorRec.name : '',
+        twistName: twistRec ? twistRec.name : '',
+        barcode: created.barcode,
+      });
+    } catch (e) { console.error('notify issue_to_holo_machine error', e); }
   } catch (err) {
     console.error('Failed to issue to holo machine', err);
     res.status(500).json({ error: err.message || 'Failed to issue to holo' });
@@ -4530,7 +4586,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
     const issue = await prisma.issueToHoloMachine.findUnique({
       where: { id: issueId },
-      select: { lotNo: true, barcode: true },
+      select: { lotNo: true, barcode: true, itemId: true },
     });
     if (!issue) {
       return res.status(404).json({ error: 'Issue not found' });
@@ -4601,6 +4657,26 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       },
     });
     res.json({ ok: true, row: createdRow });
+
+    // Notify receive_from_holo_machine created
+    try {
+      const itemRec = await prisma.item.findUnique({ where: { id: issue.itemId } });
+      const itemName = itemRec ? itemRec.name || '' : '';
+      const operatorRec = operatorId ? await prisma.operator.findUnique({ where: { id: operatorId } }) : null;
+
+      sendNotification('receive_from_holo_machine_created', {
+        itemName,
+        lotNo: issue.lotNo,
+        date: date || new Date().toISOString().slice(0, 10),
+        grossWeight: grossNum,
+        tareWeight,
+        netWeight,
+        rollCount: rollCountNum,
+        machineName: machineNo || '',
+        operatorName: operatorRec ? operatorRec.name : '',
+        barcode,
+      });
+    } catch (e) { console.error('notify receive_from_holo_machine manual error', e); }
   } catch (err) {
     console.error('Failed to receive from holo machine', err);
     res.status(500).json({ error: err.message || 'Failed to record holo receive' });
@@ -4852,6 +4928,26 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       },
     });
     res.json({ ok: true, issueToConingMachine: created });
+
+    // Notify issue_to_coning_machine created
+    try {
+      const itemRec = await prisma.item.findUnique({ where: { id: created.itemId } });
+      const itemName = itemRec ? itemRec.name : '';
+      const machineRec = created.machineId ? await prisma.machine.findUnique({ where: { id: created.machineId } }) : null;
+      const operatorRec = created.operatorId ? await prisma.operator.findUnique({ where: { id: created.operatorId } }) : null;
+
+      sendNotification('issue_to_coning_machine_created', {
+        itemName,
+        lotNo: created.lotNo,
+        date: created.date,
+        rollsIssued: created.rollsIssued,
+        requiredPerConeNetWeight: created.requiredPerConeNetWeight,
+        expectedCones: created.expectedCones,
+        machineName: machineRec ? machineRec.name : '',
+        operatorName: operatorRec ? operatorRec.name : '',
+        barcode: created.barcode,
+      });
+    } catch (e) { console.error('notify issue_to_coning_machine error', e); }
   } catch (err) {
     console.error('Failed to issue to coning machine', err);
     res.status(500).json({ error: err.message || 'Failed to issue to coning' });
@@ -4944,6 +5040,32 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
       },
     });
     res.json({ ok: true, row: createdRow });
+
+    // Notify receive_from_coning_machine created
+    try {
+      const itemRec = await prisma.item.findUnique({ where: { id: issue.itemId } });
+      const itemName = itemRec ? itemRec.name : '';
+      const operatorRec = (operatorId || issue.operatorId) ? await prisma.operator.findUnique({ where: { id: (operatorId || issue.operatorId) } }) : null;
+
+      let machineName = machineNo || '';
+      if (issue.machineId && !machineName) {
+        const machineRec = await prisma.machine.findUnique({ where: { id: issue.machineId } });
+        machineName = machineRec ? machineRec.name : '';
+      }
+
+      sendNotification('receive_from_coning_machine_created', {
+        itemName,
+        lotNo: issue.lotNo,
+        date: date || issue.date,
+        grossWeight: Number(grossWeight),
+        tareWeight: Number(tareWeight),
+        netWeight: Number(netWeight),
+        coneCount,
+        machineName: machineName,
+        operatorName: operatorRec ? operatorRec.name : '',
+        barcode,
+      });
+    } catch (e) { console.error('notify receive_from_coning_machine manual error', e); }
   } catch (err) {
     console.error('Failed to receive from coning machine', err);
     res.status(500).json({ error: err.message || 'Failed to record coning receive' });
@@ -6007,7 +6129,7 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
       const machineNameDel = machineRec ? machineRec.name : '';
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
-      sendNotification('issue_to_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
+      sendNotification('issue_to_cutter_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
     } catch (e) { console.error('notify issue_to_cutter_machine deleted error', e); }
   } catch (err) {
     console.error('Failed to delete issue_to_cutter_machine record', err);

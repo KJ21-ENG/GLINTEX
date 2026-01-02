@@ -3,66 +3,198 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText, Search } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
 
-const WHATSAPP_VARIABLES = {
-    inbound_created: [
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'date', label: 'Date' },
-        { key: 'totalPieces', label: 'Total Pieces' },
-        { key: 'totalWeight', label: 'Total Weight' },
-    ],
-    issue_to_machine_created: [
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'date', label: 'Date' },
-        { key: 'count', label: 'Pieces Count' },
-        { key: 'totalWeight', label: 'Total Weight' },
-        { key: 'machineName', label: 'Machine' },
-        { key: 'operatorName', label: 'Operator' },
-        { key: 'cutName', label: 'Cut' },
-    ],
-    issue_to_machine_deleted: [
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'date', label: 'Date' },
-        { key: 'count', label: 'Pieces Count' },
-        { key: 'totalWeight', label: 'Total Weight' },
-        { key: 'machineName', label: 'Machine' },
-        { key: 'operatorName', label: 'Operator' },
-    ],
-    piece_wastage_marked: [
-        { key: 'pieceId', label: 'Piece ID' },
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'wastage', label: 'Wastage (kg)' },
-        { key: 'wastagePercent', label: 'Wastage %' },
-    ],
-    item_out_of_stock: [
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'available', label: 'Available Weight' },
-    ],
-    lot_deleted: [
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'totalPieces', label: 'Total Pieces' },
-        { key: 'date', label: 'Date' },
-    ],
-    inbound_piece_deleted: [
-        { key: 'itemName', label: 'Item Name' },
-        { key: 'lotNo', label: 'Lot No' },
-        { key: 'pieceId', label: 'Piece ID' },
-    ],
-    backup_failed: [
-        { key: 'time', label: 'Time (ISO)' },
-        { key: 'type', label: 'Backup Type' },
-        { key: 'filename', label: 'Filename' },
-        { key: 'error', label: 'Error Message' },
-        { key: 'host', label: 'Host' },
-    ],
+const WHATSAPP_EVENTS_CONFIG = {
+    inbound_created: {
+        note: 'Triggered when a new inbound item is added to the system.',
+        variables: [
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalPieces', label: 'Total Pieces' },
+            { key: 'totalWeight', label: 'Total Weight' },
+        ]
+    },
+    issue_to_cutter_machine_created: {
+        note: 'Triggered when pieces are issued to a Cutter machine.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'count', label: 'Pieces Count' },
+            { key: 'totalWeight', label: 'Total Weight' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+            { key: 'cutName', label: 'Cut Name' },
+        ]
+    },
+    issue_to_holo_machine_created: {
+        note: 'Triggered when material is issued to a Holo machine.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'metallicBobbins', label: 'Bobbins' },
+            { key: 'metallicBobbinsWeight', label: 'Bobbin Weight' },
+            { key: 'yarnKg', label: 'Yarn Weight' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+            { key: 'twistName', label: 'Twist Name' },
+        ]
+    },
+    issue_to_coning_machine_created: {
+        note: 'Triggered when material is issued to a Coning machine.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'rollsIssued', label: 'Rolls' },
+            { key: 'requiredPerConeNetWeight', label: 'Target Cone Wt' },
+            { key: 'expectedCones', label: 'Expected Cones' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    receive_from_cutter_machine_created: {
+        note: 'Triggered when a piece is received from a Cutter machine (Manual or Bulk).',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'netWeight', label: 'Net Weight' },
+            { key: 'bobbinQuantity', label: 'Bobbins' },
+            { key: 'operatorName', label: 'Operator' },
+            { key: 'challanNo', label: 'Challan No' },
+        ]
+    },
+    receive_from_holo_machine_created: {
+        note: 'Triggered when material is received from a Holo machine.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'netWeight', label: 'Net Weight' },
+            { key: 'rollCount', label: 'Rolls' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+            { key: 'barcode', label: 'Barcode' },
+        ]
+    },
+    receive_from_coning_machine_created: {
+        note: 'Triggered when material is received from a Coning machine.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'netWeight', label: 'Net Weight' },
+            { key: 'coneCount', label: 'Cones' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+            { key: 'barcode', label: 'Barcode' },
+        ]
+    },
+    piece_wastage_marked_cutter: {
+        note: 'Triggered when a piece is marked as wastage in the Cutter process.',
+        variables: [
+            { key: 'pieceId', label: 'Piece ID' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'wastage', label: 'Wastage (kg)' },
+            { key: 'wastagePercent', label: 'Wastage %' },
+        ]
+    },
+    piece_wastage_marked_holo: {
+        note: 'Triggered when a piece is marked as wastage in the Holo process.',
+        variables: [
+            { key: 'pieceId', label: 'Piece ID' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'wastage', label: 'Wastage (kg)' },
+            { key: 'wastagePercent', label: 'Wastage %' },
+        ]
+    },
+    piece_wastage_marked_coning: {
+        note: 'Triggered when a piece is marked as wastage in the Coning process.',
+        variables: [
+            { key: 'pieceId', label: 'Piece ID' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'wastage', label: 'Wastage (kg)' },
+            { key: 'wastagePercent', label: 'Wastage %' },
+        ]
+    },
+    item_out_of_stock: {
+        note: 'Triggered when available stock for an item falls to zero.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'available', label: 'Available Weight' },
+        ]
+    },
+    lot_deleted: {
+        note: 'Triggered when an entire lot is deleted.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'totalPieces', label: 'Total Pieces' },
+            { key: 'date', label: 'Date' },
+        ]
+    },
+    inbound_piece_deleted: {
+        note: 'Triggered when a single piece is deleted from an inbound lot.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'pieceId', label: 'Piece ID' },
+        ]
+    },
+    issue_to_cutter_machine_deleted: {
+        note: 'Triggered when a Cutter machine issue record is deleted.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'count', label: 'Pieces Count' },
+            { key: 'totalWeight', label: 'Total Weight' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_holo_machine_deleted: {
+        note: 'Triggered when a Holo machine issue record is deleted.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'metallicBobbins', label: 'Bobbins' },
+            { key: 'metallicBobbinsWeight', label: 'Bobbin Weight' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_coning_machine_deleted: {
+        note: 'Triggered when a Coning machine issue record is deleted.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'date', label: 'Date' },
+            { key: 'rollsIssued', label: 'Rolls' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    backup_failed: {
+        note: 'Triggered when a system backup attempt fails.',
+        variables: [
+            { key: 'time', label: 'Time (ISO)' },
+            { key: 'type', label: 'Backup Type' },
+            { key: 'filename', label: 'Filename' },
+            { key: 'error', label: 'Error Message' },
+            { key: 'host', label: 'Host' },
+        ]
+    }
 };
 
 function VariablesPopover({ variables }) {
@@ -265,6 +397,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editing, setEditing] = useState(null); // { event, template, enabled, sendToPrimary, groupIds }
+    const [searchQuery, setSearchQuery] = useState('');
     const textareaRef = useRef(null);
     const [mention, setMention] = useState({
         open: false,
@@ -274,7 +407,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     });
     const [mentionIndex, setMentionIndex] = useState(0);
 
-    const eventVariables = editing ? WHATSAPP_VARIABLES[editing.event] || [] : [];
+    const eventVariables = editing ? (WHATSAPP_EVENTS_CONFIG[editing.event]?.variables || []) : [];
 
     useEffect(() => {
         load();
@@ -392,59 +525,87 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
             <CardHeader><CardTitle>Message Templates</CardTitle></CardHeader>
             <CardContent>
                 <div className="space-y-4">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            placeholder="Search by event or content..."
+                            className="pl-10"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
+                    </div>
+
                     {loading && <div className="text-sm text-muted-foreground">Loading...</div>}
                     {!loading && templates.length === 0 && <div className="text-sm text-muted-foreground">No templates found.</div>}
+                    {!loading && templates.length > 0 && searchQuery && templates.filter(t =>
+                        t.event.toLowerCase().replace(/_/g, ' ').includes(searchQuery.toLowerCase()) ||
+                        t.template.toLowerCase().includes(searchQuery.toLowerCase())
+                    ).length === 0 && (
+                            <div className="text-sm text-muted-foreground py-8 text-center border rounded-md border-dashed">
+                                No templates matching "{searchQuery}"
+                            </div>
+                        )}
 
                     <div className="grid gap-4">
-                        {templates.map(t => {
-                            const primaryNumber = db?.settings?.[0]?.whatsappNumber;
-                            const assignedGroups = (t.groupIds || [])
-                                .map(gid => {
-                                    const g = groups.find(x => x.id === gid);
-                                    if (g) return { id: gid, name: g.name };
-                                    if (groups.length === 0) return { id: gid, name: 'Loading...' };
-                                    return null;
-                                })
-                                .filter(Boolean);
+                        {templates
+                            .filter(t =>
+                                t.event.toLowerCase().replace(/_/g, ' ').includes(searchQuery.toLowerCase()) ||
+                                t.template.toLowerCase().includes(searchQuery.toLowerCase())
+                            )
+                            .map(t => {
+                                const primaryNumber = db?.settings?.[0]?.whatsappNumber;
+                                const assignedGroups = (t.groupIds || [])
+                                    .map(gid => {
+                                        const g = groups.find(x => x.id === gid);
+                                        if (g) return { id: gid, name: g.name };
+                                        if (groups.length === 0) return { id: gid, name: 'Loading...' };
+                                        return null;
+                                    })
+                                    .filter(Boolean);
 
-                            return (
-                                <div key={t.event} className={`border p-4 rounded-md space-y-2 ${!t.enabled ? 'opacity-50 grayscale bg-muted/20' : ''}`}>
-                                    <div className="flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
-                                            <h4 className="font-medium capitalize">{t.event.replace(/_/g, ' ')}</h4>
-                                            {!t.enabled && <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase font-bold">Disabled</span>}
+                                return (
+                                    <div key={t.event} className={`border p-4 rounded-md space-y-2 ${!t.enabled ? 'opacity-50 grayscale bg-muted/20' : ''}`}>
+                                        <div className="flex justify-between items-center">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-medium capitalize">{t.event.replace(/_/g, ' ')}</h4>
+                                                {!t.enabled && <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase font-bold">Disabled</span>}
+                                            </div>
+                                            <Button variant="outline" size="sm" onClick={() => setEditing(t)}>Edit</Button>
                                         </div>
-                                        <Button variant="outline" size="sm" onClick={() => setEditing(t)}>Edit</Button>
+                                        {WHATSAPP_EVENTS_CONFIG[t.event]?.note && (
+                                            <p className="text-[11px] text-primary/80 font-medium italic bg-primary/5 p-2 rounded border-l-2 border-primary">
+                                                Note: {WHATSAPP_EVENTS_CONFIG[t.event].note}
+                                            </p>
+                                        )}
+                                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{t.template}</p>
+
+                                        {(t.sendToPrimary || assignedGroups.length > 0) && (
+                                            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-muted/50">
+                                                {t.sendToPrimary && primaryNumber && (
+                                                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600 dark:bg-blue-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-blue-700 dark:border-blue-800">
+                                                        <Smartphone className="w-3.5 h-3.5 text-white/90" />
+                                                        <span>+{primaryNumber}</span>
+                                                    </div>
+                                                )}
+                                                {whatsappStatus?.status === 'connected' && assignedGroups.map(group => (
+                                                    <div key={group.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 dark:bg-emerald-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-emerald-700 dark:border-emerald-800">
+                                                        <Users className="w-3.5 h-3.5 text-white/90" />
+                                                        <span className="max-w-[150px] truncate">
+                                                            {group.name === 'Loading...' ? (
+                                                                <span className="animate-pulse">Loading...</span>
+                                                            ) : group.name ? (
+                                                                group.name
+                                                            ) : (
+                                                                `Unknown Group (${group.id.split('@')[0]})`
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
-                                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{t.template}</p>
-
-                                    {(t.sendToPrimary || assignedGroups.length > 0) && (
-                                        <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-muted/50">
-                                            {t.sendToPrimary && primaryNumber && (
-                                                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600 dark:bg-blue-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-blue-700 dark:border-blue-800">
-                                                    <Smartphone className="w-3.5 h-3.5 text-white/90" />
-                                                    <span>+{primaryNumber}</span>
-                                                </div>
-                                            )}
-                                            {whatsappStatus?.status === 'connected' && assignedGroups.map(group => (
-                                                <div key={group.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 dark:bg-emerald-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-emerald-700 dark:border-emerald-800">
-                                                    <Users className="w-3.5 h-3.5 text-white/90" />
-                                                    <span className="max-w-[150px] truncate">
-                                                        {group.name === 'Loading...' ? (
-                                                            <span className="animate-pulse">Loading...</span>
-                                                        ) : group.name ? (
-                                                            group.name
-                                                        ) : (
-                                                            `Unknown Group (${group.id.split('@')[0]})`
-                                                        )}
-                                                    </span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
+                                );
+                            })}
                     </div>
                 </div>
 
@@ -537,7 +698,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                             </div>
                                         )}
                                     </div>
-                                    <p className="text-[10px] text-muted-foreground">Supports both {'{{variable}}'} and @variable syntax.</p>
+                                    <p className="text-[10px] text-muted-foreground">Use tagging syntax (e.g., <b>@variableName</b>) for dynamic data.</p>
                                 </div>
 
                                 <div className="space-y-2">

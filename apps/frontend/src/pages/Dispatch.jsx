@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
@@ -7,8 +8,9 @@ import {
 } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
-import { Truck, Plus, Search, History, Package, X, ChevronRight, Trash2 } from 'lucide-react';
+import { Truck, Plus, Search, History, Package, X, ChevronRight, Trash2, Printer } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { printDispatchChallan } from '../utils/printDispatchChallan';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -18,7 +20,7 @@ const STAGES = [
 ];
 
 export function Dispatch() {
-    const { refreshDb } = useInventory();
+    const { refreshDb, db } = useInventory();
     const [activeTab, setActiveTab] = useState('dispatch'); // 'dispatch' | 'history'
     const [selectedStage, setSelectedStage] = useState('inbound');
     const [availableItems, setAvailableItems] = useState([]);
@@ -140,7 +142,7 @@ export function Dispatch() {
 
         setSubmitting(true);
         try {
-            await api.createDispatch({
+            const res = await api.createDispatch({
                 customerId: dispatchForm.customerId,
                 stage: selectedStage,
                 stageItemId: selectedItem.id,
@@ -150,11 +152,27 @@ export function Dispatch() {
             });
 
             setDispatchModalOpen(false);
-            // Refresh available items
-            const res = await api.getDispatchAvailable(selectedStage);
-            setAvailableItems(res.items || []);
+
+            // Auto print logic if desired, or just alert
+            const shouldPrint = confirm('Dispatch created successfully! Do you want to print the challan?');
+            if (shouldPrint && res.dispatch) {
+                // We need to hydrate customer name as the response might just have ID
+                // But typically responses include relation if requested.
+                // Assuming res.dispatch has relations or we merge it.
+                // Re-fetch dispatches to get full object for printing just in case.
+                const updatedDispatches = await api.listDispatches();
+                setDispatches(updatedDispatches.dispatches || []);
+                const freshDispatch = updatedDispatches.dispatches?.find(d => d.id === res.dispatch.id);
+                if (freshDispatch) {
+                    handlePrintChallan(freshDispatch);
+                }
+            }
+
+            // Refresh available items regardless of print choice
+            const availRes = await api.getDispatchAvailable(selectedStage);
+            setAvailableItems(availRes.items || []);
             await refreshDb();
-            alert('Dispatch created successfully!');
+
         } catch (err) {
             alert(err.message || 'Failed to create dispatch');
         } finally {
@@ -199,6 +217,16 @@ export function Dispatch() {
         } finally {
             setSavingCustomer(false);
         }
+    }
+
+    function handlePrintChallan(dispatch) {
+        const settings = db?.settings?.[0] || {};
+        const firmDetails = {
+            name: settings.challanFromName || 'GLINTEX',
+            address: settings.challanFromAddress,
+            mobile: settings.challanFromMobile
+        };
+        printDispatchChallan(dispatch, firmDetails);
     }
 
     const getStageUnitLabel = (stage) => {
@@ -379,7 +407,7 @@ export function Dispatch() {
                                         <TableHead>Stage</TableHead>
                                         <TableHead>Barcode</TableHead>
                                         <TableHead className="text-right">Weight</TableHead>
-                                        <TableHead className="w-[80px]"></TableHead>
+                                        <TableHead className="w-[120px] text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -408,12 +436,22 @@ export function Dispatch() {
                                                 </TableCell>
                                                 <TableCell className="font-mono text-sm">{d.stageBarcode || '—'}</TableCell>
                                                 <TableCell className="text-right font-medium">{formatKg(d.weight)}</TableCell>
-                                                <TableCell>
+                                                <TableCell className="text-right whitespace-nowrap">
                                                     <Button
                                                         size="sm"
                                                         variant="ghost"
-                                                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                        className="h-8 w-8 p-0 mr-1"
+                                                        onClick={() => handlePrintChallan(d)}
+                                                        title="Print Challan"
+                                                    >
+                                                        <Printer className="w-4 h-4" />
+                                                    </Button>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="ghost"
+                                                        className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
                                                         onClick={() => handleDeleteDispatch(d.id)}
+                                                        title="Delete Dispatch"
                                                     >
                                                         <Trash2 className="w-4 h-4" />
                                                     </Button>
@@ -434,7 +472,7 @@ export function Dispatch() {
                     <div className="space-y-4">
                         {selectedItem && (
                             <div className="bg-muted p-4 rounded-lg">
-                                <div className="text-sm text-muted-foreground mb-1">Dispatching from {selectedStage}</div>
+                                <div className="text-sm text-muted-foreground mb-1">Dispatching from {selectedItem.stage || selectedStage}</div>
                                 <div className="font-medium">{selectedItem.barcode || selectedItem.lotNo}</div>
                                 <div className="text-sm text-muted-foreground">
                                     Available: <span className="font-medium text-green-600">{formatKg(selectedItem.availableWeight)}</span>

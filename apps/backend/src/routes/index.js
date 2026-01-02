@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';

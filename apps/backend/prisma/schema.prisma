@@ -100,6 +100,7 @@ model InboundItem {
   barcode         String   @unique
   consumptionDate String?
   isOpeningStock  Boolean  @default(false)
+  dispatchedWeight Float   @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -200,6 +201,7 @@ model ReceiveFromHoloMachineRow {
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
+  dispatchedWeight Float   @default(0)
   issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
   rollType    RollType?          @relation(fields: [rollTypeId], references: [id])
   box         Box?               @relation(fields: [boxId], references: [id])
@@ -306,6 +308,7 @@ model ReceiveFromConingMachineRow {
   operator    Operator?            @relation("OperatorConingReceive", fields: [operatorId], references: [id])
   helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
   box         Box?                 @relation(fields: [boxId], references: [id])
+  dispatchedWeight Float            @default(0)
 }
 
 model ReceiveFromConingMachinePieceTotal {
@@ -407,6 +410,7 @@ model ReceiveFromCutterMachineRow {
   helper        Operator?                            @relation("HelperReceiveRows", fields: [helperId], references: [id])
   cutId         String?
   cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
+  dispatchedWeight Float                             @default(0)
 }
 
 model ReceiveFromCutterMachineChallan {
@@ -585,3 +589,42 @@ model UserSession {
   userAgent  String?
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
+
+// ========== DISPATCH FEATURE ==========
+
+model Customer {
+  id          String    @id @default(cuid())
+  name        String
+  phone       String?
+  address     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  dispatches  Dispatch[]
+}
+
+model DispatchSequence {
+  id        String   @id // Format: "dispatch_seq_2025_26"
+  nextValue Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+model Dispatch {
+  id              String   @id @default(cuid())
+  challanNo       String   @unique // Format: DC/2025-26/001
+  date            String
+  customerId      String
+  stage           String   // "inbound" | "cutter" | "holo" | "coning"
+  stageItemId     String   // ID of the source item
+  stageBarcode    String   // Original barcode of the dispatched item
+  weight          Float
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  customer        Customer @relation(fields: [customerId], references: [id])
+}
+

@@ -34,7 +34,52 @@ export function ReceiveHistoryTable() {
         let sorted = rows.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
         // Filter based on search and date
-        return sorted.filter(r => {
+        return sorted.map(r => {
+            let pieceIdsList = [];
+            if (process === 'holo') {
+                const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                if (issue) {
+                    try {
+                        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+                        if (Array.isArray(refs)) {
+                            const ids = new Set();
+                            refs.forEach(ref => {
+                                const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === ref.rowId);
+                                if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
+                            });
+                            pieceIdsList = Array.from(ids);
+                        }
+                    } catch (e) { }
+                }
+            } else if (process === 'coning') {
+                const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                if (issue) {
+                    try {
+                        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+                        if (Array.isArray(refs)) {
+                            const ids = new Set();
+                            refs.forEach(ref => {
+                                const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === ref.rowId);
+                                if (holoRow) {
+                                    const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
+                                    if (holoIssue) {
+                                        const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                                        if (Array.isArray(hRefs)) {
+                                            hRefs.forEach(hRef => {
+                                                const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
+                                                if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+                            pieceIdsList = Array.from(ids);
+                        }
+                    } catch (e) { }
+                }
+            }
+            return { ...r, pieceIdsList };
+        }).filter(r => {
             // Date filter
             if (startDate || endDate) {
                 const itemDate = new Date(r.date || r.createdAt);
@@ -54,12 +99,14 @@ export function ReceiveHistoryTable() {
                 const operator = (r.operator?.name || '').toLowerCase();
                 const notes = (r.note || r.notes || '').toLowerCase();
                 const lot = (r.lotNo || r.issue?.lotNo || '').toLowerCase();
+                const pieces = (r.pieceIdsList || []).join(' ').toLowerCase();
 
                 return barcode.includes(term) ||
                     machine.includes(term) ||
                     operator.includes(term) ||
                     notes.includes(term) ||
-                    lot.includes(term);
+                    lot.includes(term) ||
+                    pieces.includes(term);
             }
 
             return true;
@@ -1080,7 +1127,7 @@ export function ReceiveHistoryTable() {
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
-                    lot: row.issue?.lotNo || issue?.lotNo || '—',
+                    piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
                     weight: formatKg(row.rollWeight ?? row.netWeight ?? row.grossWeight),
@@ -1093,7 +1140,7 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'lot', header: 'Lot' },
+                { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'rolls', header: 'Rolls' },
                 { key: 'weight', header: 'Weight (kg)' },
@@ -1109,7 +1156,7 @@ export function ReceiveHistoryTable() {
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
-                    lot: issue?.lotNo || row.issue?.lotNo || '—',
+                    piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     box: row.box?.name || '—',
                     cones: row.coneCount || 0,
@@ -1122,7 +1169,7 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'lot', header: 'Lot' },
+                { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'box', header: 'Box' },
                 { key: 'cones', header: 'Cones' },
@@ -1262,7 +1309,7 @@ export function ReceiveHistoryTable() {
                                     {process === 'holo' && (
                                         <>
                                             <TableHead>Date</TableHead>
-                                            <TableHead>Lot</TableHead>
+                                            <TableHead>Piece</TableHead>
                                             <TableHead>Barcode</TableHead>
                                             <TableHead className="text-right">Rolls</TableHead>
                                             <TableHead className="text-right">Weight (kg)</TableHead>
@@ -1276,7 +1323,7 @@ export function ReceiveHistoryTable() {
                                     {process === 'coning' && (
                                         <>
                                             <TableHead>Date</TableHead>
-                                            <TableHead>Lot</TableHead>
+                                            <TableHead>Piece</TableHead>
                                             <TableHead>Barcode</TableHead>
                                             <TableHead>Box</TableHead>
                                             <TableHead className="text-right">Cones</TableHead>
@@ -1335,7 +1382,9 @@ export function ReceiveHistoryTable() {
                                             return (
                                                 <TableRow key={r.id}>
                                                     <TableCell>{dateDisplay}</TableCell>
-                                                    <TableCell>{r.issue?.lotNo || '—'}</TableCell>
+                                                    <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                        {(r.pieceIdsList || []).join(', ') || '—'}
+                                                    </TableCell>
                                                     <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
                                                     <TableCell className="text-right">1</TableCell>
                                                     <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
@@ -1351,7 +1400,9 @@ export function ReceiveHistoryTable() {
                                             return (
                                                 <TableRow key={r.id}>
                                                     <TableCell>{dateDisplay}</TableCell>
-                                                    <TableCell>{r.issue?.lotNo || '—'}</TableCell>
+                                                    <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                        {(r.pieceIdsList || []).join(', ') || '—'}
+                                                    </TableCell>
                                                     <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
                                                     <TableCell>{r.box?.name || '—'}</TableCell>
                                                     <TableCell className="text-right">{r.coneCount}</TableCell>

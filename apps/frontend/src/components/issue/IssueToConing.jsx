@@ -79,10 +79,24 @@ export function IssueToConing() {
 
         const unitWeight = row.rollCount > 0 ? (row.rollWeight / row.rollCount) : 0;
 
+        // Trace piece IDs
+        let pieceIds = [];
+        try {
+            const hRefs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
+            if (Array.isArray(hRefs)) {
+                const ids = new Set();
+                hRefs.forEach(hRef => {
+                    const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
+                    if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
+                });
+                pieceIds = Array.from(ids);
+            }
+        } catch (e) { }
+
         setCrates(prev => [...prev, {
             rowId: row.id,
             barcode: row.barcode,
-            lotNo: rowLot,
+            lotNo: pieceIds.join(', ') || rowLot, // Show piece IDs in the 'Piece' column
             availRolls: row.rollCount,
             unitWeight,
             issueRolls: row.rollCount, // Default all
@@ -318,7 +332,7 @@ export function IssueToConing() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Rolls</TableHead>
                                     <TableHead className="">Issue Rolls</TableHead>
                                     <TableHead className="">Issue Wt</TableHead>

@@ -79,7 +79,7 @@ export function IssueToHolo() {
         const newCrate = {
             rowId: row.id,
             barcode: row.barcode,
-            lotNo: rowLot,
+            lotNo: row.pieceId, // Show piece ID in the 'Piece' column
             itemId: rowItem,
             availCount,
             availWt,
@@ -280,7 +280,7 @@ export function IssueToHolo() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Count</TableHead>
                                     <TableHead className="">Issue Count</TableHead>
                                     <TableHead className="">Issue Wt</TableHead>

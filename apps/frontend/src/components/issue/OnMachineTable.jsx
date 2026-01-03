@@ -128,12 +128,33 @@ export function OnMachineTable({ db, process }) {
                 const accountedWeight = totalReceived + totalWastage;
                 const pendingWeight = issuedWeight - accountedWeight;
 
+                // Trace pieces for holo: trace back to cutter receive rows
+                let pieceIds = [];
+                try {
+                    const refs = typeof issue.receivedRowRefs === 'string'
+                        ? JSON.parse(issue.receivedRowRefs)
+                        : issue.receivedRowRefs;
+                    if (Array.isArray(refs)) {
+                        const idsSet = new Set();
+                        refs.forEach(ref => {
+                            const cutterRow = (db.receive_from_cutter_machine_rows || []).find(r => r.id === ref.rowId);
+                            if (cutterRow?.pieceId) {
+                                idsSet.add(cutterRow.pieceId);
+                            }
+                        });
+                        pieceIds = Array.from(idsSet);
+                    }
+                } catch (e) {
+                    pieceIds = [];
+                }
+
                 return {
                     ...issue,
                     issuedWeight,
                     receivedWeight: totalReceived,
                     wastageWeight: totalWastage,
                     pendingWeight: Math.max(0, pendingWeight),
+                    pieceIdsList: pieceIds,
                 };
             }).filter(e => e.pendingWeight > 0.001);
 
@@ -147,18 +168,41 @@ export function OnMachineTable({ db, process }) {
 
                 // Calculate issued weight from receivedRowRefs
                 let issuedWeight = 0;
+                let pieceIds = [];
                 try {
                     const refs = typeof issue.receivedRowRefs === 'string'
                         ? JSON.parse(issue.receivedRowRefs)
                         : issue.receivedRowRefs;
                     if (Array.isArray(refs)) {
+                        const idsSet = new Set();
                         refs.forEach(ref => {
                             issuedWeight += Number(ref.issueWeight || 0);
+
+                            // Trace back to piece: coning issue -> holo receive -> holo issue -> cutter receive -> pieceId
+                            const holoRow = (db.receive_from_holo_machine_rows || []).find(r => r.id === ref.rowId);
+                            if (holoRow) {
+                                const holoIssue = (db.issue_to_holo_machine || []).find(i => i.id === holoRow.issueId);
+                                if (holoIssue) {
+                                    const holoRefs = typeof holoIssue.receivedRowRefs === 'string'
+                                        ? JSON.parse(holoIssue.receivedRowRefs)
+                                        : holoIssue.receivedRowRefs;
+                                    if (Array.isArray(holoRefs)) {
+                                        holoRefs.forEach(hRef => {
+                                            const cutterRow = (db.receive_from_cutter_machine_rows || []).find(r => r.id === hRef.rowId);
+                                            if (cutterRow?.pieceId) {
+                                                idsSet.add(cutterRow.pieceId);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
                         });
+                        pieceIds = Array.from(idsSet);
                     }
                 } catch (e) {
                     // If parsing fails, use rollsIssued as fallback (less accurate)
                     issuedWeight = 0;
+                    pieceIds = [];
                 }
 
                 const accountedWeight = totalReceived + totalWastage;
@@ -170,6 +214,7 @@ export function OnMachineTable({ db, process }) {
                     receivedWeight: totalReceived,
                     wastageWeight: totalWastage,
                     pendingWeight: Math.max(0, pendingWeight),
+                    pieceIdsList: pieceIds,
                 };
             }).filter(e => e.pendingWeight > 0.001);
         }
@@ -209,7 +254,8 @@ export function OnMachineTable({ db, process }) {
                     pieceIdsStr.includes(term) ||
                     itemName.includes(term) ||
                     operatorName.includes(term) ||
-                    machineName.includes(term);
+                    machineName.includes(term) ||
+                    (e.pieceIdsList && e.pieceIdsList.join(' ').toLowerCase().includes(term));
             }
 
             return true;
@@ -246,8 +292,8 @@ export function OnMachineTable({ db, process }) {
             const progressPercent = getProgressPercent(entry);
             const baseData = {
                 date: formatDateDDMMYYYY(entry.date),
-                lotOrPiece: process === 'cutter'
-                    ? (Array.isArray(entry.pieceIds) ? entry.pieceIds.join(', ') : (entry.pieceIds || ''))
+                lotOrPiece: (process === 'cutter' || process === 'holo' || process === 'coning')
+                    ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || ''))
                     : (entry.lotNo || ''),
                 itemName: itemNameById.get(entry.itemId) || '—',
                 machineName: machineNameById.get(entry.machineId) || '—',
@@ -266,7 +312,7 @@ export function OnMachineTable({ db, process }) {
 
         let columns = [
             { key: 'date', header: 'Date' },
-            { key: 'lotOrPiece', header: process === 'cutter' ? 'Piece' : 'Lot' },
+            { key: 'lotOrPiece', header: (process === 'cutter' || process === 'holo' || process === 'coning') ? 'Piece' : 'Lot' },
             { key: 'itemName', header: 'Item' },
         ];
         if (process === 'cutter') {
@@ -362,7 +408,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Piece</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -377,7 +423,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Piece</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -404,8 +450,8 @@ export function OnMachineTable({ db, process }) {
                                     <TableRow key={entry.id}>
                                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(entry.date)}</TableCell>
                                         <TableCell>{itemNameById.get(entry.itemId)}</TableCell>
-                                        <TableCell className="max-w-[120px] truncate" title={process === 'cutter' ? (entry.pieceIds || '') : (entry.lotNo || '')}>
-                                            {process === 'cutter' ? (entry.pieceIds || '—') : (entry.lotNo || '—')}
+                                        <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : entry.pieceIdsList) : (entry.lotNo || '')}>
+                                            {(process === 'cutter' || process === 'holo' || process === 'coning') ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || '—')) : (entry.lotNo || '—')}
                                         </TableCell>
                                         {process === 'cutter' && <TableCell>{cutNameById.get(entry.cutId) || '—'}</TableCell>}
                                         <TableCell>{machineNameById.get(entry.machineId)}</TableCell>

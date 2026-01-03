@@ -2,9 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../components/ui';
-import { Trash2, Printer } from 'lucide-react';
+import { Trash2, Printer, Download } from 'lucide-react';
 import * as api from '../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
+import { exportHistoryToExcel } from '../services';
 
 export function IssueHistory({ db, refreshDb }) {
   const { process } = useInventory();
@@ -289,6 +290,12 @@ export function IssueHistory({ db, refreshDb }) {
     return map;
   }, [db.operators]);
 
+  const cutNameById = useMemo(() => {
+    const map = new Map();
+    (db.cuts || []).forEach(c => map.set(c.id, c.name || '—'));
+    return map;
+  }, [db.cuts]);
+
   const issues = useMemo(() => {
     let rows = [];
     if (process === 'holo') {
@@ -384,6 +391,94 @@ export function IssueHistory({ db, refreshDb }) {
     return actions;
   };
 
+  const handleExport = () => {
+    // Build export data with resolved names
+    const exportData = issues.map(r => {
+      const baseData = {
+        date: formatDateDDMMYYYY(r.date),
+        itemName: itemNameById.get(r.itemId) || '—',
+        machineName: machineNameById.get(r.machineId) || '—',
+        operatorName: operatorNameById.get(r.operatorId) || '—',
+        barcode: r.barcode || r.id.substring(0, 8),
+        note: r.note || '',
+      };
+
+      if (process === 'cutter') {
+        return {
+          ...baseData,
+          pieceIds: Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || ''),
+          cut: cutNameById.get(r.cutId) || '—',
+          qty: r.count || 0,
+          weight: formatKg(r.totalWeight),
+        };
+      } else if (process === 'holo') {
+        return {
+          ...baseData,
+          lotNo: r.lotNo || '',
+          yarnName: yarnNameById.get(r.yarnId) || '—',
+          twistName: twistNameById.get(r.twistId) || '—',
+          metallicBobbins: r.metallicBobbins || 0,
+          metallicBobbinsWeight: formatKg(r.metallicBobbinsWeight),
+          yarnKg: formatKg(r.yarnKg),
+          rollsEst: r.rollsProducedEstimate || '',
+        };
+      } else {
+        return {
+          ...baseData,
+          lotNo: r.lotNo || '',
+          rollsIssued: r.count || r.rollsIssued || 0,
+        };
+      }
+    });
+
+    // Define columns based on process
+    let columns;
+    if (process === 'cutter') {
+      columns = [
+        { key: 'date', header: 'Date' },
+        { key: 'itemName', header: 'Item' },
+        { key: 'pieceIds', header: 'Piece IDs' },
+        { key: 'cut', header: 'Cut' },
+        { key: 'machineName', header: 'Machine' },
+        { key: 'operatorName', header: 'Operator' },
+        { key: 'qty', header: 'Qty' },
+        { key: 'weight', header: 'Weight (kg)' },
+        { key: 'barcode', header: 'Barcode' },
+        { key: 'note', header: 'Note' },
+      ];
+    } else if (process === 'holo') {
+      columns = [
+        { key: 'date', header: 'Date' },
+        { key: 'itemName', header: 'Item' },
+        { key: 'lotNo', header: 'Lot' },
+        { key: 'machineName', header: 'Machine' },
+        { key: 'operatorName', header: 'Operator' },
+        { key: 'yarnName', header: 'Yarn' },
+        { key: 'twistName', header: 'Twist' },
+        { key: 'metallicBobbins', header: 'Metallic Bobbins' },
+        { key: 'metallicBobbinsWeight', header: 'Met. Bob. Wt (kg)' },
+        { key: 'yarnKg', header: 'Yarn Wt (kg)' },
+        { key: 'rollsEst', header: 'Rolls Est.' },
+        { key: 'barcode', header: 'Barcode' },
+        { key: 'note', header: 'Note' },
+      ];
+    } else {
+      columns = [
+        { key: 'date', header: 'Date' },
+        { key: 'itemName', header: 'Item' },
+        { key: 'lotNo', header: 'Lot' },
+        { key: 'machineName', header: 'Machine' },
+        { key: 'operatorName', header: 'Operator' },
+        { key: 'rollsIssued', header: 'Rolls Issued' },
+        { key: 'barcode', header: 'Barcode' },
+        { key: 'note', header: 'Note' },
+      ];
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
@@ -427,6 +522,13 @@ export function IssueHistory({ db, refreshDb }) {
         >
           Clear
         </button>
+        <button
+          onClick={handleExport}
+          className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
+        >
+          <Download className="w-4 h-4" />
+          Export
+        </button>
       </div>
 
       <div className="rounded-md border max-h-[600px] overflow-auto">
@@ -438,6 +540,7 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Piece</TableHead>
+                  <TableHead>Cut</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Qty</TableHead>
@@ -491,6 +594,7 @@ export function IssueHistory({ db, refreshDb }) {
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
                       <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
+                      <TableCell>{cutNameById.get(r.cutId) || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
                       <TableCell>{r.count}</TableCell>

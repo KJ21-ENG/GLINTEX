@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Download } from 'lucide-react';
+import { exportHistoryToExcel } from '../../services';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -34,6 +35,12 @@ export function OnMachineTable({ db, process }) {
         (db.operators || []).forEach(o => map.set(o.id, o.name || '—'));
         return map;
     }, [db.operators]);
+
+    const cutNameById = useMemo(() => {
+        const map = new Map();
+        (db.cuts || []).forEach(c => map.set(c.id, c.name || '—'));
+        return map;
+    }, [db.cuts]);
 
     // Build piece totals lookup maps for each process
     const cutterPieceTotals = useMemo(() => {
@@ -234,6 +241,51 @@ export function OnMachineTable({ db, process }) {
         return Math.min(100, percent);
     };
 
+    const handleExport = () => {
+        const exportData = onMachineEntries.map(entry => {
+            const progressPercent = getProgressPercent(entry);
+            const baseData = {
+                date: formatDateDDMMYYYY(entry.date),
+                lotOrPiece: process === 'cutter'
+                    ? (Array.isArray(entry.pieceIds) ? entry.pieceIds.join(', ') : (entry.pieceIds || ''))
+                    : (entry.lotNo || ''),
+                itemName: itemNameById.get(entry.itemId) || '—',
+                machineName: machineNameById.get(entry.machineId) || '—',
+                operatorName: operatorNameById.get(entry.operatorId) || '—',
+                issuedWeight: formatKg(entry.issuedWeight),
+                receivedWeight: formatKg(entry.receivedWeight),
+                pendingWeight: formatKg(entry.pendingWeight),
+                progress: `${progressPercent}%`,
+                barcode: entry.barcode || entry.id.substring(0, 8),
+            };
+            if (process === 'cutter') {
+                return { ...baseData, cut: cutNameById.get(entry.cutId) || '—' };
+            }
+            return baseData;
+        });
+
+        let columns = [
+            { key: 'date', header: 'Date' },
+            { key: 'lotOrPiece', header: process === 'cutter' ? 'Piece' : 'Lot' },
+            { key: 'itemName', header: 'Item' },
+        ];
+        if (process === 'cutter') {
+            columns.push({ key: 'cut', header: 'Cut' });
+        }
+        columns = columns.concat([
+            { key: 'machineName', header: 'Machine' },
+            { key: 'operatorName', header: 'Operator' },
+            { key: 'issuedWeight', header: 'Issued (kg)' },
+            { key: 'receivedWeight', header: 'Received (kg)' },
+            { key: 'pendingWeight', header: 'Pending (kg)' },
+            { key: 'progress', header: 'Progress' },
+            { key: 'barcode', header: 'Barcode' },
+        ]);
+
+        const today = new Date().toISOString().split('T')[0];
+        exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
+    };
+
     return (
         <div className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
@@ -277,6 +329,13 @@ export function OnMachineTable({ db, process }) {
                 >
                     Clear
                 </button>
+                <button
+                    onClick={handleExport}
+                    className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
+                >
+                    <Download className="w-4 h-4" />
+                    Export
+                </button>
             </div>
 
             <div className="rounded-md border max-h-[600px] overflow-y-auto">
@@ -288,6 +347,7 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
                                     <TableHead>Piece</TableHead>
+                                    <TableHead>Cut</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -344,7 +404,10 @@ export function OnMachineTable({ db, process }) {
                                     <TableRow key={entry.id}>
                                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(entry.date)}</TableCell>
                                         <TableCell>{itemNameById.get(entry.itemId)}</TableCell>
-                                        <TableCell className="max-w-[120px] truncate" title={entry.pieceIds || ''}>{entry.pieceIds || '—'}</TableCell>
+                                        <TableCell className="max-w-[120px] truncate" title={process === 'cutter' ? (entry.pieceIds || '') : (entry.lotNo || '')}>
+                                            {process === 'cutter' ? (entry.pieceIds || '—') : (entry.lotNo || '—')}
+                                        </TableCell>
+                                        {process === 'cutter' && <TableCell>{cutNameById.get(entry.cutId) || '—'}</TableCell>}
                                         <TableCell>{machineNameById.get(entry.machineId)}</TableCell>
                                         <TableCell>{operatorNameById.get(entry.operatorId)}</TableCell>
                                         <TableCell>{formatKg(entry.issuedWeight)}</TableCell>

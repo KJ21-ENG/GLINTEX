@@ -7,6 +7,7 @@ import { Printer, Edit2, Trash2, Download, History, RotateCcw } from 'lucide-rea
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
+import { exportHistoryToExcel } from '../../services';
 
 export function ReceiveHistoryTable() {
     const { db, process, refreshDb } = useInventory();
@@ -1039,6 +1040,131 @@ export function ReceiveHistoryTable() {
     const showHistory = process !== 'cutter' || activeTab === 'history';
     const showChallans = process === 'cutter' && activeTab === 'challan';
 
+    const handleExportHistory = () => {
+        let exportData;
+        let columns;
+
+        if (process === 'cutter') {
+            exportData = history.map(row => {
+                const piece = db.inbound_items?.find(p => p.id === row.pieceId);
+                const item = db.items?.find(i => i.id === piece?.itemId);
+                return {
+                    date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    item: item?.name || '—',
+                    piece: row.pieceId || '—',
+                    cut: row.cutMaster?.name || row.cut || '—',
+                    barcode: row.barcode || '—',
+                    machine: row.machineNo || '—',
+                    employee: row.operator?.name || '—',
+                    netWt: formatKg(row.netWt),
+                    bobbinQty: row.bobbinQuantity || 0,
+                    bobbin: row.bobbin?.name || row.pcsTypeName || '—',
+                };
+            });
+            columns = [
+                { key: 'date', header: 'Date' },
+                { key: 'item', header: 'Item' },
+                { key: 'piece', header: 'Piece' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'barcode', header: 'Barcode' },
+                { key: 'machine', header: 'Machine' },
+                { key: 'employee', header: 'Employee' },
+                { key: 'netWt', header: 'Net Wt (kg)' },
+                { key: 'bobbinQty', header: 'Bobbin Qty' },
+                { key: 'bobbin', header: 'Bobbin' },
+            ];
+        } else if (process === 'holo') {
+            exportData = history.map(row => {
+                const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                const item = db.items?.find(i => i.id === issue?.itemId);
+                return {
+                    date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    item: item?.name || '—',
+                    lot: row.issue?.lotNo || issue?.lotNo || '—',
+                    barcode: row.barcode || '—',
+                    rolls: row.rollCount || 0,
+                    weight: formatKg(row.rollWeight ?? row.netWeight ?? row.grossWeight),
+                    machine: row.machineNo || '—',
+                    operator: row.operator?.name || '—',
+                    helper: row.helper?.name || '—',
+                    notes: row.note || row.notes || '',
+                };
+            });
+            columns = [
+                { key: 'date', header: 'Date' },
+                { key: 'item', header: 'Item' },
+                { key: 'lot', header: 'Lot' },
+                { key: 'barcode', header: 'Barcode' },
+                { key: 'rolls', header: 'Rolls' },
+                { key: 'weight', header: 'Weight (kg)' },
+                { key: 'machine', header: 'Machine' },
+                { key: 'operator', header: 'Operator' },
+                { key: 'helper', header: 'Helper' },
+                { key: 'notes', header: 'Notes' },
+            ];
+        } else {
+            exportData = history.map(row => {
+                const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                const item = db.items?.find(i => i.id === issue?.itemId);
+                return {
+                    date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    item: item?.name || '—',
+                    lot: issue?.lotNo || row.issue?.lotNo || '—',
+                    barcode: row.barcode || '—',
+                    box: row.box?.name || '—',
+                    cones: row.coneCount || 0,
+                    weight: formatKg(row.netWeight ?? row.grossWeight),
+                    machine: getConingMachineName(row),
+                    operator: row.operator?.name || '—',
+                    notes: row.note || row.notes || '',
+                };
+            });
+            columns = [
+                { key: 'date', header: 'Date' },
+                { key: 'item', header: 'Item' },
+                { key: 'lot', header: 'Lot' },
+                { key: 'barcode', header: 'Barcode' },
+                { key: 'box', header: 'Box' },
+                { key: 'cones', header: 'Cones' },
+                { key: 'weight', header: 'Weight (kg)' },
+                { key: 'machine', header: 'Machine' },
+                { key: 'operator', header: 'Operator' },
+                { key: 'notes', header: 'Notes' },
+            ];
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        exportHistoryToExcel(exportData, columns, `receive-history-${process}-${today}`);
+    };
+
+    const handleExportChallans = () => {
+        const exportData = challans.map(c => {
+            const meta = getCutterChallanMeta(c);
+            return {
+                challanNo: c.challanNo || '—',
+                date: formatDateDDMMYYYY(c.date || c.createdAt),
+                lot: c.lotNo || '—',
+                item: meta.itemName,
+                operator: meta.operatorName,
+                cut: meta.cutName,
+                totalNetWt: formatKg(c.totalNetWeight),
+                totalBobbins: c.totalBobbinQty || 0,
+            };
+        });
+        const columns = [
+            { key: 'challanNo', header: 'Challan No' },
+            { key: 'date', header: 'Date' },
+            { key: 'lot', header: 'Lot' },
+            { key: 'item', header: 'Item' },
+            { key: 'operator', header: 'Operator' },
+            { key: 'cut', header: 'Cut' },
+            { key: 'totalNetWt', header: 'Total Net Wt (kg)' },
+            { key: 'totalBobbins', header: 'Total Bobbins' },
+        ];
+        const today = new Date().toISOString().split('T')[0];
+        exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
+    };
+
     return (
         <Card>
             <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1104,6 +1230,13 @@ export function ReceiveHistoryTable() {
                     >
                         Clear
                     </button>
+                    <button
+                        onClick={showChallans ? handleExportChallans : handleExportHistory}
+                        className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
+                    >
+                        <Download className="w-4 h-4" />
+                        Export
+                    </button>
                 </div>
 
                 {showHistory && (
@@ -1113,6 +1246,8 @@ export function ReceiveHistoryTable() {
                                 <TableRow>
                                     {process === 'cutter' && (
                                         <>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Item</TableHead>
                                             <TableHead>Piece</TableHead>
                                             <TableHead>Cut</TableHead>
                                             <TableHead>Barcode</TableHead>
@@ -1161,8 +1296,13 @@ export function ReceiveHistoryTable() {
                                     history.map(r => {
                                         if (process === 'cutter') {
                                             const infoItems = getCutterReceiveInfo(r);
+                                            const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                                            const item = db.items?.find(i => i.id === piece?.itemId);
+                                            const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                             return (
                                                 <TableRow key={r.id}>
+                                                    <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
+                                                    <TableCell>{item?.name || '—'}</TableCell>
                                                     <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
                                                     <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
                                                     <TableCell className="font-mono text-xs">{r.barcode}</TableCell>

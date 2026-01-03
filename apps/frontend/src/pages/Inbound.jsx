@@ -4,7 +4,8 @@ import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
-import { Trash2, Plus, Save, ArrowUpDown, Search, Printer } from 'lucide-react';
+import { Trash2, Plus, Save, ArrowUpDown, Search, Printer, Download } from 'lucide-react';
+import { exportHistoryToExcel } from '../services';
 
 
 export function Inbound() {
@@ -353,6 +354,29 @@ function RecentLotsTable({ db }) {
         }
     };
 
+    const handleExportLots = () => {
+        const exportData = lots.map(l => ({
+            lotNo: l.lotNo,
+            date: formatDateDDMMYYYY(l.date),
+            item: l.itemName,
+            firm: l.firmName,
+            supplier: l.supplierName,
+            pieces: l.totalPieces || 0,
+            weight: formatKg(l.totalWeight),
+        }));
+        const columns = [
+            { key: 'lotNo', header: 'Lot No' },
+            { key: 'date', header: 'Date' },
+            { key: 'item', header: 'Item' },
+            { key: 'firm', header: 'Firm' },
+            { key: 'supplier', header: 'Supplier' },
+            { key: 'pieces', header: 'Pieces' },
+            { key: 'weight', header: 'Weight (kg)' },
+        ];
+        const today = new Date().toISOString().split('T')[0];
+        exportHistoryToExcel(exportData, columns, `inbound-lots-${today}`);
+    };
+
     return (
         <Card>
             <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -401,6 +425,14 @@ function RecentLotsTable({ db }) {
                         }}
                     >
                         Clear
+                    </Button>
+                    <Button
+                        size="sm"
+                        className="h-9 text-xs"
+                        onClick={handleExportLots}
+                    >
+                        <Download className="w-4 h-4 mr-1" />
+                        Export
                     </Button>
                 </div>
             </CardHeader>

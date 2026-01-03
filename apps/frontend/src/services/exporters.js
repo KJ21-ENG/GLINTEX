@@ -153,6 +153,82 @@ export function exportPdf(lots, piecesByLot, brand = { primary: '#2E4CA6', gold:
   doc.save('stock-summary.pdf');
 }
 
+
 export default { exportXlsx, exportCsv, exportPdf };
 
+/**
+ * Generic Excel export for history tables
+ * @param {Array} data - Array of objects to export
+ * @param {Array} columns - Array of { key, header } objects defining columns
+ * @param {string} filename - Filename without extension (e.g., 'issue-history-cutter')
+ */
+export function exportHistoryToExcel(data, columns, filename) {
+  if (!data || data.length === 0) {
+    alert('No data to export');
+    return;
+  }
 
+  // Transform data to use header labels
+  const rows = data.map(row => {
+    const obj = {};
+    columns.forEach(col => {
+      obj[col.header] = row[col.key] ?? '';
+    });
+    return obj;
+  });
+
+  const wb = utils.book_new();
+  const ws = utils.json_to_sheet(rows);
+
+  // Auto-calculate column widths based on content
+  const colWidths = columns.map(col => {
+    const maxDataLen = Math.max(
+      col.header.length,
+      ...data.map(row => String(row[col.key] ?? '').length)
+    );
+    return { wch: Math.min(50, Math.max(10, maxDataLen + 2)) };
+  });
+  ws['!cols'] = colWidths;
+
+  utils.book_append_sheet(wb, ws, 'Data');
+
+  const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Generic CSV export for history tables
+ * @param {Array} data - Array of objects to export
+ * @param {Array} columns - Array of { key, header } objects defining columns
+ * @param {string} filename - Filename without extension
+ */
+export function exportHistoryToCsv(data, columns, filename) {
+  if (!data || data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+
+  const headers = columns.map(col => escape(col.header));
+  const lines = [headers.join(',')];
+
+  for (const row of data) {
+    const values = columns.map(col => escape(row[col.key]));
+    lines.push(values.join(','));
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}

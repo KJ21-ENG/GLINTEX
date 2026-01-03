@@ -238,6 +238,8 @@ export function Inbound() {
 // Sub-component for Recent Lots
 function RecentLotsTable({ db }) {
     const [filter, setFilter] = useState("");
+    const [startDate, setStartDate] = useState("");
+    const [endDate, setEndDate] = useState("");
     const [page, setPage] = useState(1);
     const [expandedLot, setExpandedLot] = useState(null);
     const pageSize = 25;
@@ -254,16 +256,30 @@ function RecentLotsTable({ db }) {
         // Sort descending by Lot No (Higher to Lower)
         all.sort((a, b) => b.lotNo.localeCompare(a.lotNo, undefined, { numeric: true }));
 
+        // Date filter
+        const withDates = all.filter(l => {
+            if (startDate || endDate) {
+                const itemDate = new Date(l.date || l.createdAt);
+                if (startDate && itemDate < new Date(startDate)) return false;
+                if (endDate) {
+                    const end = new Date(endDate);
+                    end.setHours(23, 59, 59, 999);
+                    if (itemDate > end) return false;
+                }
+            }
+            return true;
+        });
+
         // Basic Filter
-        if (!filter) return all;
+        if (!filter) return withDates;
         const lower = filter.toLowerCase();
-        return all.filter(l =>
+        return withDates.filter(l =>
             l.lotNo.toLowerCase().includes(lower) ||
             l.itemName.toLowerCase().includes(lower) ||
             l.firmName.toLowerCase().includes(lower) ||
             l.supplierName.toLowerCase().includes(lower)
         );
-    }, [db, filter]);
+    }, [db, filter, startDate, endDate]);
 
     const paged = lots.slice((page - 1) * pageSize, page * pageSize);
     const totalPages = Math.ceil(lots.length / pageSize);
@@ -341,14 +357,51 @@ function RecentLotsTable({ db }) {
         <Card>
             <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <CardTitle>Recent Lots</CardTitle>
-                <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        placeholder="Filter lots..."
-                        className="pl-8"
-                        value={filter}
-                        onChange={e => setFilter(e.target.value)}
-                    />
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-end">
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-medium text-muted-foreground uppercase px-1">Search</label>
+                        <div className="relative w-full sm:w-64">
+                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="Filter lots..."
+                                className="pl-8"
+                                value={filter}
+                                onChange={e => setFilter(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-medium text-muted-foreground uppercase px-1">From</label>
+                            <Input
+                                type="date"
+                                className="h-9 text-xs"
+                                value={startDate}
+                                onChange={e => setStartDate(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-medium text-muted-foreground uppercase px-1">To</label>
+                            <Input
+                                type="date"
+                                className="h-9 text-xs"
+                                value={endDate}
+                                onChange={e => setEndDate(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 text-xs border"
+                        onClick={() => {
+                            setFilter('');
+                            setStartDate('');
+                            setEndDate('');
+                        }}
+                    >
+                        Clear
+                    </Button>
                 </div>
             </CardHeader>
             <CardContent>

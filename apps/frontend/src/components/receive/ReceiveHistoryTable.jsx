@@ -16,8 +16,10 @@ export function ReceiveHistoryTable() {
     const [removedRowIds, setRemovedRowIds] = useState(new Set());
     const [savingEdit, setSavingEdit] = useState(false);
     const [logChallan, setLogChallan] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
 
-    // Determine which collection to use based on process
     const history = useMemo(() => {
         let rows = [];
         if (process === 'holo') {
@@ -28,20 +30,40 @@ export function ReceiveHistoryTable() {
             rows = (db.receive_from_cutter_machine_rows || []).filter(row => !row.isDeleted);
         }
         // Sort by created date descending
-        return rows.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-    }, [db, process]);
+        let sorted = rows.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
-    const challans = useMemo(() => {
-        if (process !== 'cutter') return [];
-        const list = db.receive_from_cutter_machine_challans || [];
-        return list
-            .filter(challan => !challan.isDeleted)
-            .slice()
-            .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-    }, [db, process]);
+        // Filter based on search and date
+        return sorted.filter(r => {
+            // Date filter
+            if (startDate || endDate) {
+                const itemDate = new Date(r.date || r.createdAt);
+                if (startDate && itemDate < new Date(startDate)) return false;
+                if (endDate) {
+                    const end = new Date(endDate);
+                    end.setHours(23, 59, 59, 999);
+                    if (itemDate > end) return false;
+                }
+            }
 
-    const bobbinMap = useMemo(() => new Map((db.bobbins || []).map(b => [b.id, b])), [db.bobbins]);
-    const boxMap = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
+            // Search filter
+            if (searchTerm) {
+                const term = searchTerm.toLowerCase();
+                const barcode = (r.barcode || '').toLowerCase();
+                const machine = (r.machineNo || '').toLowerCase();
+                const operator = (r.operator?.name || '').toLowerCase();
+                const notes = (r.note || r.notes || '').toLowerCase();
+                const lot = (r.lotNo || r.issue?.lotNo || '').toLowerCase();
+
+                return barcode.includes(term) ||
+                    machine.includes(term) ||
+                    operator.includes(term) ||
+                    notes.includes(term) ||
+                    lot.includes(term);
+            }
+
+            return true;
+        });
+    }, [db, process, searchTerm, startDate, endDate]);
 
     // Helper for Coning Machine Lookup
     const getConingMachineName = (row) => {
@@ -90,6 +112,44 @@ export function ReceiveHistoryTable() {
             cutName: cut?.name || '—'
         };
     };
+
+    const challans = useMemo(() => {
+        if (process !== 'cutter') return [];
+        const list = db.receive_from_cutter_machine_challans || [];
+        let sorted = list
+            .filter(challan => !challan.isDeleted)
+            .slice()
+            .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+        // Filter based on search and date
+        return sorted.filter(c => {
+            // Date filter - simple string comparison
+            if (startDate || endDate) {
+                const itemDateStr = (c.date || c.createdAt || '').substring(0, 10);
+                if (startDate && itemDateStr < startDate) return false;
+                if (endDate && itemDateStr > endDate) return false;
+            }
+
+            // Search filter
+            if (searchTerm) {
+                const term = searchTerm.toLowerCase();
+                const challanNo = (c.challanNo || '').toLowerCase();
+                const lot = (c.lotNo || '').toLowerCase();
+                const meta = getCutterChallanMeta(c);
+                const itemName = (meta.itemName || '').toLowerCase();
+                const operatorName = (meta.operatorName || '').toLowerCase();
+                const note = (c.wastageNote || '').toLowerCase();
+
+                return challanNo.includes(term) ||
+                    lot.includes(term) ||
+                    itemName.includes(term) ||
+                    operatorName.includes(term) ||
+                    note.includes(term);
+            }
+
+            return true;
+        });
+    }, [db, process, searchTerm, startDate, endDate]);
 
     const getChallanEntriesLocal = (challanId) => (db.receive_from_cutter_machine_rows || [])
         .filter(row => !row.isDeleted && row.challanId === challanId)
@@ -1002,7 +1062,50 @@ export function ReceiveHistoryTable() {
                     </div>
                 )}
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+                <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+                    <div className="flex-1 space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+                        <input
+                            type="text"
+                            placeholder="Search by lot, barcode, operator, note..."
+                            className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex gap-2">
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
+                            <input
+                                type="date"
+                                className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={startDate}
+                                onChange={(e) => setStartDate(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
+                            <input
+                                type="date"
+                                className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={endDate}
+                                onChange={(e) => setEndDate(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            setSearchTerm('');
+                            setStartDate('');
+                            setEndDate('');
+                        }}
+                        className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
+                    >
+                        Clear
+                    </button>
+                </div>
+
                 {showHistory && (
                     <div className="rounded-md border max-h-[600px] overflow-auto">
                         <Table>

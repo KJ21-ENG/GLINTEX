@@ -9,6 +9,9 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 export function IssueHistory({ db, refreshDb }) {
   const { process } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
@@ -268,19 +271,6 @@ export function IssueHistory({ db, refreshDb }) {
     }
   };
 
-  const issues = useMemo(() => {
-    let rows = [];
-    if (process === 'holo') {
-      rows = db.issue_to_holo_machine || [];
-    } else if (process === 'coning') {
-      rows = db.issue_to_coning_machine || [];
-    } else {
-      rows = db.issue_to_cutter_machine || [];
-    }
-    // Sort by createdAt timestamp descending (latest first, considering time)
-    return rows.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-  }, [db, process]);
-
   const itemNameById = useMemo(() => {
     const map = new Map();
     (db.items || []).forEach(i => map.set(i.id, i.name || '—'));
@@ -298,6 +288,60 @@ export function IssueHistory({ db, refreshDb }) {
     (db.operators || []).forEach(o => map.set(o.id, o.name || '—'));
     return map;
   }, [db.operators]);
+
+  const issues = useMemo(() => {
+    let rows = [];
+    if (process === 'holo') {
+      rows = db.issue_to_holo_machine || [];
+    } else if (process === 'coning') {
+      rows = db.issue_to_coning_machine || [];
+    } else {
+      rows = db.issue_to_cutter_machine || [];
+    }
+
+    // Filter based on search and date
+    let filtered = rows.filter(r => {
+      // Date filter - use simple string comparison on ISO dates (YYYY-MM-DD)
+      if (startDate || endDate) {
+        const itemDateStr = (r.date || r.createdAt || '').substring(0, 10);
+        if (startDate && itemDateStr < startDate) return false;
+        if (endDate && itemDateStr > endDate) return false;
+      }
+
+      // Search filter
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        const itemName = itemNameById.get(r.itemId)?.toLowerCase() || '';
+        const operatorName = operatorNameById.get(r.operatorId)?.toLowerCase() || '';
+        const machineName = machineNameById.get(r.machineId)?.toLowerCase() || '';
+        const lotNo = (r.lotNo || '').toLowerCase();
+        const barcode = (r.barcode || '').toLowerCase();
+        const note = (r.note || '').toLowerCase();
+
+        // Handle pieceIds which can be array or string
+        let pieceIdsStr = '';
+        if (Array.isArray(r.pieceIds)) {
+          pieceIdsStr = r.pieceIds.join(' ');
+        } else {
+          pieceIdsStr = r.pieceIds || '';
+        }
+        pieceIdsStr = pieceIdsStr.toLowerCase();
+
+        return itemName.includes(term) ||
+          operatorName.includes(term) ||
+          machineName.includes(term) ||
+          lotNo.includes(term) ||
+          barcode.includes(term) ||
+          pieceIdsStr.includes(term) ||
+          note.includes(term);
+      }
+
+      return true;
+    });
+
+    // Sort by createdAt timestamp descending (latest first, considering time)
+    return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
+  }, [db, process, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
 
   const twistNameById = useMemo(() => {
     const map = new Map();
@@ -342,6 +386,49 @@ export function IssueHistory({ db, refreshDb }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+        <div className="flex-1 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+          <input
+            type="text"
+            placeholder="Search by lot, item, barcode, operator..."
+            className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-2">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
+            <input
+              type="date"
+              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
+            <input
+              type="date"
+              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            setSearchTerm('');
+            setStartDate('');
+            setEndDate('');
+          }}
+          className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
+        >
+          Clear
+        </button>
+      </div>
+
       <div className="rounded-md border max-h-[600px] overflow-auto">
         <Table>
           <TableHeader>

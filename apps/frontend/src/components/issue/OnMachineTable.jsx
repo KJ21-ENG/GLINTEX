@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
@@ -12,6 +12,9 @@ import { ArrowRight } from 'lucide-react';
  */
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
+    const [searchTerm, setSearchTerm] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
 
     // Build lookup maps
     const itemNameById = useMemo(() => {
@@ -165,8 +168,46 @@ export function OnMachineTable({ db, process }) {
         }
 
         // Sort by date descending (most recent first)
-        return entries.sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-    }, [db, process, cutterPieceTotals, holoPieceTotals, coningPieceTotals]);
+        let sorted = entries.sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
+
+        // Filter based on search and date
+        return sorted.filter(e => {
+            // Date filter - string comparison
+            if (startDate || endDate) {
+                const itemDateStr = (e.date || e.createdAt || '').substring(0, 10);
+                if (startDate && itemDateStr < startDate) return false;
+                if (endDate && itemDateStr > endDate) return false;
+            }
+
+            // Search filter
+            if (searchTerm) {
+                const term = searchTerm.toLowerCase();
+                const lot = (e.lotNo || '').toLowerCase();
+                const barcode = (e.barcode || '').toLowerCase();
+                const itemName = itemNameById.get(e.itemId)?.toLowerCase() || '';
+                const operatorName = operatorNameById.get(e.operatorId)?.toLowerCase() || '';
+                const machineName = machineNameById.get(e.machineId)?.toLowerCase() || '';
+
+                // Handle pieceIds which could be array or string
+                let pieceIdsStr = '';
+                if (Array.isArray(e.pieceIds)) {
+                    pieceIdsStr = e.pieceIds.join(' ');
+                } else {
+                    pieceIdsStr = e.pieceIds || '';
+                }
+                pieceIdsStr = pieceIdsStr.toLowerCase();
+
+                return lot.includes(term) ||
+                    barcode.includes(term) ||
+                    pieceIdsStr.includes(term) ||
+                    itemName.includes(term) ||
+                    operatorName.includes(term) ||
+                    machineName.includes(term);
+            }
+
+            return true;
+        });
+    }, [db, process, cutterPieceTotals, holoPieceTotals, coningPieceTotals, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
 
     const handleGoToReceive = (entry) => {
         // Navigate to receive page with barcode param for auto-scan
@@ -195,6 +236,49 @@ export function OnMachineTable({ db, process }) {
 
     return (
         <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+                <div className="flex-1 space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+                    <input
+                        type="text"
+                        placeholder="Search by lot, piece, barcode, machine..."
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                </div>
+                <div className="flex gap-2">
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
+                        <input
+                            type="date"
+                            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
+                        <input
+                            type="date"
+                            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                        />
+                    </div>
+                </div>
+                <button
+                    onClick={() => {
+                        setSearchTerm('');
+                        setStartDate('');
+                        setEndDate('');
+                    }}
+                    className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
+                >
+                    Clear
+                </button>
+            </div>
+
             <div className="rounded-md border max-h-[600px] overflow-y-auto">
                 <Table>
                     <TableHeader>

@@ -28,7 +28,10 @@ export function Dispatch() {
     const [customers, setCustomers] = useState([]);
     const [dispatches, setDispatches] = useState([]);
     const [loadingDispatches, setLoadingDispatches] = useState(false);
-    const [search, setSearch] = useState('');
+    const [itemSearch, setItemSearch] = useState('');
+    const [historySearch, setHistorySearch] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
 
     // Dispatch form state
     const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
@@ -99,8 +102,8 @@ export function Dispatch() {
 
     // Filter items based on search
     const filteredItems = useMemo(() => {
-        if (!search.trim()) return availableItems;
-        const terms = search.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
+        if (!itemSearch.trim()) return availableItems;
+        const terms = itemSearch.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
         return availableItems.filter(item => {
             const searchable = [
                 item.barcode,
@@ -110,7 +113,40 @@ export function Dispatch() {
             ].filter(Boolean).join(' ').toLowerCase();
             return terms.every(term => searchable.includes(term));
         });
-    }, [availableItems, search]);
+    }, [availableItems, itemSearch]);
+
+    // Filter dispatches for history
+    const filteredDispatches = useMemo(() => {
+        let list = dispatches.slice().sort((a, b) => (b.date || b.createdAt || '').localeCompare(a.date || a.createdAt || ''));
+
+        // Date filter
+        if (startDate || endDate) {
+            list = list.filter(d => {
+                const itemDateStr = (d.date || d.createdAt || '').substring(0, 10);
+                if (startDate && itemDateStr < startDate) return false;
+                if (endDate && itemDateStr > endDate) return false;
+                return true;
+            });
+        }
+
+        // Search filter
+        if (historySearch.trim()) {
+            const terms = historySearch.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
+            list = list.filter(d => {
+                const searchable = [
+                    d.challanNo,
+                    d.customer?.name,
+                    d.stage,
+                    d.stageBarcode,
+                    String(d.weight),
+                    d.notes
+                ].filter(Boolean).join(' ').toLowerCase();
+                return terms.every(term => searchable.includes(term));
+            });
+        }
+
+        return list;
+    }, [dispatches, historySearch, startDate, endDate]);
 
     function openDispatchModal(item) {
         setSelectedItem(item);
@@ -308,13 +344,13 @@ export function Dispatch() {
                     </Card>
 
                     {/* Search Bar */}
-                    <div className="relative max-w-md">
+                    <div className="relative max-w-md mb-4">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
                             placeholder="Search by barcode, lot no..."
                             className="pl-10"
-                            value={search}
-                            onChange={e => setSearch(e.target.value)}
+                            value={itemSearch}
+                            onChange={e => setItemSearch(e.target.value)}
                         />
                     </div>
 
@@ -394,7 +430,57 @@ export function Dispatch() {
                 /* History Tab */
                 <Card>
                     <CardHeader>
-                        <CardTitle className="text-lg">Dispatch History</CardTitle>
+                        <div className="flex flex-col gap-4">
+                            <CardTitle className="text-lg">Dispatch History</CardTitle>
+
+                            {/* History Filters */}
+                            <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+                                <div className="flex-1 space-y-1 w-full">
+                                    <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+                                    <div className="relative">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <Input
+                                            placeholder="Search by challan, customer, barcode, stage..."
+                                            className="pl-10 h-9"
+                                            value={historySearch}
+                                            onChange={e => setHistorySearch(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex gap-2 w-full sm:w-auto">
+                                    <div className="space-y-1 flex-1 sm:flex-none">
+                                        <label className="text-xs font-medium text-muted-foreground uppercase">From</label>
+                                        <Input
+                                            type="date"
+                                            className="h-9"
+                                            value={startDate}
+                                            onChange={e => setStartDate(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-1 flex-1 sm:flex-none">
+                                        <label className="text-xs font-medium text-muted-foreground uppercase">To</label>
+                                        <Input
+                                            type="date"
+                                            className="h-9"
+                                            value={endDate}
+                                            onChange={e => setEndDate(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-9 border"
+                                    onClick={() => {
+                                        setHistorySearch('');
+                                        setStartDate('');
+                                        setEndDate('');
+                                    }}
+                                >
+                                    Clear
+                                </Button>
+                            </div>
+                        </div>
                     </CardHeader>
                     <CardContent>
                         <div className="rounded-md border overflow-x-auto">
@@ -417,14 +503,14 @@ export function Dispatch() {
                                                 Loading...
                                             </TableCell>
                                         </TableRow>
-                                    ) : dispatches.length === 0 ? (
+                                    ) : filteredDispatches.length === 0 ? (
                                         <TableRow>
                                             <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                                                 No dispatches found
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        dispatches.map(d => (
+                                        filteredDispatches.map(d => (
                                             <TableRow key={d.id}>
                                                 <TableCell className="font-mono text-sm font-medium">{d.challanNo}</TableCell>
                                                 <TableCell>{formatDateDDMMYYYY(d.date)}</TableCell>

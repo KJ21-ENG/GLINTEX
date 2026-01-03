@@ -322,7 +322,7 @@ function ProductionReport() {
 
             {/* Summary Cards */}
             {report && (
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card className="bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 border-indigo-500/20">
                         <CardContent className="py-4">
                             <div className="flex items-center gap-3">
@@ -379,21 +379,7 @@ function ProductionReport() {
                         </CardContent>
                     </Card>
 
-                    <Card className="bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20">
-                        <CardContent className="py-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                                    <Calendar className="w-5 h-5 text-purple-500" />
-                                </div>
-                                <div>
-                                    <div className="text-sm text-muted-foreground">Date Range</div>
-                                    <div className="text-sm font-medium">
-                                        {formatDateDDMMYYYY(report.dateRange.from)} - {formatDateDDMMYYYY(report.dateRange.to)}
-                                    </div>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+
                 </div>
             )}
 

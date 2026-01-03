@@ -7782,6 +7782,15 @@ router.get('/api/reports/production', async (req, res) => {
         }
         if (process === 'cutter') {
           report.data = Array.from(byMachine.values());
+        } else if (!process || process === 'all') {
+          // For 'All Processes', we can't easily mix machine-wise data from different stages 
+          // because the fields differ. However, we can push normalized objects or simply allow the UI to handle it.
+          // A better approach for "All Processes" is to perhaps NOT show the detailed table, 
+          // OR show a combined list if the UI supports it.
+          // Given the current UI structure, let's try to populate report.data with a generic structure
+          // identifying the process.
+          const cutterData = Array.from(byMachine.values()).map(d => ({ ...d, process: 'Cutter' }));
+          report.data.push(...cutterData);
         }
       }
     }
@@ -7841,17 +7850,22 @@ router.get('/api/reports/production', async (req, res) => {
           byShift.set(key, current);
         }
         report.data = Array.from(byShift.values());
-      } else if (process === 'holo') {
+      } else { // Default to machine-wise
         const byMachine = new Map();
         for (const row of holoReceives) {
           const key = row.issue?.machine?.name || row.machineNo || 'unknown';
-          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
           const current = byMachine.get(key) || { machineName: key, received: 0, rollCount: 0 };
+          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
           current.received += netWeight;
           current.rollCount += row.rollCount || 0;
           byMachine.set(key, current);
         }
-        report.data = Array.from(byMachine.values());
+        if (process === 'holo') {
+          report.data = Array.from(byMachine.values());
+        } else if (!process || process === 'all') {
+          const holoData = Array.from(byMachine.values()).map(d => ({ ...d, process: 'Holo' }));
+          report.data.push(...holoData);
+        }
       }
     }
 
@@ -7941,7 +7955,12 @@ router.get('/api/reports/production', async (req, res) => {
           current.coneCount += row.coneCount || 0;
           byMachine.set(key, current);
         }
-        report.data = Array.from(byMachine.values());
+        if (process === 'coning') {
+          report.data = Array.from(byMachine.values());
+        } else if (!process || process === 'all') {
+          const coningData = Array.from(byMachine.values()).map(d => ({ ...d, process: 'Coning' }));
+          report.data.push(...coningData);
+        }
       }
     }
 

@@ -6888,7 +6888,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
       });
       items = holoRows
         .map(row => {
-          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           return {
             id: row.id,
             barcode: row.barcode,
@@ -7873,10 +7873,11 @@ router.get('/api/reports/production', async (req, res) => {
       for (const issue of coningIssues) {
         // If we have receivedRowRefs, try to get actual weights from holo receives
         try {
-          const refs = JSON.parse(issue.receivedRowRefs || '[]');
+          let refs = JSON.parse(issue.receivedRowRefs || '[]');
           if (Array.isArray(refs) && refs.length > 0) {
+            const rowIds = refs.map(r => (typeof r === 'object' && r.rowId) ? r.rowId : r);
             const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
-              where: { id: { in: refs } },
+              where: { id: { in: rowIds } },
             });
             const issuedWeight = holoRows.reduce((sum, r) => {
               const netWeight = r.rollWeight ? (r.rollWeight * r.rollCount) : (r.grossWeight || 0) - (r.tareWeight || 0);

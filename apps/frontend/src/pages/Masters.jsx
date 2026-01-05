@@ -151,7 +151,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -186,6 +186,36 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                             ))}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3 flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                                {editingId === item.id ? (
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" />
+                                ) : (
+                                    <span className="font-medium">{item.name}</span>
+                                )}
+                            </div>
+                            <div className="flex gap-1">
+                                {editingId === item.id ? (
+                                    <>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             </CardContent>
         </Card>
@@ -231,7 +261,7 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -268,6 +298,37 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                             ))}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" />
+                                    <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" />
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <span className="font-medium">{item.name}</span>
+                                        <span className="text-xs text-muted-foreground ml-2">({formatKg(item.weight)})</span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
                 </div>
             </CardContent>
         </Card>
@@ -322,7 +383,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -371,6 +432,37 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                             ))}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Machine Name" />
+                                    <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <span className="font-medium">{item.name}</span>
+                                        <span className="text-xs text-muted-foreground ml-2">({PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'})</span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
                 </div>
             </CardContent>
         </Card>
@@ -434,7 +526,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -496,6 +588,42 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                         </TableBody>
                     </Table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" />
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <Select value={editRole} onChange={e => setEditRole(e.target.value)} options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]} searchable={false} />
+                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                    </div>
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <span className="font-medium">{item.name}</span>
+                                        <div className="text-xs text-muted-foreground">
+                                            <span className="capitalize">{item.role || 'operator'}</span> • {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
             </CardContent>
         </Card>
     )
@@ -551,7 +679,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -604,6 +732,42 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                             ))}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Box Name" />
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" />
+                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                    </div>
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <span className="font-medium">{item.name}</span>
+                                        <div className="text-xs text-muted-foreground">
+                                            {formatKg(item.weight)} • {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
                 </div>
             </CardContent>
         </Card>
@@ -659,7 +823,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                     <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Firm</Button>
                 </div>
 
-                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -718,6 +882,44 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                             ))}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Firm Name" />
+                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" />
+                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} placeholder="Mobile/Contact" />
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="font-medium text-primary">{item.name}</div>
+                                        <div className="text-xs text-muted-foreground mt-0.5 truncate">{item.address || 'No address'}</div>
+                                        <div className="text-xs font-mono mt-0.5">{item.mobile || 'No contact'}</div>
+                                    </div>
+                                    <div className="flex gap-1 shrink-0">
+                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                            setEditingId(item.id);
+                                            setEditName(item.name);
+                                            setEditAddress(item.address || '');
+                                            setEditMobile(item.mobile || '');
+                                        }}><Edit2 className="w-4 h-4" /></Button>
+                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
                 </div>
             </CardContent>
         </Card>

@@ -906,7 +906,7 @@ export function OpeningStock() {
               </Button>
             </div>
 
-            <div className="rounded-md border overflow-x-auto">
+            <div className="hidden sm:block rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -941,6 +941,33 @@ export function OpeningStock() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="block sm:hidden space-y-2">
+              {inboundCart.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No pieces added.</div>
+              ) : inboundCart.map((row, idx) => (
+                <div key={row.id} className="border rounded-lg bg-card p-3 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-muted-foreground w-6">#{idx + 1}</span>
+                    <div>
+                      <div className="font-medium">{formatKg(row.weight)}</div>
+                      <div className="text-xs">
+                        <span className={row.isConsumed ? 'text-orange-600' : 'text-green-600'}>
+                          {row.isConsumed ? 'Consumed' : 'Available'}
+                        </span>
+                        {row.isConsumed && row.consumptionDate && (
+                          <span className="text-muted-foreground ml-2">{row.consumptionDate}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => handleRemove(setInboundCart, row.id)}>
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                </div>
+              ))}
             </div>
             {inboundCart.length > 0 && (
               <div className="flex justify-between text-sm text-muted-foreground font-medium">
@@ -1042,7 +1069,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border overflow-x-auto">
+            <div className="hidden sm:block rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1077,6 +1104,30 @@ export function OpeningStock() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="block sm:hidden space-y-2">
+              {cutterCart.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+              ) : cutterCart.map(row => (
+                <div key={row.id} className="border rounded-lg bg-card p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{getBobbin(row.bobbinId)?.name || '—'} × {row.bobbinQuantity}</div>
+                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
+                        <span>Box: {getBox(row.boxId)?.name || '—'}</span>
+                        <span>Cut: {row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</span>
+                        <span>Gross: {formatKg(row.grossWeight)}</span>
+                        <span className="font-medium text-foreground">Net: {formatKg(row.netWeight)}</span>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setCutterCart, row.id)}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
             {cutterCart.length > 0 && (
               <div className="text-sm text-muted-foreground">
@@ -1176,7 +1227,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border overflow-x-auto">
+            <div className="hidden sm:block rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1209,6 +1260,29 @@ export function OpeningStock() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="block sm:hidden space-y-2">
+              {holoCart.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+              ) : holoCart.map(row => (
+                <div key={row.id} className="border rounded-lg bg-card p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{getRollType(row.rollTypeId)?.name || '—'} × {row.rollCount}</div>
+                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
+                        <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
+                        <span>Gross: {formatKg(row.grossWeight)}</span>
+                        <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setHoloCart, row.id)}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
             {holoCart.length > 0 && (
               <div className="text-sm text-muted-foreground">
@@ -1301,7 +1375,7 @@ export function OpeningStock() {
                 {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
               </Button>
             </div>
-            <div className="rounded-md border overflow-x-auto">
+            <div className="hidden sm:block rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1332,6 +1406,29 @@ export function OpeningStock() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="block sm:hidden space-y-2">
+              {coningCart.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+              ) : coningCart.map(row => (
+                <div key={row.id} className="border rounded-lg bg-card p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{row.coneCount} cones</div>
+                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
+                        <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
+                        <span>Gross: {formatKg(row.grossWeight)}</span>
+                        <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setConingCart, row.id)}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
             {coningCart.length > 0 && (
               <div className="text-sm text-muted-foreground">

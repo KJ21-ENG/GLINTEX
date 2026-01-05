@@ -207,109 +207,174 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const tableColumnCount = groupBy ? 9 : 10;
 
   return (
-    <div className="rounded-md border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[30px]"></TableHead>
-            <TableHead>Lot No</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Item</TableHead>
-            <TableHead>Cut</TableHead>
-            <TableHead>Yarn / Twist</TableHead>
-            {!groupBy ? <TableHead>Firm</TableHead> : null}
-            <TableHead>Supplier</TableHead>
-            <TableHead className="">Total Rolls</TableHead>
-            <TableHead className="">Net Weight</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {displayLots.length === 0 ? (
-            <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
-          ) : (
-            displayLots.map((l, idx) => {
-              const rowKey = groupBy
-                ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx)
-                : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
-              const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
-              return (
-                <React.Fragment key={rowKey}>
-                  <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
-                    <TableCell>
-                      {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {groupBy ? (
-                        <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
-                      ) : (
-                        <HighlightMatch text={l.lotNo || '—'} query={search} />
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
-                    <TableCell>
-                      <HighlightMatch text={l.itemName} query={search} />
-                    </TableCell>
-                    <TableCell>
-                      <HighlightMatch text={l.cutName || '—'} query={search} />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <HighlightMatch text={l.yarnName} query={search} />
-                        <span>/</span>
-                        <HighlightMatch text={l.twistName} query={search} />
-                      </div>
-                    </TableCell>
-                    {!groupBy ? (
+    <>
+      <div className="hidden sm:block rounded-md border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[30px]"></TableHead>
+              <TableHead>Lot No</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead>Item</TableHead>
+              <TableHead>Cut</TableHead>
+              <TableHead>Yarn / Twist</TableHead>
+              {!groupBy ? <TableHead>Firm</TableHead> : null}
+              <TableHead>Supplier</TableHead>
+              <TableHead className="">Total Rolls</TableHead>
+              <TableHead className="">Net Weight</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {displayLots.length === 0 ? (
+              <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
+            ) : (
+              displayLots.map((l, idx) => {
+                const rowKey = groupBy
+                  ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx)
+                  : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
+                const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+                return (
+                  <React.Fragment key={rowKey}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
                       <TableCell>
-                        <HighlightMatch text={l.firmName} query={search} />
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
-                    ) : null}
-                    <TableCell>
-                      <HighlightMatch text={l.supplierName} query={search} />
-                    </TableCell>
-                    <TableCell className="">{l.totalRolls}</TableCell>
-                    <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
-                  </TableRow>
-                  {isExpanded && (
-                    <TableRow className="bg-muted/30">
-                      <TableCell colSpan={10} className="p-4">
-                        <div className="border rounded-md bg-background">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Barcode</TableHead>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Roll Type</TableHead>
-                                <TableHead className="">Rolls</TableHead>
-                                <TableHead className="">Net Wt</TableHead>
-                                <TableHead className="">Gross Wt</TableHead>
-                                <TableHead>Machine</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {l.rows.map(r => (
-                                <TableRow key={r.id}>
-                                  <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                  <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
-                                  <TableCell>{r.rollType?.name || '—'}</TableCell>
-                                  <TableCell className="">{r.rollCount}</TableCell>
-                                  <TableCell className="">{formatKg(r.rollWeight)}</TableCell>
-                                  <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
-                                  <TableCell>{r.machineNo}</TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
+                      <TableCell className="font-medium">
+                        {groupBy ? (
+                          <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
+                          <HighlightMatch text={l.lotNo || '—'} query={search} />
+                        )}
+                      </TableCell>
+                      <TableCell>{formatDateDDMMYYYY(l.date) || '—'}</TableCell>
+                      <TableCell>
+                        <HighlightMatch text={l.itemName} query={search} />
+                      </TableCell>
+                      <TableCell>
+                        <HighlightMatch text={l.cutName || '—'} query={search} />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <HighlightMatch text={l.yarnName} query={search} />
+                          <span>/</span>
+                          <HighlightMatch text={l.twistName} query={search} />
                         </div>
                       </TableCell>
+                      {!groupBy ? (
+                        <TableCell>
+                          <HighlightMatch text={l.firmName} query={search} />
+                        </TableCell>
+                      ) : null}
+                      <TableCell>
+                        <HighlightMatch text={l.supplierName} query={search} />
+                      </TableCell>
+                      <TableCell className="">{l.totalRolls}</TableCell>
+                      <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                     </TableRow>
-                  )}
-                </React.Fragment>
-              );
-            })
-          )}
-        </TableBody>
-      </Table>
-    </div>
+                    {isExpanded && (
+                      <TableRow className="bg-muted/30">
+                        <TableCell colSpan={10} className="p-4">
+                          <div className="border rounded-md bg-background overflow-x-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Barcode</TableHead>
+                                  <TableHead>Date</TableHead>
+                                  <TableHead>Roll Type</TableHead>
+                                  <TableHead className="">Rolls</TableHead>
+                                  <TableHead className="">Net Wt</TableHead>
+                                  <TableHead className="">Gross Wt</TableHead>
+                                  <TableHead>Machine</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {l.rows.map(r => (
+                                  <TableRow key={r.id}>
+                                    <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
+                                    <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
+                                    <TableCell>{r.rollType?.name || '—'}</TableCell>
+                                    <TableCell className="">{r.rollCount}</TableCell>
+                                    <TableCell className="">{formatKg(r.rollWeight)}</TableCell>
+                                    <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
+                                    <TableCell>{r.machineNo}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Mobile Card View for Holo Stock */}
+      <div className="block sm:hidden space-y-3">
+        {displayLots.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No holo stock found.</div>
+        ) : (
+          displayLots.map((l, idx) => {
+            const rowKey = groupBy ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx) : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
+            const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+
+            return (
+              <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold flex items-center gap-2">
+                        {groupBy ? (
+                          <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
+                          <HighlightMatch text={l.lotNo || '—'} query={search} />
+                        )}
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
+                      </div>
+                      <p className="font-medium mt-1">
+                        <HighlightMatch text={l.itemName} query={search} />
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {formatDateDDMMYYYY(l.date) || '—'} • {l.cutName}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold">{formatKg(l.totalWeight)}</div>
+                      <div className="text-[10px] text-muted-foreground uppercase">{l.totalRolls} rolls</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Twist: {l.twistName}</span>
+                    <span>Supplier: <HighlightMatch text={l.supplierName} query={search} /></span>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t bg-muted/30 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">Roll Details</p>
+                    {l.rows.map(r => (
+                      <div key={r.id} className="bg-background border rounded p-2 space-y-1">
+                        <div className="flex justify-between font-mono text-xs">
+                          <span className="font-semibold text-primary">{r.barcode}</span>
+                          <span>{formatKg(r.rollWeight)}</span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                          <span>{r.rollType?.name} • Rolls: {r.rollCount}</span>
+                          <span>Mac: {r.machineNo}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </>
   );
 }

@@ -1236,7 +1236,7 @@ export function ReceiveHistoryTable() {
                 )}
             </CardHeader>
             <CardContent className="space-y-4">
-                <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+                <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
                     <div className="flex-1 space-y-1">
                         <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
                         <input
@@ -1287,187 +1287,329 @@ export function ReceiveHistoryTable() {
                 </div>
 
                 {showHistory && (
-                    <div className="rounded-md border max-h-[600px] overflow-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    {process === 'cutter' && (
-                                        <>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Item</TableHead>
-                                            <TableHead>Piece</TableHead>
-                                            <TableHead>Cut</TableHead>
-                                            <TableHead>Barcode</TableHead>
-                                            <TableHead>Machine</TableHead>
-                                            <TableHead>Employee</TableHead>
-                                            <TableHead className="text-right">Net Wt (kg)</TableHead>
-                                            <TableHead className="text-right">Bobbin Qty</TableHead>
-                                            <TableHead>Bobbin</TableHead>
-                                            <TableHead className="w-[50px]">Actions</TableHead>
-                                        </>
+                    <>
+                        <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        {process === 'cutter' && (
+                                            <>
+                                                <TableHead>Date</TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Piece</TableHead>
+                                                <TableHead>Cut</TableHead>
+                                                <TableHead>Barcode</TableHead>
+                                                <TableHead>Machine</TableHead>
+                                                <TableHead>Employee</TableHead>
+                                                <TableHead className="text-right">Net Wt (kg)</TableHead>
+                                                <TableHead className="text-right">Bobbin Qty</TableHead>
+                                                <TableHead>Bobbin</TableHead>
+                                                <TableHead className="w-[50px]">Actions</TableHead>
+                                            </>
+                                        )}
+                                        {process === 'holo' && (
+                                            <>
+                                                <TableHead>Date</TableHead>
+                                                <TableHead>Piece</TableHead>
+                                                <TableHead>Barcode</TableHead>
+                                                <TableHead className="text-right">Rolls</TableHead>
+                                                <TableHead className="text-right">Weight (kg)</TableHead>
+                                                <TableHead>Machine</TableHead>
+                                                <TableHead>Operator</TableHead>
+                                                <TableHead>Helper</TableHead>
+                                                <TableHead>Notes</TableHead>
+                                                <TableHead className="w-[50px]">Actions</TableHead>
+                                            </>
+                                        )}
+                                        {process === 'coning' && (
+                                            <>
+                                                <TableHead>Date</TableHead>
+                                                <TableHead>Piece</TableHead>
+                                                <TableHead>Barcode</TableHead>
+                                                <TableHead>Box</TableHead>
+                                                <TableHead className="text-right">Cones</TableHead>
+                                                <TableHead className="text-right">Weight (kg)</TableHead>
+                                                <TableHead>Machine</TableHead>
+                                                <TableHead>Operator</TableHead>
+                                                <TableHead>Notes</TableHead>
+                                                <TableHead className="w-[50px]">Actions</TableHead>
+                                            </>
+                                        )}
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {history.length === 0 ? (
+                                        <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
+                                    ) : (
+                                        history.map(r => {
+                                            if (process === 'cutter') {
+                                                const infoItems = getCutterReceiveInfo(r);
+                                                const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                                                const item = db.items?.find(i => i.id === piece?.itemId);
+                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                return (
+                                                    <TableRow key={r.id}>
+                                                        <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
+                                                        <TableCell>{item?.name || '—'}</TableCell>
+                                                        <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
+                                                        <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
+                                                        <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
+                                                        <TableCell>{r.machineNo || '—'}</TableCell>
+                                                        <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
+                                                        <TableCell className="text-right font-medium">
+                                                            <div className="flex items-center justify-end gap-1">
+                                                                {formatKg(r.netWt)}
+                                                                <InfoPopover
+                                                                    title="Receive Details"
+                                                                    items={infoItems}
+                                                                    renderItem={(item) => (
+                                                                        <div className="flex justify-between text-xs">
+                                                                            <span className="text-muted-foreground">{item.label}:</span>
+                                                                            <span className="font-medium">{item.value}</span>
+                                                                        </div>
+                                                                    )}
+                                                                    widthClassName="w-56"
+                                                                    buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
+                                                                />
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
+                                                        <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
+                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                    </TableRow>
+                                                );
+                                            } else if (process === 'holo') {
+                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                return (
+                                                    <TableRow key={r.id}>
+                                                        <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                            {(r.pieceIdsList || []).join(', ') || '—'}
+                                                        </TableCell>
+                                                        <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                        <TableCell className="text-right">1</TableCell>
+                                                        <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
+                                                        <TableCell>{r.machineNo || r.machine?.name || '—'}</TableCell>
+                                                        <TableCell>{r.operator?.name || '—'}</TableCell>
+                                                        <TableCell>{r.helper?.name || '—'}</TableCell>
+                                                        <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
+                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                    </TableRow>
+                                                );
+                                            } else if (process === 'coning') {
+                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                return (
+                                                    <TableRow key={r.id}>
+                                                        <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                            {(r.pieceIdsList || []).join(', ') || '—'}
+                                                        </TableCell>
+                                                        <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                        <TableCell>{r.box?.name || '—'}</TableCell>
+                                                        <TableCell className="text-right">{r.coneCount}</TableCell>
+                                                        <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
+                                                        <TableCell>{getConingMachineName(r)}</TableCell>
+                                                        <TableCell>{r.operator?.name || '—'}</TableCell>
+                                                        <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
+                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                    </TableRow>
+                                                );
+                                            }
+                                        })
                                     )}
-                                    {process === 'holo' && (
-                                        <>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Piece</TableHead>
-                                            <TableHead>Barcode</TableHead>
-                                            <TableHead className="text-right">Rolls</TableHead>
-                                            <TableHead className="text-right">Weight (kg)</TableHead>
-                                            <TableHead>Machine</TableHead>
-                                            <TableHead>Operator</TableHead>
-                                            <TableHead>Helper</TableHead>
-                                            <TableHead>Notes</TableHead>
-                                            <TableHead className="w-[50px]">Actions</TableHead>
-                                        </>
-                                    )}
-                                    {process === 'coning' && (
-                                        <>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Piece</TableHead>
-                                            <TableHead>Barcode</TableHead>
-                                            <TableHead>Box</TableHead>
-                                            <TableHead className="text-right">Cones</TableHead>
-                                            <TableHead className="text-right">Weight (kg)</TableHead>
-                                            <TableHead>Machine</TableHead>
-                                            <TableHead>Operator</TableHead>
-                                            <TableHead>Notes</TableHead>
-                                            <TableHead className="w-[50px]">Actions</TableHead>
-                                        </>
-                                    )}
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {history.length === 0 ? (
-                                    <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
-                                ) : (
-                                    history.map(r => {
-                                        if (process === 'cutter') {
-                                            const infoItems = getCutterReceiveInfo(r);
-                                            const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                                            const item = db.items?.find(i => i.id === piece?.itemId);
-                                            const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                            return (
-                                                <TableRow key={r.id}>
-                                                    <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
-                                                    <TableCell>{item?.name || '—'}</TableCell>
-                                                    <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                    <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
-                                                    <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                                    <TableCell>{r.machineNo || '—'}</TableCell>
-                                                    <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
-                                                    <TableCell className="text-right font-medium">
-                                                        <div className="flex items-center justify-end gap-1">
-                                                            {formatKg(r.netWt)}
-                                                            <InfoPopover
-                                                                title="Receive Details"
-                                                                items={infoItems}
-                                                                renderItem={(item) => (
-                                                                    <div className="flex justify-between text-xs">
-                                                                        <span className="text-muted-foreground">{item.label}:</span>
-                                                                        <span className="font-medium">{item.value}</span>
-                                                                    </div>
-                                                                )}
-                                                                widthClassName="w-56"
-                                                                buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
-                                                            />
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        {/* Mobile Card View for Receive History */}
+                        <div className="block sm:hidden space-y-3">
+                            {history.length === 0 ? (
+                                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No records found.</div>
+                            ) : (
+                                history.map(r => {
+                                    const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+
+                                    if (process === 'cutter') {
+                                        const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                                        const item = db.items?.find(i => i.id === piece?.itemId);
+                                        return (
+                                            <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                                <div className="p-4">
+                                                    <div className="flex justify-between items-start gap-2">
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="font-mono text-xs text-primary">{r.barcode}</p>
+                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                {dateDisplay} • {r.operator?.name || r.employee || '—'}
+                                                            </p>
                                                         </div>
-                                                    </TableCell>
-                                                    <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
-                                                    <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
-                                                    <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                </TableRow>
-                                            );
-                                        } else if (process === 'holo') {
-                                            const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                            return (
-                                                <TableRow key={r.id}>
-                                                    <TableCell>{dateDisplay}</TableCell>
-                                                    <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                        {(r.pieceIdsList || []).join(', ') || '—'}
-                                                    </TableCell>
-                                                    <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
-                                                    <TableCell className="text-right">1</TableCell>
-                                                    <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
-                                                    <TableCell>{r.machineNo || r.machine?.name || '—'}</TableCell>
-                                                    <TableCell>{r.operator?.name || '—'}</TableCell>
-                                                    <TableCell>{r.helper?.name || '—'}</TableCell>
-                                                    <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
-                                                    <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                </TableRow>
-                                            );
-                                        } else if (process === 'coning') {
-                                            const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                            return (
-                                                <TableRow key={r.id}>
-                                                    <TableCell>{dateDisplay}</TableCell>
-                                                    <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                        {(r.pieceIdsList || []).join(', ') || '—'}
-                                                    </TableCell>
-                                                    <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
-                                                    <TableCell>{r.box?.name || '—'}</TableCell>
-                                                    <TableCell className="text-right">{r.coneCount}</TableCell>
-                                                    <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
-                                                    <TableCell>{getConingMachineName(r)}</TableCell>
-                                                    <TableCell>{r.operator?.name || '—'}</TableCell>
-                                                    <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
-                                                    <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                </TableRow>
-                                            );
-                                        }
-                                    })
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
+                                                        <div className="text-right">
+                                                            <div className="font-mono font-semibold">{formatKg(r.netWt)}</div>
+                                                            <div className="text-[10px] text-muted-foreground uppercase">{r.bobbinQuantity} bobbins</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                        <span>Cut: {r.cutMaster?.name || r.cut || '—'}</span>
+                                                        <span>Mac: {r.machineNo || '—'}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">
+                                                    <ActionMenu actions={getActions(r)} />
+                                                </div>
+                                            </div>
+                                        );
+                                    } else if (process === 'holo') {
+                                        return (
+                                            <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                                <div className="p-4">
+                                                    <div className="flex justify-between items-start gap-2">
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                                Piece: {(r.pieceIdsList || []).join(', ') || '—'}
+                                                            </p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                {dateDisplay} • {r.operator?.name || '—'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="font-mono font-semibold">{formatKg(r.rollWeight ?? r.grossWeight)}</div>
+                                                            <div className="text-[10px] text-muted-foreground uppercase">1 roll</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                        <span>Mac: {r.machineNo || r.machine?.name || '—'}</span>
+                                                        {r.helper?.name && <span>Helper: {r.helper.name}</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">
+                                                    <ActionMenu actions={getActions(r)} />
+                                                </div>
+                                            </div>
+                                        );
+                                    } else if (process === 'coning') {
+                                        return (
+                                            <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                                <div className="p-4">
+                                                    <div className="flex justify-between items-start gap-2">
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                                Piece: {(r.pieceIdsList || []).join(', ') || '—'}
+                                                            </p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                {dateDisplay} • {r.operator?.name || '—'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="font-mono font-semibold">{formatKg(r.netWeight ?? r.grossWeight)}</div>
+                                                            <div className="text-[10px] text-muted-foreground uppercase">{r.coneCount} cones</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                        <span>Box: {r.box?.name || '—'}</span>
+                                                        <span>Mac: {getConingMachineName(r)}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">
+                                                    <ActionMenu actions={getActions(r)} />
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+                                    return null;
+                                })
+                            )}
+                        </div>
+                    </>
                 )}
 
                 {showChallans && (
-                    <div className="rounded-md border max-h-[600px] overflow-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Challan</TableHead>
-                                    <TableHead>Date</TableHead>
-                                    <TableHead>Lot</TableHead>
-                                    <TableHead>Item</TableHead>
-                                    <TableHead className="text-right">Total Kg</TableHead>
-                                    <TableHead className="text-right">Bobbins</TableHead>
-                                    <TableHead>Operator</TableHead>
-                                    <TableHead>Cut</TableHead>
-                                    <TableHead>Helper</TableHead>
-                                    <TableHead>Note</TableHead>
-                                    <TableHead className="w-[50px]">Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {challans.length === 0 ? (
-                                    <TableRow><TableCell colSpan={11} className="text-center py-4 text-muted-foreground">No challans found.</TableCell></TableRow>
-                                ) : (
-                                    challans.map((challan) => {
-                                        const meta = getCutterChallanMeta(challan);
-                                        const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
-                                        return (
-                                            <TableRow key={challan.id}>
-                                                <TableCell className="font-mono text-xs">{challan.challanNo}</TableCell>
-                                                <TableCell>{dateDisplay}</TableCell>
-                                                <TableCell>{challan.lotNo || '—'}</TableCell>
-                                                <TableCell>{meta.itemName}</TableCell>
-                                                <TableCell className="text-right font-medium">{formatKg(challan.totalNetWeight)}</TableCell>
-                                                <TableCell className="text-right">{challan.totalBobbinQty || 0}</TableCell>
-                                                <TableCell>{meta.operatorName}</TableCell>
-                                                <TableCell>{meta.cutName}</TableCell>
-                                                <TableCell>{meta.helperName}</TableCell>
-                                                <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]" title={challan.wastageNote || ''}>
-                                                    {challan.wastageNote || '—'}
-                                                </TableCell>
-                                                <TableCell><ActionMenu actions={getChallanActions(challan)} /></TableCell>
-                                            </TableRow>
-                                        );
-                                    })
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
+                    <>
+                        <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Challan</TableHead>
+                                        <TableHead>Date</TableHead>
+                                        <TableHead>Lot</TableHead>
+                                        <TableHead>Item</TableHead>
+                                        <TableHead className="text-right">Total Kg</TableHead>
+                                        <TableHead className="text-right">Bobbins</TableHead>
+                                        <TableHead>Operator</TableHead>
+                                        <TableHead>Cut</TableHead>
+                                        <TableHead>Helper</TableHead>
+                                        <TableHead>Note</TableHead>
+                                        <TableHead className="w-[50px]">Actions</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {challans.length === 0 ? (
+                                        <TableRow><TableCell colSpan={11} className="text-center py-4 text-muted-foreground">No challans found.</TableCell></TableRow>
+                                    ) : (
+                                        challans.map((challan) => {
+                                            const meta = getCutterChallanMeta(challan);
+                                            const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
+                                            return (
+                                                <TableRow key={challan.id}>
+                                                    <TableCell className="font-mono text-xs">{challan.challanNo}</TableCell>
+                                                    <TableCell>{dateDisplay}</TableCell>
+                                                    <TableCell>{challan.lotNo || '—'}</TableCell>
+                                                    <TableCell>{meta.itemName}</TableCell>
+                                                    <TableCell className="text-right font-medium">{formatKg(challan.totalNetWeight)}</TableCell>
+                                                    <TableCell className="text-right">{challan.totalBobbinQty || 0}</TableCell>
+                                                    <TableCell>{meta.operatorName}</TableCell>
+                                                    <TableCell>{meta.cutName}</TableCell>
+                                                    <TableCell>{meta.helperName}</TableCell>
+                                                    <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]" title={challan.wastageNote || ''}>
+                                                        {challan.wastageNote || '—'}
+                                                    </TableCell>
+                                                    <TableCell><ActionMenu actions={getChallanActions(challan)} /></TableCell>
+                                                </TableRow>
+                                            );
+                                        })
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        {/* Mobile Card View for Challans */}
+                        <div className="block sm:hidden space-y-3">
+                            {challans.length === 0 ? (
+                                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No challans found.</div>
+                            ) : (
+                                challans.map((challan) => {
+                                    const meta = getCutterChallanMeta(challan);
+                                    const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
+                                    return (
+                                        <div key={challan.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                            <div className="p-4">
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="font-mono text-xs text-primary">{challan.challanNo}</p>
+                                                        <p className="font-medium mt-1">{meta.itemName}</p>
+                                                        <p className="text-xs text-muted-foreground mt-1">
+                                                            {dateDisplay} • Lot: {challan.lotNo || '—'}
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="font-mono font-semibold">{formatKg(challan.totalNetWeight)}</div>
+                                                        <div className="text-[10px] text-muted-foreground uppercase">{challan.totalBobbinQty || 0} bobbins</div>
+                                                    </div>
+                                                </div>
+                                                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                    <span>Op: {meta.operatorName} • Cut: {meta.cutName}</span>
+                                                </div>
+                                            </div>
+                                            <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">
+                                                <ActionMenu actions={getChallanActions(challan)} />
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </>
                 )}
             </CardContent>
 

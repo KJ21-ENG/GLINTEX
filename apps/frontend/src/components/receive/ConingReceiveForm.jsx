@@ -259,14 +259,14 @@ export function ConingReceiveForm() {
                 {issue && (
                     <CardContent className="space-y-6">
                         <div className="p-4 bg-muted rounded-md text-sm space-y-3">
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                                 <div><strong>Lot:</strong> {issue.lotNo}</div>
                                 <div><strong>Total Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
                                 <div><strong>Expected:</strong> {totalExpected} cones</div>
                                 <div><strong>Target:</strong> {perConeWeight} g/cone</div>
                             </div>
                             <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-center">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
                                 <div className="hidden md:block" />
                                 <div className="flex items-center gap-2">
                                     <div>

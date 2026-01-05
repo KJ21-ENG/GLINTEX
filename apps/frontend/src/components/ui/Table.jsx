@@ -13,7 +13,7 @@ const Table = React.forwardRef(({ className, ...props }, ref) => (
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
+  <thead ref={ref} className={cn("[&_tr]:border-b sticky top-0 z-10 bg-card", className)} {...props} />
 ))
 TableHeader.displayName = "TableHeader"
 
@@ -77,15 +77,44 @@ const TableCaption = React.forwardRef(({ className, ...props }, ref) => (
 ))
 TableCaption.displayName = "TableCaption"
 
+// Sticky header variant - stays visible when scrolling vertically
+const TableHeadSticky = React.forwardRef(({ className, ...props }, ref) => (
+  <th
+    ref={ref}
+    className={cn(
+      "h-12 px-4 text-center align-middle font-medium text-muted-foreground",
+      "sticky top-0 z-10 bg-card",
+      "[&:has([role=checkbox])]:pr-0",
+      className
+    )}
+    {...props}
+  />
+))
+TableHeadSticky.displayName = "TableHeadSticky"
+
+// Sticky first column variant - stays visible when scrolling horizontally
+const TableCellSticky = React.forwardRef(({ className, ...props }, ref) => (
+  <td
+    ref={ref}
+    className={cn(
+      "p-4 text-center align-middle sticky left-0 z-10 bg-card border-r",
+      "[&:has([role=checkbox])]:pr-0",
+      className
+    )}
+    {...props}
+  />
+))
+TableCellSticky.displayName = "TableCellSticky"
+
 export {
   Table,
   TableHeader,
   TableBody,
   TableFooter,
   TableHead,
+  TableHeadSticky,
   TableRow,
   TableCell,
+  TableCellSticky,
   TableCaption,
 }
-
-

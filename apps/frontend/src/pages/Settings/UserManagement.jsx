@@ -209,7 +209,7 @@ export default function UserManagement() {
             <Plus className="w-4 h-4 mr-2" /> Add Role
           </Button>
 
-          <div className="rounded-md border overflow-x-auto">
+          <div className="hidden sm:block rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -273,6 +273,41 @@ export default function UserManagement() {
               </TableBody>
             </Table>
           </div>
+
+          {/* Mobile Card View */}
+          <div className="block sm:hidden space-y-2">
+            {(roles || []).length === 0 ? (
+              <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No roles</div>
+            ) : (roles || []).map((r) => (
+              <div key={r.id} className="border rounded-lg bg-card p-3">
+                {editingRoleId === r.id ? (
+                  <div className="space-y-2">
+                    <Input value={editRoleName} onChange={(e) => setEditRoleName(e.target.value)} placeholder="Name" />
+                    <Input value={editRoleDescription} onChange={(e) => setEditRoleDescription(e.target.value)} placeholder="Description" />
+                    <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdateRole(r.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingRoleId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{r.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        <span className="font-mono">{r.key}</span>
+                        {r.description && <span className="ml-2">• {r.description}</span>}
+                      </div>
+                    </div>
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                      setEditingRoleId(r.id);
+                      setEditRoleName(r.name || '');
+                      setEditRoleDescription(r.description || '');
+                    }}><Edit2 className="w-4 h-4" /></Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
 
@@ -314,7 +349,7 @@ export default function UserManagement() {
             <Plus className="w-4 h-4 mr-2" /> Add User
           </Button>
 
-          <div className="rounded-md border overflow-x-auto">
+          <div className="hidden sm:block rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -397,6 +432,59 @@ export default function UserManagement() {
                 ))}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="block sm:hidden space-y-2">
+            {(users || []).length === 0 ? (
+              <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No users</div>
+            ) : (users || []).map((u) => (
+              <div key={u.id} className="border rounded-lg bg-card p-3">
+                {editingUserId === u.id ? (
+                  <div className="space-y-2">
+                    <Input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} placeholder="Display Name" />
+                    <Select value={editRoleId} onChange={(e) => setEditRoleId(e.target.value)}>
+                      {(roleOptions || []).map((r) => (
+                        <option key={r.id} value={r.id}>{r.name} ({r.key})</option>
+                      ))}
+                    </Select>
+                    <div className="flex items-center gap-2">
+                      <Checkbox checked={editIsActive} onCheckedChange={(v) => setEditIsActive(!!v)} />
+                      <span className="text-sm">{editIsActive ? 'Active' : 'Disabled'}</span>
+                    </div>
+                    <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdateUser(u.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingUserId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{u.displayName || u.username}</div>
+                      <div className="text-xs text-muted-foreground">
+                        <span className="font-mono">{u.username}</span>
+                        {u.role && <span className="ml-2">• {u.role.name}</span>}
+                      </div>
+                      <div className="text-xs mt-1">
+                        <span className={u.isActive ? 'text-green-600' : 'text-orange-600'}>{u.isActive ? 'Active' : 'Disabled'}</span>
+                        {u.lastLoginAt && <span className="text-muted-foreground ml-2">Last: {formatDateTime(u.lastLoginAt)}</span>}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                        setEditingUserId(u.id);
+                        setEditDisplayName(u.displayName || '');
+                        setEditRoleId(u.role?.id || (roleOptions[0] ? roleOptions[0].id : ''));
+                        setEditIsActive(!!u.isActive);
+                      }}><Edit2 className="w-4 h-4" /></Button>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleResetPassword(u)} title="Reset password">
+                        <KeyRound className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

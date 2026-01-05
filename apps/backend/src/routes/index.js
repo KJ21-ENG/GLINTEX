@@ -984,28 +984,136 @@ router.get('/api/db', async (req, res) => {
     take: RECEIVE_ROWS_FETCH_LIMIT,
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
-  const receive_from_holo_machine_rows = await prisma.receiveFromHoloMachineRow.findMany({
+  const receive_from_holo_machine_rows_raw = await prisma.receiveFromHoloMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true, cutId: true, cut: { select: { name: true } } } },
+      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true, cutId: true, cut: { select: { name: true } }, receivedRowRefs: true } },
       rollType: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
     },
   });
+
+  // Compute pieceIds for each holo receive row by tracing through issue.receivedRowRefs to cutter rows
+  const holoRowRefs = receive_from_holo_machine_rows_raw
+    .flatMap(r => {
+      const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+      return refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+    });
+  const uniqueHoloRowRefs = [...new Set(holoRowRefs)];
+  const cutterRowsForHolo = uniqueHoloRowRefs.length > 0
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: uniqueHoloRowRefs } },
+      select: { id: true, pieceId: true },
+    })
+    : [];
+  const cutterRowPieceMap = new Map(cutterRowsForHolo.map(r => [r.id, r.pieceId]));
+
+  const receive_from_holo_machine_rows = receive_from_holo_machine_rows_raw.map(r => {
+    const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+    const pieceIds = new Set();
+    refs.forEach(ref => {
+      if (typeof ref?.rowId === 'string') {
+        const pieceId = cutterRowPieceMap.get(ref.rowId);
+        if (pieceId) pieceIds.add(pieceId);
+      }
+    });
+
+    // Fallback for opening stock: if no refs but we have a lotNo, derive pieceId as ${lotNo}-1
+    if (pieceIds.size === 0 && r.issue?.lotNo) {
+      pieceIds.add(`${r.issue.lotNo}-1`);
+    }
+
+    // Remove receivedRowRefs from issue before sending (not needed on frontend)
+    const issueCopy = r.issue ? { ...r.issue } : null;
+    if (issueCopy) delete issueCopy.receivedRowRefs;
+    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds) };
+  });
+
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
-  const receive_from_coning_machine_rows = await prisma.receiveFromConingMachineRow.findMany({
+  const receive_from_coning_machine_rows_raw = await prisma.receiveFromConingMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true } },
+      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true, receivedRowRefs: true } },
       box: { select: { id: true, name: true, weight: true } },
     },
   });
+
+  // Compute pieceIds for coning receive rows by tracing:
+  // coning_issue.receivedRowRefs → holo_receive → holo_issue.receivedRowRefs → cutter_receive.pieceId
+  const coningHoloRowRefs = receive_from_coning_machine_rows_raw
+    .flatMap(r => {
+      const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+      return refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+    });
+  const uniqueConingHoloRowRefs = [...new Set(coningHoloRowRefs)];
+  const holoRowsForConing = uniqueConingHoloRowRefs.length > 0
+    ? await prisma.receiveFromHoloMachineRow.findMany({
+      where: { id: { in: uniqueConingHoloRowRefs } },
+      select: { id: true, issueId: true },
+    })
+    : [];
+  const holoIssueIds = [...new Set(holoRowsForConing.map(r => r.issueId).filter(Boolean))];
+  const holoIssuesForConing = holoIssueIds.length > 0
+    ? await prisma.issueToHoloMachine.findMany({
+      where: { id: { in: holoIssueIds } },
+      select: { id: true, receivedRowRefs: true },
+    })
+    : [];
+  const holoIssueMap = new Map(holoIssuesForConing.map(i => [i.id, i]));
+  const holoRowIssueMap = new Map(holoRowsForConing.map(r => [r.id, r.issueId]));
+
+  // Collect all cutter row refs from holo issues
+  const coningCutterRowRefs = holoIssuesForConing.flatMap(issue => {
+    const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
+    return refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+  });
+  const uniqueConingCutterRowRefs = [...new Set(coningCutterRowRefs)];
+  const cutterRowsForConing = uniqueConingCutterRowRefs.length > 0
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: uniqueConingCutterRowRefs } },
+      select: { id: true, pieceId: true },
+    })
+    : [];
+  const coningCutterRowPieceMap = new Map(cutterRowsForConing.map(r => [r.id, r.pieceId]));
+
+  const receive_from_coning_machine_rows = receive_from_coning_machine_rows_raw.map(r => {
+    const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+    const pieceIds = new Set();
+    refs.forEach(ref => {
+      if (typeof ref?.rowId === 'string') {
+        const holoIssueId = holoRowIssueMap.get(ref.rowId);
+        if (holoIssueId) {
+          const holoIssue = holoIssueMap.get(holoIssueId);
+          if (holoIssue) {
+            const hRefs = Array.isArray(holoIssue.receivedRowRefs) ? holoIssue.receivedRowRefs : [];
+            hRefs.forEach(hRef => {
+              if (typeof hRef?.rowId === 'string') {
+                const pieceId = coningCutterRowPieceMap.get(hRef.rowId);
+                if (pieceId) pieceIds.add(pieceId);
+              }
+            });
+          }
+        }
+      }
+    });
+
+    // Fallback for opening stock: if no refs found but we have a lotNo, derive pieceId as ${lotNo}-1
+    if (pieceIds.size === 0 && r.issue?.lotNo) {
+      pieceIds.add(`${r.issue.lotNo}-1`);
+    }
+
+    // Remove receivedRowRefs from issue before sending (not needed on frontend)
+    const issueCopy = r.issue ? { ...r.issue } : null;
+    if (issueCopy) delete issueCopy.receivedRowRefs;
+    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds) };
+  });
+
   const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
   const roll_types = await prisma.rollType.findMany();
   const cone_types = await prisma.coneType.findMany();

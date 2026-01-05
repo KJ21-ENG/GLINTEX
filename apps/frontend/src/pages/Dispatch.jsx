@@ -362,7 +362,7 @@ export function Dispatch() {
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <div className="rounded-md border overflow-x-auto">
+                            <div className="hidden sm:block rounded-md border overflow-x-auto">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
@@ -423,6 +423,39 @@ export function Dispatch() {
                                     </TableBody>
                                 </Table>
                             </div>
+
+                            {/* Mobile Card View for Available Items */}
+                            <div className="block sm:hidden space-y-3">
+                                {loadingItems ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">Loading...</div>
+                                ) : filteredItems.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No items available for dispatch</div>
+                                ) : (
+                                    filteredItems.map(item => (
+                                        <div key={item.id} className="border rounded-lg p-4 bg-card shadow-sm">
+                                            <div className="flex justify-between items-start gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="font-mono text-sm font-semibold truncate">{item.barcode || '—'}</p>
+                                                    <p className="text-sm text-muted-foreground">{item.lotNo || item.pieceId || '—'}</p>
+                                                </div>
+                                                <Badge variant="outline" className="text-green-600 border-green-600 whitespace-nowrap">
+                                                    {formatKg(item.availableWeight)} avail
+                                                </Badge>
+                                            </div>
+                                            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                <span>Total: {formatKg(item.weight)} | Dispatched: {formatKg(item.dispatchedWeight)}</span>
+                                            </div>
+                                            <Button
+                                                size="sm"
+                                                className="mt-3 w-full"
+                                                onClick={() => openDispatchModal(item)}
+                                            >
+                                                <ChevronRight className="w-4 h-4 mr-1" /> Dispatch
+                                            </Button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
                         </CardContent>
                     </Card>
                 </>
@@ -434,7 +467,7 @@ export function Dispatch() {
                             <CardTitle className="text-lg">Dispatch History</CardTitle>
 
                             {/* History Filters */}
-                            <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+                            <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
                                 <div className="flex-1 space-y-1 w-full">
                                     <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
                                     <div className="relative">
@@ -483,7 +516,7 @@ export function Dispatch() {
                         </div>
                     </CardHeader>
                     <CardContent>
-                        <div className="rounded-md border overflow-x-auto">
+                        <div className="hidden sm:block rounded-md border overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -547,6 +580,42 @@ export function Dispatch() {
                                     )}
                                 </TableBody>
                             </Table>
+                        </div>
+
+                        {/* Mobile Card View for Dispatch History */}
+                        <div className="block sm:hidden space-y-3">
+                            {loadingDispatches ? (
+                                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">Loading...</div>
+                            ) : filteredDispatches.length === 0 ? (
+                                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No dispatches found</div>
+                            ) : (
+                                filteredDispatches.map(d => (
+                                    <div key={d.id} className="border rounded-lg p-4 bg-card shadow-sm">
+                                        <div className="flex justify-between items-start gap-2">
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-mono text-sm font-semibold">{d.challanNo}</p>
+                                                <p className="text-sm text-muted-foreground">{d.customer?.name || '—'}</p>
+                                                <p className="text-xs text-muted-foreground mt-1">{formatDateDDMMYYYY(d.date)}</p>
+                                            </div>
+                                            <div className="flex flex-col items-end gap-1">
+                                                <Badge variant="outline" className="capitalize text-xs">{d.stage}</Badge>
+                                                <span className="font-medium">{formatKg(d.weight)}</span>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 flex items-center justify-between">
+                                            <span className="text-xs font-mono text-muted-foreground">{d.stageBarcode || '—'}</span>
+                                            <div className="flex gap-1">
+                                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
+                                                    <Printer className="w-4 h-4" />
+                                                </Button>
+                                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.id)}>
+                                                    <Trash2 className="w-4 h-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
                         </div>
                     </CardContent>
                 </Card>

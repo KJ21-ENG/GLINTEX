@@ -282,7 +282,7 @@ function ProductionReport() {
             {/* Filters */}
             <Card className="bg-muted/40 border-none shadow-none">
                 <CardContent className="py-4">
-                    <div className="flex flex-wrap gap-4 items-end">
+                    <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 flex-wrap">
                         <div className="min-w-[150px]">
                             <label className="text-sm font-medium mb-1 block">Process</label>
                             <Select value={process} onChange={e => setProcess(e.target.value)}>
@@ -402,33 +402,56 @@ function ProductionReport() {
                             <p>No data available for selected filters</p>
                         </div>
                     ) : (
-                        <div className="rounded-md border overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        {getColumnHeaders().map((header, i) => (
-                                            <TableHead key={i} className={i > 0 ? 'text-right' : ''}>
-                                                {header}
-                                            </TableHead>
-                                        ))}
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {report.data.map((item, index) => {
-                                        const rowData = getRowData(item);
-                                        return (
-                                            <TableRow key={index}>
-                                                {rowData.map((cell, i) => (
-                                                    <TableCell key={i} className={cn(i > 0 && 'text-right', i === 0 && 'font-medium')}>
-                                                        {cell}
-                                                    </TableCell>
+                        <>
+                            <div className="hidden sm:block rounded-md border overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            {getColumnHeaders().map((header, i) => (
+                                                <TableHead key={i} className={i > 0 ? 'text-right' : ''}>
+                                                    {header}
+                                                </TableHead>
+                                            ))}
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {report.data.map((item, index) => {
+                                            const rowData = getRowData(item);
+                                            return (
+                                                <TableRow key={index}>
+                                                    {rowData.map((cell, i) => (
+                                                        <TableCell key={i} className={cn(i > 0 && 'text-right', i === 0 && 'font-medium')}>
+                                                            {cell}
+                                                        </TableCell>
+                                                    ))}
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            {/* Mobile Card View */}
+                            <div className="block sm:hidden space-y-3">
+                                {report.data.map((item, index) => {
+                                    const headers = getColumnHeaders();
+                                    const rowData = getRowData(item);
+                                    return (
+                                        <div key={index} className="border rounded-lg bg-card p-4 shadow-sm">
+                                            <div className="font-medium text-primary mb-2">{rowData[0]}</div>
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                {headers.slice(1).map((header, i) => (
+                                                    <div key={i} className="flex justify-between">
+                                                        <span className="text-muted-foreground">{header}:</span>
+                                                        <span className="font-medium">{rowData[i + 1]}</span>
+                                                    </div>
                                                 ))}
-                                            </TableRow>
-                                        );
-                                    })}
-                                </TableBody>
-                            </Table>
-                        </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
                     )}
                 </CardContent>
             </Card>

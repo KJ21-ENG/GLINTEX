@@ -489,151 +489,252 @@ export function Stock() {
       ) : showBobbins ? (
         <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
       ) : (
-        <div className="rounded-md border bg-card overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[30px]"></TableHead>
-                <TableHead>Lot No</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Item</TableHead>
-                {!groupByItem ? <TableHead>Firm</TableHead> : null}
-                <TableHead>Supplier</TableHead>
-                <TableHead className="">Pieces</TableHead>
-                <TableHead className="">Total Wt</TableHead>
-                {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {displayedLots.length === 0 ? (
-                <TableRow><TableCell colSpan={(groupByItem ? 8 : 9) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
-              ) : (
-                displayedLots.map((l, idx) => {
-                  const isExpanded = !groupByItem && expandedLot === l.lotNo;
-                  return (
-                    <React.Fragment key={l.lotNo || idx}>
-                      <TableRow
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => !groupByItem && toggleExpand(l.lotNo)}
-                      >
-                        <TableCell>
-                          {!groupByItem && (
-                            isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                          )}
-                        </TableCell>
-                        <TableCell className="font-medium">
-                          {groupByItem ? (
-                            <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
-                          ) : (
-                            <HighlightMatch text={l.lotNo || '—'} query={search} />
-                          )}
-                        </TableCell>
-                        <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
-                        <TableCell>
-                          <HighlightMatch text={l.itemName} query={search} />
-                        </TableCell>
-                        {!groupByItem ? (
+        <>
+          <div className="hidden sm:block rounded-md border bg-card overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[30px]"></TableHead>
+                  <TableHead>Lot No</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Item</TableHead>
+                  {!groupByItem ? <TableHead>Firm</TableHead> : null}
+                  <TableHead>Supplier</TableHead>
+                  <TableHead className="">Pieces</TableHead>
+                  <TableHead className="">Total Wt</TableHead>
+                  {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {displayedLots.length === 0 ? (
+                  <TableRow><TableCell colSpan={(groupByItem ? 8 : 9) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                ) : (
+                  displayedLots.map((l, idx) => {
+                    const isExpanded = !groupByItem && expandedLot === l.lotNo;
+                    return (
+                      <React.Fragment key={l.lotNo || idx}>
+                        <TableRow
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => !groupByItem && toggleExpand(l.lotNo)}
+                        >
                           <TableCell>
-                            <HighlightMatch text={l.firmName} query={search} />
+                            {!groupByItem && (
+                              isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                            )}
                           </TableCell>
-                        ) : null}
-                        <TableCell>
-                          <HighlightMatch text={l.supplierName} query={search} />
-                        </TableCell>
-                        <TableCell className="">
-                          {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
-                        </TableCell>
-                        <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
-                        {filters.status !== 'available_to_issue' && (
-                          <TableCell className="font-bold">
-                            {formatKg(l.pendingWeight)}
+                          <TableCell className="font-medium">
+                            {groupByItem ? (
+                              <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
+                            ) : (
+                              <HighlightMatch text={l.lotNo || '—'} query={search} />
+                            )}
                           </TableCell>
-                        )}
-                      </TableRow>
-                      {isExpanded && !groupByItem && (
-                        <TableRow className="bg-muted/30 hover:bg-muted/30">
-                          <TableCell colSpan={filters.status === 'available_to_issue' ? 8 : 9} className="p-4">
-                            <div className="bg-background border rounded-lg p-4 shadow-sm">
-                              <div className="flex justify-between items-center mb-4">
-                                <div className="flex gap-2">
-                                  {(selectedByLot[l.lotNo] || []).length === 1 && (
-                                    <Button
-                                      size="sm"
-                                      onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
-                                    >
-                                      Issue Selected
-                                    </Button>
-                                  )}
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={(e) => handleDeleteLot(l.lotNo, e)}
-                                >
-                                  <Trash2 className="w-4 h-4 mr-2" /> Delete Lot
-                                </Button>
-                              </div>
-
-                              <Table>
-                                <TableHeader>
-                                  <TableRow className="bg-muted/50">
-                                    <TableHead className="w-[30px]">
-                                      {(() => {
-                                        const availablePieces = (l.pieces || []).filter(p => p.status === 'available');
-                                        const currentSelected = selectedByLot[l.lotNo] || [];
-                                        const allSelected = availablePieces.length > 0 && availablePieces.every(p => currentSelected.includes(p.id));
-                                        const someSelected = currentSelected.length > 0 && !allSelected;
-                                        return (
-                                          <input
-                                            type="checkbox"
-                                            checked={allSelected}
-                                            ref={el => { if (el) el.indeterminate = someSelected; }}
-                                            onChange={(e) => { e.stopPropagation(); toggleAllPieces(l.lotNo); }}
-                                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                            disabled={availablePieces.length === 0}
-                                          />
-                                        );
-                                      })()}
-                                    </TableHead>
-                                    <TableHead>Piece ID</TableHead>
-                                    <TableHead>Barcode</TableHead>
-                                    <TableHead>Seq</TableHead>
-                                    <TableHead className="">Weight</TableHead>
-                                    {filters.status !== 'available_to_issue' && <TableHead className="">Pending</TableHead>}
-                                    <TableHead className="">Total Units</TableHead>
-                                    <TableHead className="w-[50px]"></TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {(l.pieces || []).sort((a, b) => a.seq - b.seq).map(p => (
-                                    <PieceRow
-                                      key={p.id}
-                                      p={p}
-                                      selected={(selectedByLot[l.lotNo] || []).includes(p.id)}
-                                      onToggle={() => togglePiece(l.lotNo, p.id)}
-                                      onSaved={refreshDb}
-                                      pendingWeight={p.pendingWeight}
-                                      wastageWeight={p.wastageWeight}
-                                      totalUnits={p.totalUnits}
-                                      onDelete={handleDeletePiece}
-                                      isDeleting={deletingPieces.has(p.id)}
-                                      hidePending={filters.status === 'available_to_issue'}
-                                    />
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </div>
+                          <TableCell>{formatDateDDMMYYYY(l.date)}</TableCell>
+                          <TableCell>
+                            <HighlightMatch text={l.itemName} query={search} />
                           </TableCell>
+                          {!groupByItem ? (
+                            <TableCell>
+                              <HighlightMatch text={l.firmName} query={search} />
+                            </TableCell>
+                          ) : null}
+                          <TableCell>
+                            <HighlightMatch text={l.supplierName} query={search} />
+                          </TableCell>
+                          <TableCell className="">
+                            {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
+                          </TableCell>
+                          <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
+                          {filters.status !== 'available_to_issue' && (
+                            <TableCell className="font-bold">
+                              {formatKg(l.pendingWeight)}
+                            </TableCell>
+                          )}
                         </TableRow>
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                        {isExpanded && !groupByItem && (
+                          <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableCell colSpan={filters.status === 'available_to_issue' ? 8 : 9} className="p-4">
+                              <div className="bg-background border rounded-lg p-4 shadow-sm">
+                                <div className="flex justify-between items-center mb-4">
+                                  <div className="flex gap-2">
+                                    {(selectedByLot[l.lotNo] || []).length === 1 && (
+                                      <Button
+                                        size="sm"
+                                        onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
+                                      >
+                                        Issue Selected
+                                      </Button>
+                                    )}
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                                  >
+                                    <Trash2 className="w-4 h-4 mr-2" /> Delete Lot
+                                  </Button>
+                                </div>
+
+                                <Table>
+                                  <TableHeader>
+                                    <TableRow className="bg-muted/50">
+                                      <TableHead className="w-[30px]">
+                                        {(() => {
+                                          const availablePieces = (l.pieces || []).filter(p => p.status === 'available');
+                                          const currentSelected = selectedByLot[l.lotNo] || [];
+                                          const allSelected = availablePieces.length > 0 && availablePieces.every(p => currentSelected.includes(p.id));
+                                          const someSelected = currentSelected.length > 0 && !allSelected;
+                                          return (
+                                            <input
+                                              type="checkbox"
+                                              checked={allSelected}
+                                              ref={el => { if (el) el.indeterminate = someSelected; }}
+                                              onChange={(e) => { e.stopPropagation(); toggleAllPieces(l.lotNo); }}
+                                              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                              disabled={availablePieces.length === 0}
+                                            />
+                                          );
+                                        })()}
+                                      </TableHead>
+                                      <TableHead>Piece ID</TableHead>
+                                      <TableHead>Barcode</TableHead>
+                                      <TableHead>Seq</TableHead>
+                                      <TableHead className="">Weight</TableHead>
+                                      {filters.status !== 'available_to_issue' && <TableHead className="">Pending</TableHead>}
+                                      <TableHead className="">Total Units</TableHead>
+                                      <TableHead className="w-[50px]"></TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {(l.pieces || []).sort((a, b) => a.seq - b.seq).map(p => (
+                                      <PieceRow
+                                        key={p.id}
+                                        p={p}
+                                        selected={(selectedByLot[l.lotNo] || []).includes(p.id)}
+                                        onToggle={() => togglePiece(l.lotNo, p.id)}
+                                        onSaved={refreshDb}
+                                        pendingWeight={p.pendingWeight}
+                                        wastageWeight={p.wastageWeight}
+                                        totalUnits={p.totalUnits}
+                                        onDelete={handleDeletePiece}
+                                        isDeleting={deletingPieces.has(p.id)}
+                                        hidePending={filters.status === 'available_to_issue'}
+                                      />
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Mobile Card View for Stock (Jumbo Rolls) */}
+          <div className="block sm:hidden space-y-3">
+            {displayedLots.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No lots found.</div>
+            ) : (
+              displayedLots.map((l, idx) => {
+                const isExpanded = !groupByItem && expandedLot === l.lotNo;
+                const available = l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length;
+                const total = l.totalPieces ?? (l.pieces || []).length;
+
+                return (
+                  <div key={l.lotNo || idx} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                    <div className="p-4" onClick={() => !groupByItem && toggleExpand(l.lotNo)}>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold flex items-center gap-2">
+                            {groupByItem ? (
+                              <LotPopover lots={l.lots || []} onApplyFilter={handleApplyLotFilter} />
+                            ) : (
+                              <HighlightMatch text={l.lotNo || '—'} query={search} />
+                            )}
+                            {!groupByItem && (
+                              isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />
+                            )}
+                          </div>
+                          <p className="text-sm text-foreground mt-1">
+                            <HighlightMatch text={l.itemName} query={search} />
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {formatDateDDMMYYYY(l.date)} • <HighlightMatch text={l.supplierName} query={search} />
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <Badge variant={l.statusType === 'active' ? 'default' : 'outline'} className="text-[10px] px-1.5 py-0 h-4">
+                            {l.statusType}
+                          </Badge>
+                          <span className="font-mono text-sm font-medium">{formatKg(l.pendingWeight)} pend.</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Pieces: {available} / {total}</span>
+                        <span>Total: {formatKg(l.totalWeight)}</span>
+                      </div>
+                    </div>
+
+                    {isExpanded && !groupByItem && (
+                      <div className="border-t bg-muted/30 p-3 space-y-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-muted-foreground">Firm: <HighlightMatch text={l.firmName} query={search} /></span>
+                          <Button
+                            variant="ghost"
+                            className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 px-2"
+                            style={{ width: 'auto', padding: '0 8px', fontSize: '11px' }}
+                            onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                          >
+                            <Trash2 className="w-3 h-3 mr-1" /> Delete Lot
+                          </Button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {(l.pieces || []).sort((a, b) => a.seq - b.seq).map(p => (
+                            <div key={p.id} className="bg-background border rounded p-2 text-sm">
+                              <div className="flex justify-between items-start">
+                                <div className="flex flex-col">
+                                  <span className="font-mono text-xs">{p.barcode || p.id.substring(0, 8)}</span>
+                                  <span className="text-xs text-muted-foreground">Seq: {p.seq || '—'}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium">{formatKg(p.pendingWeight)}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
+                                    onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
+                                    className="h-4 w-4 rounded border-gray-300 text-primary"
+                                    disabled={p.status !== 'available'}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {(selectedByLot[l.lotNo] || []).length > 0 && (
+                          <Button
+                            className="w-full mt-2"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
+                          >
+                            Issue Selected ({(selectedByLot[l.lotNo] || []).length})
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
       )}
 
       {/* Issue Modal */}

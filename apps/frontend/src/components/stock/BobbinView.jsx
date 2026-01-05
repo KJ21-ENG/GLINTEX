@@ -198,7 +198,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-md border bg-card">
+      <div className="hidden sm:block rounded-md border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
@@ -253,8 +253,8 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                     </TableRow>
                     {isExpanded && !groupBy && (
                       <TableRow className="bg-muted/30">
-                        <TableCell colSpan={9} className="p-4">
-                          <div className="border rounded-md bg-background">
+                        <TableCell colSpan={10} className="p-4">
+                          <div className="border rounded-md bg-background overflow-x-auto">
                             <Table>
                               <TableHeader>
                                 <TableRow>
@@ -291,6 +291,67 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Mobile Card View for Bobbin Stock */}
+      <div className="block sm:hidden space-y-3">
+        {displayData.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No bobbin stock found.</div>
+        ) : (
+          displayData.map((l, idx) => {
+            const isExpanded = !groupBy && expandedLot === l.lotNo;
+            const rowKey = l.lotNo || idx;
+
+            return (
+              <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold flex items-center gap-2">
+                        {groupBy ? 'Grouped' : (
+                          <HighlightMatch text={l.lotNo || '—'} query={search} />
+                        )}
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
+                      </div>
+                      <p className="font-medium mt-1">
+                        <HighlightMatch text={l.itemName} query={search} />
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {formatDateDDMMYYYY(l.date) || '—'} • {l.cutName}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</div>
+                      <div className="text-[10px] text-muted-foreground uppercase">{l.availableBobbins} / {l.totalBobbins} bobbins</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Supplier: <HighlightMatch text={l.supplierName} query={search} /></span>
+                    <span>Crates: {l.crates?.length || l.crateCount}</span>
+                  </div>
+                </div>
+
+                {isExpanded && !groupBy && (
+                  <div className="border-t bg-muted/30 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">Crate Details</p>
+                    {l.crates.map(c => (
+                      <div key={c.id} className="bg-background border rounded p-2 space-y-1">
+                        <div className="flex justify-between font-mono text-xs">
+                          <span className="font-semibold text-primary">{c.barcode}</span>
+                          <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                          <span>{c.bobbinName} • Qty: {c.availableBobbins}</span>
+                          <span>Op: {c.operator?.name || '—'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );

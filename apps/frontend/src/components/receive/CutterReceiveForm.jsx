@@ -438,7 +438,7 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-2 md:grid-cols-8 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-1 sm:grid-cols-2 md:grid-cols-8 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>

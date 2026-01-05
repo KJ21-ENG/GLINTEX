@@ -334,7 +334,7 @@ export function OnMachineTable({ db, process }) {
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+            <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
                 <div className="flex-1 space-y-1">
                     <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
                     <input
@@ -384,7 +384,7 @@ export function OnMachineTable({ db, process }) {
                 </button>
             </div>
 
-            <div className="rounded-md border max-h-[600px] overflow-y-auto">
+            <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-y-auto">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -480,6 +480,59 @@ export function OnMachineTable({ db, process }) {
                         )}
                     </TableBody>
                 </Table>
+            </div>
+
+            {/* Mobile Card View - shown on small screens only */}
+            <div className="block sm:hidden space-y-3">
+                {onMachineEntries.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+                        No pending entries on machine for {process}.
+                    </div>
+                ) : (
+                    onMachineEntries.map((entry) => {
+                        const progressPercent = getProgressPercent(entry);
+                        const identifier = (process === 'cutter' || process === 'holo' || process === 'coning')
+                            ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || '—'))
+                            : (entry.lotNo || '—');
+                        return (
+                            <div key={entry.id} className="border rounded-lg p-4 bg-card shadow-sm">
+                                <div className="flex justify-between items-start gap-2">
+                                    <div className="min-w-0 flex-1">
+                                        <p className="font-semibold truncate" title={identifier}>{identifier}</p>
+                                        <p className="text-sm text-muted-foreground">
+                                            {machineNameById.get(entry.machineId)} • {operatorNameById.get(entry.operatorId)}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            {formatDateDDMMYYYY(entry.date)} • {itemNameById.get(entry.itemId)}
+                                        </p>
+                                    </div>
+                                    <Badge variant="outline" className="text-blue-600 border-blue-600 whitespace-nowrap">
+                                        {formatKg(entry.pendingWeight)} pending
+                                    </Badge>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <span>Issued: {formatKg(entry.issuedWeight)}</span>
+                                        <span>→</span>
+                                        <span className="text-green-600">Rcvd: {formatKg(entry.receivedWeight)}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-12 h-2 bg-muted rounded-full overflow-hidden">
+                                            <div className="h-full bg-primary rounded-full" style={{ width: `${progressPercent}%` }} />
+                                        </div>
+                                        <span className="text-xs">{progressPercent}%</span>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => handleGoToReceive(entry)}
+                                    className="mt-3 w-full h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 flex items-center justify-center gap-2"
+                                >
+                                    <ArrowRight className="w-4 h-4" /> Receive
+                                </button>
+                            </div>
+                        );
+                    })
+                )}
             </div>
         </div>
     );

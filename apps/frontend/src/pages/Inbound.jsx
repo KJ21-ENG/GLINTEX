@@ -381,7 +381,7 @@ function RecentLotsTable({ db }) {
         <Card>
             <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <CardTitle>Recent Lots</CardTitle>
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-end">
+                <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-2 w-full sm:w-auto">
                     <div className="space-y-1">
                         <label className="text-[10px] font-medium text-muted-foreground uppercase px-1">Search</label>
                         <div className="relative w-full sm:w-64">
@@ -437,7 +437,7 @@ function RecentLotsTable({ db }) {
                 </div>
             </CardHeader>
             <CardContent>
-                <div className="rounded-md border overflow-x-auto">
+                <div className="hidden sm:block rounded-md border overflow-x-auto">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -542,6 +542,42 @@ function RecentLotsTable({ db }) {
                             )}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Mobile Card View for Recent Lots */}
+                <div className="block sm:hidden space-y-3">
+                    {paged.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No lots found.</div>
+                    ) : (
+                        paged.map(l => (
+                            <div key={l.lotNo} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                <div className="p-4" onClick={() => setExpandedLot(expandedLot === l.lotNo ? null : l.lotNo)}>
+                                    <div className="flex justify-between items-start gap-2">
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-semibold">{l.lotNo}</p>
+                                            <p className="text-sm text-muted-foreground">{l.itemName}</p>
+                                            <p className="text-xs text-muted-foreground mt-1">{formatDateDDMMYYYY(l.date)} • {l.firmName}</p>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1">
+                                            <Badge variant="outline">{l.totalPieces} pcs</Badge>
+                                            <span className="font-mono text-sm font-medium">{formatKg(l.totalWeight)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                {expandedLot === l.lotNo && (
+                                    <div className="border-t bg-muted/30 p-3 space-y-2">
+                                        <p className="text-xs font-medium text-muted-foreground">Pieces in this lot:</p>
+                                        {(l.pieces || []).map(p => (
+                                            <div key={p.id} className="flex justify-between items-center text-sm bg-background rounded px-2 py-1">
+                                                <span className="font-mono">{p.seq || p.id.substring(0, 6)}</span>
+                                                <span className="font-medium">{formatKg(p.weight)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ))
+                    )}
                 </div>
                 {/* Pagination */}
                 <div className="flex items-center justify-end space-x-2 py-4">

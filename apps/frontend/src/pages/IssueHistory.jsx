@@ -481,7 +481,7 @@ export function IssueHistory({ db, refreshDb }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row gap-4 items-end bg-muted/30 p-4 rounded-lg border">
+      <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
         <div className="flex-1 space-y-1">
           <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
           <input
@@ -531,7 +531,7 @@ export function IssueHistory({ db, refreshDb }) {
         </button>
       </div>
 
-      <div className="rounded-md border max-h-[600px] overflow-auto">
+      <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -640,6 +640,41 @@ export function IssueHistory({ db, refreshDb }) {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Mobile Card View */}
+      <div className="block sm:hidden space-y-3">
+        {issues.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+            No issue records found for {process}.
+          </div>
+        ) : (
+          issues.map((r) => {
+            const pieceDisplay = Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || r.lotNo || '—');
+            return (
+              <div key={r.id} className="border rounded-lg p-4 bg-card shadow-sm">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold truncate" title={pieceDisplay}>{pieceDisplay}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {machineNameById.get(r.machineId)} • {operatorNameById.get(r.operatorId)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {formatDateDDMMYYYY(r.date)} • {itemNameById.get(r.itemId)}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="whitespace-nowrap">
+                    {process === 'cutter' ? formatKg(r.totalWeight) : (r.count || r.rollsIssued || r.metallicBobbins || 0)}
+                  </Badge>
+                </div>
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs font-mono text-muted-foreground">{r.barcode || r.id.substring(0, 8)}</span>
+                  <ActionMenu actions={getActions(r)} />
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );

@@ -172,99 +172,163 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   const tableColumnCount = groupBy ? 7 : 8;
 
   return (
-    <div className="rounded-md border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[30px]"></TableHead>
-            <TableHead>Lot No</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Item</TableHead>
-            {!groupBy ? <TableHead>Firm</TableHead> : null}
-            <TableHead>Supplier</TableHead>
-            <TableHead className="">Cones</TableHead>
-            <TableHead className="">Net Weight</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {displayLots.length === 0 ? (
-            <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
-          ) : (
-            displayLots.map((lot, idx) => {
-              const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
-              const isExpanded = !groupBy && expandedLot === lot.lotNo;
-              return (
-                <React.Fragment key={rowKey}>
-                  <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
-                    <TableCell>
-                      {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {groupBy ? (
-                        <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
-                      ) : (
-                        <HighlightMatch text={lot.lotNo || '—'} query={search} />
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
-                    <TableCell>
-                      <HighlightMatch text={lot.itemName} query={search} />
-                    </TableCell>
-                    {!groupBy ? (
+    <>
+      <div className="hidden sm:block rounded-md border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[30px]"></TableHead>
+              <TableHead>Lot No</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead>Item</TableHead>
+              {!groupBy ? <TableHead>Firm</TableHead> : null}
+              <TableHead>Supplier</TableHead>
+              <TableHead className="">Cones</TableHead>
+              <TableHead className="">Net Weight</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {displayLots.length === 0 ? (
+              <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
+            ) : (
+              displayLots.map((lot, idx) => {
+                const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
+                const isExpanded = !groupBy && expandedLot === lot.lotNo;
+                return (
+                  <React.Fragment key={rowKey}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
                       <TableCell>
-                        <HighlightMatch text={lot.firmName} query={search} />
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
-                    ) : null}
-                    <TableCell>
-                      <HighlightMatch text={lot.supplierName} query={search} />
-                    </TableCell>
-                    <TableCell className="">{lot.totalCones}</TableCell>
-                    <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
-                  </TableRow>
-                  {isExpanded && (
-                    <TableRow className="bg-muted/30">
-                      <TableCell colSpan={8} className="p-4">
-                        <div className="border rounded-md bg-background">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Barcode</TableHead>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Box</TableHead>
-                                <TableHead>Cone Type</TableHead>
-                                <TableHead className="">Cones</TableHead>
-                                <TableHead className="">Net / Gross Wt</TableHead>
-                                <TableHead>Machine</TableHead>
-                                <TableHead>Operator</TableHead>
-                                <TableHead>Notes</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {lot.rows.map((row) => (
-                                <TableRow key={row.id}>
-                                  <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                                  <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
-                                  <TableCell>{row.boxName}</TableCell>
-                                  <TableCell>{row.coneType}</TableCell>
-                                  <TableCell className="">{row.coneCount}</TableCell>
-                                  <TableCell className="">{formatKg(row.netWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
-                                  <TableCell>{row.machineName}</TableCell>
-                                  <TableCell>{row.operatorName}</TableCell>
-                                  <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
+                      <TableCell className="font-medium">
+                        {groupBy ? (
+                          <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
+                          <HighlightMatch text={lot.lotNo || '—'} query={search} />
+                        )}
                       </TableCell>
+                      <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
+                      <TableCell>
+                        <HighlightMatch text={lot.itemName} query={search} />
+                      </TableCell>
+                      {!groupBy ? (
+                        <TableCell>
+                          <HighlightMatch text={lot.firmName} query={search} />
+                        </TableCell>
+                      ) : null}
+                      <TableCell>
+                        <HighlightMatch text={lot.supplierName} query={search} />
+                      </TableCell>
+                      <TableCell className="">{lot.totalCones}</TableCell>
+                      <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
                     </TableRow>
-                  )}
-                </React.Fragment>
-              );
-            })
-          )}
-        </TableBody>
-      </Table>
-    </div>
+                    {isExpanded && (
+                      <TableRow className="bg-muted/30">
+                        <TableCell colSpan={8} className="p-4">
+                          <div className="border rounded-md bg-background overflow-x-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Barcode</TableHead>
+                                  <TableHead>Date</TableHead>
+                                  <TableHead>Box</TableHead>
+                                  <TableHead>Cone Type</TableHead>
+                                  <TableHead className="">Cones</TableHead>
+                                  <TableHead className="">Net / Gross Wt</TableHead>
+                                  <TableHead>Machine</TableHead>
+                                  <TableHead>Operator</TableHead>
+                                  <TableHead>Notes</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {lot.rows.map((row) => (
+                                  <TableRow key={row.id}>
+                                    <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                                    <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
+                                    <TableCell>{row.boxName}</TableCell>
+                                    <TableCell>{row.coneType}</TableCell>
+                                    <TableCell className="">{row.coneCount}</TableCell>
+                                    <TableCell className="">{formatKg(row.netWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
+                                    <TableCell>{row.machineName}</TableCell>
+                                    <TableCell>{row.operatorName}</TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Mobile Card View for Coning Stock */}
+      <div className="block sm:hidden space-y-3">
+        {displayLots.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No coning stock found.</div>
+        ) : (
+          displayLots.map((lot, idx) => {
+            const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
+            const isExpanded = !groupBy && expandedLot === lot.lotNo;
+
+            return (
+              <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold flex items-center gap-2">
+                        {groupBy ? (
+                          <LotPopover lots={lot.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
+                          <HighlightMatch text={lot.lotNo || '—'} query={search} />
+                        )}
+                        {!groupBy && (isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}
+                      </div>
+                      <p className="font-medium mt-1">
+                        <HighlightMatch text={lot.itemName} query={search} />
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {formatDateDDMMYYYY(lot.date) || '—'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold">{formatKg(lot.totalWeight)}</div>
+                      <div className="text-[10px] text-muted-foreground uppercase">{lot.totalCones} cones</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Supplier: <HighlightMatch text={lot.supplierName} query={search} /></span>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t bg-muted/30 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">Box Details</p>
+                    {lot.rows.map(r => (
+                      <div key={r.id} className="bg-background border rounded p-2 space-y-1">
+                        <div className="flex justify-between font-mono text-xs">
+                          <span className="font-semibold text-primary">{r.barcode}</span>
+                          <span>{formatKg(r.netWeight)}</span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                          <span>{r.boxName} • Cones: {r.coneCount}</span>
+                          <span>Mac: {r.machineName}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </>
   );
 }

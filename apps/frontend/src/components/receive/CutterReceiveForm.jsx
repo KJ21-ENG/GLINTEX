@@ -284,9 +284,10 @@ export function CutterReceiveForm() {
             return;
         }
 
-        // Validate bobbin weight is set
-        const bobbinWeight = Number(selectedBobbin?.weight);
-        if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+        // Validate bobbin weight is set (0 is allowed)
+        const bobbinWeightRaw = selectedBobbin?.weight;
+        const bobbinWeight = Number(bobbinWeightRaw);
+        if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
             alert('Bobbin weight is missing. Please update the bobbin first.');
             return;
         }

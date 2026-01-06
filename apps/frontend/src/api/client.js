@@ -102,6 +102,9 @@ export async function uploadOpeningStock(stage, payload) { return await request(
 export async function previewOpeningStock(stage, payload) { return await request(`/api/opening_stock/preview/${stage}`, { method: 'POST', body: payload }); }
 export async function createOpeningHoloReceive(payload) { return await request('/api/opening_stock/holo_receive', { method: 'POST', body: payload }); }
 export async function createOpeningConingReceive(payload) { return await request('/api/opening_stock/coning_receive', { method: 'POST', body: payload }); }
+export async function deleteOpeningCutterReceiveRow(id) { return await request(`/api/opening_stock/cutter_receive_rows/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+export async function deleteOpeningHoloReceiveRow(id) { return await request(`/api/opening_stock/holo_receive_rows/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+export async function deleteOpeningConingReceiveRow(id) { return await request(`/api/opening_stock/coning_receive_rows/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
 export async function manualReceiveFromConingMachine(payload) { return await request('/api/receive_from_coning_machine/manual', { method: 'POST', body: payload }); }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }

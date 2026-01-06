@@ -68,6 +68,26 @@ function roundTo3Decimals(val) {
   return Math.round(num * 1000) / 1000;
 }
 
+function isOpeningLotNo(lotNo) {
+  return typeof lotNo === 'string' && lotNo.startsWith('OP-');
+}
+
+async function recalculateLotTotals(tx, lotNo, actorUserId) {
+  if (!lotNo) return { totalWeight: 0, totalPieces: 0 };
+  const agg = await tx.inboundItem.aggregate({
+    where: { lotNo },
+    _sum: { weight: true },
+    _count: { id: true },
+  });
+  const totalWeight = Number(agg._sum.weight || 0);
+  const totalPieces = Number(agg._count.id || 0);
+  await tx.lot.update({
+    where: { lotNo },
+    data: { totalWeight, totalPieces, ...actorUpdateFields(actorUserId) },
+  });
+  return { totalWeight, totalPieces };
+}
+
 function extractWastageFromNote(note) {
   if (!note) return 0;
   const raw = String(note);
@@ -1491,9 +1511,10 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
       const gross = toNumber(crate?.grossWeight);
       if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
 
-      const bobbinWeight = Number(bobbin.weight);
+      const bobbinWeightRaw = bobbin.weight;
+      const bobbinWeight = Number(bobbinWeightRaw);
       const boxWeight = Number(box.weight);
-      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+      if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
         throw new Error('Bobbin weight missing. Update bobbin first.');
       }
       if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
@@ -2045,6 +2066,282 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
   } catch (err) {
     console.error('Failed to create opening coning stock', err);
     res.status(400).json({ error: err.message || 'Failed to create opening coning stock' });
+  }
+});
+
+// Delete a single opening stock cutter receive row
+router.delete('/api/opening_stock/cutter_receive_rows/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Missing row id' });
+
+    const row = await prisma.receiveFromCutterMachineRow.findUnique({ where: { id } });
+    if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
+    if (!row.pieceId || !isOpeningLotNo(row.pieceId)) {
+      return res.status(400).json({ error: 'Only opening stock rows can be removed' });
+    }
+
+    const issuedBobbins = Number(row.issuedBobbins || 0);
+    const issuedBobbinWeight = Number(row.issuedBobbinWeight || 0);
+    if (issuedBobbins > 0 || issuedBobbinWeight > 0) {
+      return res.status(400).json({ error: 'Cannot delete row: bobbins already issued' });
+    }
+    const dispatchedWeight = Number(row.dispatchedWeight || 0);
+    if (dispatchedWeight > 0) {
+      return res.status(400).json({ error: 'Cannot delete row: already dispatched' });
+    }
+
+    const piece = await prisma.inboundItem.findUnique({ where: { id: row.pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Linked inbound piece not found' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.receiveFromCutterMachineRow.update({
+        where: { id },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedByUserId: actorUserId || null,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+
+      const remainingRows = await tx.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: row.pieceId, isDeleted: false },
+        select: { netWt: true, bobbinQuantity: true },
+      });
+      const totalNetWeight = roundTo3Decimals(
+        remainingRows.reduce((sum, r) => sum + (Number(r.netWt) || 0), 0)
+      );
+      const totalBob = remainingRows.reduce((sum, r) => sum + (Number(r.bobbinQuantity) || 0), 0);
+
+      await tx.receiveFromCutterMachinePieceTotal.upsert({
+        where: { pieceId: row.pieceId },
+        update: { totalNetWeight, totalBob, ...actorUpdateFields(actorUserId) },
+        create: {
+          pieceId: row.pieceId,
+          totalNetWeight,
+          totalBob,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.update({
+        where: { id: row.pieceId },
+        data: { weight: totalNetWeight, ...actorUpdateFields(actorUserId) },
+      });
+
+      const lotTotals = await recalculateLotTotals(tx, piece.lotNo, actorUserId);
+
+      await logCrudWithActor(req, {
+        entityType: 'opening_cutter_receive_row',
+        entityId: row.id,
+        action: 'delete',
+        payload: {
+          pieceId: row.pieceId,
+          lotNo: piece.lotNo,
+          totalNetWeight,
+          totalBob,
+        },
+        client: tx,
+      });
+
+      return { totalNetWeight, totalBob, lotTotals };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to delete opening cutter receive row', err);
+    res.status(500).json({ error: err.message || 'Failed to delete opening cutter receive row' });
+  }
+});
+
+// Delete a single opening stock holo receive row
+router.delete('/api/opening_stock/holo_receive_rows/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Missing row id' });
+
+    const row = await prisma.receiveFromHoloMachineRow.findUnique({
+      where: { id },
+      include: { issue: { select: { id: true, lotNo: true } } },
+    });
+    if (!row || !row.issue) return res.status(404).json({ error: 'Receive row not found' });
+    if (!isOpeningLotNo(row.issue.lotNo)) {
+      return res.status(400).json({ error: 'Only opening stock rows can be removed' });
+    }
+
+    const dispatchedWeight = Number(row.dispatchedWeight || 0);
+    if (dispatchedWeight > 0) {
+      return res.status(400).json({ error: 'Cannot delete row: already dispatched' });
+    }
+
+    const rowIds = [row.id];
+    const barcodeArray = row.barcode ? [String(row.barcode)] : [];
+    const rowIdArray = rowIds.length ? rowIds : ['__none__'];
+    const barcodeCheck = barcodeArray.length ? barcodeArray : ['__none__'];
+    const coningUsage = await prisma.$queryRaw`
+      SELECT id FROM "IssueToConingMachine"
+      WHERE EXISTS (
+        SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+        WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+           OR elem->>'barcode' = ANY (${barcodeCheck}::text[])
+      )
+    `;
+    if (Array.isArray(coningUsage) && coningUsage.length > 0) {
+      return res.status(400).json({ error: 'Cannot delete row: already issued to coning' });
+    }
+
+    const pieceId = `${row.issue.lotNo}-1`;
+    const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Linked inbound piece not found' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.receiveFromHoloMachineRow.delete({ where: { id } });
+
+      const remainingRows = await tx.receiveFromHoloMachineRow.findMany({
+        where: { issueId: row.issueId },
+        select: { rollCount: true, rollWeight: true, grossWeight: true, tareWeight: true },
+      });
+
+      const totalRolls = remainingRows.reduce((sum, r) => sum + (Number(r.rollCount) || 0), 0);
+      const totalNetWeight = roundTo3Decimals(
+        remainingRows.reduce((sum, r) => {
+          const net = Number.isFinite(r.rollWeight)
+            ? Number(r.rollWeight)
+            : (Number(r.grossWeight || 0) - Number(r.tareWeight || 0));
+          return sum + (Number(net) || 0);
+        }, 0)
+      );
+
+      await tx.receiveFromHoloMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: { totalRolls, totalNetWeight, ...actorUpdateFields(actorUserId) },
+        create: {
+          pieceId,
+          totalRolls,
+          totalNetWeight,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.update({
+        where: { id: pieceId },
+        data: { weight: totalNetWeight, ...actorUpdateFields(actorUserId) },
+      });
+
+      const lotTotals = await recalculateLotTotals(tx, piece.lotNo, actorUserId);
+
+      await logCrudWithActor(req, {
+        entityType: 'opening_holo_receive_row',
+        entityId: row.id,
+        action: 'delete',
+        payload: {
+          issueId: row.issueId,
+          pieceId,
+          lotNo: piece.lotNo,
+          totalNetWeight,
+          totalRolls,
+        },
+        client: tx,
+      });
+
+      return { totalNetWeight, totalRolls, lotTotals };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to delete opening holo receive row', err);
+    res.status(500).json({ error: err.message || 'Failed to delete opening holo receive row' });
+  }
+});
+
+// Delete a single opening stock coning receive row
+router.delete('/api/opening_stock/coning_receive_rows/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Missing row id' });
+
+    const row = await prisma.receiveFromConingMachineRow.findUnique({
+      where: { id },
+      include: { issue: { select: { id: true, lotNo: true } } },
+    });
+    if (!row || !row.issue) return res.status(404).json({ error: 'Receive row not found' });
+    if (!isOpeningLotNo(row.issue.lotNo)) {
+      return res.status(400).json({ error: 'Only opening stock rows can be removed' });
+    }
+
+    const dispatchedWeight = Number(row.dispatchedWeight || 0);
+    if (dispatchedWeight > 0) {
+      return res.status(400).json({ error: 'Cannot delete row: already dispatched' });
+    }
+
+    const pieceId = `${row.issue.lotNo}-1`;
+    const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+    if (!piece) return res.status(404).json({ error: 'Linked inbound piece not found' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.receiveFromConingMachineRow.delete({ where: { id } });
+
+      const remainingRows = await tx.receiveFromConingMachineRow.findMany({
+        where: { issueId: row.issueId },
+        select: { coneCount: true, netWeight: true, coneWeight: true, grossWeight: true, tareWeight: true },
+      });
+
+      const totalCones = remainingRows.reduce((sum, r) => sum + (Number(r.coneCount) || 0), 0);
+      const totalNetWeight = roundTo3Decimals(
+        remainingRows.reduce((sum, r) => {
+          const net = Number.isFinite(r.netWeight)
+            ? Number(r.netWeight)
+            : (Number.isFinite(r.coneWeight) ? Number(r.coneWeight) : (Number(r.grossWeight || 0) - Number(r.tareWeight || 0)));
+          return sum + (Number(net) || 0);
+        }, 0)
+      );
+
+      await tx.receiveFromConingMachinePieceTotal.upsert({
+        where: { pieceId: row.issueId },
+        update: { totalCones, totalNetWeight, ...actorUpdateFields(actorUserId) },
+        create: {
+          pieceId: row.issueId,
+          totalCones,
+          totalNetWeight,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+
+      await tx.inboundItem.update({
+        where: { id: pieceId },
+        data: { weight: totalNetWeight, ...actorUpdateFields(actorUserId) },
+      });
+
+      const lotTotals = await recalculateLotTotals(tx, piece.lotNo, actorUserId);
+
+      await logCrudWithActor(req, {
+        entityType: 'opening_coning_receive_row',
+        entityId: row.id,
+        action: 'delete',
+        payload: {
+          issueId: row.issueId,
+          pieceId,
+          lotNo: piece.lotNo,
+          totalNetWeight,
+          totalCones,
+        },
+        client: tx,
+      });
+
+      return { totalNetWeight, totalCones, lotTotals };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Failed to delete opening coning receive row', err);
+    res.status(500).json({ error: err.message || 'Failed to delete opening coning receive row' });
   }
 });
 
@@ -3559,8 +3856,9 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
       const box = boxMap.get(entry.boxId);
       if (!box) return res.status(404).json({ error: 'Box not found' });
 
-      const bobbinWeight = Number(bobbin.weight);
-      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+      const bobbinWeightRaw = bobbin.weight;
+      const bobbinWeight = Number(bobbinWeightRaw);
+      if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
         return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
       }
       const boxWeight = Number(box.weight);
@@ -3818,8 +4116,9 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
     }
 
-    const bobbinWeight = Number(bobbin.weight);
-    if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+    const bobbinWeightRaw = bobbin.weight;
+    const bobbinWeight = Number(bobbinWeightRaw);
+    if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
       return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
     }
     const boxWeight = Number(box.weight);
@@ -4094,8 +4393,9 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
         return res.status(400).json({ error: 'Gross weight must be a positive number' });
       }
 
-      const bobbinWeight = Number(bobbin.weight);
-      if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) {
+      const bobbinWeightRaw = bobbin.weight;
+      const bobbinWeight = Number(bobbinWeightRaw);
+      if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
         return res.status(400).json({ error: 'Bobbin weight missing. Update bobbin first.' });
       }
       const boxWeight = Number(box.weight);
@@ -6392,8 +6692,29 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.inboundItem.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Inbound piece not found' });
-    // Do not allow delete if consumed
-    if (existing.status === 'consumed') return res.status(400).json({ error: 'Cannot delete consumed piece' });
+    const isConsumed = existing.status === 'consumed';
+    if (isConsumed && !existing.isOpeningStock) {
+      return res.status(400).json({ error: 'Cannot delete consumed piece' });
+    }
+
+    const dispatchedWeight = Number(existing.dispatchedWeight || 0);
+    if (dispatchedWeight > 0) {
+      return res.status(400).json({ error: 'Cannot delete piece with dispatched weight' });
+    }
+
+    const issuedCount = await prisma.issueToCutterMachine.count({
+      where: { pieceIds: { contains: existing.id } },
+    });
+    if (issuedCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete piece that was issued to cutter' });
+    }
+
+    const receiveCount = await prisma.receiveFromCutterMachineRow.count({
+      where: { pieceId: existing.id, isDeleted: false },
+    });
+    if (receiveCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete piece with cutter receives' });
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.inboundItem.delete({ where: { id } });

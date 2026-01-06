@@ -52,6 +52,7 @@ export function OpeningStock() {
   const [supplierId, setSupplierId] = useState('');
   const [previewLotNo, setPreviewLotNo] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deletingKey, setDeletingKey] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
@@ -375,8 +376,14 @@ export function OpeningStock() {
     if (!cutterEntry.bobbinId || !cutterEntry.boxId) return;
     const bobbin = getBobbin(cutterEntry.bobbinId);
     const box = getBox(cutterEntry.boxId);
-    if (!Number(bobbin?.weight) || !Number(box?.weight)) {
-      alert('Bobbin/box weight missing. Update masters first.');
+    const bobbinWeight = bobbin?.weight;
+    const boxWeight = box?.weight;
+    if (bobbinWeight == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
+      alert('Bobbin weight missing. Update masters first.');
+      return;
+    }
+    if (boxWeight == null || !Number.isFinite(boxWeight) || boxWeight <= 0) {
+      alert('Box weight missing. Update masters first.');
       return;
     }
     const bobbinQty = Number(cutterEntry.bobbinQuantity || 0);
@@ -622,6 +629,70 @@ export function OpeningStock() {
 
   const handleRemove = (setter, id) => {
     setter(prev => prev.filter(row => row.id !== id));
+  };
+
+  const handleDeleteOpeningInbound = async (pieceId) => {
+    if (!pieceId) return;
+    const ok = window.confirm(`Remove opening piece ${pieceId}? This will only work if it is not used further.`);
+    if (!ok) return;
+    const key = `inbound:${pieceId}`;
+    setDeletingKey(key);
+    try {
+      await api.deleteInboundItem(pieceId);
+      await refreshDb();
+    } catch (err) {
+      alert(err.message || 'Failed to delete opening piece');
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleDeleteOpeningCutterRow = async (rowId) => {
+    if (!rowId) return;
+    const ok = window.confirm('Remove this opening cutter receive row? This will only work if it is not used further.');
+    if (!ok) return;
+    const key = `cutter:${rowId}`;
+    setDeletingKey(key);
+    try {
+      await api.deleteOpeningCutterReceiveRow(rowId);
+      await refreshDb();
+    } catch (err) {
+      alert(err.message || 'Failed to delete opening cutter row');
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleDeleteOpeningHoloRow = async (rowId) => {
+    if (!rowId) return;
+    const ok = window.confirm('Remove this opening holo receive row? This will only work if it is not used further.');
+    if (!ok) return;
+    const key = `holo:${rowId}`;
+    setDeletingKey(key);
+    try {
+      await api.deleteOpeningHoloReceiveRow(rowId);
+      await refreshDb();
+    } catch (err) {
+      alert(err.message || 'Failed to delete opening holo row');
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const handleDeleteOpeningConingRow = async (rowId) => {
+    if (!rowId) return;
+    const ok = window.confirm('Remove this opening coning receive row? This will only work if it is not used further.');
+    if (!ok) return;
+    const key = `coning:${rowId}`;
+    setDeletingKey(key);
+    try {
+      await api.deleteOpeningConingReceiveRow(rowId);
+      await refreshDb();
+    } catch (err) {
+      alert(err.message || 'Failed to delete opening coning row');
+    } finally {
+      setDeletingKey(null);
+    }
   };
 
   const handleSaveCutter = async () => {
@@ -1491,12 +1562,13 @@ export function OpeningStock() {
                     <TableHead>Piece</TableHead>
                     <TableHead>Weight</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {openingHistory.inbound.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
+                      <TableCell colSpan={7} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
                     </TableRow>
                   ) : openingHistory.inbound.slice(0, 50).map(row => (
                     <TableRow key={row.id}>
@@ -1509,6 +1581,16 @@ export function OpeningStock() {
                         <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
                           {row.status}
                         </span>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={deletingKey === `inbound:${row.id}`}
+                          onClick={() => handleDeleteOpeningInbound(row.id)}
+                        >
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1530,12 +1612,13 @@ export function OpeningStock() {
                     <TableHead>Qty</TableHead>
                     <TableHead>Cut</TableHead>
                     <TableHead>Net Wt</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {openingHistory.cutter.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
+                      <TableCell colSpan={9} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
                     </TableRow>
                   ) : openingHistory.cutter.slice(0, 50).map(row => {
                     // Get item name from inbound_items via pieceId
@@ -1551,6 +1634,16 @@ export function OpeningStock() {
                         <TableCell>{row.bobbinQuantity || 0}</TableCell>
                         <TableCell>{row.cutMaster?.name || row.cut || getCut(row.cutId)?.name || '—'}</TableCell>
                         <TableCell>{formatKg(row.netWt)}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={deletingKey === `cutter:${row.id}`}
+                            onClick={() => handleDeleteOpeningCutterRow(row.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -1572,12 +1665,13 @@ export function OpeningStock() {
                     <TableHead>Rolls</TableHead>
                     <TableHead>Cut</TableHead>
                     <TableHead>Net Wt</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {openingHistory.holo.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
+                      <TableCell colSpan={9} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
                     </TableRow>
                   ) : openingHistory.holo.slice(0, 50).map(row => {
                     const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
@@ -1593,6 +1687,16 @@ export function OpeningStock() {
                         <TableCell>{row.rollCount || 0}</TableCell>
                         <TableCell>{cutName || '—'}</TableCell>
                         <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={deletingKey === `holo:${row.id}`}
+                            onClick={() => handleDeleteOpeningHoloRow(row.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -1613,12 +1717,13 @@ export function OpeningStock() {
                     <TableHead>Cones</TableHead>
                     <TableHead>Cut</TableHead>
                     <TableHead>Net Wt</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {openingHistory.coning.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
                     </TableRow>
                   ) : openingHistory.coning.slice(0, 50).map(row => {
                     const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
@@ -1644,6 +1749,16 @@ export function OpeningStock() {
                         <TableCell>{row.coneCount || 0}</TableCell>
                         <TableCell>{cutName}</TableCell>
                         <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={deletingKey === `coning:${row.id}`}
+                            onClick={() => handleDeleteOpeningConingRow(row.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}

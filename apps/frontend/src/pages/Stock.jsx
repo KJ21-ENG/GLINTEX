@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
 import { PieceRow } from '../components/stock/PieceRow';
@@ -40,7 +41,47 @@ export function Stock() {
   const isConing = processId === 'coning';
 
   // --- UI State ---
-  const [view, setView] = useState(() => (isHolo ? 'holo' : 'jumbo')); // 'jumbo' | 'bobbins' | 'holo'
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Initialize view from URL or default based on process
+  const getInitialView = () => {
+    const urlView = searchParams.get('view');
+    if (isHolo) return 'holo';
+    if (isCutter && urlView === 'bobbins') return 'bobbins';
+    if (isCutter && urlView === 'jumbo') return 'jumbo';
+    return 'jumbo'; // default for cutter
+  };
+
+  const [view, setViewState] = useState(getInitialView);
+
+  // Sync view state when URL searchParams changes (e.g., browser back/forward navigation)
+  useEffect(() => {
+    const urlView = searchParams.get('view');
+    if (isCutter) {
+      if (urlView === 'bobbins' && view !== 'bobbins') {
+        setViewState('bobbins');
+      } else if (urlView === 'jumbo' && view !== 'jumbo') {
+        setViewState('jumbo');
+      } else if (!urlView && view !== 'jumbo') {
+        // No view param defaults to jumbo
+        setViewState('jumbo');
+      }
+    }
+  }, [searchParams, isCutter, view]);
+
+  // Wrapper to update both state and URL
+  const setView = (newView) => {
+    setViewState(newView);
+    // Only persist view param for cutter process with jumbo/bobbins views
+    if (isCutter && (newView === 'jumbo' || newView === 'bobbins')) {
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.set('view', newView);
+        return newParams;
+      }, { replace: true });
+    }
+  };
+
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
   const [groupByItem, setGroupByItem] = useState(false);
@@ -239,18 +280,30 @@ export function Stock() {
   // Keep view aligned with process (match main-branch behaviour)
   useEffect(() => {
     if (isHolo) {
-      setView('holo');
+      setViewState('holo');
+      // Clear view param from URL for non-cutter processes
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.delete('view');
+        return newParams;
+      }, { replace: true });
       return;
     }
     // For coning/other processes, force jumbo like main-branch behaviour
     if (!isCutter) {
-      if (view !== 'jumbo') setView('jumbo');
+      if (view !== 'jumbo') setViewState('jumbo');
+      // Clear view param from URL for non-cutter processes
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.delete('view');
+        return newParams;
+      }, { replace: true });
       return;
     }
     if (view === 'holo') {
-      setView('jumbo');
+      setViewState('jumbo');
     }
-  }, [isCutter, isHolo, view]);
+  }, [isCutter, isHolo, view, setSearchParams]);
 
   useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
   useEffect(() => {

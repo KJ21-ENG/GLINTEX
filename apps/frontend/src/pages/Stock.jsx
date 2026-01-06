@@ -94,11 +94,13 @@ export function Stock() {
     for (const piece of inbound) {
       if (!m[piece.lotNo]) continue;
       const inboundWeight = Number(piece.weight || 0);
+      const dispatchedWeight = Number(piece.dispatchedWeight || 0);
       const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalUnits: 0 };
       const receivedWeight = totals.received || 0;
       const wastageWeight = totals.wastage || 0;
       const pieceTotalUnits = totals.totalUnits || 0;
-      const pendingForPiece = Math.max(0, inboundWeight - receivedWeight - wastageWeight);
+      const pendingRaw = inboundWeight - receivedWeight - wastageWeight - dispatchedWeight;
+      const pendingForPiece = pendingRaw > EPSILON ? pendingRaw : 0;
 
       const pieceEntry = {
         ...piece,
@@ -114,7 +116,7 @@ export function Stock() {
         m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
         m[piece.lotNo].wastageCount = (m[piece.lotNo].wastageCount || 0) + 1;
       }
-      if (piece.status === 'available') {
+      if (piece.status === 'available' && pendingForPiece > EPSILON) {
         m[piece.lotNo].availableCount = (m[piece.lotNo].availableCount || 0) + 1;
       }
       m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
@@ -209,7 +211,7 @@ export function Stock() {
       };
       existing.totalWeight += Number(lot.totalWeight || 0);
       existing.pendingWeight += Number(lot.pendingWeight || 0);
-      const available = lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available').length;
+      const available = lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length;
       existing.availableCount += available;
       existing.totalPieces += lot.totalPieces ?? (lot.pieces || []).length;
       existing.statusType = existing.pendingWeight > EPSILON ? 'active' : 'inactive';
@@ -284,7 +286,9 @@ export function Stock() {
   }
 
   function toggleAllPieces(lotNo) {
-    const availablePieces = (lotsMap[lotNo]?.pieces || []).filter(p => p.status === 'available').map(p => p.id);
+    const availablePieces = (lotsMap[lotNo]?.pieces || [])
+      .filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON)
+      .map(p => p.id);
     const currentSelected = selectedByLot[lotNo] || [];
     const allSelected = availablePieces.length > 0 && availablePieces.every(id => currentSelected.includes(id));
     if (allSelected) {
@@ -542,7 +546,7 @@ export function Stock() {
                             <HighlightMatch text={l.supplierName} query={search} />
                           </TableCell>
                           <TableCell className="">
-                            {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length} / ${l.totalPieces ?? (l.pieces || []).length}`}
+                            {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length} / ${l.totalPieces ?? (l.pieces || []).length}`}
                           </TableCell>
                           <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                           {filters.status !== 'available_to_issue' && (
@@ -643,7 +647,7 @@ export function Stock() {
             ) : (
               displayedLots.map((l, idx) => {
                 const isExpanded = !groupByItem && expandedLot === l.lotNo;
-                const available = l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available').length;
+                const available = l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length;
                 const total = l.totalPieces ?? (l.pieces || []).length;
 
                 return (
@@ -710,7 +714,7 @@ export function Stock() {
                                     checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                     onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
                                     className="h-4 w-4 rounded border-gray-300 text-primary"
-                                    disabled={p.status !== 'available'}
+                                    disabled={p.status !== 'available' || Number(p.pendingWeight || 0) <= EPSILON}
                                   />
                                 </div>
                               </div>

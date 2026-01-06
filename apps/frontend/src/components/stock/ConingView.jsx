@@ -6,6 +6,7 @@ import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
 export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+  const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
@@ -45,7 +46,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       })();
 
       const coneCount = Number(row.coneCount || row.totalCones || 0);
-      const netWeight = Number(row.netWeight ?? row.grossWeight ?? 0);
+      const baseNetWeight = Number.isFinite(row.netWeight)
+        ? Number(row.netWeight)
+        : (Number.isFinite(row.coneWeight) ? Number(row.coneWeight) : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
+      const dispatchedWeight = Number(row.dispatchedWeight || 0);
+      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
+      const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
       const grossWeight = Number(row.grossWeight ?? 0);
 
       return {
@@ -58,14 +64,15 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         supplierId: lotMeta?.supplierId || '',
         supplierName: lotMeta?.supplierName || '—',
         coneCount,
-        netWeight,
+        netWeight: baseNetWeight,
+        availableWeight,
         grossWeight,
         coneType: row.coneType?.name || row.coneTypeName || '—',
         boxName: row.box?.name || '—',
         machineName: machineName || '—',
         operatorName: row.operator?.name || '—',
         date: row.date || row.createdAt || '',
-        statusType: coneCount > 0 ? 'active' : 'inactive',
+        statusType: availableWeight > EPSILON ? 'active' : 'inactive',
       };
     });
   }, [db.receive_from_coning_machine_rows, issueMap, lotMetaMap, db.machines]);
@@ -88,12 +95,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       };
       existing.rows.push(row);
       existing.totalCones += row.coneCount;
-      existing.totalWeight += row.netWeight;
+      existing.totalWeight += row.availableWeight;
       map.set(lotNo, existing);
     });
     return Array.from(map.values()).map((lot) => ({
       ...lot,
-      statusType: lot.totalCones > 0 ? 'active' : 'inactive',
+      statusType: lot.totalWeight > EPSILON ? 'active' : 'inactive',
       date: lot.rows?.[0]?.date || '',
     }));
   }, [coningRows]);
@@ -161,7 +168,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       };
       existing.totalCones += lot.totalCones;
       existing.totalWeight += lot.totalWeight;
-      existing.statusType = existing.totalCones > 0 ? 'active' : 'inactive';
+      existing.statusType = existing.totalWeight > EPSILON ? 'active' : 'inactive';
       existing.rows = [];
       existing.lots.push(lot.lotNo);
       map.set(key, existing);
@@ -248,7 +255,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                     <TableCell>{row.boxName}</TableCell>
                                     <TableCell>{row.coneType}</TableCell>
                                     <TableCell className="">{row.coneCount}</TableCell>
-                                    <TableCell className="">{formatKg(row.netWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
+                                    <TableCell className="">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
                                     <TableCell>{row.machineName}</TableCell>
                                     <TableCell>{row.operatorName}</TableCell>
                                     <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
@@ -314,7 +321,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                       <div key={r.id} className="bg-background border rounded p-2 space-y-1">
                         <div className="flex justify-between font-mono text-xs">
                           <span className="font-semibold text-primary">{r.barcode}</span>
-                          <span>{formatKg(r.netWeight)}</span>
+                          <span>{formatKg(r.availableWeight)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted-foreground">
                           <span>{r.boxName} • Cones: {r.coneCount}</span>

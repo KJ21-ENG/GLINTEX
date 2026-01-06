@@ -6,6 +6,7 @@ import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+  const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
@@ -66,6 +67,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       const yarn = db.yarns?.find(y => y.id === issue?.yarnId);
       const twist = db.twists?.find(t => t.id === issue?.twistId);
 
+      const baseNetWeight = Number.isFinite(row.rollWeight)
+        ? Number(row.rollWeight)
+        : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
+      const dispatchedWeight = Number(row.dispatchedWeight || 0);
+      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
+      const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
+
       return {
         ...row,
         lotNo,
@@ -80,6 +88,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
         rollCount: Number(row.rollCount || 0),
         rollWeight: Number(row.rollWeight || 0),
+        netWeight: baseNetWeight,
+        availableWeight,
       };
     });
   }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.yarns, db.twists, cutByIssueId]);
@@ -108,7 +118,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
       existing.rows.push(row);
       existing.totalRolls += row.rollCount;
-      existing.totalWeight += row.rollWeight;
+      existing.totalWeight += row.availableWeight;
       existing.cutNames.add(row.cutName || '—');
       map.set(lotKey, existing);
     });
@@ -118,7 +128,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       return {
         ...rest,
         cutName,
-        statusType: rest.totalRolls > 0 ? 'active' : 'inactive',
+      statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
       };
     });
@@ -191,7 +201,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       };
       existing.totalRolls += lot.totalRolls;
       existing.totalWeight += lot.totalWeight;
-      existing.statusType = existing.totalRolls > 0 ? 'active' : 'inactive';
+      existing.statusType = existing.totalWeight > EPSILON ? 'active' : 'inactive';
       existing.rows = []; // collapse detail when grouped
       existing.lots.push(lot.lotNo);
       existing.cutNames.add(lot.cutName || '—');
@@ -294,7 +304,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                     <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                     <TableCell>{r.rollType?.name || '—'}</TableCell>
                                     <TableCell className="">{r.rollCount}</TableCell>
-                                    <TableCell className="">{formatKg(r.rollWeight)}</TableCell>
+                                    <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
                                     <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
                                     <TableCell>{r.machineNo}</TableCell>
                                   </TableRow>
@@ -360,7 +370,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       <div key={r.id} className="bg-background border rounded p-2 space-y-1">
                         <div className="flex justify-between font-mono text-xs">
                           <span className="font-semibold text-primary">{r.barcode}</span>
-                          <span>{formatKg(r.rollWeight)}</span>
+                          <span>{formatKg(r.availableWeight)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted-foreground">
                           <span>{r.rollType?.name} • Rolls: {r.rollCount}</span>

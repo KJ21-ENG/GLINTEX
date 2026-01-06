@@ -18,6 +18,7 @@ export function PieceRow({
   isDeleting = false,
   hidePending = false
 }) {
+  const EPSILON = 1e-9;
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
   const [saving, setSaving] = useState(false);
@@ -37,8 +38,9 @@ export function PieceRow({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const isWastageMarked = Number(pendingWeight || 0) === 0 && Number(wastageWeight || 0) > 0;
+  const isWastageMarked = Number(pendingWeight || 0) <= EPSILON && Number(wastageWeight || 0) > 0;
   const isAvailable = p.status === 'available';
+  const hasPending = Number(pendingWeight || 0) > EPSILON;
 
   async function save() {
     if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) {
@@ -70,7 +72,7 @@ export function PieceRow({
           type="checkbox"
           checked={selected}
           onChange={onToggle}
-          disabled={!isAvailable}
+          disabled={!isAvailable || !hasPending}
           className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
         />
       </td>

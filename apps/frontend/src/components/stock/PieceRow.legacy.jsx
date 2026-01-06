@@ -10,6 +10,7 @@ import { formatKg } from '../../utils';
 import * as api from '../../api';
 
 export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight = 0, pendingWeight = 0, isIssued = false, wastageWeight = 0, totalUnits = 0, onMarkWastage, isMarking = false }) {
+  const EPSILON = 1e-9;
   const { cls, theme } = useBrand();
   const [editing, setEditing] = useState(false);
   const [weight, setWeight] = useState(p.weight);
@@ -20,7 +21,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
   // Treat a piece as "wastage marked" when its pending weight reaches 0 and
   // it has a recorded wastage weight. Only in that case apply strike-through
   // and disabled formatting in the expanded view.
-  const isWastageMarked = Number(pendingWeight || 0) === 0 && Number(wastageWeight || 0) > 0;
+  const isWastageMarked = Number(pendingWeight || 0) <= EPSILON && Number(wastageWeight || 0) > 0;
 
   async function save() {
     if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) { alert('Weight must be positive'); return; }
@@ -56,7 +57,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
   return (
     <>
     <tr ref={rowRef} onContextMenu={openContextMenu} className={`border-t ${cls.rowBorder} ${isWastageMarked ? 'piece-disabled' : ''} row-hover`}>
-      <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} disabled={!isAvailable} /></td>
+      <td className="py-2 pr-2"><input type="checkbox" checked={selected} onChange={onToggle} disabled={!isAvailable || Number(pendingWeight || 0) <= EPSILON} /></td>
       <td className="py-2 pr-2 font-mono">{p.id}</td>
       <td className="py-2 pr-2">
         {p.barcode ? (
@@ -113,7 +114,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
             <>
               {(() => {
                 const canEdit = !isWastageMarked && !isIssued;
-                const canMarkWastage = isIssued && pendingWeight > 0 && wastageWeight === 0;
+                const canMarkWastage = isIssued && pendingWeight > EPSILON && wastageWeight === 0;
                 const editClass = `${!canEdit ? 'opacity-50 cursor-not-allowed' : ''}`;
                 const markClass = `${!canMarkWastage ? 'opacity-50 cursor-not-allowed' : ''}`;
                 return (

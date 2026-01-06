@@ -160,6 +160,8 @@ export function IssueHistory({ db, refreshDb }) {
               const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
               if (holoIssue) {
                 yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
+                const twist = db.twists?.find(t => t.id === holoIssue.twistId)?.name || '';
+                const twistName = twist;
 
                 // Get cut from cutter receive row
                 const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
@@ -184,6 +186,8 @@ export function IssueHistory({ db, refreshDb }) {
           rollType,
           coneType,
           wrapperName,
+          twist: twist || '',
+          twistName: twistName || '',
           rollCount,
           totalRolls,
           totalWeight,

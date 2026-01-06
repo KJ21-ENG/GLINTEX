@@ -162,6 +162,7 @@ export function ConingReceiveForm() {
                     let rollType = '';
                     let coneType = '';
                     let wrapperName = '';
+                    let twistName = '';
                     let rollCount = 0;
 
                     try {
@@ -187,6 +188,7 @@ export function ConingReceiveForm() {
                                     const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
                                     if (holoIssue) {
                                         if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
+                                        if (holoIssue.twistId) twistName = db.twists.find(t => t.id === holoIssue.twistId)?.name || '';
                                         const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
                                         if (Array.isArray(hRefs) && hRefs.length > 0) {
                                             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
@@ -214,6 +216,8 @@ export function ConingReceiveForm() {
                         itemName,
                         cut: cutName,
                         yarnName,
+                        twist: twistName,
+                        twistName: twistName,
                         rollType,
                         coneType,
                         wrapperName,

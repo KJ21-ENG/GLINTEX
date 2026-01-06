@@ -21,7 +21,8 @@ export function HoloReceiveForm() {
         rollCount: '',
         grossWeight: '',
         boxId: '',
-        notes: ''
+        notes: '',
+        shift: ''
     });
 
     // --- Derived ---
@@ -62,7 +63,8 @@ export function HoloReceiveForm() {
             setForm(p => ({
                 ...p,
                 machineId: result.machineId || '',
-                operatorId: result.operatorId || ''
+                operatorId: result.operatorId || '',
+                shift: result.shift || ''
             }));
         } catch (e) {
             alert(e.message);
@@ -87,6 +89,7 @@ export function HoloReceiveForm() {
                 date: form.date,
                 machineNo: db.machines.find(m => m.id === form.machineId)?.name,
                 operatorId: form.operatorId,
+                shift: form.shift,
                 notes: form.notes
             });
             const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
@@ -99,6 +102,7 @@ export function HoloReceiveForm() {
                     const machineName = db?.machines?.find((m) => m.id === form.machineId)?.name;
                     const itemName = db?.items?.find((i) => i.id === issue.itemId)?.name;
                     const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
+                    const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
 
                     // Resolve Cut from issue's source rows
                     let cutName = '';
@@ -128,7 +132,10 @@ export function HoloReceiveForm() {
                             machineName,
                             itemName,
                             yarnName,
+                            twist: twist || '',
+                            twistName: twist || '',
                             cut: cutName,
+                            shift: form.shift,
                             date: form.date,
                         },
                         { template },
@@ -195,6 +202,18 @@ export function HoloReceiveForm() {
                                     labelKey="name"
                                     valueKey="id"
                                     placeholder="Select Operator"
+                                    clearable
+                                />
+                            </div>
+                            <div>
+                                <Label>Shift (Optional)</Label>
+                                <Select
+                                    value={form.shift}
+                                    onChange={e => setForm({ ...form, shift: e.target.value })}
+                                    options={[{ id: 'Day', name: 'Day' }, { id: 'Night', name: 'Night' }]}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Shift"
                                     clearable
                                 />
                             </div>

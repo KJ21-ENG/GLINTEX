@@ -17,9 +17,9 @@ import {
   TableHeader,
   TableRow,
 } from '../components/ui';
-import { formatKg, todayISO, uid } from '../utils';
+import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
-import { Plus, Save, Trash2, Upload, Download, X } from 'lucide-react';
+import { Plus, Save, Trash2, Upload, Download, X, History } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 
 const STAGE_OPTIONS = [
@@ -244,6 +244,31 @@ export function OpeningStock() {
 
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
 
+  // History data for opening stock entries
+  const openingHistory = useMemo(() => {
+    const result = { inbound: [], cutter: [], holo: [], coning: [] };
+
+    // Inbound: filter by isOpeningStock flag
+    result.inbound = (db.inbound_items || []).filter(p => p.isOpeningStock).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    // Cutter Receive: filter by lotNo starting with OP-
+    result.cutter = (db.receive_from_cutter_machine_rows || []).filter(r => !r.isDeleted && (r.pieceId || '').startsWith('OP-')).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    // Holo Receive: filter by lotNo starting with OP-
+    result.holo = (db.receive_from_holo_machine_rows || []).filter(r => {
+      const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+      return issue && (issue.lotNo || '').startsWith('OP-');
+    }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    // Coning Receive: filter by lotNo starting with OP-
+    result.coning = (db.receive_from_coning_machine_rows || []).filter(r => {
+      const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+      return issue && (issue.lotNo || '').startsWith('OP-');
+    }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    return result;
+  }, [db]);
+
   const getBobbin = (id) => db.bobbins?.find(b => b.id === id);
   const getBox = (id) => db.boxes?.find(b => b.id === id);
   const getCut = (id) => db.cuts?.find(c => c.id === id);
@@ -406,6 +431,7 @@ export function OpeningStock() {
             machineName,
             helperName,
             operatorName,
+            shift: cutterEntry.shift || '',
             date,
           },
           { template },
@@ -476,6 +502,9 @@ export function OpeningStock() {
             machineName: holoIssue.machineId ? getMachine(holoIssue.machineId)?.name || '' : '',
             operatorName,
             cut: '',
+            twist: holoIssue.twistId ? (db.twists?.find(t => t.id === holoIssue.twistId)?.name || '') : '',
+            twistName: holoIssue.twistId ? (db.twists?.find(t => t.id === holoIssue.twistId)?.name || '') : '',
+            shift: holoIssue.shift || '',
             date,
             barcode,
           },
@@ -1441,6 +1470,189 @@ export function OpeningStock() {
           </CardContent>
         </Card>
       )}
+
+      {/* History Section */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <History className="w-5 h-5" />
+            Recent Opening Stock Entries ({STAGE_OPTIONS.find(s => s.id === stage)?.label})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {stage === 'inbound' && (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Lot</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Piece</TableHead>
+                    <TableHead>Weight</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {openingHistory.inbound.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
+                    </TableRow>
+                  ) : openingHistory.inbound.slice(0, 50).map(row => (
+                    <TableRow key={row.id}>
+                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
+                      <TableCell>{row.lotNo}</TableCell>
+                      <TableCell>{db.items?.find(i => i.id === row.itemId)?.name || '—'}</TableCell>
+                      <TableCell className="font-mono text-xs">{row.id}</TableCell>
+                      <TableCell>{formatKg(row.weight)}</TableCell>
+                      <TableCell>
+                        <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
+                          {row.status}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {stage === 'cutter' && (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Lot</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Bobbin</TableHead>
+                    <TableHead>Qty</TableHead>
+                    <TableHead>Cut</TableHead>
+                    <TableHead>Net Wt</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {openingHistory.cutter.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
+                    </TableRow>
+                  ) : openingHistory.cutter.slice(0, 50).map(row => {
+                    // Get item name from inbound_items via pieceId
+                    const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
+                    const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                        <TableCell>{row.pieceId?.split('-').slice(0, 2).join('-')}</TableCell>
+                        <TableCell>{itemName}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
+                        <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
+                        <TableCell>{row.bobbinQuantity || 0}</TableCell>
+                        <TableCell>{row.cutMaster?.name || row.cut || getCut(row.cutId)?.name || '—'}</TableCell>
+                        <TableCell>{formatKg(row.netWt)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {stage === 'holo' && (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Lot</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Roll Type</TableHead>
+                    <TableHead>Rolls</TableHead>
+                    <TableHead>Cut</TableHead>
+                    <TableHead>Net Wt</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {openingHistory.holo.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
+                    </TableRow>
+                  ) : openingHistory.holo.slice(0, 50).map(row => {
+                    const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                    const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                    const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '—';
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                        <TableCell>{issue?.lotNo || '—'}</TableCell>
+                        <TableCell>{itemName || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                        <TableCell>{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'}</TableCell>
+                        <TableCell>{row.rollCount || 0}</TableCell>
+                        <TableCell>{cutName || '—'}</TableCell>
+                        <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {stage === 'coning' && (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Lot</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Cones</TableHead>
+                    <TableHead>Cut</TableHead>
+                    <TableHead>Net Wt</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {openingHistory.coning.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
+                    </TableRow>
+                  ) : openingHistory.coning.slice(0, 50).map(row => {
+                    const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                    const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                    // Trace back through holo for cut
+                    let cutName = '—';
+                    try {
+                      const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
+                      if (Array.isArray(refs) && refs.length > 0) {
+                        const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === refs[0].rowId);
+                        if (holoRow) {
+                          const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
+                          if (holoIssue?.cutId) cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '—';
+                        }
+                      }
+                    } catch (e) { /* ignore */ }
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                        <TableCell>{issue?.lotNo || '—'}</TableCell>
+                        <TableCell>{itemName || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                        <TableCell>{row.coneCount || 0}</TableCell>
+                        <TableCell>{cutName}</TableCell>
+                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

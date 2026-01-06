@@ -372,6 +372,7 @@ export function CutterReceiveForm() {
                         machineName,
                         helperName,
                         operatorName: db.workers.find((o) => o.id === issueRecord.operatorId)?.name,
+                        shift,
                         date: receiveDate,
                     },
                     { template },

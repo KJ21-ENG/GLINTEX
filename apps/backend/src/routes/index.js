@@ -957,7 +957,7 @@ router.get('/api/db', async (req, res) => {
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
   const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany();
-  const issue_to_holo_machine = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
+  const issue_to_holo_machine_raw = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const settings = await prisma.settings.findMany();
   const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
@@ -1004,6 +1004,39 @@ router.get('/api/db', async (req, res) => {
     take: RECEIVE_ROWS_FETCH_LIMIT,
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
+  const cutterRowPieceMap = new Map(receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
+  const pieceMetaMap = new Map(inbound_items.map(p => [p.id, { lotNo: p.lotNo, itemId: p.itemId }]));
+  const issue_to_holo_machine = issue_to_holo_machine_raw.map((issue) => {
+    let refs = [];
+    try {
+      refs = Array.isArray(issue.receivedRowRefs)
+        ? issue.receivedRowRefs
+        : (typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : []);
+    } catch (e) {
+      refs = [];
+    }
+    const lotSet = new Set();
+    const itemSet = new Set();
+    refs.forEach((ref) => {
+      const rowId = typeof ref?.rowId === 'string' ? ref.rowId : null;
+      if (!rowId) return;
+      const pieceId = cutterRowPieceMap.get(rowId);
+      if (!pieceId) return;
+      const meta = pieceMetaMap.get(pieceId);
+      if (meta?.lotNo) lotSet.add(meta.lotNo);
+      if (meta?.itemId) itemSet.add(meta.itemId);
+    });
+    const lotNos = Array.from(lotSet);
+    const itemIds = Array.from(itemSet);
+    if (lotNos.length === 0 && issue.lotNo) lotNos.push(issue.lotNo);
+    if (itemIds.length === 0 && issue.itemId) itemIds.push(issue.itemId);
+    const lotLabel = lotNos.length <= 1
+      ? (lotNos[0] || issue.lotNo || '')
+      : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+    return { ...issue, lotNos, itemIds, lotLabel, isMixedLot: lotNos.length > 1 };
+  });
+  const issueLotLabelMap = new Map(issue_to_holo_machine.map(i => [i.id, i.lotLabel]));
+  const issueLotNosMap = new Map(issue_to_holo_machine.map(i => [i.id, i.lotNos]));
   const receive_from_holo_machine_rows_raw = await prisma.receiveFromHoloMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
@@ -1029,14 +1062,14 @@ router.get('/api/db', async (req, res) => {
       select: { id: true, pieceId: true },
     })
     : [];
-  const cutterRowPieceMap = new Map(cutterRowsForHolo.map(r => [r.id, r.pieceId]));
+  const holoCutterRowPieceMap = new Map(cutterRowsForHolo.map(r => [r.id, r.pieceId]));
 
   const receive_from_holo_machine_rows = receive_from_holo_machine_rows_raw.map(r => {
     const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
     const pieceIds = new Set();
     refs.forEach(ref => {
       if (typeof ref?.rowId === 'string') {
-        const pieceId = cutterRowPieceMap.get(ref.rowId);
+        const pieceId = holoCutterRowPieceMap.get(ref.rowId);
         if (pieceId) pieceIds.add(pieceId);
       }
     });
@@ -1048,6 +1081,12 @@ router.get('/api/db', async (req, res) => {
 
     // Remove receivedRowRefs from issue before sending (not needed on frontend)
     const issueCopy = r.issue ? { ...r.issue } : null;
+    if (issueCopy && issueLotLabelMap.has(issueCopy.id)) {
+      issueCopy.lotLabel = issueLotLabelMap.get(issueCopy.id);
+    }
+    if (issueCopy && issueLotNosMap.has(issueCopy.id)) {
+      issueCopy.lotNos = issueLotNosMap.get(issueCopy.id);
+    }
     if (issueCopy) delete issueCopy.receivedRowRefs;
     return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds) };
   });
@@ -1275,6 +1314,9 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
       })
       : [];
     const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
+    if (pieceIds.length === 0 && issue?.lotNo) {
+      pieceIds.push(`${issue.lotNo}-1`);
+    }
     const pieces = pieceIds.length
       ? await prisma.inboundItem.findMany({
         where: { id: { in: pieceIds } },
@@ -1299,7 +1341,11 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
         issuedBobbins: meta.issuedBobbins ?? row.bobbinQuantity ?? null,
       };
     });
-    res.json({ ...issue, pieceIds, crates });
+    const lotNos = Array.from(new Set(crates.map((c) => c.lotNo).filter(Boolean)));
+    const lotLabel = lotNos.length <= 1
+      ? (lotNos[0] || issue.lotNo || '')
+      : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+    res.json({ ...issue, pieceIds, lotNos, lotLabel, crates });
   } catch (err) {
     console.error('Failed to lookup holo issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
@@ -4843,10 +4889,14 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
       lotSet.add(piece.lotNo);
       itemSet.add(piece.itemId);
     }
-    if (lotSet.size !== 1 || itemSet.size !== 1) {
-      return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
+    if (itemSet.size !== 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single item' });
     }
-    const lotNo = Array.from(lotSet)[0];
+    const lotNos = Array.from(lotSet).filter(Boolean);
+    if (lotNos.length === 0) {
+      return res.status(400).json({ error: 'Unable to resolve lot numbers for scanned crates' });
+    }
+    const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
 
     let yarnRecord = null;
@@ -4969,7 +5019,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     const actorUserId = req.user?.id;
     const {
       issueId,
-      pieceId,
+      pieceId: rawPieceId,
       rollCount,
       // rollWeight, // No longer accepted for calculation
       rollTypeId,
@@ -4983,6 +5033,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       notes,
       createdBy,
     } = req.body || {};
+    const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
     const rollCountNum = Number(rollCount);
     const grossNum = Number(grossWeight);
 
@@ -4994,10 +5045,33 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
     const issue = await prisma.issueToHoloMachine.findUnique({
       where: { id: issueId },
-      select: { lotNo: true, barcode: true, itemId: true },
+      select: { lotNo: true, barcode: true, itemId: true, receivedRowRefs: true },
     });
     if (!issue) {
       return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    let allowedPieceIds = [];
+    try {
+      let refs = issue.receivedRowRefs;
+      if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+      if (!Array.isArray(refs)) refs = [];
+      const rowIds = refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+      if (rowIds.length > 0) {
+        const cutterRows = await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: rowIds } },
+          select: { pieceId: true },
+        });
+        allowedPieceIds = Array.from(new Set(cutterRows.map(r => r.pieceId).filter(Boolean)));
+      }
+    } catch (e) {
+      allowedPieceIds = [];
+    }
+    if (allowedPieceIds.length === 0 && issue.lotNo) {
+      allowedPieceIds = [`${issue.lotNo}-1`];
+    }
+    if (allowedPieceIds.length > 0 && !allowedPieceIds.includes(pieceId)) {
+      return res.status(400).json({ error: 'Selected piece is not part of this issue' });
     }
 
     const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
@@ -7315,6 +7389,58 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
         include: { issue: true },
         orderBy: { createdAt: 'desc' },
       });
+      const issueById = new Map();
+      holoRows.forEach((row) => {
+        if (row.issue?.id) issueById.set(row.issue.id, row.issue);
+      });
+      const issueRowIdsMap = new Map();
+      const allRowIds = [];
+      issueById.forEach((issue) => {
+        let refs = [];
+        try {
+          refs = Array.isArray(issue.receivedRowRefs)
+            ? issue.receivedRowRefs
+            : (typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : []);
+        } catch (e) {
+          refs = [];
+        }
+        const rowIds = refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+        issueRowIdsMap.set(issue.id, rowIds);
+        allRowIds.push(...rowIds);
+      });
+      const uniqueRowIds = Array.from(new Set(allRowIds));
+      const cutterRows = uniqueRowIds.length
+        ? await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: uniqueRowIds } },
+          select: { id: true, pieceId: true },
+        })
+        : [];
+      const rowToPieceMap = new Map(cutterRows.map(r => [r.id, r.pieceId]));
+      const pieceIds = Array.from(new Set(cutterRows.map(r => r.pieceId).filter(Boolean)));
+      const pieces = pieceIds.length
+        ? await prisma.inboundItem.findMany({
+          where: { id: { in: pieceIds } },
+          select: { id: true, lotNo: true },
+        })
+        : [];
+      const pieceLotMap = new Map(pieces.map(p => [p.id, p.lotNo]));
+      const issueLotLabelMap = new Map();
+      issueById.forEach((issue) => {
+        const rowIds = issueRowIdsMap.get(issue.id) || [];
+        const lotSet = new Set();
+        rowIds.forEach((rowId) => {
+          const pieceId = rowToPieceMap.get(rowId);
+          if (!pieceId) return;
+          const lotNo = pieceLotMap.get(pieceId);
+          if (lotNo) lotSet.add(lotNo);
+        });
+        if (lotSet.size === 0 && issue.lotNo) lotSet.add(issue.lotNo);
+        const lotNos = Array.from(lotSet);
+        const lotLabel = lotNos.length <= 1
+          ? (lotNos[0] || issue.lotNo || '')
+          : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+        issueLotLabelMap.set(issue.id, lotLabel);
+      });
       items = holoRows
         .map(row => {
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
@@ -7322,6 +7448,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             id: row.id,
             barcode: row.barcode,
             lotNo: row.issue?.lotNo,
+            lotLabel: row.issue?.id ? issueLotLabelMap.get(row.issue.id) : null,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
             availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),

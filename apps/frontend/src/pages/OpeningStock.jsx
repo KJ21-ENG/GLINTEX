@@ -258,13 +258,21 @@ export function OpeningStock() {
     // Holo Receive: filter by lotNo starting with OP-
     result.holo = (db.receive_from_holo_machine_rows || []).filter(r => {
       const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-      return issue && (issue.lotNo || '').startsWith('OP-');
+      if (!issue) return false;
+      if ((issue.lotNo || '').startsWith('OP-')) return true;
+      if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
+      if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
+      return false;
     }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     // Coning Receive: filter by lotNo starting with OP-
     result.coning = (db.receive_from_coning_machine_rows || []).filter(r => {
       const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-      return issue && (issue.lotNo || '').startsWith('OP-');
+      if (!issue) return false;
+      if ((issue.lotNo || '').startsWith('OP-')) return true;
+      if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
+      if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
+      return false;
     }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return result;

@@ -37,8 +37,10 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   const coningRows = useMemo(() => {
     return (db.receive_from_coning_machine_rows || []).map((row) => {
       const issue = row?.issueId ? issueMap.get(row.issueId) : row.issue;
-      const lotNo = row?.lotNo || issue?.lotNo || '';
-      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+      const lotNoRaw = row?.lotNo || issue?.lotNo || '';
+      const lotLabel = issue?.lotLabel || lotNoRaw || '';
+      const lotMeta = lotNoRaw ? lotMetaMap.get(lotNoRaw) : null;
+      const itemName = lotMeta?.itemName || db.items?.find(i => i.id === issue?.itemId)?.name || '—';
       const machineName = row.machineNo || row.machine?.name || (() => {
         if (!issue?.machineId) return '';
         const m = db.machines?.find(mc => mc.id === issue.machineId);
@@ -56,9 +58,10 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
 
       return {
         ...row,
-        lotNo,
+        lotNo: lotLabel,
+        lotNoRaw,
         itemId: issue?.itemId || lotMeta?.itemId || '',
-        itemName: lotMeta?.itemName || '—',
+        itemName,
         firmId: lotMeta?.firmId || '',
         firmName: lotMeta?.firmName || '—',
         supplierId: lotMeta?.supplierId || '',
@@ -75,7 +78,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         statusType: availableWeight > EPSILON ? 'active' : 'inactive',
       };
     });
-  }, [db.receive_from_coning_machine_rows, issueMap, lotMetaMap, db.machines]);
+  }, [db.receive_from_coning_machine_rows, issueMap, lotMetaMap, db.items, db.machines]);
 
   const coningLots = useMemo(() => {
     const map = new Map();

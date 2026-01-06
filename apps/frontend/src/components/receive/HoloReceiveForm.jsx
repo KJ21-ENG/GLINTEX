@@ -22,7 +22,8 @@ export function HoloReceiveForm() {
         grossWeight: '',
         boxId: '',
         notes: '',
-        shift: ''
+        shift: '',
+        pieceId: '',
     });
 
     // --- Derived ---
@@ -45,12 +46,20 @@ export function HoloReceiveForm() {
         return Math.max(0, g - tareWeight);
     }, [form.grossWeight, tareWeight]);
 
-    const selectedPiece = useMemo(() => {
-        if (!issue) return null;
-        // Default to first piece for now if multiple, assuming single piece workflow primarily
-        const pid = issue.pieceIds?.[0];
-        return db.inbound_items.find(p => p.id === pid);
+    const pieceOptions = useMemo(() => {
+        if (!issue) return [];
+        const ids = Array.isArray(issue.pieceIds) ? issue.pieceIds : [];
+        return ids.map(pid => {
+            const piece = db.inbound_items.find(p => p.id === pid);
+            const label = piece ? `${piece.id} (${piece.lotNo})` : pid;
+            return { id: pid, name: label };
+        });
     }, [issue, db.inbound_items]);
+
+    const selectedPiece = useMemo(() => {
+        if (!issue || !form.pieceId) return null;
+        return db.inbound_items.find(p => p.id === form.pieceId) || null;
+    }, [issue, form.pieceId, db.inbound_items]);
 
     // --- Handlers ---
     async function handleScan() {
@@ -64,7 +73,8 @@ export function HoloReceiveForm() {
                 ...p,
                 machineId: result.machineId || '',
                 operatorId: result.operatorId || '',
-                shift: result.shift || ''
+                shift: result.shift || '',
+                pieceId: Array.isArray(result.pieceIds) && result.pieceIds.length > 0 ? result.pieceIds[0] : '',
             }));
         } catch (e) {
             alert(e.message);
@@ -76,11 +86,15 @@ export function HoloReceiveForm() {
 
     async function handleSubmit() {
         if (!issue) return;
+        if (!form.pieceId) {
+            alert('Select a piece for this receive');
+            return;
+        }
         setSubmitting(true);
         try {
             const result = await api.manualReceiveFromHoloMachine({
                 issueId: issue.id,
-                pieceId: selectedPiece?.id, // Should be selected from issue crates ideally
+                pieceId: form.pieceId,
                 rollCount: Number(form.rollCount),
                 rollTypeId: form.rollTypeId,
                 boxId: form.boxId,
@@ -100,7 +114,9 @@ export function HoloReceiveForm() {
                     const boxName = db?.boxes?.find((b) => b.id === form.boxId)?.name;
                     const operatorName = db?.operators?.find((o) => o.id === form.operatorId)?.name;
                     const machineName = db?.machines?.find((m) => m.id === form.machineId)?.name;
-                    const itemName = db?.items?.find((i) => i.id === issue.itemId)?.name;
+                    const itemName = selectedPiece
+                        ? db?.items?.find((i) => i.id === selectedPiece.itemId)?.name
+                        : db?.items?.find((i) => i.id === issue.itemId)?.name;
                     const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
                     const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
 
@@ -120,7 +136,7 @@ export function HoloReceiveForm() {
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_RECEIVE,
                         {
-                            lotNo: issue.lotNo,
+                            lotNo: selectedPiece?.lotNo || issue.lotLabel || issue.lotNo,
                             barcode: result.row.barcode,
                             rollCount: form.rollCount,
                             grossWeight: form.grossWeight,
@@ -173,7 +189,7 @@ export function HoloReceiveForm() {
                 {issue && (
                     <CardContent className="space-y-6">
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-md text-sm">
-                            <div><strong>Lot:</strong> {issue.lotNo}</div>
+                            <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
                             <div><strong>Item:</strong> {issue.itemId}</div>
                             <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name}</div>
                             <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name}</div>
@@ -181,6 +197,17 @@ export function HoloReceiveForm() {
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+                            <div>
+                                <Label>Piece / Lot</Label>
+                                <Select
+                                    value={form.pieceId}
+                                    onChange={e => setForm({ ...form, pieceId: e.target.value })}
+                                    options={pieceOptions}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Piece"
+                                />
+                            </div>
                             <div>
                                 <Label>Machine</Label>
                                 <Select

@@ -65,6 +65,10 @@ export function IssueToConing() {
         // Check Lot
         const issue = db.issue_to_holo_machine.find(i => i.id === row.issueId);
         const rowLot = issue?.lotNo;
+        if (!rowLot) {
+            alert('Lot not found for this crate');
+            return;
+        }
 
         if (crates.length > 0 && rowLot !== meta.lotNo) {
             alert('Mixed lots not allowed');
@@ -93,10 +97,13 @@ export function IssueToConing() {
             }
         } catch (e) { }
 
+        const pieceIdsDisplay = pieceIds.join(', ') || rowLot;
+
         setCrates(prev => [...prev, {
             rowId: row.id,
             barcode: row.barcode,
-            lotNo: pieceIds.join(', ') || rowLot, // Show piece IDs in the 'Piece' column
+            lotNo: rowLot,
+            pieceIdsDisplay, // Show piece IDs in the 'Piece' column
             availRolls: row.rollCount,
             unitWeight,
             issueRolls: row.rollCount, // Default all
@@ -345,7 +352,7 @@ export function IssueToConing() {
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
-                                        <TableCell>{c.lotNo}</TableCell>
+                                        <TableCell>{c.pieceIdsDisplay || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availRolls}</TableCell>
                                         <TableCell className="">
                                             <Input

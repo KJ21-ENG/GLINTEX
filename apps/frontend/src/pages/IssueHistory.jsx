@@ -13,6 +13,7 @@ export function IssueHistory({ db, refreshDb }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
 
   const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
@@ -33,6 +34,7 @@ export function IssueHistory({ db, refreshDb }) {
   const handleReprint = async (row) => {
     try {
       let stageKey, data;
+      const lotLabel = lotLabelFor(row);
 
       if (process === 'cutter') {
         stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE;
@@ -48,7 +50,7 @@ export function IssueHistory({ db, refreshDb }) {
         const inboundDate = lot?.date || firstPiece?.date || '';
 
         data = {
-          lotNo: row.lotNo,
+          lotNo: lotLabel,
           itemName,
           pieceId: row.pieceIds,
           seq: firstPiece?.seq || '',
@@ -97,7 +99,7 @@ export function IssueHistory({ db, refreshDb }) {
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
         data = {
-          lotNo: row.lotNo,
+          lotNo: lotLabel,
           itemName,
           machineName,
           operatorName,
@@ -177,7 +179,7 @@ export function IssueHistory({ db, refreshDb }) {
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
         data = {
-          lotNo: row.lotNo,
+          lotNo: lotLabel,
           itemName,
           machineName,
           operatorName,
@@ -325,7 +327,7 @@ export function IssueHistory({ db, refreshDb }) {
         const itemName = itemNameById.get(r.itemId)?.toLowerCase() || '';
         const operatorName = operatorNameById.get(r.operatorId)?.toLowerCase() || '';
         const machineName = machineNameById.get(r.machineId)?.toLowerCase() || '';
-        const lotNo = (r.lotNo || '').toLowerCase();
+        const lotSearch = [lotLabelFor(r), ...(Array.isArray(r.lotNos) ? r.lotNos : [])].join(' ').toLowerCase();
         const barcode = (r.barcode || '').toLowerCase();
         const note = (r.note || '').toLowerCase();
 
@@ -341,7 +343,7 @@ export function IssueHistory({ db, refreshDb }) {
         return itemName.includes(term) ||
           operatorName.includes(term) ||
           machineName.includes(term) ||
-          lotNo.includes(term) ||
+          lotSearch.includes(term) ||
           barcode.includes(term) ||
           pieceIdsStr.includes(term) ||
           note.includes(term);
@@ -418,7 +420,7 @@ export function IssueHistory({ db, refreshDb }) {
       } else if (process === 'holo') {
         return {
           ...baseData,
-          lotNo: r.lotNo || '',
+          lotNo: lotLabelFor(r),
           yarnName: yarnNameById.get(r.yarnId) || '—',
           twistName: twistNameById.get(r.twistId) || '—',
           metallicBobbins: r.metallicBobbins || 0,
@@ -429,7 +431,7 @@ export function IssueHistory({ db, refreshDb }) {
       } else {
         return {
           ...baseData,
-          lotNo: r.lotNo || '',
+          lotNo: lotLabelFor(r),
           rollsIssued: r.count || r.rollsIssued || 0,
         };
       }
@@ -611,7 +613,7 @@ export function IssueHistory({ db, refreshDb }) {
                     <>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{r.lotNo}</TableCell>
+                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
                       <TableCell>{yarnNameById.get(r.yarnId)}</TableCell>
@@ -628,7 +630,7 @@ export function IssueHistory({ db, refreshDb }) {
                     <>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
                       <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{r.lotNo}</TableCell>
+                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
                       <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
@@ -654,7 +656,7 @@ export function IssueHistory({ db, refreshDb }) {
           </div>
         ) : (
           issues.map((r) => {
-            const pieceDisplay = Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || r.lotNo || '—');
+            const pieceDisplay = Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || lotLabelFor(r) || '—');
             return (
               <div key={r.id} className="border rounded-lg p-4 bg-card shadow-sm">
                 <div className="flex justify-between items-start gap-2">

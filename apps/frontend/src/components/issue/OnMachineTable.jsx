@@ -119,15 +119,6 @@ export function OnMachineTable({ db, process }) {
         } else if (process === 'holo') {
             const issues = db.issue_to_holo_machine || [];
             entries = issues.map(issue => {
-                // For holo: use issue.id as the pieceId key for totals
-                const totals = holoPieceTotals.get(issue.id);
-                const totalReceived = totals?.totalNetWeight || 0;
-                const totalWastage = totals?.wastageNetWeight || 0;
-
-                const issuedWeight = issue.metallicBobbinsWeight || 0;
-                const accountedWeight = totalReceived + totalWastage;
-                const pendingWeight = issuedWeight - accountedWeight;
-
                 // Trace pieces for holo: trace back to cutter receive rows
                 let pieceIds = [];
                 try {
@@ -147,6 +138,23 @@ export function OnMachineTable({ db, process }) {
                 } catch (e) {
                     pieceIds = [];
                 }
+                if (pieceIds.length === 0 && issue.lotNo) {
+                    pieceIds = [`${issue.lotNo}-1`];
+                }
+
+                let totalReceived = 0;
+                let totalWastage = 0;
+                pieceIds.forEach((pieceId) => {
+                    const totals = holoPieceTotals.get(pieceId);
+                    if (totals) {
+                        totalReceived += totals.totalNetWeight || 0;
+                        totalWastage += totals.wastageNetWeight || 0;
+                    }
+                });
+
+                const issuedWeight = issue.metallicBobbinsWeight || 0;
+                const accountedWeight = totalReceived + totalWastage;
+                const pendingWeight = issuedWeight - accountedWeight;
 
                 return {
                     ...issue,
@@ -234,7 +242,7 @@ export function OnMachineTable({ db, process }) {
             // Search filter
             if (searchTerm) {
                 const term = searchTerm.toLowerCase();
-                const lot = (e.lotNo || '').toLowerCase();
+                const lot = [e.lotLabel || e.lotNo || '', ...(Array.isArray(e.lotNos) ? e.lotNos : [])].join(' ').toLowerCase();
                 const barcode = (e.barcode || '').toLowerCase();
                 const itemName = itemNameById.get(e.itemId)?.toLowerCase() || '';
                 const operatorName = operatorNameById.get(e.operatorId)?.toLowerCase() || '';

@@ -61,11 +61,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const holoRows = useMemo(() => {
     return (db.receive_from_holo_machine_rows || []).map((row) => {
       const issue = row?.issueId ? holoIssueMap.get(row.issueId) : null;
-      const lotNo = issue?.lotNo || '';
-      const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
+      const lotNoRaw = issue?.lotNo || '';
+      const lotLabel = issue?.lotLabel || lotNoRaw || '';
+      const lotNos = Array.isArray(issue?.lotNos) ? issue.lotNos : (lotNoRaw ? [lotNoRaw] : []);
+      const lotMeta = lotNoRaw ? lotMetaMap.get(lotNoRaw) : null;
+      const hasMixedLots = Array.isArray(issue?.lotNos) && issue.lotNos.length > 1;
 
       const yarn = db.yarns?.find(y => y.id === issue?.yarnId);
       const twist = db.twists?.find(t => t.id === issue?.twistId);
+      const itemName = lotMeta?.itemName || db.items?.find(i => i.id === issue?.itemId)?.name || '—';
+      const firmName = lotMeta?.firmName || (hasMixedLots ? 'Mixed' : '—');
+      const supplierName = lotMeta?.supplierName || (hasMixedLots ? 'Mixed' : '—');
 
       const baseNetWeight = Number.isFinite(row.rollWeight)
         ? Number(row.rollWeight)
@@ -76,13 +82,15 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
       return {
         ...row,
-        lotNo,
+        lotNo: lotLabel,
+        lotNoRaw,
+        lotNos,
         itemId: issue?.itemId || lotMeta?.itemId || '',
-        itemName: lotMeta?.itemName || '—',
+        itemName,
         firmId: lotMeta?.firmId || '',
-        firmName: lotMeta?.firmName || '—',
+        firmName,
         supplierId: lotMeta?.supplierId || '',
-        supplierName: lotMeta?.supplierName || '—',
+        supplierName,
         yarnName: yarn?.name || '—',
         twistName: twist?.name || '—',
         cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
@@ -92,7 +100,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         availableWeight,
       };
     });
-  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.yarns, db.twists, cutByIssueId]);
+  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId]);
 
   // 4. Group by Lot
   const holoLots = useMemo(() => {
@@ -113,6 +121,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         cutNames: new Set(),
         totalRolls: 0,
         totalWeight: 0,
+        lotNos: new Set(),
         rows: []
       };
 
@@ -120,15 +129,19 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.totalRolls += row.rollCount;
       existing.totalWeight += row.availableWeight;
       existing.cutNames.add(row.cutName || '—');
+      (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
       map.set(lotKey, existing);
     });
     return Array.from(map.values()).map((lot) => {
       const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
-      const { cutNames, ...rest } = lot;
+      const lotNosArr = Array.from(lot.lotNos || []);
+      const { cutNames, lotNos, ...rest } = lot;
       return {
         ...rest,
         cutName,
-      statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
+        lotNos: lotNosArr,
+        lotSearch: lotNosArr.join(' '),
+        statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
       };
     });
@@ -141,7 +154,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       if (search) {
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
-          'lotNo', 'itemName', 'cutName', 'yarnName', 'twistName', 'firmName', 'supplierName',
+          'lotNo', 'lotSearch', 'itemName', 'cutName', 'yarnName', 'twistName', 'firmName', 'supplierName',
           'totalRolls', 'totalWeight'
         ];
         const tempItem = {

@@ -110,7 +110,7 @@ export function ReceiveHistoryTable() {
                 const machine = (r.machineNo || '').toLowerCase();
                 const operator = (r.operator?.name || '').toLowerCase();
                 const notes = (r.note || r.notes || '').toLowerCase();
-                const lot = (r.lotNo || r.issue?.lotNo || '').toLowerCase();
+                const lot = [r.lotNo || '', r.issue?.lotLabel || r.issue?.lotNo || '', ...(Array.isArray(r.issue?.lotNos) ? r.issue.lotNos : [])].join(' ').toLowerCase();
                 const pieces = (r.pieceIdsList || []).join(' ').toLowerCase();
 
                 return barcode.includes(term) ||
@@ -408,8 +408,9 @@ export function ReceiveHistoryTable() {
                 const rollTypeWeight = rollType?.weight || 0;
                 const tareWeight = boxWeight + rollTypeWeight;
 
+                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
                 data = {
-                    lotNo: issue?.lotNo || row.issue?.lotNo || '',
+                    lotNo: lotLabel,
                     itemName: item?.name || '',
                     rollCount: row.rollCount || 1,
                     rollType: rollType?.name || '',
@@ -469,8 +470,9 @@ export function ReceiveHistoryTable() {
                     }
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
+                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
                 data = {
-                    lotNo: issue?.lotNo || row.issue?.lotNo || '',
+                    lotNo: lotLabel,
                     itemName: item?.name || '',
                     coneCount: row.coneCount,
                     grossWeight: row.grossWeight,

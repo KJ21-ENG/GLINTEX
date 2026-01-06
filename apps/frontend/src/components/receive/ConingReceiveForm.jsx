@@ -134,6 +134,7 @@ export function ConingReceiveForm() {
             const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
             const baseCount = existingRows.length;
             const baseCode = issue.barcode || issue.lotNo || issue.id;
+            const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
             for (const row of cart) {
@@ -203,7 +204,7 @@ export function ConingReceiveForm() {
                     } catch (e) { console.error('Error resolving details', e); }
 
                     labelsToPrint.push({
-                        lotNo: issue.lotNo,
+                        lotNo: lotLabel,
                         issueBarcode: issue.barcode,
                         barcode,
                         coneCount: row.coneCount,
@@ -264,7 +265,7 @@ export function ConingReceiveForm() {
                     <CardContent className="space-y-6">
                         <div className="p-4 bg-muted rounded-md text-sm space-y-3">
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                                <div><strong>Lot:</strong> {issue.lotNo}</div>
+                                <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
                                 <div><strong>Total Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
                                 <div><strong>Expected:</strong> {totalExpected} cones</div>
                                 <div><strong>Target:</strong> {perConeWeight} g/cone</div>
@@ -280,7 +281,7 @@ export function ConingReceiveForm() {
                                         </span>
                                     </div>
                                     <InfoPopover
-                                        title={`Coning Receives (${issue.lotNo})`}
+                                        title={`Coning Receives (${issue.lotLabel || issue.lotNo})`}
                                         items={receiveRowsForIssue}
                                         emptyText="No receives yet for this lot."
                                         widthClassName="w-[560px]"

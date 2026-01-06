@@ -32,12 +32,20 @@ export function IssueToHolo() {
         }), { rolls: 0, weight: 0 });
     }, [crates]);
 
-    const meta = useMemo(() => {
-        if (crates.length === 0) return { lotNo: '', itemId: '' };
-        return {
-            lotNo: crates[0].lotNo,
-            itemId: crates[0].itemId
-        };
+    const lotSummary = useMemo(() => {
+        if (crates.length === 0) return { lotNos: [], itemIds: [], lotLabel: '', itemId: '' };
+        const lotSet = new Set();
+        const itemSet = new Set();
+        crates.forEach(c => {
+            if (c.lotNo) lotSet.add(c.lotNo);
+            if (c.itemId) itemSet.add(c.itemId);
+        });
+        const lotNos = Array.from(lotSet);
+        const itemIds = Array.from(itemSet);
+        const lotLabel = lotNos.length <= 1
+            ? (lotNos[0] || '')
+            : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+        return { lotNos, itemIds, lotLabel, itemId: itemIds[0] || '' };
     }, [crates]);
 
     // --- Handlers ---
@@ -61,12 +69,20 @@ export function IssueToHolo() {
 
         // Check Lot Consistency
         const piece = db.inbound_items.find(p => p.id === row.pieceId);
-        const rowLot = row.lotNo || piece?.lotNo;
-        const rowItem = piece?.itemId;
+        if (!piece) {
+            alert('Inbound piece not found for this crate');
+            return;
+        }
+        const rowLot = piece.lotNo;
+        const rowItem = piece.itemId;
+        if (!rowLot || !rowItem) {
+            alert('Missing lot or item for this crate');
+            return;
+        }
 
-        if (crates.length > 0) {
-            if (rowLot !== meta.lotNo) { alert('Mixed lots not allowed'); return; }
-            if (rowItem !== meta.itemId) { alert('Mixed items not allowed'); return; }
+        if (crates.length > 0 && rowItem !== lotSummary.itemId) {
+            alert('Mixed items not allowed');
+            return;
         }
 
         // Calculate Default Issue Qty (Available)
@@ -79,7 +95,8 @@ export function IssueToHolo() {
         const newCrate = {
             rowId: row.id,
             barcode: row.barcode,
-            lotNo: row.pieceId, // Show piece ID in the 'Piece' column
+            lotNo: rowLot,
+            pieceId: row.pieceId, // Show piece ID in the 'Piece' column
             itemId: rowItem,
             availCount,
             availWt,
@@ -108,12 +125,16 @@ export function IssueToHolo() {
 
     async function handleSubmit() {
         if (crates.length === 0) return;
+        if (lotSummary.itemIds.length > 1) {
+            alert('Mixed items not allowed');
+            return;
+        }
         setSubmitting(true);
         try {
             const created = await api.createIssueToHoloMachine({
                 date: form.date,
-                itemId: meta.itemId,
-                lotNo: meta.lotNo,
+                itemId: lotSummary.itemId,
+                lotNo: lotSummary.lotNos[0] || '',
                 machineId: form.machineId || null,
                 operatorId: form.operatorId || null,
                 shift: form.shift || null,
@@ -135,7 +156,7 @@ export function IssueToHolo() {
                 if (confirmPrint) {
                     const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
                     const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
-                    const itemName = db.items.find((i) => i.id === meta.itemId)?.name;
+                    const itemName = db.items.find((i) => i.id === lotSummary.itemId)?.name;
                     const twistName = db.twists?.find((t) => t.id === form.twistId)?.name;
                     const yarnName = db.yarns?.find((y) => y.id === form.yarnId)?.name;
 
@@ -149,7 +170,7 @@ export function IssueToHolo() {
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_ISSUE,
                         {
-                            lotNo: created.issueToHoloMachine.lotNo || meta.lotNo,
+                            lotNo: lotSummary.lotLabel || created.issueToHoloMachine.lotNo,
                             barcode: created.issueToHoloMachine.barcode,
                             itemName,
                             machineName,
@@ -280,6 +301,7 @@ export function IssueToHolo() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
+                                    <TableHead>Lot</TableHead>
                                     <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Count</TableHead>
                                     <TableHead className="">Issue Count</TableHead>
@@ -289,11 +311,12 @@ export function IssueToHolo() {
                             </TableHeader>
                             <TableBody>
                                 {crates.length === 0 ? (
-                                    <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
-                                        <TableCell>{c.lotNo}</TableCell>
+                                        <TableCell>{c.lotNo || '—'}</TableCell>
+                                        <TableCell>{c.pieceId || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availCount}</TableCell>
                                         <TableCell className="">
                                             <Input
@@ -315,6 +338,7 @@ export function IssueToHolo() {
                     <div className="mt-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                         <div className="text-sm font-medium">
                             Total Rolls: {holoTotals.rolls} | Total Weight: {formatKg(holoTotals.weight)}
+                            {lotSummary.lotLabel ? ` | Lots: ${lotSummary.lotLabel}` : ''}
                         </div>
                         <Button onClick={handleSubmit} disabled={submitting || crates.length === 0} className="w-full sm:w-auto">
                             {submitting ? 'Issuing...' : 'Confirm Issue'}

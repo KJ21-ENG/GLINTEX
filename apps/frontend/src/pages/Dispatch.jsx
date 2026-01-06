@@ -107,7 +107,7 @@ export function Dispatch() {
         return availableItems.filter(item => {
             const searchable = [
                 item.barcode,
-                item.lotNo,
+                item.lotLabel || item.lotNo,
                 item.pieceId,
                 String(item.weight),
             ].filter(Boolean).join(' ').toLowerCase();
@@ -395,7 +395,7 @@ export function Dispatch() {
                                             filteredItems.map(item => (
                                                 <TableRow key={item.id}>
                                                     <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
-                                                    <TableCell>{item.lotNo || item.pieceId || '—'}</TableCell>
+                                                    <TableCell>{item.lotLabel || item.lotNo || item.pieceId || '—'}</TableCell>
                                                     <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
                                                     <TableCell className="text-right text-muted-foreground">
                                                         {formatKg(item.dispatchedWeight)}
@@ -436,7 +436,7 @@ export function Dispatch() {
                                             <div className="flex justify-between items-start gap-2">
                                                 <div className="min-w-0 flex-1">
                                                     <p className="font-mono text-sm font-semibold truncate">{item.barcode || '—'}</p>
-                                                    <p className="text-sm text-muted-foreground">{item.lotNo || item.pieceId || '—'}</p>
+                                                    <p className="text-sm text-muted-foreground">{item.lotLabel || item.lotNo || item.pieceId || '—'}</p>
                                                 </div>
                                                 <Badge variant="outline" className="text-green-600 border-green-600 whitespace-nowrap">
                                                     {formatKg(item.availableWeight)} avail
@@ -628,7 +628,7 @@ export function Dispatch() {
                         {selectedItem && (
                             <div className="bg-muted p-4 rounded-lg">
                                 <div className="text-sm text-muted-foreground mb-1">Dispatching from {selectedItem.stage || selectedStage}</div>
-                                <div className="font-medium">{selectedItem.barcode || selectedItem.lotNo}</div>
+                                <div className="font-medium">{selectedItem.barcode || selectedItem.lotLabel || selectedItem.lotNo}</div>
                                 <div className="text-sm text-muted-foreground">
                                     Available: <span className="font-medium text-green-600">{formatKg(selectedItem.availableWeight)}</span>
                                 </div>

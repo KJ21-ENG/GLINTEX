@@ -942,7 +942,7 @@ export const printStageTemplatesBatch = async (stageKey, dataArray = [], options
   // Generate TSPL for each item and concatenate
   let combinedTspl = '';
   for (const data of dataArray) {
-    const copies = options.copies || 1;
+    const copies = options.copies || template.content?.copies || 1;
     combinedTspl += buildTsplFromTemplate(template, data, { stageKey, copies });
   }
 

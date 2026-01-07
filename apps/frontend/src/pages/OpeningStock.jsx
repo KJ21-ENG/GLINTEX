@@ -19,7 +19,7 @@ import {
 } from '../components/ui';
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
-import { Plus, Save, Trash2, Upload, Download, X, History } from 'lucide-react';
+import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 
 const STAGE_OPTIONS = [
@@ -56,6 +56,11 @@ export function OpeningStock() {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Search and date filter state for history section
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+  const [historyStartDate, setHistoryStartDate] = useState('');
+  const [historyEndDate, setHistoryEndDate] = useState('');
 
   const handleDownloadTemplate = async () => {
     try {
@@ -203,6 +208,7 @@ export function OpeningStock() {
   const [holoIssue, setHoloIssue] = useState({
     twistId: '',
     yarnId: '',
+    cutId: '',
     machineId: '',
     operatorId: '',
     shift: '',
@@ -249,34 +255,104 @@ export function OpeningStock() {
   const openingHistory = useMemo(() => {
     const result = { inbound: [], cutter: [], holo: [], coning: [] };
 
+    // Helper function for date filtering
+    const matchesDateFilter = (itemDate) => {
+      if (!historyStartDate && !historyEndDate) return true;
+      const date = new Date(itemDate);
+      if (historyStartDate && date < new Date(historyStartDate)) return false;
+      if (historyEndDate) {
+        const end = new Date(historyEndDate);
+        end.setHours(23, 59, 59, 999);
+        if (date > end) return false;
+      }
+      return true;
+    };
+
+    // Helper function for search filtering
+    const matchesSearch = (searchFields) => {
+      if (!historySearchTerm) return true;
+      const term = historySearchTerm.toLowerCase();
+      return searchFields.some(field => (field || '').toLowerCase().includes(term));
+    };
+
     // Inbound: filter by isOpeningStock flag
-    result.inbound = (db.inbound_items || []).filter(p => p.isOpeningStock).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    result.inbound = (db.inbound_items || [])
+      .filter(p => p.isOpeningStock)
+      .filter(p => matchesDateFilter(p.createdAt))
+      .filter(p => matchesSearch([
+        p.lotNo,
+        p.id,
+        db.items?.find(i => i.id === p.itemId)?.name,
+        p.status
+      ]))
+      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     // Cutter Receive: filter by lotNo starting with OP-
-    result.cutter = (db.receive_from_cutter_machine_rows || []).filter(r => !r.isDeleted && (r.pieceId || '').startsWith('OP-')).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    result.cutter = (db.receive_from_cutter_machine_rows || [])
+      .filter(r => !r.isDeleted && (r.pieceId || '').startsWith('OP-'))
+      .filter(r => matchesDateFilter(r.date || r.createdAt))
+      .filter(r => {
+        const inboundItem = db.inbound_items?.find(p => p.id === r.pieceId);
+        const itemName = r.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : '');
+        return matchesSearch([
+          r.pieceId?.split('-').slice(0, 2).join('-'),
+          itemName,
+          r.barcode || r.vchNo,
+          r.bobbin?.name || db.bobbins?.find(b => b.id === r.bobbinId)?.name,
+          r.cutMaster?.name || r.cut || db.cuts?.find(c => c.id === r.cutId)?.name
+        ]);
+      })
+      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     // Holo Receive: filter by lotNo starting with OP-
-    result.holo = (db.receive_from_holo_machine_rows || []).filter(r => {
-      const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-      if (!issue) return false;
-      if ((issue.lotNo || '').startsWith('OP-')) return true;
-      if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
-      if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
-      return false;
-    }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    result.holo = (db.receive_from_holo_machine_rows || [])
+      .filter(r => {
+        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+        if (!issue) return false;
+        if ((issue.lotNo || '').startsWith('OP-')) return true;
+        if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
+        if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
+        return false;
+      })
+      .filter(r => matchesDateFilter(r.date || r.createdAt))
+      .filter(r => {
+        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+        const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '';
+        const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '';
+        return matchesSearch([
+          issue?.lotNo,
+          itemName,
+          r.barcode,
+          r.rollType?.name || db.rollTypes?.find(rt => rt.id === r.rollTypeId)?.name,
+          cutName
+        ]);
+      })
+      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     // Coning Receive: filter by lotNo starting with OP-
-    result.coning = (db.receive_from_coning_machine_rows || []).filter(r => {
-      const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-      if (!issue) return false;
-      if ((issue.lotNo || '').startsWith('OP-')) return true;
-      if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
-      if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
-      return false;
-    }).slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    result.coning = (db.receive_from_coning_machine_rows || [])
+      .filter(r => {
+        const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+        if (!issue) return false;
+        if ((issue.lotNo || '').startsWith('OP-')) return true;
+        if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
+        if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
+        return false;
+      })
+      .filter(r => matchesDateFilter(r.date || r.createdAt))
+      .filter(r => {
+        const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+        const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '';
+        return matchesSearch([
+          issue?.lotNo,
+          itemName,
+          r.barcode
+        ]);
+      })
+      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return result;
-  }, [db]);
+  }, [db, historySearchTerm, historyStartDate, historyEndDate]);
 
   const getBobbin = (id) => db.bobbins?.find(b => b.id === id);
   const getBox = (id) => db.boxes?.find(b => b.id === id);
@@ -502,6 +578,7 @@ export function OpeningStock() {
         const boxName = holoEntry.boxId ? getBox(holoEntry.boxId)?.name || '' : '';
         const operatorName = holoIssue.operatorId ? getOperator(holoIssue.operatorId)?.name || '' : '';
         const yarnName = holoIssue.yarnId ? db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '' : '';
+        const cutName = holoIssue.cutId ? getCut(holoIssue.cutId)?.name || '' : '';
         await printStageTemplate(
           LABEL_STAGE_KEYS.HOLO_RECEIVE,
           {
@@ -516,7 +593,7 @@ export function OpeningStock() {
             yarnName,
             machineName: holoIssue.machineId ? getMachine(holoIssue.machineId)?.name || '' : '',
             operatorName,
-            cut: '',
+            cut: cutName,
             twist: holoIssue.twistId ? (db.twists?.find(t => t.id === holoIssue.twistId)?.name || '') : '',
             twistName: holoIssue.twistId ? (db.twists?.find(t => t.id === holoIssue.twistId)?.name || '') : '',
             shift: holoIssue.shift || '',
@@ -750,6 +827,7 @@ export function OpeningStock() {
         supplierId,
         twistId: holoIssue.twistId,
         yarnId: holoIssue.yarnId || null,
+        cutId: holoIssue.cutId || null,
         machineId: holoIssue.machineId || null,
         operatorId: holoIssue.operatorId || null,
         shift: holoIssue.shift || null,
@@ -1255,7 +1333,7 @@ export function OpeningStock() {
             <CardTitle>Opening Holo Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="space-y-2">
                 <Label>Twist</Label>
                 <Select value={holoIssue.twistId} onChange={e => setHoloIssue(prev => ({ ...prev, twistId: e.target.value }))}>
@@ -1268,6 +1346,13 @@ export function OpeningStock() {
                 <Select value={holoIssue.yarnId} onChange={e => setHoloIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
                   <option value="">Select Yarn</option>
                   {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Cut (Optional)</Label>
+                <Select value={holoIssue.cutId} onChange={e => setHoloIssue(prev => ({ ...prev, cutId: e.target.value }))}>
+                  <option value="">Select Cut</option>
+                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -1558,6 +1643,57 @@ export function OpeningStock() {
             Recent Opening Stock Entries ({STAGE_OPTIONS.find(s => s.id === stage)?.label})
           </CardTitle>
         </CardHeader>
+
+        {/* Search and Date Range Filters */}
+        <div className="px-6 pb-4">
+          <div className="flex flex-col md:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by lot, item, barcode..."
+                value={historySearchTerm}
+                onChange={e => setHistorySearchTerm(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <div className="flex gap-2 items-center">
+              <Label className="text-sm text-muted-foreground whitespace-nowrap">From</Label>
+              <Input
+                type="date"
+                value={historyStartDate}
+                onChange={e => setHistoryStartDate(e.target.value)}
+                className="w-auto"
+              />
+              <Label className="text-sm text-muted-foreground whitespace-nowrap">To</Label>
+              <Input
+                type="date"
+                value={historyEndDate}
+                onChange={e => setHistoryEndDate(e.target.value)}
+                className="w-auto"
+              />
+              {(historySearchTerm || historyStartDate || historyEndDate) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setHistorySearchTerm('');
+                    setHistoryStartDate('');
+                    setHistoryEndDate('');
+                  }}
+                  title="Clear filters"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Record count display */}
+          <div className="mt-3 text-sm text-muted-foreground">
+            Showing {openingHistory[stage]?.length || 0} record{(openingHistory[stage]?.length || 0) !== 1 ? 's' : ''}
+            {(historySearchTerm || historyStartDate || historyEndDate) && ' (filtered)'}
+          </div>
+        </div>
         <CardContent>
           {stage === 'inbound' && (
             <div className="rounded-md border overflow-x-auto">
@@ -1578,7 +1714,7 @@ export function OpeningStock() {
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
                     </TableRow>
-                  ) : openingHistory.inbound.slice(0, 50).map(row => (
+                  ) : openingHistory.inbound.map(row => (
                     <TableRow key={row.id}>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
                       <TableCell>{row.lotNo}</TableCell>
@@ -1628,7 +1764,7 @@ export function OpeningStock() {
                     <TableRow>
                       <TableCell colSpan={9} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
                     </TableRow>
-                  ) : openingHistory.cutter.slice(0, 50).map(row => {
+                  ) : openingHistory.cutter.map(row => {
                     // Get item name from inbound_items via pieceId
                     const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
                     const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
@@ -1681,7 +1817,7 @@ export function OpeningStock() {
                     <TableRow>
                       <TableCell colSpan={9} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
                     </TableRow>
-                  ) : openingHistory.holo.slice(0, 50).map(row => {
+                  ) : openingHistory.holo.map(row => {
                     const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
                     const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '—';
@@ -1733,7 +1869,7 @@ export function OpeningStock() {
                     <TableRow>
                       <TableCell colSpan={8} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
                     </TableRow>
-                  ) : openingHistory.coning.slice(0, 50).map(row => {
+                  ) : openingHistory.coning.map(row => {
                     const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
                     // Trace back through holo for cut

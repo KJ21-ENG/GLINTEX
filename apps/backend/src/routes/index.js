@@ -1717,7 +1717,7 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
 router.post('/api/opening_stock/holo_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { date, itemId, firmId, supplierId, twistId, yarnId, machineId, operatorId, shift, crates } = req.body || {};
+    const { date, itemId, firmId, supplierId, twistId, yarnId, cutId, machineId, operatorId, shift, crates } = req.body || {};
     if (!date || !itemId || !supplierId || !twistId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
@@ -1725,16 +1725,18 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
       return res.status(400).json({ error: 'Add at least one crate' });
     }
 
-    const [itemRecord, firmRecord, supplierRecord, twistRecord] = await Promise.all([
+    const [itemRecord, firmRecord, supplierRecord, twistRecord, cutRecord] = await Promise.all([
       prisma.item.findUnique({ where: { id: itemId } }),
       firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
       prisma.supplier.findUnique({ where: { id: supplierId } }),
       prisma.twist.findUnique({ where: { id: twistId } }),
+      cutId ? prisma.cut.findUnique({ where: { id: cutId } }) : Promise.resolve(null),
     ]);
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
     if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
     if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
     if (!twistRecord) return res.status(404).json({ error: 'Twist not found' });
+    if (cutId && !cutRecord) return res.status(404).json({ error: 'Cut not found' });
 
     const rollTypeIds = Array.from(new Set(crates.map(c => c?.rollTypeId).filter(Boolean)));
     const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
@@ -1838,6 +1840,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
           lotNo,
           yarnId: yarnId || null,
           twistId,
+          cutId: cutId || null,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeHoloIssueBarcode({ series: seriesNumber }),

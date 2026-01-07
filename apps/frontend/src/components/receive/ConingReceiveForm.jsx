@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../../context/InventoryContext';
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
@@ -9,12 +10,34 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 
 export function ConingReceiveForm() {
     const { db, refreshDb } = useInventory();
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [receiveDate, setReceiveDate] = useState(todayISO());
+
+    // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
+    useEffect(() => {
+        const barcodeFromUrl = searchParams.get('barcode');
+        if (barcodeFromUrl && !issue) {
+            // For coning, lookup in db.issue_to_coning_machine by barcode
+            const found = db.issue_to_coning_machine?.find(
+                i => (i.barcode || '').toUpperCase() === barcodeFromUrl.toUpperCase()
+            );
+
+            if (found) {
+                setIssue(found);
+                setCart([]);
+            } else {
+                alert('Coning issue not found for barcode');
+            }
+
+            // Clear the URL param to prevent re-scan on refresh
+            setSearchParams({}, { replace: true });
+        }
+    }, [searchParams, issue, setSearchParams, db.issue_to_coning_machine]);
 
     // --- Derived ---
     const perConeWeight = Number(issue?.requiredPerConeNetWeight || 0);

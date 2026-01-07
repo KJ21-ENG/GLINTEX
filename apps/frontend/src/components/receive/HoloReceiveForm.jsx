@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO } from '../../utils';
@@ -8,6 +9,7 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
     const { db, refreshDb } = useInventory();
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
@@ -25,6 +27,37 @@ export function HoloReceiveForm() {
         shift: '',
         pieceId: '',
     });
+
+    // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
+    useEffect(() => {
+        const barcodeFromUrl = searchParams.get('barcode');
+        if (barcodeFromUrl && !issue) {
+            // Auto-load the issue
+            api.getIssueByHoloBarcode(barcodeFromUrl)
+                .then(result => {
+                    if (result && result.id) {
+                        setIssue(result);
+                        // Pre-fill defaults from issue if available
+                        setForm(p => ({
+                            ...p,
+                            machineId: result.machineId || '',
+                            operatorId: result.operatorId || '',
+                            shift: result.shift || '',
+                            pieceId: Array.isArray(result.pieceIds) && result.pieceIds.length > 0 ? result.pieceIds[0] : '',
+                        }));
+                    } else {
+                        alert('Barcode not found or invalid');
+                    }
+                })
+                .catch(err => {
+                    alert(err.message || 'Failed to fetch barcode details');
+                })
+                .finally(() => {
+                    // Clear the URL param to prevent re-scan on refresh
+                    setSearchParams({}, { replace: true });
+                });
+        }
+    }, [searchParams, issue, setSearchParams]);
 
     // --- Derived ---
     const selectedBox = db?.boxes?.find(b => b.id === form.boxId);
@@ -190,7 +223,7 @@ export function HoloReceiveForm() {
                     <CardContent className="space-y-6">
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-md text-sm">
                             <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                            <div><strong>Item:</strong> {issue.itemId}</div>
+                            <div><strong>Item:</strong> {db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId}</div>
                             <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name}</div>
                             <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name}</div>
                         </div>

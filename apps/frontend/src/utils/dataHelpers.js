@@ -11,6 +11,7 @@ export function normalizeDb(raw) {
   const cuts = ensureArr(raw?.cuts);
   const twists = ensureArr(raw?.twists);
   const firms = ensureArr(raw?.firms);
+  const customers = ensureArr(raw?.customers);
   const suppliers = ensureArr(raw?.suppliers);
   const machines = ensureArr(raw?.machines);
   const workersRaw = ensureArr(raw?.workers?.length ? raw?.workers : raw?.operators);
@@ -57,6 +58,7 @@ export function normalizeDb(raw) {
     cuts,
     twists,
     firms,
+    customers,
     suppliers,
     machines,
     workers,

@@ -41,8 +41,10 @@ export function MobileDispatchView({
     const [dispatchForm, setDispatchForm] = useState({
         customerId: '',
         weight: '',
+        count: '',
         date: todayISO(),
         notes: '',
+        mode: 'weight',
     });
     const [submitting, setSubmitting] = useState(false);
 
@@ -124,31 +126,51 @@ export function MobileDispatchView({
     const openDispatchModal = (item) => {
         if (item.status !== 'found') return;
         setSelectedItem(item);
+        const hasCount = item.availableCount > 0;
         setDispatchForm({
             customerId: '',
             weight: String(item.availableWeight || item.weight || ''),
+            count: hasCount ? String(item.availableCount || '') : '',
             date: todayISO(),
             notes: '',
+            mode: hasCount ? 'count' : 'weight',
         });
         setDispatchModalOpen(true);
     };
 
     // Create dispatch
     const handleCreateDispatch = async () => {
-        if (!selectedItem || !dispatchForm.customerId || !dispatchForm.weight) {
+        if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
             return;
         }
 
         const weight = parseFloat(dispatchForm.weight);
-        if (isNaN(weight) || weight <= 0) {
-            alert('Please enter a valid weight');
-            return;
-        }
+        const count = dispatchForm.mode === 'count' ? parseInt(dispatchForm.count) : null;
 
-        if (weight > selectedItem.availableWeight + 0.001) {
-            alert(`Weight cannot exceed available weight (${selectedItem.availableWeight.toFixed(3)} kg)`);
-            return;
+        if (dispatchForm.mode === 'weight') {
+            if (isNaN(weight) || weight <= 0) {
+                alert('Please enter a valid weight');
+                return;
+            }
+            if (weight > selectedItem.availableWeight + 0.001) {
+                alert(`Weight cannot exceed available weight (${selectedItem.availableWeight.toFixed(3)} kg)`);
+                return;
+            }
+        } else {
+            // Count mode
+            if (!count || count <= 0) {
+                alert('Please enter a valid count');
+                return;
+            }
+            if (count > selectedItem.availableCount) {
+                alert(`Count cannot exceed available quantity (${selectedItem.availableCount})`);
+                return;
+            }
+            if (!weight || weight <= 0) {
+                alert('Weight must be greater than 0');
+                return;
+            }
         }
 
         setSubmitting(true);
@@ -158,6 +180,7 @@ export function MobileDispatchView({
                 stage: selectedStage,
                 stageItemId: selectedItem.id,
                 weight,
+                count: dispatchForm.mode === 'count' ? count : null,
                 date: dispatchForm.date,
                 notes: dispatchForm.notes || null,
             });
@@ -204,6 +227,13 @@ export function MobileDispatchView({
     };
 
     const foundItems = scannedItems.filter(item => item.status === 'found');
+
+    const getStageUnitLabel = (stage) => {
+        if (stage === 'cutter') return 'Bobbins';
+        if (stage === 'holo') return 'Rolls';
+        if (stage === 'coning') return 'Cones';
+        return 'Pieces';
+    };
 
     return (
         <div className="flex flex-col h-[calc(100vh-120px)] bg-background">
@@ -403,6 +433,54 @@ export function MobileDispatchView({
                         </div>
 
                         <div className="grid grid-cols-2 gap-3">
+                            {/* Dispatch Mode Toggle - Full Width */}
+                            {selectedItem?.availableCount > 0 && (
+                                <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            id="mob-mode-weight"
+                                            name="mobDispatchMode"
+                                            checked={dispatchForm.mode === 'weight'}
+                                            onChange={() => setDispatchForm(prev => ({ ...prev, mode: 'weight', count: '' }))}
+                                            className="w-4 h-4"
+                                        />
+                                        <label htmlFor="mob-mode-weight" className="text-sm font-medium">By Weight</label>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            id="mob-mode-count"
+                                            name="mobDispatchMode"
+                                            checked={dispatchForm.mode === 'count'}
+                                            onChange={() => setDispatchForm(prev => ({ ...prev, mode: 'count' }))}
+                                            className="w-4 h-4"
+                                        />
+                                        <label htmlFor="mob-mode-count" className="text-sm font-medium">By Count</label>
+                                    </div>
+                                </div>
+                            )}
+
+                            {dispatchForm.mode === 'count' && (
+                                <div className="col-span-2">
+                                    <Label>Count ({getStageUnitLabel(selectedStage)}) *</Label>
+                                    <Input
+                                        type="number"
+                                        step="1"
+                                        value={dispatchForm.count}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            const intVal = parseInt(val) || 0;
+                                            const avgWeight = selectedItem.avgWeightPerPiece || 0;
+                                            const estimatedWeight = avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '';
+                                            setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
+                                        }}
+                                        max={selectedItem?.availableCount}
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">Available: {selectedItem?.availableCount}</p>
+                                </div>
+                            )}
+
                             <div>
                                 <Label>Weight (kg) *</Label>
                                 <Input

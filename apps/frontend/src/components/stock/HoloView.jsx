@@ -76,9 +76,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       const baseNetWeight = Number.isFinite(row.rollWeight)
         ? Number(row.rollWeight)
         : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
+      const dispatchedRolls = Number(row.dispatchedCount || 0);
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
       const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
+      const availableRolls = Math.max(0, Number(row.rollCount || 0) - dispatchedRolls);
 
       return {
         ...row,
@@ -95,6 +97,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         twistName: twist?.name || '—',
         cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
         rollCount: Number(row.rollCount || 0),
+        dispatchedRolls,
+        availableRolls,
         rollWeight: Number(row.rollWeight || 0),
         netWeight: baseNetWeight,
         availableWeight,
@@ -126,7 +130,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       };
 
       existing.rows.push(row);
-      existing.totalRolls += row.rollCount;
+      existing.totalRolls += row.availableRolls;
       existing.totalWeight += row.availableWeight;
       existing.cutNames.add(row.cutName || '—');
       (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
@@ -243,7 +247,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               <TableHead>Yarn / Twist</TableHead>
               {!groupBy ? <TableHead>Firm</TableHead> : null}
               <TableHead>Supplier</TableHead>
-              <TableHead className="">Total Rolls</TableHead>
+              <TableHead className="">Available Rolls</TableHead>
               <TableHead className="">Net Weight</TableHead>
             </TableRow>
           </TableHeader>
@@ -304,7 +308,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                   <TableHead>Barcode</TableHead>
                                   <TableHead>Date</TableHead>
                                   <TableHead>Roll Type</TableHead>
-                                  <TableHead className="">Rolls</TableHead>
+                                  <TableHead className="">Available Rolls</TableHead>
                                   <TableHead className="">Net Wt</TableHead>
                                   <TableHead className="">Gross Wt</TableHead>
                                   <TableHead>Machine</TableHead>
@@ -316,7 +320,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                     <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                     <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                     <TableCell>{r.rollType?.name || '—'}</TableCell>
-                                    <TableCell className="">{r.rollCount}</TableCell>
+                                    <TableCell className="">{r.availableRolls}</TableCell>
                                     <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
                                     <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
                                     <TableCell>{r.machineNo}</TableCell>
@@ -386,7 +390,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                           <span>{formatKg(r.availableWeight)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>{r.rollType?.name} • Rolls: {r.rollCount}</span>
+                          <span>{r.rollType?.name} • Rolls: {r.availableRolls}</span>
                           <span>Mac: {r.machineNo}</span>
                         </div>
                       </div>

@@ -22,6 +22,7 @@ export function Masters() {
         createCut, updateCut, deleteCut,
         createTwist, updateTwist, deleteTwist,
         createFirm, updateFirm, deleteFirm,
+        createCustomer, updateCustomer, deleteCustomer,
         createSupplier, updateSupplier, deleteSupplier,
         createMachine, updateMachine, deleteMachine,
         createOperator, updateOperator, deleteOperator,
@@ -42,6 +43,7 @@ export function Masters() {
             case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
             case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
             case 'firms': return <FirmsMasterCrud data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
+            case 'customers': return <CustomersMasterCrud data={db.customers} onCreate={createCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} loading={refreshing} />;
             case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
             case 'machines': return <MachinesMasterCrud data={db.machines || []} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
             case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
@@ -84,6 +86,7 @@ export function Masters() {
                         <SectionDivider label="Global" />
                         <TabButton id="items" label="Items" />
                         <TabButton id="firms" label="Firms" />
+                        <TabButton id="customers" label="Customers" />
                         <TabButton id="suppliers" label="Suppliers" />
 
                         <SectionDivider label="Cutter" />
@@ -924,4 +927,154 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardContent>
         </Card>
     )
+}
+
+function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+    const [newName, setNewName] = useState('');
+    const [newPhone, setNewPhone] = useState('');
+    const [newAddress, setNewAddress] = useState('');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editPhone, setEditPhone] = useState('');
+    const [editAddress, setEditAddress] = useState('');
+
+    const filtered = (data || []).filter(i =>
+        i.name.toLowerCase().includes(search.toLowerCase()) ||
+        (i.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+        (i.address || '').toLowerCase().includes(search.toLowerCase())
+    );
+
+    const handleCreate = async () => {
+        if (!newName.trim()) return;
+        await onCreate(newName, newPhone, newAddress);
+        setNewName('');
+        setNewPhone('');
+        setNewAddress('');
+    }
+
+    const handleUpdate = async (id) => {
+        if (!editName.trim()) return;
+        await onUpdate(id, editName, editPhone, editAddress);
+        setEditingId(null);
+    }
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Customers</CardTitle>
+                <div className="relative w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <Input placeholder="Customer Name" value={newName} onChange={e => setNewName(e.target.value)} />
+                    <Input placeholder="Phone" value={newPhone} onChange={e => setNewPhone(e.target.value)} />
+                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} />
+                </div>
+                <div className="flex justify-end">
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+                </div>
+
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Customer Details</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <div className="space-y-2 py-1">
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Name</Label>
+                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Phone</Label>
+                                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="w-16 text-[10px] uppercase">Address</Label>
+                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="py-1">
+                                                <div className="font-bold text-sm text-primary">{item.name}</div>
+                                                <div className="text-xs text-muted-foreground mt-0.5">{item.address || 'No address added'}</div>
+                                                <div className="text-xs font-mono mt-0.5">{item.phone || 'No phone added'}</div>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="">
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                    setEditingId(item.id);
+                                                    setEditName(item.name);
+                                                    setEditPhone(item.phone || '');
+                                                    setEditAddress(item.address || '');
+                                                }}><Edit2 className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No records found</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Customer Name" />
+                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="Phone" />
+                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" />
+                                    <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    <div className="font-semibold text-primary">{item.name}</div>
+                                    <div className="text-xs text-muted-foreground">{item.address || 'No address added'}</div>
+                                    <div className="text-xs font-mono">{item.phone || 'No phone added'}</div>
+                                    <div className="flex justify-end gap-1 pt-2">
+                                        <Button size="sm" variant="ghost" onClick={() => {
+                                            setEditingId(item.id);
+                                            setEditName(item.name);
+                                            setEditPhone(item.phone || '');
+                                            setEditAddress(item.address || '');
+                                        }}><Edit2 className="w-4 h-4 mr-1" /> Edit</Button>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
 }

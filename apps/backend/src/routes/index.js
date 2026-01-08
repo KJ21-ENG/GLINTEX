@@ -960,6 +960,7 @@ router.get('/api/db', async (req, res) => {
   const issue_to_holo_machine_raw = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({ orderBy: { createdAt: 'desc' } });
   const settings = await prisma.settings.findMany();
+  const customers = await prisma.customer.findMany({ orderBy: { name: 'asc' } });
   const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
   const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
     orderBy: { createdAt: 'desc' },
@@ -1196,6 +1197,7 @@ router.get('/api/db', async (req, res) => {
     issue_to_holo_machine,
     issue_to_coning_machine,
     settings,
+    customers,
     receive_from_cutter_machine_uploads,
     receive_from_cutter_machine_rows,
     receive_from_cutter_machine_challans,
@@ -7373,6 +7375,13 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           const issuedToHolo = row.issuedBobbinWeight || 0;
           const dispatched = row.dispatchedWeight || 0;
           const netWt = row.netWt || 0;
+          const totalCount = row.bobbinQuantity || 0;
+          const dispatchedCount = row.dispatchedCount || 0;
+          const issuedCount = row.issuedBobbins || 0;
+          const availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
+          const avgWeightPerPiece = availableCount > 0
+            ? (Math.max(0, netWt - dispatched - issuedToHolo) / availableCount)
+            : 0;
           return {
             id: row.id,
             barcode: row.barcode || row.vchNo,
@@ -7382,10 +7391,15 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             issuedToHolo: issuedToHolo,
             availableWeight: Math.max(0, netWt - dispatched - issuedToHolo),
             stage: 'cutter',
-            bobbinQuantity: row.bobbinQuantity,
+            bobbinQuantity: totalCount,
+            totalCount: totalCount,
+            dispatchedCount: dispatchedCount,
+            issuedCount: issuedCount,
+            availableCount: availableCount,
+            avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
         })
-        .filter(item => item.availableWeight > 0);
+        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
     } else if (stage === 'holo') {
       // Get holo receive rows with remaining weight
       const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
@@ -7447,6 +7461,12 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
       items = holoRows
         .map(row => {
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const totalCount = row.rollCount || 0;
+          const dispatchedCount = row.dispatchedCount || 0;
+          const availableCount = Math.max(0, totalCount - dispatchedCount);
+          const avgWeightPerPiece = availableCount > 0
+            ? (Math.max(0, netWeight - (row.dispatchedWeight || 0)) / availableCount)
+            : 0;
           return {
             id: row.id,
             barcode: row.barcode,
@@ -7456,10 +7476,14 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             dispatchedWeight: row.dispatchedWeight || 0,
             availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),
             stage: 'holo',
-            rollCount: row.rollCount,
+            rollCount: totalCount,
+            totalCount: totalCount,
+            dispatchedCount: dispatchedCount,
+            availableCount: availableCount,
+            avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
         })
-        .filter(item => item.availableWeight > 0);
+        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
     } else if (stage === 'coning') {
       // Get coning receive rows with remaining weight
       const coningRows = await prisma.receiveFromConingMachineRow.findMany({
@@ -7467,17 +7491,30 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
         orderBy: { createdAt: 'desc' },
       });
       items = coningRows
-        .map(row => ({
-          id: row.id,
-          barcode: row.barcode,
-          lotNo: row.issue?.lotNo,
-          weight: row.netWeight || 0,
-          dispatchedWeight: row.dispatchedWeight || 0,
-          availableWeight: Math.max(0, (row.netWeight || 0) - (row.dispatchedWeight || 0)),
-          stage: 'coning',
-          coneCount: row.coneCount,
-        }))
-        .filter(item => item.availableWeight > 0);
+        .map(row => {
+          const netWeight = row.netWeight || 0;
+          const totalCount = row.coneCount || 0;
+          const dispatchedCount = row.dispatchedCount || 0;
+          const availableCount = Math.max(0, totalCount - dispatchedCount);
+          const avgWeightPerPiece = availableCount > 0
+            ? (Math.max(0, netWeight - (row.dispatchedWeight || 0)) / availableCount)
+            : 0;
+          return {
+            id: row.id,
+            barcode: row.barcode,
+            lotNo: row.issue?.lotNo,
+            weight: netWeight,
+            dispatchedWeight: row.dispatchedWeight || 0,
+            availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),
+            stage: 'coning',
+            coneCount: totalCount,
+            totalCount: totalCount,
+            dispatchedCount: dispatchedCount,
+            availableCount: availableCount,
+            avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
+          };
+        })
+        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
     } else {
       return res.status(400).json({ error: 'Invalid stage. Must be: inbound, cutter, holo, or coning' });
     }
@@ -7537,12 +7574,13 @@ router.get('/api/dispatch/:id', async (req, res) => {
 router.post('/api/dispatch', async (req, res) => {
   try {
     const actor = getActor(req);
-    const { customerId, stage, stageItemId, weight, date, notes } = req.body;
+    const { customerId, stage, stageItemId, weight, count, date, notes } = req.body;
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required' });
     if (!stage) return res.status(400).json({ error: 'Stage is required' });
     if (!stageItemId) return res.status(400).json({ error: 'Stage item is required' });
-    if (!weight || weight <= 0) return res.status(400).json({ error: 'Valid weight is required' });
+    // If count provided, weight can be auto-calculated, so check weight only if count is missing
+    if ((!count && (!weight || weight <= 0))) return res.status(400).json({ error: 'Valid weight or count is required' });
     if (!['inbound', 'cutter', 'holo', 'coning'].includes(stage)) {
       return res.status(400).json({ error: 'Invalid stage' });
     }
@@ -7559,6 +7597,9 @@ router.post('/api/dispatch', async (req, res) => {
       let sourceItem;
       let stageBarcode = '';
       let availableWeight = 0;
+      let availableCount = 0;
+      let finalWeight = weight;
+      let avgWeight = 0;
 
       // Fetch source item INSIDE transaction to get fresh data
       if (stage === 'inbound') {
@@ -7566,6 +7607,7 @@ router.post('/api/dispatch', async (req, res) => {
         if (!sourceItem) throw new Error('Inbound item not found');
         stageBarcode = sourceItem.barcode;
         availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0);
+        // Inbound doesn't support partial count dispatch (it's 1 piece)
       } else if (stage === 'cutter') {
         sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
         if (!sourceItem) throw new Error('Cutter receive row not found');
@@ -7573,22 +7615,53 @@ router.post('/api/dispatch', async (req, res) => {
         // Subtract both dispatchedWeight AND issuedBobbinWeight (weight already issued to Holo)
         const issuedToHolo = sourceItem.issuedBobbinWeight || 0;
         availableWeight = (sourceItem.netWt || 0) - (sourceItem.dispatchedWeight || 0) - issuedToHolo;
+
+        const totalCount = sourceItem.bobbinQuantity || 0;
+        const dispatchedCount = sourceItem.dispatchedCount || 0;
+        const issuedCount = sourceItem.issuedBobbins || 0;
+        availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
+        avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
       } else if (stage === 'holo') {
         sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
         if (!sourceItem) throw new Error('Holo receive row not found');
         stageBarcode = sourceItem.barcode || '';
-        const netWeight = sourceItem.rollWeight ? (sourceItem.rollWeight * sourceItem.rollCount) : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
+        const netWeight = sourceItem.rollWeight ? sourceItem.rollWeight : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
         availableWeight = netWeight - (sourceItem.dispatchedWeight || 0);
+
+        const totalCount = sourceItem.rollCount || 0;
+        const dispatchedCount = sourceItem.dispatchedCount || 0;
+        availableCount = Math.max(0, totalCount - dispatchedCount);
+        avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
       } else if (stage === 'coning') {
         sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
         if (!sourceItem) throw new Error('Coning receive row not found');
         stageBarcode = sourceItem.barcode || '';
         availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
+
+        const totalCount = sourceItem.coneCount || 0;
+        const dispatchedCount = sourceItem.dispatchedCount || 0;
+        availableCount = Math.max(0, totalCount - dispatchedCount);
+        avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
+      }
+
+      // If count provided, validate and calculate weight if needed
+      if (count && count > 0) {
+        if (stage === 'inbound') {
+          throw new Error('Count dispatch not supported for inbound items');
+        }
+        if (count > availableCount) {
+          throw new Error(`Dispatch count (${count}) exceeds available count (${availableCount})`);
+        }
+
+        // Auto-calculate weight if not provided
+        if (!finalWeight || finalWeight <= 0) {
+          finalWeight = roundTo3Decimals(count * avgWeight);
+        }
       }
 
       // Validate weight INSIDE transaction to prevent race condition
-      if (weight > availableWeight + 0.001) {
-        throw new Error(`Dispatch weight (${weight}) exceeds available weight (${availableWeight.toFixed(3)})`);
+      if (finalWeight > availableWeight + 0.001) {
+        throw new Error(`Dispatch weight (${finalWeight}) exceeds available weight (${availableWeight.toFixed(3)})`);
       }
 
       const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
@@ -7601,33 +7674,42 @@ router.post('/api/dispatch', async (req, res) => {
           stage,
           stageItemId,
           stageBarcode,
-          weight: roundTo3Decimals(weight),
+          weight: roundTo3Decimals(finalWeight),
+          count: count || null,
           notes: notes || null,
           ...actorCreateFields(actor?.userId),
         },
         include: { customer: true },
       });
 
-      // Update dispatchedWeight on source item
+      // Update dispatchedWeight AND dispatchedCount on source item
+      const updateData = {
+        dispatchedWeight: { increment: roundTo3Decimals(finalWeight) }
+      };
+
+      if (count && count > 0) {
+        updateData.dispatchedCount = { increment: count };
+      }
+
       if (stage === 'inbound') {
         await tx.inboundItem.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+          data: updateData, // Inbound doesn't have dispatchedCount
         });
       } else if (stage === 'cutter') {
         await tx.receiveFromCutterMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+          data: updateData,
         });
       } else if (stage === 'holo') {
         await tx.receiveFromHoloMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+          data: updateData,
         });
       } else if (stage === 'coning') {
         await tx.receiveFromConingMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { increment: roundTo3Decimals(weight) } },
+          data: updateData,
         });
       }
 
@@ -7662,27 +7744,35 @@ router.delete('/api/dispatch/:id', async (req, res) => {
       await tx.dispatch.delete({ where: { id } });
 
       // Restore dispatchedWeight on source item
-      const { stage, stageItemId, weight } = existing;
+      const { stage, stageItemId, weight, count } = existing;
+
+      const updateData = {
+        dispatchedWeight: { decrement: weight }
+      };
+
+      if (count && count > 0) {
+        updateData.dispatchedCount = { decrement: count };
+      }
 
       if (stage === 'inbound') {
         await tx.inboundItem.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { decrement: weight } },
+          data: updateData, // Inbound doesn't have dispatchedCount
         });
       } else if (stage === 'cutter') {
         await tx.receiveFromCutterMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { decrement: weight } },
+          data: updateData,
         });
       } else if (stage === 'holo') {
         await tx.receiveFromHoloMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { decrement: weight } },
+          data: updateData,
         });
       } else if (stage === 'coning') {
         await tx.receiveFromConingMachineRow.update({
           where: { id: stageItemId },
-          data: { dispatchedWeight: { decrement: weight } },
+          data: updateData,
         });
       }
     });
@@ -8391,7 +8481,7 @@ router.get('/api/reports/production', async (req, res) => {
         const byOperator = new Map();
         for (const row of holoReceives) {
           const key = row.operatorId || 'unknown';
-          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const current = byOperator.get(key) || { operatorId: key, operatorName: row.operator?.name || 'Unknown', received: 0, rollCount: 0 };
           current.received += netWeight;
           current.rollCount += row.rollCount || 0;
@@ -8402,7 +8492,7 @@ router.get('/api/reports/production', async (req, res) => {
         const byShift = new Map();
         for (const row of holoReceives) {
           const key = row.issue?.shift || 'Not Specified';
-          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const current = byShift.get(key) || { shift: key, received: 0, rollCount: 0 };
           current.received += netWeight;
           current.rollCount += row.rollCount || 0;
@@ -8414,7 +8504,7 @@ router.get('/api/reports/production', async (req, res) => {
         for (const row of holoReceives) {
           const key = row.issue?.machine?.name || row.machineNo || 'unknown';
           const current = byMachine.get(key) || { machineName: key, received: 0, rollCount: 0 };
-          const netWeight = row.rollWeight ? (row.rollWeight * row.rollCount) : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           current.received += netWeight;
           current.rollCount += row.rollCount || 0;
           byMachine.set(key, current);
@@ -8453,7 +8543,7 @@ router.get('/api/reports/production', async (req, res) => {
               where: { id: { in: rowIds } },
             });
             const issuedWeight = holoRows.reduce((sum, r) => {
-              const netWeight = r.rollWeight ? (r.rollWeight * r.rollCount) : (r.grossWeight || 0) - (r.tareWeight || 0);
+              const netWeight = r.rollWeight ? r.rollWeight : (r.grossWeight || 0) - (r.tareWeight || 0);
               return sum + netWeight;
             }, 0);
             totalConingIssued += issuedWeight;
@@ -8557,7 +8647,7 @@ router.post('/api/box-transfer/lookup', async (req, res) => {
       },
     });
     if (holoRow) {
-      const totalNetWeight = holoRow.rollWeight ? (holoRow.rollWeight * holoRow.rollCount) : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+      const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
       const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
       // Calculate available rolls proportionally based on weight
@@ -8710,7 +8800,7 @@ router.post('/api/box-transfer', async (req, res) => {
         if (!sourceRow) throw new Error('Source item not found');
 
         // Re-validate availability inside transaction to prevent race condition
-        const srcTotalNetWeight = sourceRow.rollWeight ? (sourceRow.rollWeight * sourceRow.rollCount) : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
+        const srcTotalNetWeight = sourceRow.rollWeight ? sourceRow.rollWeight : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
         const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
         const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
         const srcAvailableRolls = srcAvailableWeight > EPSILON && srcTotalNetWeight > EPSILON
@@ -8726,7 +8816,7 @@ router.post('/api/box-transfer', async (req, res) => {
 
         const newRollCount = sourceRow.rollCount - pieceCount;
         const newNetWeight = srcTotalNetWeight - weightTransferred;
-        const newRollWeight = newRollCount > 0 ? roundTo3Decimals(newNetWeight / newRollCount) : 0;
+        const newRollWeight = roundTo3Decimals(Math.max(0, newNetWeight));
         await tx.receiveFromHoloMachineRow.update({
           where: { id: lookupFrom.itemId },
           data: { rollCount: newRollCount, rollWeight: newRollWeight, ...actorUpdateFields(actor?.userId) },
@@ -8736,9 +8826,9 @@ router.post('/api/box-transfer', async (req, res) => {
         const destRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: lookupTo.itemId } });
         if (!destRow) throw new Error('Destination item not found');
         const destNewRollCount = destRow.rollCount + pieceCount;
-        const destOldNetWeight = destRow.rollWeight ? (destRow.rollWeight * destRow.rollCount) : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
+        const destOldNetWeight = destRow.rollWeight ? destRow.rollWeight : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
         const destNewNetWeight = destOldNetWeight + weightTransferred;
-        const destNewRollWeight = destNewRollCount > 0 ? roundTo3Decimals(destNewNetWeight / destNewRollCount) : 0;
+        const destNewRollWeight = roundTo3Decimals(Math.max(0, destNewNetWeight));
         await tx.receiveFromHoloMachineRow.update({
           where: { id: lookupTo.itemId },
           data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
@@ -8919,9 +9009,9 @@ router.post('/api/box-transfer/:id/reverse', async (req, res) => {
 
         // Add back to source
         const srcNewRollCount = sourceRow.rollCount + pieceCount;
-        const srcOldNetWeight = sourceRow.rollWeight ? (sourceRow.rollWeight * sourceRow.rollCount) : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
+        const srcOldNetWeight = sourceRow.rollWeight ? sourceRow.rollWeight : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
         const srcNewNetWeight = srcOldNetWeight + weightTransferred;
-        const srcNewRollWeight = srcNewRollCount > 0 ? roundTo3Decimals(srcNewNetWeight / srcNewRollCount) : 0;
+        const srcNewRollWeight = roundTo3Decimals(Math.max(0, srcNewNetWeight));
         await tx.receiveFromHoloMachineRow.update({
           where: { id: original.fromItemId },
           data: { rollCount: srcNewRollCount, rollWeight: srcNewRollWeight, ...actorUpdateFields(actor?.userId) },
@@ -8929,9 +9019,9 @@ router.post('/api/box-transfer/:id/reverse', async (req, res) => {
 
         // Subtract from destination
         const destNewRollCount = destRow.rollCount - pieceCount;
-        const destOldNetWeight = destRow.rollWeight ? (destRow.rollWeight * destRow.rollCount) : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
+        const destOldNetWeight = destRow.rollWeight ? destRow.rollWeight : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
         const destNewNetWeight = Math.max(0, destOldNetWeight - weightTransferred);
-        const destNewRollWeight = destNewRollCount > 0 ? roundTo3Decimals(destNewNetWeight / destNewRollCount) : 0;
+        const destNewRollWeight = roundTo3Decimals(Math.max(0, destNewNetWeight));
         await tx.receiveFromHoloMachineRow.update({
           where: { id: original.toItemId },
           data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
@@ -9038,7 +9128,7 @@ async function lookupBarcodeForTransfer(barcode) {
   // Try Holo
   const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({ where: { barcode } });
   if (holoRow) {
-    const totalNetWeight = holoRow.rollWeight ? (holoRow.rollWeight * holoRow.rollCount) : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+    const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
     const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
     const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
     const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON

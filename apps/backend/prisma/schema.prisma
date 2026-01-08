@@ -202,6 +202,7 @@ model ReceiveFromHoloMachineRow {
   createdByUserId String?
   updatedByUserId String?
   dispatchedWeight Float   @default(0)
+  dispatchedCount  Int     @default(0)
   issue       IssueToHoloMachine @relation("IssueHoloRelation", fields: [issueId], references: [id])
   rollType    RollType?          @relation(fields: [rollTypeId], references: [id])
   box         Box?               @relation(fields: [boxId], references: [id])
@@ -309,6 +310,7 @@ model ReceiveFromConingMachineRow {
   helper      Operator?            @relation("HelperConingReceive", fields: [helperId], references: [id])
   box         Box?                 @relation(fields: [boxId], references: [id])
   dispatchedWeight Float            @default(0)
+  dispatchedCount  Int               @default(0)
 }
 
 model ReceiveFromConingMachinePieceTotal {
@@ -411,6 +413,7 @@ model ReceiveFromCutterMachineRow {
   cutId         String?
   cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
   dispatchedWeight Float                             @default(0)
+  dispatchedCount  Int                               @default(0)
 }
 
 model ReceiveFromCutterMachineChallan {
@@ -620,6 +623,7 @@ model Dispatch {
   stageItemId     String   // ID of the source item
   stageBarcode    String   // Original barcode of the dispatched item
   weight          Float
+  count           Int?     // Number of pieces dispatched (nullable for backward compat)
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt

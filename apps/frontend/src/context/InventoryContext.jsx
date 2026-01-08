@@ -159,6 +159,11 @@ export const InventoryProvider = ({ children }) => {
     updateFirm: async (id, name, address, mobile) => { await api.updateFirm(id, name, address, mobile); await refreshDb(); },
     deleteFirm: async (id) => { await api.deleteFirm(id); await refreshDb(); },
 
+    // Masters - Customers
+    createCustomer: async (name, phone, address) => { await api.createCustomer({ name, phone, address }); await refreshDb(); },
+    updateCustomer: async (id, name, phone, address) => { await api.updateCustomer(id, { name, phone, address }); await refreshDb(); },
+    deleteCustomer: async (id) => { await api.deleteCustomer(id); await refreshDb(); },
+
     // Masters - Suppliers
     createSupplier: async (name) => { await api.createSupplier(name); await refreshDb(); },
     updateSupplier: async (id, name) => { await api.updateSupplier(id, name); await refreshDb(); },

@@ -48,12 +48,14 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       })();
 
       const coneCount = Number(row.coneCount || row.totalCones || 0);
+      const dispatchedCones = Number(row.dispatchedCount || 0);
       const baseNetWeight = Number.isFinite(row.netWeight)
         ? Number(row.netWeight)
         : (Number.isFinite(row.coneWeight) ? Number(row.coneWeight) : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
       const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
+      const availableCones = Math.max(0, coneCount - dispatchedCones);
       const grossWeight = Number(row.grossWeight ?? 0);
 
       return {
@@ -67,6 +69,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         supplierId: lotMeta?.supplierId || '',
         supplierName: lotMeta?.supplierName || '—',
         coneCount,
+        dispatchedCones,
+        availableCones,
         netWeight: baseNetWeight,
         availableWeight,
         grossWeight,
@@ -97,7 +101,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         rows: []
       };
       existing.rows.push(row);
-      existing.totalCones += row.coneCount;
+      existing.totalCones += row.availableCones;
       existing.totalWeight += row.availableWeight;
       map.set(lotNo, existing);
     });
@@ -193,7 +197,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               <TableHead>Item</TableHead>
               {!groupBy ? <TableHead>Firm</TableHead> : null}
               <TableHead>Supplier</TableHead>
-              <TableHead className="">Cones</TableHead>
+              <TableHead className="">Available Cones</TableHead>
               <TableHead className="">Net Weight</TableHead>
             </TableRow>
           </TableHeader>
@@ -243,7 +247,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                   <TableHead>Date</TableHead>
                                   <TableHead>Box</TableHead>
                                   <TableHead>Cone Type</TableHead>
-                                  <TableHead className="">Cones</TableHead>
+                                  <TableHead className="">Available Cones</TableHead>
                                   <TableHead className="">Net / Gross Wt</TableHead>
                                   <TableHead>Machine</TableHead>
                                   <TableHead>Operator</TableHead>
@@ -257,7 +261,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                     <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
                                     <TableCell>{row.boxName}</TableCell>
                                     <TableCell>{row.coneType}</TableCell>
-                                    <TableCell className="">{row.coneCount}</TableCell>
+                                    <TableCell className="">{row.availableCones}</TableCell>
                                     <TableCell className="">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
                                     <TableCell>{row.machineName}</TableCell>
                                     <TableCell>{row.operatorName}</TableCell>
@@ -327,7 +331,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                           <span>{formatKg(r.availableWeight)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>{r.boxName} • Cones: {r.coneCount}</span>
+                          <span>{r.boxName} • Cones: {r.availableCones}</span>
                           <span>Mac: {r.machineName}</span>
                         </div>
                       </div>

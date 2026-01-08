@@ -50,8 +50,10 @@ export function Dispatch() {
     const [dispatchForm, setDispatchForm] = useState({
         customerId: '',
         weight: '',
+        count: '',
         date: todayISO(),
         notes: '',
+        mode: 'weight', // 'weight' | 'count'
     });
     const [submitting, setSubmitting] = useState(false);
 
@@ -161,30 +163,51 @@ export function Dispatch() {
 
     function openDispatchModal(item) {
         setSelectedItem(item);
+        // Default to count mode if item has piece count, otherwise weight
+        const hasCount = item.availableCount > 0;
         setDispatchForm({
             customerId: '',
             weight: String(item.availableWeight || item.weight || ''),
+            count: hasCount ? String(item.availableCount || '') : '',
             date: todayISO(),
             notes: '',
+            mode: hasCount ? 'count' : 'weight',
         });
         setDispatchModalOpen(true);
     }
 
     async function handleCreateDispatch() {
-        if (!selectedItem || !dispatchForm.customerId || !dispatchForm.weight) {
+        if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
             return;
         }
 
         const weight = parseFloat(dispatchForm.weight);
-        if (isNaN(weight) || weight <= 0) {
-            alert('Please enter a valid weight');
-            return;
-        }
+        const count = dispatchForm.mode === 'count' ? parseInt(dispatchForm.count) : null;
 
-        if (weight > selectedItem.availableWeight + 0.001) {
-            alert(`Weight cannot exceed available weight (${selectedItem.availableWeight.toFixed(3)} kg)`);
-            return;
+        if (dispatchForm.mode === 'weight') {
+            if (isNaN(weight) || weight <= 0) {
+                alert('Please enter a valid weight');
+                return;
+            }
+            if (weight > selectedItem.availableWeight + 0.001) {
+                alert(`Weight cannot exceed available weight (${selectedItem.availableWeight.toFixed(3)} kg)`);
+                return;
+            }
+        } else {
+            // Count mode
+            if (!count || count <= 0) {
+                alert('Please enter a valid count');
+                return;
+            }
+            if (count > selectedItem.availableCount) {
+                alert(`Count cannot exceed available quantity (${selectedItem.availableCount})`);
+                return;
+            }
+            if (!weight || weight <= 0) {
+                alert('Weight must be greater than 0');
+                return;
+            }
         }
 
         setSubmitting(true);
@@ -194,6 +217,7 @@ export function Dispatch() {
                 stage: selectedStage,
                 stageItemId: selectedItem.id,
                 weight,
+                count: dispatchForm.mode === 'count' ? count : null,
                 date: dispatchForm.date,
                 notes: dispatchForm.notes || null,
             });
@@ -204,7 +228,7 @@ export function Dispatch() {
             const shouldPrint = confirm('Dispatch created successfully! Do you want to print the challan?');
             if (shouldPrint && res.dispatch) {
                 // We need to hydrate customer name as the response might just have ID
-                // But typically responses include relation if requested.
+                // But typically responses includes relation if requested.
                 // Assuming res.dispatch has relations or we merge it.
                 // Re-fetch dispatches to get full object for printing just in case.
                 const updatedDispatches = await api.listDispatches();
@@ -259,6 +283,7 @@ export function Dispatch() {
             setDispatchForm(prev => ({ ...prev, customerId: res.customer.id }));
             setNewCustomerModalOpen(false);
             setNewCustomerForm({ name: '', phone: '', address: '' });
+            await refreshDb();
         } catch (err) {
             alert(err.message || 'Failed to create customer');
         } finally {
@@ -300,6 +325,7 @@ export function Dispatch() {
     async function handleMobileAddCustomer(customerData) {
         const res = await api.createCustomer(customerData);
         setCustomers(prev => [...prev, res.customer].sort((a, b) => a.name.localeCompare(b.name)));
+        await refreshDb();
         return res.customer;
     }
 
@@ -432,10 +458,9 @@ export function Dispatch() {
                                                 {selectedStage !== 'inbound' && <TableHead>Piece/Lot</TableHead>}
                                                 {selectedStage === 'inbound' && <TableHead>Lot No</TableHead>}
                                                 <TableHead className="text-right">Total Weight</TableHead>
-                                                <TableHead className="text-right">Dispatched</TableHead>
                                                 <TableHead className="text-right">Available</TableHead>
                                                 {selectedStage !== 'inbound' && (
-                                                    <TableHead className="text-right">{getStageUnitLabel(selectedStage)}</TableHead>
+                                                    <TableHead className="text-right">Available {getStageUnitLabel(selectedStage)}</TableHead>
                                                 )}
                                                 <TableHead className="w-[100px]"></TableHead>
                                             </TableRow>
@@ -459,15 +484,14 @@ export function Dispatch() {
                                                         <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
                                                         <TableCell>{item.lotLabel || item.lotNo || item.pieceId || '—'}</TableCell>
                                                         <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
-                                                        <TableCell className="text-right text-muted-foreground">
-                                                            {formatKg(item.dispatchedWeight)}
-                                                        </TableCell>
                                                         <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
                                                             {formatKg(item.availableWeight)}
                                                         </TableCell>
                                                         {selectedStage !== 'inbound' && (
                                                             <TableCell className="text-right">
-                                                                {item.bobbinQuantity || item.rollCount || item.coneCount || '—'}
+                                                                {item.availableCount !== undefined ?
+                                                                    `${item.availableCount} / ${item.totalCount}` :
+                                                                    (item.bobbinQuantity || item.rollCount || item.coneCount || '—')}
                                                             </TableCell>
                                                         )}
                                                         <TableCell>
@@ -505,7 +529,10 @@ export function Dispatch() {
                                                     </Badge>
                                                 </div>
                                                 <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                    <span>Total: {formatKg(item.weight)} | Dispatched: {formatKg(item.dispatchedWeight)}</span>
+                                                    <span>Total: {formatKg(item.weight)}</span>
+                                                    {item.availableCount !== undefined && (
+                                                        <span>{item.availableCount} / {item.totalCount} {getStageUnitLabel(selectedStage)} left</span>
+                                                    )}
                                                 </div>
                                                 <Button
                                                     size="sm"
@@ -723,7 +750,61 @@ export function Dispatch() {
                             </div>
                         </div>
 
+                        {/* Dispatch Mode & Weight/Count Inputs */}
                         <div className="grid grid-cols-2 gap-4">
+                            {/* Dispatch Mode Toggle - Only for stages that support count */}
+                            {selectedItem?.availableCount > 0 && (
+                                <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            id="mode-weight"
+                                            name="dispatchMode"
+                                            checked={dispatchForm.mode === 'weight'}
+                                            onChange={() => setDispatchForm(prev => ({ ...prev, mode: 'weight', count: '' }))}
+                                            className="w-4 h-4"
+                                        />
+                                        <label htmlFor="mode-weight" className="text-sm font-medium cursor-pointer">By Weight ({formatKg(selectedItem.availableWeight)} available)</label>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            id="mode-count"
+                                            name="dispatchMode"
+                                            checked={dispatchForm.mode === 'count'}
+                                            onChange={() => setDispatchForm(prev => ({ ...prev, mode: 'count' }))}
+                                            className="w-4 h-4"
+                                        />
+                                        <label htmlFor="mode-count" className="text-sm font-medium cursor-pointer">By Count ({selectedItem.availableCount} {getStageUnitLabel(selectedStage)} available)</label>
+                                    </div>
+                                </div>
+                            )}
+
+                            {dispatchForm.mode === 'count' && (
+                                <div>
+                                    <Label>Count ({getStageUnitLabel(selectedStage)}) *</Label>
+                                    <Input
+                                        type="number"
+                                        step="1"
+                                        value={dispatchForm.count}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            const intVal = parseInt(val) || 0;
+                                            const avgWeight = selectedItem.avgWeightPerPiece || 0;
+                                            // Auto-calc weight if average is known
+                                            const estimatedWeight = avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '';
+                                            setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
+                                        }}
+                                        max={selectedItem?.availableCount}
+                                    />
+                                    {selectedItem?.avgWeightPerPiece > 0 && (
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            Avg: {selectedItem.avgWeightPerPiece.toFixed(3)} kg/pc
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
                             <div>
                                 <Label>Weight (kg) *</Label>
                                 <Input
@@ -810,6 +891,6 @@ export function Dispatch() {
                     </div>
                 </DialogContent>
             </Dialog>
-        </div>
+        </div >
     );
 }

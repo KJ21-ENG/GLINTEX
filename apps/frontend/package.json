@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "html5-qrcode": "^2.3.8",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.5.28",
     "lucide-react": "^0.555.0",

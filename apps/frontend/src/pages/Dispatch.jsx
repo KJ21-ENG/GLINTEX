@@ -8,9 +8,11 @@ import {
 } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
-import { Truck, Plus, Search, History, Package, X, ChevronRight, Trash2, Printer } from 'lucide-react';
+import { Truck, Plus, Search, History, Package, X, ChevronRight, Trash2, Printer, ScanLine } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { printDispatchChallan } from '../utils/printDispatchChallan';
+import { useMobileDetect } from '../utils/useMobileDetect';
+import { MobileDispatchView } from '../components/dispatch/MobileDispatchView';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -21,7 +23,9 @@ const STAGES = [
 
 export function Dispatch() {
     const { refreshDb, db } = useInventory();
+    const { isMobile, isTouchDevice } = useMobileDetect();
     const [activeTab, setActiveTab] = useState('dispatch'); // 'dispatch' | 'history'
+    const [useMobileMode, setUseMobileMode] = useState(false); // Manual toggle for mobile scanner mode
     const [selectedStage, setSelectedStage] = useState('inbound');
     const [availableItems, setAvailableItems] = useState([]);
     const [loadingItems, setLoadingItems] = useState(false);
@@ -32,6 +36,13 @@ export function Dispatch() {
     const [historySearch, setHistorySearch] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+
+    // Auto-enable mobile mode on mobile devices
+    React.useEffect(() => {
+        if (isMobile && isTouchDevice) {
+            setUseMobileMode(true);
+        }
+    }, [isMobile, isTouchDevice]);
 
     // Dispatch form state
     const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
@@ -265,6 +276,31 @@ export function Dispatch() {
         printDispatchChallan(dispatch, firmDetails);
     }
 
+    // Handler for mobile dispatch view to create dispatch
+    async function handleMobileDispatchCreate(dispatchData) {
+        const res = await api.createDispatch(dispatchData);
+
+        const shouldPrint = confirm('Dispatch created successfully! Do you want to print the challan?');
+        if (shouldPrint && res.dispatch) {
+            const updatedDispatches = await api.listDispatches();
+            setDispatches(updatedDispatches.dispatches || []);
+            const freshDispatch = updatedDispatches.dispatches?.find(d => d.id === res.dispatch.id);
+            if (freshDispatch) {
+                handlePrintChallan(freshDispatch);
+            }
+        }
+
+        await refreshDb();
+        return res.dispatch;
+    }
+
+    // Handler for mobile dispatch view to add customer
+    async function handleMobileAddCustomer(customerData) {
+        const res = await api.createCustomer(customerData);
+        setCustomers(prev => [...prev, res.customer].sort((a, b) => a.name.localeCompare(b.name)));
+        return res.customer;
+    }
+
     const getStageUnitLabel = (stage) => {
         if (stage === 'cutter') return 'Bobbins';
         if (stage === 'holo') return 'Rolls';
@@ -285,180 +321,205 @@ export function Dispatch() {
                 </div>
 
                 {/* Tab Toggle */}
-                <div className="flex p-1 bg-muted rounded-lg">
-                    <button
-                        onClick={() => setActiveTab('dispatch')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'dispatch'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <Package className="w-4 h-4" />
-                        Dispatch
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('history')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'history'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <History className="w-4 h-4" />
-                        History
-                    </button>
+                <div className="flex gap-2">
+                    {/* Scanner Mode Toggle - only show on dispatch tab */}
+                    {activeTab === 'dispatch' && (
+                        <Button
+                            variant={useMobileMode ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setUseMobileMode(!useMobileMode)}
+                            className="flex items-center gap-2"
+                        >
+                            <ScanLine className="w-4 h-4" />
+                            <span className="hidden sm:inline">{useMobileMode ? 'Scanner' : 'Table'}</span>
+                        </Button>
+                    )}
+
+                    <div className="flex p-1 bg-muted rounded-lg">
+                        <button
+                            onClick={() => setActiveTab('dispatch')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'dispatch'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Package className="w-4 h-4" />
+                            Dispatch
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('history')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'history'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <History className="w-4 h-4" />
+                            History
+                        </button>
+                    </div>
                 </div>
             </div>
 
             {activeTab === 'dispatch' ? (
-                <>
-                    {/* Stage Tabs */}
-                    <Card className="bg-muted/40 border-none shadow-none">
-                        <CardContent className="p-4">
-                            <div className="flex flex-wrap gap-2">
-                                {STAGES.map(stage => (
-                                    <button
-                                        key={stage.id}
-                                        onClick={() => setSelectedStage(stage.id)}
-                                        className={cn(
-                                            "px-4 py-3 rounded-lg transition-all flex-1 min-w-[120px] text-left",
-                                            selectedStage === stage.id
-                                                ? "bg-primary text-primary-foreground shadow-md"
-                                                : "bg-background hover:bg-muted border border-border"
-                                        )}
-                                    >
-                                        <div className="font-medium">{stage.label}</div>
-                                        <div className={cn(
-                                            "text-xs",
-                                            selectedStage === stage.id ? "text-primary-foreground/80" : "text-muted-foreground"
-                                        )}>
-                                            {stage.description}
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Search Bar */}
-                    <div className="relative max-w-md mb-4">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search by barcode, lot no..."
-                            className="pl-10"
-                            value={itemSearch}
-                            onChange={e => setItemSearch(e.target.value)}
-                        />
-                    </div>
-
-                    {/* Available Items Table */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-lg">
-                                Available for Dispatch - {STAGES.find(s => s.id === selectedStage)?.label}
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="hidden sm:block rounded-md border overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Barcode</TableHead>
-                                            {selectedStage !== 'inbound' && <TableHead>Piece/Lot</TableHead>}
-                                            {selectedStage === 'inbound' && <TableHead>Lot No</TableHead>}
-                                            <TableHead className="text-right">Total Weight</TableHead>
-                                            <TableHead className="text-right">Dispatched</TableHead>
-                                            <TableHead className="text-right">Available</TableHead>
-                                            {selectedStage !== 'inbound' && (
-                                                <TableHead className="text-right">{getStageUnitLabel(selectedStage)}</TableHead>
+                useMobileMode ? (
+                    /* Mobile Scanner View */
+                    <MobileDispatchView
+                        customers={customers}
+                        onDispatchCreate={handleMobileDispatchCreate}
+                        onAddCustomer={handleMobileAddCustomer}
+                        refreshAvailableItems={() => api.getDispatchAvailable(selectedStage).then(res => setAvailableItems(res.items || []))}
+                    />
+                ) : (
+                    <>
+                        {/* Stage Tabs */}
+                        <Card className="bg-muted/40 border-none shadow-none">
+                            <CardContent className="p-4">
+                                <div className="flex flex-wrap gap-2">
+                                    {STAGES.map(stage => (
+                                        <button
+                                            key={stage.id}
+                                            onClick={() => setSelectedStage(stage.id)}
+                                            className={cn(
+                                                "px-4 py-3 rounded-lg transition-all flex-1 min-w-[120px] text-left",
+                                                selectedStage === stage.id
+                                                    ? "bg-primary text-primary-foreground shadow-md"
+                                                    : "bg-background hover:bg-muted border border-border"
                                             )}
-                                            <TableHead className="w-[100px]"></TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {loadingItems ? (
+                                        >
+                                            <div className="font-medium">{stage.label}</div>
+                                            <div className={cn(
+                                                "text-xs",
+                                                selectedStage === stage.id ? "text-primary-foreground/80" : "text-muted-foreground"
+                                            )}>
+                                                {stage.description}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Search Bar */}
+                        <div className="relative max-w-md mb-4">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="Search by barcode, lot no..."
+                                className="pl-10"
+                                value={itemSearch}
+                                onChange={e => setItemSearch(e.target.value)}
+                            />
+                        </div>
+
+                        {/* Available Items Table */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg">
+                                    Available for Dispatch - {STAGES.find(s => s.id === selectedStage)?.label}
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="hidden sm:block rounded-md border overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
                                             <TableRow>
-                                                <TableCell colSpan={7} className="h-24 text-center">
-                                                    Loading...
-                                                </TableCell>
+                                                <TableHead>Barcode</TableHead>
+                                                {selectedStage !== 'inbound' && <TableHead>Piece/Lot</TableHead>}
+                                                {selectedStage === 'inbound' && <TableHead>Lot No</TableHead>}
+                                                <TableHead className="text-right">Total Weight</TableHead>
+                                                <TableHead className="text-right">Dispatched</TableHead>
+                                                <TableHead className="text-right">Available</TableHead>
+                                                {selectedStage !== 'inbound' && (
+                                                    <TableHead className="text-right">{getStageUnitLabel(selectedStage)}</TableHead>
+                                                )}
+                                                <TableHead className="w-[100px]"></TableHead>
                                             </TableRow>
-                                        ) : filteredItems.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                                                    No items available for dispatch
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            filteredItems.map(item => (
-                                                <TableRow key={item.id}>
-                                                    <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
-                                                    <TableCell>{item.lotLabel || item.lotNo || item.pieceId || '—'}</TableCell>
-                                                    <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
-                                                    <TableCell className="text-right text-muted-foreground">
-                                                        {formatKg(item.dispatchedWeight)}
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
-                                                        {formatKg(item.availableWeight)}
-                                                    </TableCell>
-                                                    {selectedStage !== 'inbound' && (
-                                                        <TableCell className="text-right">
-                                                            {item.bobbinQuantity || item.rollCount || item.coneCount || '—'}
-                                                        </TableCell>
-                                                    )}
-                                                    <TableCell>
-                                                        <Button
-                                                            size="sm"
-                                                            onClick={() => openDispatchModal(item)}
-                                                        >
-                                                            <ChevronRight className="w-4 h-4 mr-1" />
-                                                            Dispatch
-                                                        </Button>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {loadingItems ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={7} className="h-24 text-center">
+                                                        Loading...
                                                     </TableCell>
                                                 </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                            </div>
+                                            ) : filteredItems.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                                        No items available for dispatch
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                filteredItems.map(item => (
+                                                    <TableRow key={item.id}>
+                                                        <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
+                                                        <TableCell>{item.lotLabel || item.lotNo || item.pieceId || '—'}</TableCell>
+                                                        <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
+                                                        <TableCell className="text-right text-muted-foreground">
+                                                            {formatKg(item.dispatchedWeight)}
+                                                        </TableCell>
+                                                        <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
+                                                            {formatKg(item.availableWeight)}
+                                                        </TableCell>
+                                                        {selectedStage !== 'inbound' && (
+                                                            <TableCell className="text-right">
+                                                                {item.bobbinQuantity || item.rollCount || item.coneCount || '—'}
+                                                            </TableCell>
+                                                        )}
+                                                        <TableCell>
+                                                            <Button
+                                                                size="sm"
+                                                                onClick={() => openDispatchModal(item)}
+                                                            >
+                                                                <ChevronRight className="w-4 h-4 mr-1" />
+                                                                Dispatch
+                                                            </Button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </div>
 
-                            {/* Mobile Card View for Available Items */}
-                            <div className="block sm:hidden space-y-3">
-                                {loadingItems ? (
-                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">Loading...</div>
-                                ) : filteredItems.length === 0 ? (
-                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No items available for dispatch</div>
-                                ) : (
-                                    filteredItems.map(item => (
-                                        <div key={item.id} className="border rounded-lg p-4 bg-card shadow-sm">
-                                            <div className="flex justify-between items-start gap-2">
-                                                <div className="min-w-0 flex-1">
-                                                    <p className="font-mono text-sm font-semibold truncate">{item.barcode || '—'}</p>
-                                                    <p className="text-sm text-muted-foreground">{item.lotLabel || item.lotNo || item.pieceId || '—'}</p>
+                                {/* Mobile Card View for Available Items */}
+                                <div className="block sm:hidden space-y-3">
+                                    {loadingItems ? (
+                                        <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">Loading...</div>
+                                    ) : filteredItems.length === 0 ? (
+                                        <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No items available for dispatch</div>
+                                    ) : (
+                                        filteredItems.map(item => (
+                                            <div key={item.id} className="border rounded-lg p-4 bg-card shadow-sm">
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="font-mono text-sm font-semibold truncate">{item.barcode || '—'}</p>
+                                                        <p className="text-sm text-muted-foreground">{item.lotLabel || item.lotNo || item.pieceId || '—'}</p>
+                                                    </div>
+                                                    <Badge variant="outline" className="text-green-600 border-green-600 whitespace-nowrap">
+                                                        {formatKg(item.availableWeight)} avail
+                                                    </Badge>
                                                 </div>
-                                                <Badge variant="outline" className="text-green-600 border-green-600 whitespace-nowrap">
-                                                    {formatKg(item.availableWeight)} avail
-                                                </Badge>
+                                                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                                                    <span>Total: {formatKg(item.weight)} | Dispatched: {formatKg(item.dispatchedWeight)}</span>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    className="mt-3 w-full"
+                                                    onClick={() => openDispatchModal(item)}
+                                                >
+                                                    <ChevronRight className="w-4 h-4 mr-1" /> Dispatch
+                                                </Button>
                                             </div>
-                                            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                <span>Total: {formatKg(item.weight)} | Dispatched: {formatKg(item.dispatchedWeight)}</span>
-                                            </div>
-                                            <Button
-                                                size="sm"
-                                                className="mt-3 w-full"
-                                                onClick={() => openDispatchModal(item)}
-                                            >
-                                                <ChevronRight className="w-4 h-4 mr-1" /> Dispatch
-                                            </Button>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                </>
+                                        ))
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </>
+                )
             ) : (
                 /* History Tab */
                 <Card>
@@ -619,7 +680,8 @@ export function Dispatch() {
                         </div>
                     </CardContent>
                 </Card>
-            )}
+            )
+            }
 
             {/* Dispatch Modal */}
             <Dialog open={dispatchModalOpen} onOpenChange={setDispatchModalOpen}>

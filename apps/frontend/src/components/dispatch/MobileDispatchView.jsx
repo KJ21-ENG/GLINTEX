@@ -26,6 +26,7 @@ const STAGES = [
 export function MobileDispatchView({
     customers,
     onDispatchCreate,
+    onDispatchBulkCreate,
     onAddCustomer,
     refreshAvailableItems
 }) {
@@ -38,6 +39,13 @@ export function MobileDispatchView({
     // Dispatch modal state
     const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
     const [selectedItem, setSelectedItem] = useState(null);
+    const [bulkDispatchOpen, setBulkDispatchOpen] = useState(false);
+    const [bulkForm, setBulkForm] = useState({
+        customerId: '',
+        date: todayISO(),
+        notes: '',
+    });
+    const [bulkItems, setBulkItems] = useState([]);
     const [dispatchForm, setDispatchForm] = useState({
         customerId: '',
         weight: '',
@@ -122,6 +130,30 @@ export function MobileDispatchView({
         setScannedItems(prev => prev.filter(item => item.barcode !== barcode));
     };
 
+    const openBulkDispatchModal = () => {
+        const foundItems = scannedItems.filter(item => item.status === 'found');
+        if (foundItems.length === 0) {
+            alert('No valid items to dispatch');
+            return;
+        }
+        const defaults = foundItems.map(item => {
+            const hasCount = item.availableCount > 0;
+            return {
+                stageItemId: item.id,
+                barcode: item.barcode,
+                label: item.lotLabel || item.lotNo || item.pieceId || '—',
+                availableWeight: item.availableWeight,
+                availableCount: item.availableCount,
+                avgWeightPerPiece: item.avgWeightPerPiece || 0,
+                count: hasCount ? String(item.availableCount || '') : '',
+                weight: String(item.availableWeight || ''),
+            };
+        });
+        setBulkItems(defaults);
+        setBulkForm({ customerId: '', date: todayISO(), notes: '' });
+        setBulkDispatchOpen(true);
+    };
+
     // Open dispatch modal for an item
     const openDispatchModal = (item) => {
         if (item.status !== 'found') return;
@@ -190,6 +222,70 @@ export function MobileDispatchView({
             setDispatchModalOpen(false);
         } catch (err) {
             alert(err.message || 'Failed to create dispatch');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleCreateBulkDispatch = async () => {
+        if (!bulkForm.customerId) {
+            alert('Please select a customer');
+            return;
+        }
+        if (bulkItems.length === 0) {
+            alert('No items to dispatch');
+            return;
+        }
+
+        const payloadItems = [];
+        for (const item of bulkItems) {
+            const count = item.count ? parseInt(item.count) : null;
+            const weight = item.weight ? parseFloat(item.weight) : null;
+
+            if (count && count > 0) {
+                if (count > (item.availableCount || 0)) {
+                    alert(`Count cannot exceed available quantity for ${item.barcode || item.label}`);
+                    return;
+                }
+                if (!weight || weight <= 0) {
+                    if (count === (item.availableCount || 0) && item.availableWeight) {
+                        payloadItems.push({ stageItemId: item.stageItemId, count, weight: item.availableWeight });
+                    } else if (!item.avgWeightPerPiece || item.avgWeightPerPiece <= 0) {
+                        alert(`Weight must be provided for ${item.barcode || item.label}`);
+                        return;
+                    } else {
+                        const estimatedWeight = count * item.avgWeightPerPiece;
+                        payloadItems.push({ stageItemId: item.stageItemId, count, weight: estimatedWeight });
+                    }
+                } else {
+                    payloadItems.push({ stageItemId: item.stageItemId, count, weight });
+                }
+            } else {
+                if (!weight || weight <= 0) {
+                    alert(`Weight must be provided for ${item.barcode || item.label}`);
+                    return;
+                }
+                if (weight > (item.availableWeight || 0) + 0.001) {
+                    alert(`Weight cannot exceed available weight for ${item.barcode || item.label}`);
+                    return;
+                }
+                payloadItems.push({ stageItemId: item.stageItemId, weight });
+            }
+        }
+
+        setSubmitting(true);
+        try {
+            await onDispatchBulkCreate({
+                customerId: bulkForm.customerId,
+                stage: selectedStage,
+                date: bulkForm.date,
+                notes: bulkForm.notes || null,
+                items: payloadItems,
+            });
+            setScannedItems([]);
+            setBulkDispatchOpen(false);
+        } catch (err) {
+            alert(err.message || 'Failed to create bulk dispatch');
         } finally {
             setSubmitting(false);
         }
@@ -306,16 +402,23 @@ export function MobileDispatchView({
                             Scanned Items ({foundItems.length})
                         </span>
                     </div>
-                    {scannedItems.length > 0 && (
-                        <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setScannedItems([])}
-                            className="text-xs"
-                        >
-                            Clear All
-                        </Button>
-                    )}
+                    <div className="flex items-center gap-2">
+                        {foundItems.length > 0 && (
+                            <Button size="sm" onClick={openBulkDispatchModal}>
+                                Dispatch All
+                            </Button>
+                        )}
+                        {scannedItems.length > 0 && (
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setScannedItems([])}
+                                className="text-xs"
+                            >
+                                Clear All
+                            </Button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Items list */}
@@ -472,7 +575,10 @@ export function MobileDispatchView({
                                             const val = e.target.value;
                                             const intVal = parseInt(val) || 0;
                                             const avgWeight = selectedItem.avgWeightPerPiece || 0;
-                                            const estimatedWeight = avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '';
+                                            const fullMatch = intVal === (selectedItem?.availableCount || 0) && selectedItem?.availableWeight;
+                                            const estimatedWeight = fullMatch
+                                                ? Number(selectedItem.availableWeight).toFixed(3)
+                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '');
                                             setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
                                         }}
                                         max={selectedItem?.availableCount}
@@ -517,6 +623,119 @@ export function MobileDispatchView({
                                 className="flex-1"
                                 onClick={handleCreateDispatch}
                                 disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight}
+                            >
+                                {submitting ? 'Creating...' : 'Create Dispatch'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Bulk Dispatch Modal */}
+            <Dialog open={bulkDispatchOpen} onOpenChange={setBulkDispatchOpen}>
+                <DialogContent title="Dispatch Scanned Items" onOpenChange={setBulkDispatchOpen} className="max-h-[85vh] overflow-hidden">
+                    <div className="space-y-4 max-h-[70vh] overflow-auto pr-2">
+                        <div>
+                            <Label>Customer *</Label>
+                            <div className="flex gap-2">
+                                <Select
+                                    className="flex-1"
+                                    value={bulkForm.customerId}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, customerId: e.target.value }))}
+                                >
+                                    <option value="">Select Customer</option>
+                                    {customers.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </Select>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setNewCustomerModalOpen(true)}
+                                >
+                                    <Plus className="w-4 h-4" />
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <Label>Date</Label>
+                                <Input
+                                    type="date"
+                                    value={bulkForm.date}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, date: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <Label>Notes</Label>
+                                <Input
+                                    value={bulkForm.notes}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, notes: e.target.value }))}
+                                    placeholder="Optional notes..."
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2 max-h-[45vh] overflow-y-auto border rounded-md p-2">
+                            {bulkItems.map(item => (
+                                <div key={item.stageItemId} className="border rounded-md p-2 bg-card space-y-2">
+                                    <div className="text-xs font-mono">{item.barcode || '—'}</div>
+                                    <div className="text-xs text-muted-foreground">{item.label}</div>
+                                    {selectedStage !== 'inbound' && (
+                                        <div>
+                                            <Label className="text-xs">Count</Label>
+                                            <Input
+                                                type="number"
+                                                step="1"
+                                                value={item.count}
+                                                onChange={e => {
+                                                    const nextCount = e.target.value;
+                                                    const intVal = parseInt(nextCount) || 0;
+                                                    const avgWeight = item.avgWeightPerPiece || 0;
+                                                    const fullMatch = intVal === (item.availableCount || 0) && item.availableWeight;
+                                                    const nextWeight = fullMatch
+                                                        ? Number(item.availableWeight).toFixed(3)
+                                                        : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : item.weight);
+                                                    setBulkItems(prev => prev.map(i => (
+                                                        i.stageItemId === item.stageItemId
+                                                            ? { ...i, count: nextCount, weight: nextWeight }
+                                                            : i
+                                                    )));
+                                                }}
+                                                max={item.availableCount}
+                                            />
+                                        </div>
+                                    )}
+                                    <div>
+                                        <Label className="text-xs">Weight (kg)</Label>
+                                        <Input
+                                            type="number"
+                                            step="0.001"
+                                            value={item.weight}
+                                            onChange={e => {
+                                                const nextWeight = e.target.value;
+                                                setBulkItems(prev => prev.map(i => (
+                                                    i.stageItemId === item.stageItemId
+                                                        ? { ...i, weight: nextWeight }
+                                                        : i
+                                                )));
+                                            }}
+                                            max={item.availableWeight}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2 pt-2">
+                            <Button variant="outline" className="flex-1" onClick={() => setBulkDispatchOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button
+                                className="flex-1"
+                                onClick={handleCreateBulkDispatch}
+                                disabled={submitting || !bulkForm.customerId}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>

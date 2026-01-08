@@ -7342,6 +7342,7 @@ async function allocateDispatchChallanNumber(tx, dateInput) {
 router.get('/api/dispatch/available/:stage', async (req, res) => {
   try {
     const { stage } = req.params;
+    const EPSILON = 1e-9;
     let items = [];
 
     if (stage === 'inbound') {
@@ -7378,9 +7379,12 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           const totalCount = row.bobbinQuantity || 0;
           const dispatchedCount = row.dispatchedCount || 0;
           const issuedCount = row.issuedBobbins || 0;
-          const availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
+          const availableWeight = Math.max(0, netWt - dispatched - issuedToHolo);
+          const availableCount = availableWeight > EPSILON
+            ? Math.max(0, totalCount - dispatchedCount - issuedCount)
+            : 0;
           const avgWeightPerPiece = availableCount > 0
-            ? (Math.max(0, netWt - dispatched - issuedToHolo) / availableCount)
+            ? (availableWeight / availableCount)
             : 0;
           return {
             id: row.id,
@@ -7389,7 +7393,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             weight: netWt,
             dispatchedWeight: dispatched,
             issuedToHolo: issuedToHolo,
-            availableWeight: Math.max(0, netWt - dispatched - issuedToHolo),
+            availableWeight: availableWeight,
             stage: 'cutter',
             bobbinQuantity: totalCount,
             totalCount: totalCount,
@@ -7399,7 +7403,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
         })
-        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
+        .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
     } else if (stage === 'holo') {
       // Get holo receive rows with remaining weight
       const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
@@ -7463,9 +7467,12 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const totalCount = row.rollCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
-          const availableCount = Math.max(0, totalCount - dispatchedCount);
+          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
+          const availableCount = availableWeight > EPSILON
+            ? Math.max(0, totalCount - dispatchedCount)
+            : 0;
           const avgWeightPerPiece = availableCount > 0
-            ? (Math.max(0, netWeight - (row.dispatchedWeight || 0)) / availableCount)
+            ? (availableWeight / availableCount)
             : 0;
           return {
             id: row.id,
@@ -7474,7 +7481,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             lotLabel: row.issue?.id ? issueLotLabelMap.get(row.issue.id) : null,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
-            availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),
+            availableWeight: availableWeight,
             stage: 'holo',
             rollCount: totalCount,
             totalCount: totalCount,
@@ -7483,7 +7490,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
         })
-        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
+        .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
     } else if (stage === 'coning') {
       // Get coning receive rows with remaining weight
       const coningRows = await prisma.receiveFromConingMachineRow.findMany({
@@ -7495,9 +7502,12 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           const netWeight = row.netWeight || 0;
           const totalCount = row.coneCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
-          const availableCount = Math.max(0, totalCount - dispatchedCount);
+          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
+          const availableCount = availableWeight > EPSILON
+            ? Math.max(0, totalCount - dispatchedCount)
+            : 0;
           const avgWeightPerPiece = availableCount > 0
-            ? (Math.max(0, netWeight - (row.dispatchedWeight || 0)) / availableCount)
+            ? (availableWeight / availableCount)
             : 0;
           return {
             id: row.id,
@@ -7505,7 +7515,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             lotNo: row.issue?.lotNo,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
-            availableWeight: Math.max(0, netWeight - (row.dispatchedWeight || 0)),
+            availableWeight: availableWeight,
             stage: 'coning',
             coneCount: totalCount,
             totalCount: totalCount,
@@ -7514,7 +7524,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
             avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
         })
-        .filter(item => item.availableWeight > 0 || item.availableCount > 0);
+        .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
     } else {
       return res.status(400).json({ error: 'Invalid stage. Must be: inbound, cutter, holo, or coning' });
     }
@@ -7655,7 +7665,11 @@ router.post('/api/dispatch', async (req, res) => {
 
         // Auto-calculate weight if not provided
         if (!finalWeight || finalWeight <= 0) {
-          finalWeight = roundTo3Decimals(count * avgWeight);
+          if (count === availableCount && availableWeight > 0) {
+            finalWeight = roundTo3Decimals(availableWeight);
+          } else {
+            finalWeight = roundTo3Decimals(count * avgWeight);
+          }
         }
       }
 
@@ -7730,6 +7744,182 @@ router.post('/api/dispatch', async (req, res) => {
   }
 });
 
+// Create dispatch for multiple items (single challan)
+router.post('/api/dispatch/bulk', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { customerId, stage, date, notes, items } = req.body;
+
+    if (!customerId) return res.status(400).json({ error: 'Customer is required' });
+    if (!stage) return res.status(400).json({ error: 'Stage is required' });
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one item is required' });
+    }
+    if (!['inbound', 'cutter', 'holo', 'coning'].includes(stage)) {
+      return res.status(400).json({ error: 'Invalid stage' });
+    }
+
+    const dispatchDate = date || new Date().toISOString().split('T')[0];
+
+    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) return res.status(400).json({ error: 'Customer not found' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
+      const adjustments = new Map();
+      const created = [];
+
+      for (const item of items) {
+        const stageItemId = item?.stageItemId;
+        if (!stageItemId) throw new Error('Stage item is required');
+
+        const rawCount = item?.count != null ? Number(item.count) : null;
+        const count = Number.isFinite(rawCount) && rawCount > 0 ? Math.floor(rawCount) : null;
+        const rawWeight = item?.weight != null ? Number(item.weight) : null;
+        const inputWeight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
+
+        if (!count && !inputWeight) throw new Error('Valid weight or count is required');
+        if (stage === 'inbound' && count) throw new Error('Count dispatch not supported for inbound items');
+
+        let sourceItem;
+        let stageBarcode = '';
+        let availableWeight = 0;
+        let availableCount = 0;
+        let avgWeight = 0;
+
+        if (stage === 'inbound') {
+          sourceItem = await tx.inboundItem.findUnique({ where: { id: stageItemId } });
+          if (!sourceItem) throw new Error('Inbound item not found');
+          stageBarcode = sourceItem.barcode;
+          availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0);
+        } else if (stage === 'cutter') {
+          sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
+          if (!sourceItem) throw new Error('Cutter receive row not found');
+          stageBarcode = sourceItem.barcode || sourceItem.vchNo;
+          const issuedToHolo = sourceItem.issuedBobbinWeight || 0;
+          availableWeight = (sourceItem.netWt || 0) - (sourceItem.dispatchedWeight || 0) - issuedToHolo;
+          const totalCount = sourceItem.bobbinQuantity || 0;
+          const dispatchedCount = sourceItem.dispatchedCount || 0;
+          const issuedCount = sourceItem.issuedBobbins || 0;
+          availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
+          avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
+        } else if (stage === 'holo') {
+          sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
+          if (!sourceItem) throw new Error('Holo receive row not found');
+          stageBarcode = sourceItem.barcode || '';
+          const netWeight = sourceItem.rollWeight ? sourceItem.rollWeight : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
+          availableWeight = netWeight - (sourceItem.dispatchedWeight || 0);
+          const totalCount = sourceItem.rollCount || 0;
+          const dispatchedCount = sourceItem.dispatchedCount || 0;
+          availableCount = Math.max(0, totalCount - dispatchedCount);
+          avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
+        } else if (stage === 'coning') {
+          sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
+          if (!sourceItem) throw new Error('Coning receive row not found');
+          stageBarcode = sourceItem.barcode || '';
+          availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
+          const totalCount = sourceItem.coneCount || 0;
+          const dispatchedCount = sourceItem.dispatchedCount || 0;
+          availableCount = Math.max(0, totalCount - dispatchedCount);
+          avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
+        }
+
+        const adj = adjustments.get(stageItemId) || { weight: 0, count: 0 };
+        availableWeight = Math.max(0, availableWeight - adj.weight);
+        availableCount = Math.max(0, availableCount - adj.count);
+
+        let finalWeight = inputWeight;
+        if (count && count > 0) {
+          if (count > availableCount) {
+            throw new Error(`Dispatch count (${count}) exceeds available count (${availableCount})`);
+          }
+          if (!finalWeight || finalWeight <= 0) {
+            if (count === availableCount && availableWeight > 0) {
+              finalWeight = roundTo3Decimals(availableWeight);
+            } else {
+              if (!avgWeight || avgWeight <= 0) {
+                throw new Error('Cannot auto-calculate weight without a valid average weight');
+              }
+              finalWeight = roundTo3Decimals(count * avgWeight);
+            }
+          }
+        }
+
+        if (!finalWeight || finalWeight <= 0) throw new Error('Valid weight is required');
+        if (finalWeight > availableWeight + 0.001) {
+          throw new Error(`Dispatch weight (${finalWeight}) exceeds available weight (${availableWeight.toFixed(3)})`);
+        }
+
+        adjustments.set(stageItemId, {
+          weight: adj.weight + finalWeight,
+          count: adj.count + (count || 0),
+        });
+
+        const createdRow = await tx.dispatch.create({
+          data: {
+            challanNo,
+            date: dispatchDate,
+            customerId,
+            stage,
+            stageItemId,
+            stageBarcode,
+            weight: roundTo3Decimals(finalWeight),
+            count: count || null,
+            notes: notes || null,
+            ...actorCreateFields(actor?.userId),
+          },
+          include: { customer: true },
+        });
+
+        const updateData = {
+          dispatchedWeight: { increment: roundTo3Decimals(finalWeight) }
+        };
+        if (count && count > 0) {
+          updateData.dispatchedCount = { increment: count };
+        }
+
+        if (stage === 'inbound') {
+          await tx.inboundItem.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'cutter') {
+          await tx.receiveFromCutterMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'holo') {
+          await tx.receiveFromHoloMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'coning') {
+          await tx.receiveFromConingMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        }
+
+        created.push(createdRow);
+      }
+
+      return { challanNo, dispatches: created };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: result.challanNo,
+      action: 'create_bulk',
+      payload: { challanNo: result.challanNo, stage, customerId, itemCount: result.dispatches.length },
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to create bulk dispatch', err);
+    res.status(500).json({ error: err.message || 'Failed to create bulk dispatch' });
+  }
+});
+
 // Delete/cancel dispatch (restores weight)
 router.delete('/api/dispatch/:id', async (req, res) => {
   try {
@@ -7788,6 +7978,67 @@ router.delete('/api/dispatch/:id', async (req, res) => {
   } catch (err) {
     console.error('Failed to delete dispatch', err);
     res.status(500).json({ error: err.message || 'Failed to delete dispatch' });
+  }
+});
+
+// Delete/cancel all dispatch rows for a challan (restores weight)
+router.delete('/api/dispatch/challan/:challanNo', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { challanNo } = req.params;
+    if (!challanNo) return res.status(400).json({ error: 'Challan number is required' });
+
+    const rows = await prisma.dispatch.findMany({ where: { challanNo } });
+    if (rows.length === 0) return res.status(404).json({ error: 'Challan not found' });
+
+    await prisma.$transaction(async (tx) => {
+      for (const row of rows) {
+        const { stage, stageItemId, weight, count } = row;
+        const updateData = {
+          dispatchedWeight: { decrement: weight }
+        };
+
+        if (count && count > 0) {
+          updateData.dispatchedCount = { decrement: count };
+        }
+
+        if (stage === 'inbound') {
+          await tx.inboundItem.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'cutter') {
+          await tx.receiveFromCutterMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'holo') {
+          await tx.receiveFromHoloMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        } else if (stage === 'coning') {
+          await tx.receiveFromConingMachineRow.update({
+            where: { id: stageItemId },
+            data: updateData,
+          });
+        }
+      }
+
+      await tx.dispatch.deleteMany({ where: { challanNo } });
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: challanNo,
+      action: 'delete_challan',
+      payload: { challanNo, rows: rows.length },
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete dispatch challan', err);
+    res.status(500).json({ error: err.message || 'Failed to delete dispatch challan' });
   }
 });
 

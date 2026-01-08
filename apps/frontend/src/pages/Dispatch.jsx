@@ -8,7 +8,8 @@ import {
 } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
-import { Truck, Plus, Search, History, Package, X, ChevronRight, Trash2, Printer, ScanLine } from 'lucide-react';
+import { exportHistoryToExcel, exportHistoryToCsv } from '../services';
+import { Truck, Plus, Search, History, Package, X, ChevronRight, ChevronDown, Trash2, Printer, ScanLine, Download } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { printDispatchChallan } from '../utils/printDispatchChallan';
 import { useMobileDetect } from '../utils/useMobileDetect';
@@ -36,6 +37,9 @@ export function Dispatch() {
     const [historySearch, setHistorySearch] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [expandedChallan, setExpandedChallan] = useState(null);
+    const [scanInput, setScanInput] = useState('');
+    const [scanQueue, setScanQueue] = useState([]);
 
     // Auto-enable mobile mode on mobile devices
     React.useEffect(() => {
@@ -47,6 +51,14 @@ export function Dispatch() {
     // Dispatch form state
     const [dispatchModalOpen, setDispatchModalOpen] = useState(false);
     const [selectedItem, setSelectedItem] = useState(null);
+    const [bulkDispatchOpen, setBulkDispatchOpen] = useState(false);
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const [bulkForm, setBulkForm] = useState({
+        customerId: '',
+        date: todayISO(),
+        notes: '',
+    });
+    const [bulkItems, setBulkItems] = useState([]);
     const [dispatchForm, setDispatchForm] = useState({
         customerId: '',
         weight: '',
@@ -94,6 +106,11 @@ export function Dispatch() {
         }
     }, [selectedStage, activeTab]);
 
+    useEffect(() => {
+        setSelectedIds(new Set());
+        setScanQueue([]);
+    }, [selectedStage]);
+
     // Load dispatch history
     useEffect(() => {
         async function loadDispatches() {
@@ -128,30 +145,53 @@ export function Dispatch() {
         });
     }, [availableItems, itemSearch]);
 
+    const selectedItems = useMemo(
+        () => filteredItems.filter(item => selectedIds.has(item.id)),
+        [filteredItems, selectedIds]
+    );
+
     // Filter dispatches for history
     const filteredDispatches = useMemo(() => {
-        let list = dispatches.slice().sort((a, b) => (b.date || b.createdAt || '').localeCompare(a.date || a.createdAt || ''));
+        const map = new Map();
+        for (const d of dispatches) {
+            if (!d?.challanNo) continue;
+            const existing = map.get(d.challanNo) || {
+                challanNo: d.challanNo,
+                date: d.date || d.createdAt || '',
+                customer: d.customer || null,
+                stage: d.stage || '',
+                notes: d.notes || '',
+                totalWeight: 0,
+                totalCount: 0,
+                items: [],
+            };
+            existing.items.push(d);
+            existing.totalWeight += Number(d.weight || 0);
+            existing.totalCount += Number(d.count || 0);
+            map.set(d.challanNo, existing);
+        }
 
-        // Date filter
+        let list = Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
         if (startDate || endDate) {
             list = list.filter(d => {
-                const itemDateStr = (d.date || d.createdAt || '').substring(0, 10);
+                const itemDateStr = (d.date || '').substring(0, 10);
                 if (startDate && itemDateStr < startDate) return false;
                 if (endDate && itemDateStr > endDate) return false;
                 return true;
             });
         }
 
-        // Search filter
         if (historySearch.trim()) {
             const terms = historySearch.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
             list = list.filter(d => {
+                const barcodes = d.items.map(i => i.stageBarcode).filter(Boolean).join(' ');
                 const searchable = [
                     d.challanNo,
                     d.customer?.name,
                     d.stage,
-                    d.stageBarcode,
-                    String(d.weight),
+                    barcodes,
+                    String(d.totalWeight),
                     d.notes
                 ].filter(Boolean).join(' ').toLowerCase();
                 return terms.every(term => searchable.includes(term));
@@ -160,6 +200,35 @@ export function Dispatch() {
 
         return list;
     }, [dispatches, historySearch, startDate, endDate]);
+
+    function handleExportDispatches(format = 'xlsx') {
+        const exportData = filteredDispatches.map(d => ({
+            challanNo: d.challanNo,
+            date: formatDateDDMMYYYY(d.date),
+            customer: d.customer?.name || '',
+            stage: d.stage,
+            barcodes: d.items.map(i => i.stageBarcode).filter(Boolean).join(', '),
+            totalWeight: d.totalWeight,
+            totalCount: d.totalCount || '',
+            notes: d.notes || '',
+        }));
+        const columns = [
+            { key: 'challanNo', header: 'Challan No' },
+            { key: 'date', header: 'Date' },
+            { key: 'customer', header: 'Customer' },
+            { key: 'stage', header: 'Stage' },
+            { key: 'barcodes', header: 'Barcodes' },
+            { key: 'totalWeight', header: 'Total Weight' },
+            { key: 'totalCount', header: 'Total Count' },
+            { key: 'notes', header: 'Notes' },
+        ];
+        const today = new Date().toISOString().split('T')[0];
+        if (format === 'csv') {
+            exportHistoryToCsv(exportData, columns, `dispatch-history-${today}`);
+        } else {
+            exportHistoryToExcel(exportData, columns, `dispatch-history-${today}`);
+        }
+    }
 
     function openDispatchModal(item) {
         setSelectedItem(item);
@@ -174,6 +243,81 @@ export function Dispatch() {
             mode: hasCount ? 'count' : 'weight',
         });
         setDispatchModalOpen(true);
+    }
+
+    function toggleSelectItem(id) {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
+            return next;
+        });
+    }
+
+    function toggleSelectAllItems() {
+        setSelectedIds(prev => {
+            const allIds = filteredItems.map(item => item.id);
+            const allSelected = allIds.length > 0 && allIds.every(id => prev.has(id));
+            if (allSelected) return new Set();
+            return new Set(allIds);
+        });
+    }
+
+    function openBulkDispatchModal() {
+        if (selectedItems.length === 0) {
+            alert('Select at least one item to dispatch');
+            return;
+        }
+        const defaults = selectedItems.map(item => {
+            const hasCount = item.availableCount > 0;
+            return {
+                stageItemId: item.id,
+                barcode: item.barcode,
+                label: item.lotLabel || item.lotNo || item.pieceId || '—',
+                availableWeight: item.availableWeight,
+                availableCount: item.availableCount,
+                avgWeightPerPiece: item.avgWeightPerPiece || 0,
+                count: hasCount ? String(item.availableCount || '') : '',
+                weight: String(item.availableWeight || ''),
+            };
+        });
+        setBulkItems(defaults);
+        setBulkForm({ customerId: '', date: todayISO(), notes: '' });
+        setBulkDispatchOpen(true);
+    }
+
+    function handleScanSubmit(e) {
+        e.preventDefault();
+        const barcode = scanInput.trim();
+        if (!barcode) return;
+        setScanInput('');
+
+        setScanQueue(prev => {
+            if (prev.some(entry => entry.barcode === barcode)) {
+                return prev;
+            }
+            const match = availableItems.find(item =>
+                item.barcode === barcode ||
+                item.lotNo === barcode ||
+                item.pieceId === barcode
+            );
+            if (!match) {
+                return [{ barcode, status: 'not_found', error: `Not found in ${selectedStage}` }, ...prev];
+            }
+            setSelectedIds(ids => {
+                const next = new Set(ids);
+                next.add(match.id);
+                return next;
+            });
+            return [{ barcode, status: 'found', itemId: match.id, label: match.lotLabel || match.lotNo || match.pieceId || '—' }, ...prev];
+        });
+    }
+
+    function clearScanQueue() {
+        setScanQueue([]);
     }
 
     async function handleCreateDispatch() {
@@ -251,12 +395,81 @@ export function Dispatch() {
         }
     }
 
-    async function handleDeleteDispatch(id) {
-        if (!confirm('Are you sure you want to cancel this dispatch? The weight will be restored.')) return;
+    async function handleCreateBulkDispatch() {
+        if (!bulkForm.customerId) {
+            alert('Please select a customer');
+            return;
+        }
+        if (bulkItems.length === 0) {
+            alert('No items to dispatch');
+            return;
+        }
+
+        const payloadItems = [];
+        for (const item of bulkItems) {
+            const count = item.count ? parseInt(item.count) : null;
+            const weight = item.weight ? parseFloat(item.weight) : null;
+
+            if (count && count > 0) {
+                if (count > (item.availableCount || 0)) {
+                    alert(`Count cannot exceed available quantity for ${item.barcode || item.label}`);
+                    return;
+                }
+                if (!weight || weight <= 0) {
+                    if (count === (item.availableCount || 0) && item.availableWeight) {
+                        payloadItems.push({ stageItemId: item.stageItemId, count, weight: item.availableWeight });
+                    } else if (!item.avgWeightPerPiece || item.avgWeightPerPiece <= 0) {
+                        alert(`Weight must be provided for ${item.barcode || item.label}`);
+                        return;
+                    } else {
+                        const estimatedWeight = count * item.avgWeightPerPiece;
+                        payloadItems.push({ stageItemId: item.stageItemId, count, weight: estimatedWeight });
+                    }
+                } else {
+                    payloadItems.push({ stageItemId: item.stageItemId, count, weight });
+                }
+            } else {
+                if (!weight || weight <= 0) {
+                    alert(`Weight must be provided for ${item.barcode || item.label}`);
+                    return;
+                }
+                if (weight > (item.availableWeight || 0) + 0.001) {
+                    alert(`Weight cannot exceed available weight for ${item.barcode || item.label}`);
+                    return;
+                }
+                payloadItems.push({ stageItemId: item.stageItemId, weight });
+            }
+        }
+
+        setSubmitting(true);
+        try {
+            await api.createDispatchBulk({
+                customerId: bulkForm.customerId,
+                stage: selectedStage,
+                date: bulkForm.date,
+                notes: bulkForm.notes || null,
+                items: payloadItems,
+            });
+
+            setBulkDispatchOpen(false);
+            setSelectedIds(new Set());
+            setScanQueue([]);
+
+            const availRes = await api.getDispatchAvailable(selectedStage);
+            setAvailableItems(availRes.items || []);
+            await refreshDb();
+        } catch (err) {
+            alert(err.message || 'Failed to create bulk dispatch');
+        } finally {
+            setSubmitting(false);
+        }
+    }
+
+    async function handleDeleteDispatch(challanNo) {
+        if (!confirm('Are you sure you want to cancel this challan? All items will be restored.')) return;
 
         try {
-            await api.deleteDispatch(id);
-            // Refresh dispatches
+            await api.deleteDispatchChallan(challanNo);
             const res = await api.listDispatches();
             setDispatches(res.dispatches || []);
             await refreshDb();
@@ -319,6 +532,14 @@ export function Dispatch() {
         setAvailableItems(availRes.items || []);
         await refreshDb();
         return res.dispatch;
+    }
+
+    async function handleMobileDispatchBulk(dispatchData) {
+        const res = await api.createDispatchBulk(dispatchData);
+        const availRes = await api.getDispatchAvailable(selectedStage);
+        setAvailableItems(availRes.items || []);
+        await refreshDb();
+        return res;
     }
 
     // Handler for mobile dispatch view to add customer
@@ -398,6 +619,7 @@ export function Dispatch() {
                     <MobileDispatchView
                         customers={customers}
                         onDispatchCreate={handleMobileDispatchCreate}
+                        onDispatchBulkCreate={handleMobileDispatchBulk}
                         onAddCustomer={handleMobileAddCustomer}
                         refreshAvailableItems={() => api.getDispatchAvailable(selectedStage).then(res => setAvailableItems(res.items || []))}
                     />
@@ -431,29 +653,95 @@ export function Dispatch() {
                             </CardContent>
                         </Card>
 
-                        {/* Search Bar */}
-                        <div className="relative max-w-md mb-4">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search by barcode, lot no..."
-                                className="pl-10"
-                                value={itemSearch}
-                                onChange={e => setItemSearch(e.target.value)}
-                            />
-                        </div>
+                        {/* Scan Queue */}
+                        <Card className="mb-4">
+                            <CardContent className="p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-sm font-medium">Scan Queue</div>
+                                        <div className="text-xs text-muted-foreground">Use scanner gun and press Enter</div>
+                                    </div>
+                                    {scanQueue.length > 0 && (
+                                        <Button size="sm" variant="ghost" onClick={clearScanQueue}>
+                                            Clear
+                                        </Button>
+                                    )}
+                                </div>
+                                <form onSubmit={handleScanSubmit} className="flex gap-2">
+                                    <Input
+                                        placeholder="Scan barcode..."
+                                        value={scanInput}
+                                        onChange={e => setScanInput(e.target.value)}
+                                    />
+                                    <Button type="submit" variant="outline">Add</Button>
+                                </form>
+                                {scanQueue.length > 0 && (
+                                    <div className="flex flex-wrap gap-2">
+                                        {scanQueue.slice(0, 12).map(entry => (
+                                            <Badge
+                                                key={entry.barcode}
+                                                variant="outline"
+                                                className={cn(
+                                                    entry.status === 'found' && 'border-green-600 text-green-600',
+                                                    entry.status === 'not_found' && 'border-red-600 text-red-600'
+                                                )}
+                                            >
+                                                {entry.barcode}
+                                            </Badge>
+                                        ))}
+                                        {scanQueue.length > 12 && (
+                                            <Badge variant="outline">+{scanQueue.length - 12} more</Badge>
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
 
                         {/* Available Items Table */}
                         <Card>
                             <CardHeader>
-                                <CardTitle className="text-lg">
-                                    Available for Dispatch - {STAGES.find(s => s.id === selectedStage)?.label}
-                                </CardTitle>
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <CardTitle className="text-lg">
+                                        Available for Dispatch - {STAGES.find(s => s.id === selectedStage)?.label}
+                                    </CardTitle>
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                        <div className="relative w-full sm:w-64">
+                                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                            <Input
+                                                placeholder="Search by barcode, lot no..."
+                                                className="pl-10 h-9"
+                                                value={itemSearch}
+                                                onChange={e => setItemSearch(e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {selectedIds.size > 0 && (
+                                                <span className="text-xs text-muted-foreground">{selectedIds.size} selected</span>
+                                            )}
+                                            <Button
+                                                size="sm"
+                                                onClick={openBulkDispatchModal}
+                                                disabled={selectedIds.size === 0}
+                                            >
+                                                Dispatch Selected
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
                             </CardHeader>
                             <CardContent>
                                 <div className="hidden sm:block rounded-md border overflow-x-auto">
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
+                                                <TableHead className="w-[30px]">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.id))}
+                                                        onChange={toggleSelectAllItems}
+                                                        className="h-4 w-4 rounded border-gray-300"
+                                                    />
+                                                </TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 {selectedStage !== 'inbound' && <TableHead>Piece/Lot</TableHead>}
                                                 {selectedStage === 'inbound' && <TableHead>Lot No</TableHead>}
@@ -468,19 +756,27 @@ export function Dispatch() {
                                         <TableBody>
                                             {loadingItems ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={7} className="h-24 text-center">
+                                                    <TableCell colSpan={8} className="h-24 text-center">
                                                         Loading...
                                                     </TableCell>
                                                 </TableRow>
                                             ) : filteredItems.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                                                         No items available for dispatch
                                                     </TableCell>
                                                 </TableRow>
                                             ) : (
                                                 filteredItems.map(item => (
                                                     <TableRow key={item.id}>
+                                                        <TableCell>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedIds.has(item.id)}
+                                                                onChange={() => toggleSelectItem(item.id)}
+                                                                className="h-4 w-4 rounded border-gray-300"
+                                                            />
+                                                        </TableCell>
                                                         <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
                                                         <TableCell>{item.lotLabel || item.lotNo || item.pieceId || '—'}</TableCell>
                                                         <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
@@ -590,18 +886,36 @@ export function Dispatch() {
                                         />
                                     </div>
                                 </div>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-9 border"
-                                    onClick={() => {
-                                        setHistorySearch('');
-                                        setStartDate('');
-                                        setEndDate('');
-                                    }}
-                                >
-                                    Clear
-                                </Button>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-9 border"
+                                        onClick={() => {
+                                            setHistorySearch('');
+                                            setStartDate('');
+                                            setEndDate('');
+                                        }}
+                                    >
+                                        Clear
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        className="h-9"
+                                        onClick={() => handleExportDispatches('xlsx')}
+                                    >
+                                        <Download className="w-4 h-4 mr-1" />
+                                        Export
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-9"
+                                        onClick={() => handleExportDispatches('csv')}
+                                    >
+                                        CSV
+                                    </Button>
+                                </div>
                             </div>
                         </div>
                     </CardHeader>
@@ -610,63 +924,101 @@ export function Dispatch() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
+                                        <TableHead className="w-[30px]"></TableHead>
                                         <TableHead>Challan No</TableHead>
                                         <TableHead>Date</TableHead>
                                         <TableHead>Customer</TableHead>
                                         <TableHead>Stage</TableHead>
-                                        <TableHead>Barcode</TableHead>
-                                        <TableHead className="text-right">Weight</TableHead>
+                                        <TableHead>Items</TableHead>
+                                        <TableHead className="text-right">Total Weight</TableHead>
                                         <TableHead className="w-[120px] text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {loadingDispatches ? (
                                         <TableRow>
-                                            <TableCell colSpan={7} className="h-24 text-center">
+                                            <TableCell colSpan={8} className="h-24 text-center">
                                                 Loading...
                                             </TableCell>
                                         </TableRow>
                                     ) : filteredDispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                                                 No dispatches found
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        filteredDispatches.map(d => (
-                                            <TableRow key={d.id}>
-                                                <TableCell className="font-mono text-sm font-medium">{d.challanNo}</TableCell>
-                                                <TableCell>{formatDateDDMMYYYY(d.date)}</TableCell>
-                                                <TableCell>{d.customer?.name || '—'}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant="outline" className="capitalize">
-                                                        {d.stage}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell className="font-mono text-sm">{d.stageBarcode || '—'}</TableCell>
-                                                <TableCell className="text-right font-medium">{formatKg(d.weight)}</TableCell>
-                                                <TableCell className="text-right whitespace-nowrap">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        className="h-8 w-8 p-0 mr-1"
-                                                        onClick={() => handlePrintChallan(d)}
-                                                        title="Print Challan"
+                                        filteredDispatches.map(d => {
+                                            const isExpanded = expandedChallan === d.challanNo;
+                                            return (
+                                                <React.Fragment key={d.challanNo}>
+                                                    <TableRow
+                                                        className="cursor-pointer hover:bg-muted/50"
+                                                        onClick={() => setExpandedChallan(isExpanded ? null : d.challanNo)}
                                                     >
-                                                        <Printer className="w-4 h-4" />
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                                        onClick={() => handleDeleteDispatch(d.id)}
-                                                        title="Delete Dispatch"
-                                                    >
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
+                                                        <TableCell>
+                                                            {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                        </TableCell>
+                                                        <TableCell className="font-mono text-sm font-medium">{d.challanNo}</TableCell>
+                                                        <TableCell>{formatDateDDMMYYYY(d.date)}</TableCell>
+                                                        <TableCell>{d.customer?.name || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="outline" className="capitalize">
+                                                                {d.stage}
+                                                            </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="text-sm">{d.items.length} items</TableCell>
+                                                        <TableCell className="text-right font-medium">{formatKg(d.totalWeight)}</TableCell>
+                                                        <TableCell className="text-right whitespace-nowrap">
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-8 w-8 p-0 mr-1"
+                                                                onClick={(e) => { e.stopPropagation(); handlePrintChallan(d); }}
+                                                                title="Print Challan"
+                                                            >
+                                                                <Printer className="w-4 h-4" />
+                                                            </Button>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                                onClick={(e) => { e.stopPropagation(); handleDeleteDispatch(d.challanNo); }}
+                                                                title="Delete Challan"
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </Button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                    {isExpanded && (
+                                                        <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                            <TableCell colSpan={8} className="p-4">
+                                                                <div className="border rounded-md bg-background overflow-x-auto">
+                                                                    <Table>
+                                                                        <TableHeader>
+                                                                            <TableRow>
+                                                                                <TableHead>Barcode</TableHead>
+                                                                                <TableHead className="text-right">Count</TableHead>
+                                                                                <TableHead className="text-right">Weight</TableHead>
+                                                                            </TableRow>
+                                                                        </TableHeader>
+                                                                        <TableBody>
+                                                                            {d.items.map(item => (
+                                                                                <TableRow key={item.id}>
+                                                                                    <TableCell className="font-mono text-xs">{item.stageBarcode || '—'}</TableCell>
+                                                                                    <TableCell className="text-right">{item.count || '—'}</TableCell>
+                                                                                    <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
+                                                                                </TableRow>
+                                                                            ))}
+                                                                        </TableBody>
+                                                                    </Table>
+                                                                </div>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    )}
+                                                </React.Fragment>
+                                            );
+                                        })
                                     )}
                                 </TableBody>
                             </Table>
@@ -679,32 +1031,53 @@ export function Dispatch() {
                             ) : filteredDispatches.length === 0 ? (
                                 <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No dispatches found</div>
                             ) : (
-                                filteredDispatches.map(d => (
-                                    <div key={d.id} className="border rounded-lg p-4 bg-card shadow-sm">
-                                        <div className="flex justify-between items-start gap-2">
-                                            <div className="min-w-0 flex-1">
-                                                <p className="font-mono text-sm font-semibold">{d.challanNo}</p>
-                                                <p className="text-sm text-muted-foreground">{d.customer?.name || '—'}</p>
-                                                <p className="text-xs text-muted-foreground mt-1">{formatDateDDMMYYYY(d.date)}</p>
+                                filteredDispatches.map(d => {
+                                    const isExpanded = expandedChallan === d.challanNo;
+                                    return (
+                                        <div key={d.challanNo} className="border rounded-lg p-4 bg-card shadow-sm">
+                                            <div className="flex justify-between items-start gap-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="font-mono text-sm font-semibold">{d.challanNo}</p>
+                                                    <p className="text-sm text-muted-foreground">{d.customer?.name || '—'}</p>
+                                                    <p className="text-xs text-muted-foreground mt-1">{formatDateDDMMYYYY(d.date)}</p>
+                                                </div>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    <Badge variant="outline" className="capitalize text-xs">{d.stage}</Badge>
+                                                    <span className="font-medium">{formatKg(d.totalWeight)}</span>
+                                                </div>
                                             </div>
-                                            <div className="flex flex-col items-end gap-1">
-                                                <Badge variant="outline" className="capitalize text-xs">{d.stage}</Badge>
-                                                <span className="font-medium">{formatKg(d.weight)}</span>
+                                            <div className="mt-3 flex items-center justify-between">
+                                                <span className="text-xs text-muted-foreground">{d.items.length} items</span>
+                                                <div className="flex gap-1">
+                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
+                                                        <Printer className="w-4 h-4" />
+                                                    </Button>
+                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.challanNo)}>
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                </div>
                                             </div>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="mt-2 w-full"
+                                                onClick={() => setExpandedChallan(isExpanded ? null : d.challanNo)}
+                                            >
+                                                {isExpanded ? 'Hide Items' : 'Show Items'}
+                                            </Button>
+                                            {isExpanded && (
+                                                <div className="mt-2 space-y-1">
+                                                    {d.items.map(item => (
+                                                        <div key={item.id} className="flex items-center justify-between text-xs border rounded-md px-2 py-1">
+                                                            <span className="font-mono">{item.stageBarcode || '—'}</span>
+                                                            <span>{item.count || '—'} • {formatKg(item.weight)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
-                                        <div className="mt-3 flex items-center justify-between">
-                                            <span className="text-xs font-mono text-muted-foreground">{d.stageBarcode || '—'}</span>
-                                            <div className="flex gap-1">
-                                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
-                                                    <Printer className="w-4 h-4" />
-                                                </Button>
-                                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.id)}>
-                                                    <Trash2 className="w-4 h-4" />
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
+                                    );
+                                })
                             )}
                         </div>
                     </CardContent>
@@ -791,8 +1164,10 @@ export function Dispatch() {
                                             const val = e.target.value;
                                             const intVal = parseInt(val) || 0;
                                             const avgWeight = selectedItem.avgWeightPerPiece || 0;
-                                            // Auto-calc weight if average is known
-                                            const estimatedWeight = avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '';
+                                            const fullMatch = intVal === (selectedItem?.availableCount || 0) && selectedItem?.availableWeight;
+                                            const estimatedWeight = fullMatch
+                                                ? Number(selectedItem.availableWeight).toFixed(3)
+                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '');
                                             setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
                                         }}
                                         max={selectedItem?.availableCount}
@@ -841,6 +1216,133 @@ export function Dispatch() {
                             <Button
                                 onClick={handleCreateDispatch}
                                 disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight}
+                            >
+                                {submitting ? 'Creating...' : 'Create Dispatch'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Bulk Dispatch Modal */}
+            <Dialog open={bulkDispatchOpen} onOpenChange={setBulkDispatchOpen}>
+                <DialogContent title="Dispatch Selected Items" onOpenChange={setBulkDispatchOpen} className="max-h-[85vh] overflow-hidden">
+                    <div className="space-y-4 max-h-[70vh] overflow-auto pr-2">
+                        <div>
+                            <Label>Customer *</Label>
+                            <div className="flex gap-2">
+                                <Select
+                                    className="flex-1"
+                                    value={bulkForm.customerId}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, customerId: e.target.value }))}
+                                >
+                                    <option value="">Select Customer</option>
+                                    {customers.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </Select>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setNewCustomerModalOpen(true)}
+                                    title="Add New Customer"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <Label>Date</Label>
+                                <Input
+                                    type="date"
+                                    value={bulkForm.date}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, date: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <Label>Notes (Optional)</Label>
+                                <Input
+                                    value={bulkForm.notes}
+                                    onChange={e => setBulkForm(prev => ({ ...prev, notes: e.target.value }))}
+                                    placeholder="Any additional notes..."
+                                />
+                            </div>
+                        </div>
+
+                        <div className="border rounded-md overflow-hidden">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Barcode</TableHead>
+                                        <TableHead>Piece/Lot</TableHead>
+                                        {selectedStage !== 'inbound' && (
+                                            <TableHead className="text-right">Count</TableHead>
+                                        )}
+                                        <TableHead className="text-right">Weight (kg)</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {bulkItems.map(item => (
+                                        <TableRow key={item.stageItemId}>
+                                            <TableCell className="font-mono text-sm">{item.barcode || '—'}</TableCell>
+                                            <TableCell>{item.label || '—'}</TableCell>
+                                            {selectedStage !== 'inbound' && (
+                                                <TableCell className="text-right">
+                                                    <Input
+                                                        type="number"
+                                                        step="1"
+                                                        className="h-8 w-24 ml-auto"
+                                                        value={item.count}
+                                                        onChange={e => {
+                                                            const nextCount = e.target.value;
+                                                            const intVal = parseInt(nextCount) || 0;
+                                                            const avgWeight = item.avgWeightPerPiece || 0;
+                                                            const fullMatch = intVal === (item.availableCount || 0) && item.availableWeight;
+                                                            const nextWeight = fullMatch
+                                                                ? Number(item.availableWeight).toFixed(3)
+                                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : item.weight);
+                                                            setBulkItems(prev => prev.map(i => (
+                                                                i.stageItemId === item.stageItemId
+                                                                    ? { ...i, count: nextCount, weight: nextWeight }
+                                                                    : i
+                                                            )));
+                                                        }}
+                                                        max={item.availableCount}
+                                                    />
+                                                </TableCell>
+                                            )}
+                                            <TableCell className="text-right">
+                                                <Input
+                                                    type="number"
+                                                    step="0.001"
+                                                    className="h-8 w-28 ml-auto"
+                                                    value={item.weight}
+                                                    onChange={e => {
+                                                        const nextWeight = e.target.value;
+                                                        setBulkItems(prev => prev.map(i => (
+                                                            i.stageItemId === item.stageItemId
+                                                                ? { ...i, weight: nextWeight }
+                                                                : i
+                                                        )));
+                                                    }}
+                                                    max={item.availableWeight}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2">
+                            <Button variant="outline" onClick={() => setBulkDispatchOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={handleCreateBulkDispatch}
+                                disabled={submitting || !bulkForm.customerId}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>

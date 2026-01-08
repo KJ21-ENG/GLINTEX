@@ -224,7 +224,9 @@ export async function listDispatches(params = {}) {
 }
 export async function getDispatch(id) { return await request(`/api/dispatch/${id}`); }
 export async function createDispatch(data) { return await request('/api/dispatch', { method: 'POST', body: data }); }
+export async function createDispatchBulk(data) { return await request('/api/dispatch/bulk', { method: 'POST', body: data }); }
 export async function deleteDispatch(id) { return await request(`/api/dispatch/${id}`, { method: 'DELETE' }); }
+export async function deleteDispatchChallan(challanNo) { return await request(`/api/dispatch/challan/${encodeURIComponent(challanNo)}`, { method: 'DELETE' }); }
 export async function getDispatchAvailable(stage) { return await request(`/api/dispatch/available/${stage}`); }
 
 // Box Transfer

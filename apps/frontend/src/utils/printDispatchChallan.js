@@ -18,11 +18,27 @@ export const printDispatchChallan = (dispatch, firmDetails = {}) => {
     const customerAddress = dispatch.customer?.address || '';
     const customerPhone = dispatch.customer?.phone || '';
 
-    // Item Details
-    const stage = dispatch.stage?.toUpperCase() || '';
-    const barcode = dispatch.stageBarcode || '';
-    const weight = typeof dispatch.weight === 'number' ? dispatch.weight.toFixed(3) : dispatch.weight;
+    const items = Array.isArray(dispatch.items) && dispatch.items.length > 0
+        ? dispatch.items
+        : [dispatch];
+    const stage = (dispatch.stage || items[0]?.stage || '').toUpperCase();
     const notes = dispatch.notes || '';
+
+    const rows = items.map((item, idx) => {
+        const itemWeight = typeof item.weight === 'number' ? item.weight.toFixed(3) : item.weight;
+        const itemCount = item.count ? ` (${item.count})` : '';
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>${stage} Material${itemCount}${notes ? `<div style="font-size: 11px; color: #666; margin-top: 4px;">Note: ${notes}</div>` : ''}</td>
+            <td style="font-family: monospace;">${item.stageBarcode || item.barcode || ''}</td>
+            <td class="text-right">${itemWeight || ''}</td>
+          </tr>
+        `;
+    }).join('');
+
+    const totalWeightValue = items.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
+    const totalWeight = totalWeightValue.toFixed(3);
 
     const html = `
     <!DOCTYPE html>
@@ -119,20 +135,12 @@ export const printDispatchChallan = (dispatch, firmDetails = {}) => {
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>1</td>
-            <td>
-              ${stage} Material
-              ${notes ? `<div style="font-size: 11px; color: #666; margin-top: 4px;">Note: ${notes}</div>` : ''}
-            </td>
-            <td style="font-family: monospace;">${barcode}</td>
-            <td class="text-right">${weight}</td>
-          </tr>
+          ${rows}
         </tbody>
         <tfoot>
           <tr>
             <td colspan="3" class="text-right" style="font-weight: bold;">Total Weight</td>
-            <td class="text-right" style="font-weight: bold;">${weight}</td>
+            <td class="text-right" style="font-weight: bold;">${totalWeight}</td>
           </tr>
         </tfoot>
       </table>

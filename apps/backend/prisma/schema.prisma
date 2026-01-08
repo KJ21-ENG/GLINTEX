@@ -616,7 +616,7 @@ model DispatchSequence {
 
 model Dispatch {
   id              String   @id @default(cuid())
-  challanNo       String   @unique // Format: DC/2025-26/001
+  challanNo       String   // Format: DC/2025-26/001
   date            String
   customerId      String
   stage           String   // "inbound" | "cutter" | "holo" | "coning"

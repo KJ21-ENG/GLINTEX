@@ -109,6 +109,22 @@ function formatOpeningLotNo(nextVal) {
   return `OP-${padded}`;
 }
 
+function buildOpeningGroupKey(stage, {
+  itemId,
+  supplierId,
+  firmId,
+  date,
+  twistId,
+  yarnId,
+  cutId,
+}) {
+  const base = [itemId || '', supplierId || '', firmId || ''].join('::');
+  if (stage === 'holo') {
+    return `${base}::${twistId || ''}::${yarnId || ''}::${cutId || ''}`;
+  }
+  return `${base}::${date || ''}`;
+}
+
 async function getOpeningLotPreview() {
   const seq = await prisma.sequence.findUnique({ where: { id: OPENING_LOT_SEQUENCE_ID } });
   const nextValue = (seq ? seq.nextValue : 0) + 1;
@@ -2463,7 +2479,7 @@ router.get('/api/opening_stock/template', async (req, res) => {
 router.post('/api/opening_stock/preview/:stage', async (req, res) => {
   try {
     const { stage } = req.params;
-    const { fileContent, fileType, date: uiDate, itemId: uiItemId, firmId: uiFirmId, supplierId: uiSupplierId } = req.body;
+    const { fileContent, fileType, date: uiDate, itemId: uiItemId, firmId: uiFirmId, supplierId: uiSupplierId, ...extraParams } = req.body;
 
     if (!fileContent) return res.status(400).json({ error: 'Missing file content' });
 
@@ -2476,31 +2492,43 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
     // Collect unique names - including stage-specific fields
     const uniqueItemNames = new Set();
     const uniqueSupplierNames = new Set();
+    const uniqueFirmNames = new Set();
     const uniqueTwistNames = new Set();
     const uniqueYarnNames = new Set();
     const uniqueCutNames = new Set();
+    const uniqueMachineNames = new Set();
+    const uniqueOperatorNames = new Set();
     rows.forEach(row => {
       if (row['Item Name']) uniqueItemNames.add(String(row['Item Name']).trim());
       if (row['Supplier Name']) uniqueSupplierNames.add(String(row['Supplier Name']).trim());
+      if (row['Firm Name (Optional)']) uniqueFirmNames.add(String(row['Firm Name (Optional)']).trim());
       if (row['Twist Name']) uniqueTwistNames.add(String(row['Twist Name']).trim());
       if (row['Yarn Name']) uniqueYarnNames.add(String(row['Yarn Name']).trim());
       if (row['Cutter (Cut Name)']) uniqueCutNames.add(String(row['Cutter (Cut Name)']).trim());
+      if (row['Machine Name']) uniqueMachineNames.add(String(row['Machine Name']).trim());
+      if (row['Operator Name']) uniqueOperatorNames.add(String(row['Operator Name']).trim());
     });
 
     // Fetch masters
-    const [items, suppliers, twists, yarns, cuts] = await Promise.all([
+    const [items, suppliers, firms, twists, yarns, cuts, machines, operators] = await Promise.all([
       uniqueItemNames.size > 0 ? prisma.item.findMany({ where: { name: { in: Array.from(uniqueItemNames), mode: 'insensitive' } } }) : [],
       uniqueSupplierNames.size > 0 ? prisma.supplier.findMany({ where: { name: { in: Array.from(uniqueSupplierNames), mode: 'insensitive' } } }) : [],
+      uniqueFirmNames.size > 0 ? prisma.firm.findMany({ where: { name: { in: Array.from(uniqueFirmNames), mode: 'insensitive' } } }) : [],
       uniqueTwistNames.size > 0 ? prisma.twist.findMany({ where: { name: { in: Array.from(uniqueTwistNames), mode: 'insensitive' } } }) : [],
       uniqueYarnNames.size > 0 ? prisma.yarn.findMany({ where: { name: { in: Array.from(uniqueYarnNames), mode: 'insensitive' } } }) : [],
       uniqueCutNames.size > 0 ? prisma.cut.findMany({ where: { name: { in: Array.from(uniqueCutNames), mode: 'insensitive' } } }) : [],
+      uniqueMachineNames.size > 0 ? prisma.machine.findMany({ where: { name: { in: Array.from(uniqueMachineNames), mode: 'insensitive' } } }) : [],
+      uniqueOperatorNames.size > 0 ? prisma.operator.findMany({ where: { name: { in: Array.from(uniqueOperatorNames), mode: 'insensitive' } } }) : [],
     ]);
 
     const itemMap = new Map(items.map(x => [x.name.toLowerCase(), x]));
     const supplierMap = new Map(suppliers.map(x => [x.name.toLowerCase(), x]));
+    const firmMap = new Map(firms.map(x => [x.name.toLowerCase(), x]));
     const twistMap = new Map(twists.map(x => [x.name.toLowerCase(), x]));
     const yarnMap = new Map(yarns.map(x => [x.name.toLowerCase(), x]));
     const cutMap = new Map(cuts.map(x => [x.name.toLowerCase(), x]));
+    const machineMap = new Map(machines.map(x => [x.name.toLowerCase(), x]));
+    const operatorMap = new Map(operators.map(x => [x.name.toLowerCase(), x]));
 
     // Get item/supplier from UI if provided
     let uiItemName = null;
@@ -2524,7 +2552,9 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
       const rowIdx = i + 1;
 
       let itemName = uiItemName;
+      let itemId = uiItemId;
       let supplierName = uiSupplierName;
+      let supplierId = uiSupplierId;
 
       if (row['Item Name']) {
         const name = String(row['Item Name']).trim();
@@ -2534,8 +2564,9 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
           continue;
         }
         itemName = itm.name;
+        itemId = itm.id;
       }
-      if (!itemName) {
+      if (!itemId) {
         errors.push(`Row ${rowIdx}: Item Name is required`);
         continue;
       }
@@ -2548,9 +2579,24 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
           continue;
         }
         supplierName = sup.name;
+        supplierId = sup.id;
       }
-      if (!supplierName) {
+      if (!supplierId) {
         errors.push(`Row ${rowIdx}: Supplier Name is required`);
+        continue;
+      }
+
+      let firmId = uiFirmId || null;
+      if (row['Firm Name (Optional)']) {
+        const name = String(row['Firm Name (Optional)']).trim();
+        const frm = firmMap.get(name.toLowerCase());
+        if (frm) firmId = frm.id;
+      }
+
+      let rowDate = uiDate;
+      if (row['Date']) rowDate = String(row['Date']);
+      if (!rowDate) {
+        errors.push(`Row ${rowIdx}: Date is required`);
         continue;
       }
 
@@ -2578,7 +2624,25 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
         }
       }
 
-      const groupKey = `${itemName}::${supplierName}`;
+      const rowTwistId = extraParams.twistId || (row['Twist Name'] ? twistMap.get(String(row['Twist Name']).trim().toLowerCase())?.id : null);
+      const rowYarnId = extraParams.yarnId || (row['Yarn Name'] ? yarnMap.get(String(row['Yarn Name']).trim().toLowerCase())?.id : null);
+      const rowMachineId = extraParams.machineId || (row['Machine Name'] ? machineMap.get(String(row['Machine Name']).trim().toLowerCase())?.id : null);
+      const rowOperatorId = extraParams.operatorId || (row['Operator Name'] ? operatorMap.get(String(row['Operator Name']).trim().toLowerCase())?.id : null);
+      const rowShift = extraParams.shift || (row['Shift'] ? String(row['Shift']) : null);
+      const rowCutId = extraParams.cutId || (row['Cutter (Cut Name)'] ? cutMap.get(String(row['Cutter (Cut Name)']).trim().toLowerCase())?.id : null);
+
+      const groupKey = buildOpeningGroupKey(stage, {
+        itemId,
+        supplierId,
+        firmId,
+        date: rowDate,
+        twistId: rowTwistId,
+        yarnId: rowYarnId,
+        machineId: rowMachineId,
+        operatorId: rowOperatorId,
+        shift: rowShift,
+        cutId: rowCutId,
+      });
       if (!groups.has(groupKey)) {
         groups.set(groupKey, { itemName, supplierName, rowCount: 0 });
       }
@@ -2713,10 +2777,42 @@ router.post('/api/opening_stock/upload/:stage', async (req, res) => {
       if (row['Date']) rowDate = String(row['Date']);
       if (!rowDate) throw new Error(`Row ${rowIdx}: Date is required`);
 
-      // Group key = itemId + supplierId
-      const groupKey = `${rowItemId}::${rowSupplierId}`;
+      const rowTwistId = extraParams.twistId || (row['Twist Name'] ? twistMap.get(String(row['Twist Name']).trim().toLowerCase())?.id : null);
+      const rowYarnId = extraParams.yarnId || (row['Yarn Name'] ? yarnMap.get(String(row['Yarn Name']).trim().toLowerCase())?.id : null);
+      const rowMachineId = extraParams.machineId || (row['Machine Name'] ? machineMap.get(String(row['Machine Name']).trim().toLowerCase())?.id : null);
+      const rowOperatorId = extraParams.operatorId || (row['Operator Name'] ? operatorMap.get(String(row['Operator Name']).trim().toLowerCase())?.id : null);
+      const rowShift = extraParams.shift || (row['Shift'] ? String(row['Shift']) : null);
+      const rowWrapperId = extraParams.wrapperId || (row['Wrapper Name'] ? wrapperMap.get(String(row['Wrapper Name']).trim().toLowerCase())?.id : null);
+      const rowCutId = extraParams.cutId || (row['Cutter (Cut Name)'] ? cutMap.get(String(row['Cutter (Cut Name)']).trim().toLowerCase())?.id : null);
+
+      const groupKey = buildOpeningGroupKey(stage, {
+        itemId: rowItemId,
+        supplierId: rowSupplierId,
+        firmId: rowFirmId,
+        date: rowDate,
+        twistId: rowTwistId,
+        yarnId: rowYarnId,
+        machineId: rowMachineId,
+        operatorId: rowOperatorId,
+        shift: rowShift,
+        cutId: rowCutId,
+      });
       if (!groupedRows.has(groupKey)) {
-        groupedRows.set(groupKey, { itemId: rowItemId, supplierId: rowSupplierId, firmId: rowFirmId, date: rowDate, rows: [] });
+        groupedRows.set(groupKey, {
+          itemId: rowItemId,
+          supplierId: rowSupplierId,
+          firmId: rowFirmId,
+          date: rowDate,
+          twistId: rowTwistId,
+          yarnId: rowYarnId,
+          machineId: rowMachineId,
+          operatorId: rowOperatorId,
+          shift: rowShift,
+          wrapperId: rowWrapperId,
+          cutId: rowCutId,
+          coneTypeId: extraParams.coneTypeId || null,
+          rows: [],
+        });
       }
       groupedRows.get(groupKey).rows.push(row);
     }
@@ -2727,15 +2823,16 @@ router.post('/api/opening_stock/upload/:stage', async (req, res) => {
       const { itemId, supplierId, firmId, date, rows: groupRows } = group;
       const common = { date, itemId, firmId, supplierId, actorUserId };
 
-      // Resolve process-specific fields from first row of each group
-      const firstRow = groupRows[0];
-      const twistId = extraParams.twistId || (firstRow['Twist Name'] ? twistMap.get(String(firstRow['Twist Name']).trim().toLowerCase())?.id : null);
-      const yarnId = extraParams.yarnId || (firstRow['Yarn Name'] ? yarnMap.get(String(firstRow['Yarn Name']).trim().toLowerCase())?.id : null);
-      const machineId = extraParams.machineId || (firstRow['Machine Name'] ? machineMap.get(String(firstRow['Machine Name']).trim().toLowerCase())?.id : null);
-      const operatorId = extraParams.operatorId || (firstRow['Operator Name'] ? operatorMap.get(String(firstRow['Operator Name']).trim().toLowerCase())?.id : null);
-      const shift = extraParams.shift || (firstRow['Shift'] ? String(firstRow['Shift']) : null);
-      const wrapperId = extraParams.wrapperId || (firstRow['Wrapper Name'] ? wrapperMap.get(String(firstRow['Wrapper Name']).trim().toLowerCase())?.id : null);
-      const cutId = extraParams.cutId || (firstRow['Cutter (Cut Name)'] ? cutMap.get(String(firstRow['Cutter (Cut Name)']).trim().toLowerCase())?.id : null);
+      const {
+        twistId,
+        yarnId,
+        machineId,
+        operatorId,
+        shift,
+        wrapperId,
+        cutId,
+        coneTypeId,
+      } = group;
 
       let result;
       if (stage === 'inbound') {
@@ -2745,7 +2842,7 @@ router.post('/api/opening_stock/upload/:stage', async (req, res) => {
       } else if (stage === 'holo') {
         result = await processOpeningHoloUpload(groupRows, { ...common, twistId, yarnId, machineId, operatorId, shift, cutId });
       } else if (stage === 'coning') {
-        result = await processOpeningConingUpload(groupRows, { ...common, machineId, operatorId, shift, wrapperId, coneTypeId: extraParams.coneTypeId });
+        result = await processOpeningConingUpload(groupRows, { ...common, machineId, operatorId, shift, wrapperId, coneTypeId });
       } else {
         throw new Error('Invalid stage');
       }

@@ -13,8 +13,13 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
     const [error, setError] = useState(null);
     const [lastScanned, setLastScanned] = useState(null);
     const lastScannedRef = useRef(null); // Ref for debounce check (avoids stale closure)
+    const onScanRef = useRef(onScan);
     const scannerRef = useRef(null);
     const containerRef = useRef(null);
+
+    useEffect(() => {
+        onScanRef.current = onScan;
+    }, [onScan]);
 
     const startScanner = async () => {
         if (!containerRef.current || disabled) return;
@@ -55,7 +60,7 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
 
                     lastScannedRef.current = decodedText;
                     setLastScanned(decodedText); // Also update state for UI display
-                    onScan?.(decodedText);
+                    onScanRef.current?.(decodedText);
 
                     // Reset after 2 seconds to allow re-scanning
                     setTimeout(() => {

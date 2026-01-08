@@ -290,6 +290,8 @@ export function Dispatch() {
             }
         }
 
+        const availRes = await api.getDispatchAvailable(selectedStage);
+        setAvailableItems(availRes.items || []);
         await refreshDb();
         return res.dispatch;
     }

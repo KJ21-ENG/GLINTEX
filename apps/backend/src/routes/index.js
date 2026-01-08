@@ -8537,4 +8537,544 @@ router.get('/api/reports/production', async (req, res) => {
   }
 });
 
+// ========== BOX TRANSFER FEATURE ==========
+
+// Lookup barcode for box transfer
+router.post('/api/box-transfer/lookup', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.body?.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Barcode is required' });
+
+    const EPSILON = 1e-9;
+
+    // Try Holo receive rows
+    const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({
+      where: { barcode },
+      include: {
+        issue: { include: { machine: true } },
+        box: true,
+        rollType: true,
+      },
+    });
+    if (holoRow) {
+      const totalNetWeight = holoRow.rollWeight ? (holoRow.rollWeight * holoRow.rollCount) : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+      const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+      // Calculate available rolls proportionally based on weight
+      const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
+        ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
+        : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+      return res.json({
+        found: true,
+        stage: 'holo',
+        itemId: holoRow.id,
+        barcode: holoRow.barcode,
+        lotNo: holoRow.issue?.lotNo || null,
+        itemName: holoRow.issue?.itemId || null,
+        currentCount: availableRolls,
+        currentWeight: roundTo3Decimals(availableWeight),
+        totalCount: holoRow.rollCount,
+        totalWeight: roundTo3Decimals(totalNetWeight),
+        boxName: holoRow.box?.name || null,
+        boxId: holoRow.boxId || null,
+        rollTypeName: holoRow.rollType?.name || null,
+        machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
+        date: holoRow.date || null,
+      });
+    }
+
+    // Try Coning receive rows
+    const coningRow = await prisma.receiveFromConingMachineRow.findUnique({
+      where: { barcode },
+      include: {
+        issue: { include: { machine: true } },
+        box: true,
+      },
+    });
+    if (coningRow) {
+      const totalNetWeight = Number(coningRow.netWeight || 0);
+      const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+      // Calculate available cones proportionally based on weight
+      const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
+        ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
+        : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+      return res.json({
+        found: true,
+        stage: 'coning',
+        itemId: coningRow.id,
+        barcode: coningRow.barcode,
+        lotNo: coningRow.issue?.lotNo || null,
+        itemName: coningRow.issue?.itemId || null,
+        currentCount: availableCones,
+        currentWeight: roundTo3Decimals(availableWeight),
+        totalCount: coningRow.coneCount,
+        totalWeight: roundTo3Decimals(totalNetWeight),
+        boxName: coningRow.box?.name || null,
+        boxId: coningRow.boxId || null,
+        machineName: coningRow.issue?.machine?.name || coningRow.machineNo || null,
+        date: coningRow.date || null,
+      });
+    }
+
+    // Try Cutter receive rows (by vchNo as primary identifier, or barcode)
+    const cutterRow = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: {
+        OR: [
+          { barcode: barcode },
+          { vchNo: barcode },
+        ],
+        isDeleted: false,
+      },
+      include: {
+        box: true,
+        bobbin: true,
+        cutMaster: true,
+      },
+    });
+    if (cutterRow) {
+      const bobbinQty = Number(cutterRow.bobbinQuantity || 0);
+      const issuedBobbins = Number(cutterRow.issuedBobbins || 0);
+      const netWeight = Number(cutterRow.netWt || 0);
+      const issuedWeight = Number(cutterRow.issuedBobbinWeight || 0);
+      const dispatchedWeight = Number(cutterRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
+      // Available bobbins = total - issued (but only if there's available weight)
+      const availableBobbins = availableWeight > EPSILON ? Math.max(0, bobbinQty - issuedBobbins) : 0;
+      return res.json({
+        found: true,
+        stage: 'cutter',
+        itemId: cutterRow.id,
+        barcode: cutterRow.barcode || cutterRow.vchNo,
+        lotNo: cutterRow.pieceId?.split('-')?.[0] || null,
+        pieceId: cutterRow.pieceId,
+        itemName: cutterRow.itemName || null,
+        currentCount: availableBobbins,
+        currentWeight: roundTo3Decimals(availableWeight),
+        totalCount: bobbinQty,
+        totalWeight: roundTo3Decimals(netWeight),
+        boxName: cutterRow.box?.name || null,
+        boxId: cutterRow.boxId || null,
+        bobbinName: cutterRow.bobbin?.name || null,
+        cutName: cutterRow.cutMaster?.name || cutterRow.cut || null,
+        date: cutterRow.date || null,
+      });
+    }
+
+    res.json({ found: false, error: 'Barcode not found' });
+  } catch (err) {
+    console.error('Box transfer lookup failed', err);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+// Execute box transfer
+router.post('/api/box-transfer', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const fromBarcode = normalizeBarcodeInput(req.body?.fromBarcode);
+    const toBarcode = normalizeBarcodeInput(req.body?.toBarcode);
+    const pieceCount = toInt(req.body?.pieceCount);
+    const notes = toOptionalString(req.body?.notes);
+
+    if (!fromBarcode) return res.status(400).json({ error: 'From barcode is required' });
+    if (!toBarcode) return res.status(400).json({ error: 'To barcode is required' });
+    if (fromBarcode === toBarcode) return res.status(400).json({ error: 'From and To barcodes must be different' });
+    if (!pieceCount || pieceCount <= 0) return res.status(400).json({ error: 'Piece count must be a positive number' });
+
+    // Lookup both barcodes
+    const lookupFrom = await lookupBarcodeForTransfer(fromBarcode);
+    const lookupTo = await lookupBarcodeForTransfer(toBarcode);
+
+    if (!lookupFrom.found) return res.status(400).json({ error: `From barcode not found: ${fromBarcode}` });
+    if (!lookupTo.found) return res.status(400).json({ error: `To barcode not found: ${toBarcode}` });
+    if (lookupFrom.stage !== lookupTo.stage) {
+      return res.status(400).json({ error: `Cannot transfer between different processes (${lookupFrom.stage} → ${lookupTo.stage})` });
+    }
+    if (pieceCount > lookupFrom.currentCount) {
+      return res.status(400).json({ error: `Insufficient pieces. Available: ${lookupFrom.currentCount}, Requested: ${pieceCount}` });
+    }
+
+    const stage = lookupFrom.stage;
+    const weightPerPiece = lookupFrom.currentCount > 0 ? lookupFrom.currentWeight / lookupFrom.currentCount : 0;
+    const weightTransferred = roundTo3Decimals(pieceCount * weightPerPiece);
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const result = await prisma.$transaction(async (tx) => {
+      const EPSILON = 1e-9;
+
+      // Update source - decrease count and weight
+      if (stage === 'holo') {
+        const sourceRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: lookupFrom.itemId } });
+        if (!sourceRow) throw new Error('Source item not found');
+
+        // Re-validate availability inside transaction to prevent race condition
+        const srcTotalNetWeight = sourceRow.rollWeight ? (sourceRow.rollWeight * sourceRow.rollCount) : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
+        const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
+        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
+        const srcAvailableRolls = srcAvailableWeight > EPSILON && srcTotalNetWeight > EPSILON
+          ? Math.round((srcAvailableWeight / srcTotalNetWeight) * sourceRow.rollCount)
+          : (srcAvailableWeight > EPSILON ? sourceRow.rollCount : 0);
+
+        if (pieceCount > srcAvailableRolls) {
+          throw new Error(`Insufficient rolls available. Only ${srcAvailableRolls} available (may have been dispatched).`);
+        }
+        if (weightTransferred > srcAvailableWeight + 0.001) {
+          throw new Error(`Insufficient weight available. Only ${srcAvailableWeight.toFixed(3)} kg available (may have been dispatched).`);
+        }
+
+        const newRollCount = sourceRow.rollCount - pieceCount;
+        const newNetWeight = srcTotalNetWeight - weightTransferred;
+        const newRollWeight = newRollCount > 0 ? roundTo3Decimals(newNetWeight / newRollCount) : 0;
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: lookupFrom.itemId },
+          data: { rollCount: newRollCount, rollWeight: newRollWeight, ...actorUpdateFields(actor?.userId) },
+        });
+
+        // Update destination - increase count and weight
+        const destRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: lookupTo.itemId } });
+        if (!destRow) throw new Error('Destination item not found');
+        const destNewRollCount = destRow.rollCount + pieceCount;
+        const destOldNetWeight = destRow.rollWeight ? (destRow.rollWeight * destRow.rollCount) : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
+        const destNewNetWeight = destOldNetWeight + weightTransferred;
+        const destNewRollWeight = destNewRollCount > 0 ? roundTo3Decimals(destNewNetWeight / destNewRollCount) : 0;
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: lookupTo.itemId },
+          data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
+        });
+      } else if (stage === 'coning') {
+        const sourceRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: lookupFrom.itemId } });
+        if (!sourceRow) throw new Error('Source item not found');
+
+        // Re-validate availability inside transaction to prevent race condition
+        const srcTotalNetWeight = Number(sourceRow.netWeight || 0);
+        const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
+        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
+        const srcAvailableCones = srcAvailableWeight > EPSILON && srcTotalNetWeight > EPSILON
+          ? Math.round((srcAvailableWeight / srcTotalNetWeight) * sourceRow.coneCount)
+          : (srcAvailableWeight > EPSILON ? sourceRow.coneCount : 0);
+
+        if (pieceCount > srcAvailableCones) {
+          throw new Error(`Insufficient cones available. Only ${srcAvailableCones} available (may have been dispatched).`);
+        }
+        if (weightTransferred > srcAvailableWeight + 0.001) {
+          throw new Error(`Insufficient weight available. Only ${srcAvailableWeight.toFixed(3)} kg available (may have been dispatched).`);
+        }
+
+        const newConeCount = sourceRow.coneCount - pieceCount;
+        const newNetWeight = srcTotalNetWeight - weightTransferred;
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: lookupFrom.itemId },
+          data: { coneCount: newConeCount, netWeight: roundTo3Decimals(Math.max(0, newNetWeight)), ...actorUpdateFields(actor?.userId) },
+        });
+
+        const destRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: lookupTo.itemId } });
+        if (!destRow) throw new Error('Destination item not found');
+        const destNewConeCount = destRow.coneCount + pieceCount;
+        const destNewNetWeight = (destRow.netWeight || 0) + weightTransferred;
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: lookupTo.itemId },
+          data: { coneCount: destNewConeCount, netWeight: roundTo3Decimals(destNewNetWeight), ...actorUpdateFields(actor?.userId) },
+        });
+      } else if (stage === 'cutter') {
+        const sourceRow = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: lookupFrom.itemId } });
+        if (!sourceRow) throw new Error('Source item not found');
+
+        // Re-validate availability inside transaction to prevent race condition
+        const srcBobbinQty = Number(sourceRow.bobbinQuantity || 0);
+        const srcIssuedBobbins = Number(sourceRow.issuedBobbins || 0);
+        const srcNetWeight = Number(sourceRow.netWt || 0);
+        const srcIssuedWeight = Number(sourceRow.issuedBobbinWeight || 0);
+        const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
+        const srcAvailableWeight = Math.max(0, srcNetWeight - srcIssuedWeight - srcDispatchedWeight);
+        const srcAvailableBobbins = srcAvailableWeight > EPSILON ? Math.max(0, srcBobbinQty - srcIssuedBobbins) : 0;
+
+        if (pieceCount > srcAvailableBobbins) {
+          throw new Error(`Insufficient bobbins available. Only ${srcAvailableBobbins} available (may have been issued or dispatched).`);
+        }
+        if (weightTransferred > srcAvailableWeight + 0.001) {
+          throw new Error(`Insufficient weight available. Only ${srcAvailableWeight.toFixed(3)} kg available (may have been issued or dispatched).`);
+        }
+
+        const newBobbinQty = srcBobbinQty - pieceCount;
+        const newNetWt = srcNetWeight - weightTransferred;
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: lookupFrom.itemId },
+          data: { bobbinQuantity: newBobbinQty, netWt: roundTo3Decimals(Math.max(0, newNetWt)), ...actorUpdateFields(actor?.userId) },
+        });
+
+        const destRow = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: lookupTo.itemId } });
+        if (!destRow) throw new Error('Destination item not found');
+        const destNewBobbinQty = (destRow.bobbinQuantity || 0) + pieceCount;
+        const destNewNetWt = (destRow.netWt || 0) + weightTransferred;
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: lookupTo.itemId },
+          data: { bobbinQuantity: destNewBobbinQty, netWt: roundTo3Decimals(destNewNetWt), ...actorUpdateFields(actor?.userId) },
+        });
+      }
+
+      // Create transfer record
+      const transfer = await tx.boxTransfer.create({
+        data: {
+          date: today,
+          stage,
+          fromBarcode,
+          fromItemId: lookupFrom.itemId,
+          toBarcode,
+          toItemId: lookupTo.itemId,
+          pieceCount,
+          weightTransferred,
+          notes,
+          ...actorCreateFields(actor?.userId),
+        },
+      });
+
+      return transfer;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'boxTransfer',
+      entityId: result.id,
+      action: 'create',
+      payload: {
+        stage,
+        fromBarcode,
+        toBarcode,
+        pieceCount,
+        weightTransferred,
+        notes,
+      },
+    });
+
+    res.json({ ok: true, transfer: result });
+  } catch (err) {
+    console.error('Box transfer failed', err);
+    res.status(500).json({ error: err.message || 'Transfer failed' });
+  }
+});
+
+// Get box transfer history
+router.get('/api/box-transfer/history', async (req, res) => {
+  try {
+    const { dateFrom, dateTo, search, stage } = req.query;
+    const where = {};
+
+    if (dateFrom || dateTo) {
+      where.date = {};
+      if (dateFrom) where.date.gte = String(dateFrom);
+      if (dateTo) where.date.lte = String(dateTo);
+    }
+
+    if (stage && stage !== 'all') {
+      where.stage = String(stage);
+    }
+
+    if (search) {
+      const term = String(search).trim();
+      where.OR = [
+        { fromBarcode: { contains: term, mode: 'insensitive' } },
+        { toBarcode: { contains: term, mode: 'insensitive' } },
+        { notes: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const transfers = await prisma.boxTransfer.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+
+    res.json({ transfers });
+  } catch (err) {
+    console.error('Failed to fetch box transfer history', err);
+    res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
+// Reverse a box transfer
+router.post('/api/box-transfer/:id/reverse', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { id } = req.params;
+
+    const original = await prisma.boxTransfer.findUnique({ where: { id } });
+    if (!original) return res.status(404).json({ error: 'Transfer not found' });
+    if (original.isReversed) return res.status(400).json({ error: 'Transfer has already been reversed' });
+
+    const today = new Date().toISOString().split('T')[0];
+    const { stage, pieceCount, weightTransferred } = original;
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Reverse the transfer: add back to source, subtract from destination
+      if (stage === 'holo') {
+        const sourceRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: original.fromItemId } });
+        const destRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: original.toItemId } });
+        if (!sourceRow || !destRow) throw new Error('Original items not found');
+
+        // Validate destination has sufficient pieces to reverse
+        if (destRow.rollCount < pieceCount) {
+          throw new Error(`Cannot reverse: destination only has ${destRow.rollCount} rolls, but ${pieceCount} are needed. The pieces may have been dispatched or transferred elsewhere.`);
+        }
+
+        // Add back to source
+        const srcNewRollCount = sourceRow.rollCount + pieceCount;
+        const srcOldNetWeight = sourceRow.rollWeight ? (sourceRow.rollWeight * sourceRow.rollCount) : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
+        const srcNewNetWeight = srcOldNetWeight + weightTransferred;
+        const srcNewRollWeight = srcNewRollCount > 0 ? roundTo3Decimals(srcNewNetWeight / srcNewRollCount) : 0;
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: original.fromItemId },
+          data: { rollCount: srcNewRollCount, rollWeight: srcNewRollWeight, ...actorUpdateFields(actor?.userId) },
+        });
+
+        // Subtract from destination
+        const destNewRollCount = destRow.rollCount - pieceCount;
+        const destOldNetWeight = destRow.rollWeight ? (destRow.rollWeight * destRow.rollCount) : ((destRow.grossWeight || 0) - (destRow.tareWeight || 0));
+        const destNewNetWeight = Math.max(0, destOldNetWeight - weightTransferred);
+        const destNewRollWeight = destNewRollCount > 0 ? roundTo3Decimals(destNewNetWeight / destNewRollCount) : 0;
+        await tx.receiveFromHoloMachineRow.update({
+          where: { id: original.toItemId },
+          data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
+        });
+      } else if (stage === 'coning') {
+        const sourceRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: original.fromItemId } });
+        const destRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: original.toItemId } });
+        if (!sourceRow || !destRow) throw new Error('Original items not found');
+
+        // Validate destination has sufficient pieces to reverse
+        if (destRow.coneCount < pieceCount) {
+          throw new Error(`Cannot reverse: destination only has ${destRow.coneCount} cones, but ${pieceCount} are needed. The pieces may have been dispatched or transferred elsewhere.`);
+        }
+
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: original.fromItemId },
+          data: {
+            coneCount: sourceRow.coneCount + pieceCount,
+            netWeight: roundTo3Decimals((sourceRow.netWeight || 0) + weightTransferred),
+            ...actorUpdateFields(actor?.userId)
+          },
+        });
+        await tx.receiveFromConingMachineRow.update({
+          where: { id: original.toItemId },
+          data: {
+            coneCount: destRow.coneCount - pieceCount,
+            netWeight: roundTo3Decimals(Math.max(0, (destRow.netWeight || 0) - weightTransferred)),
+            ...actorUpdateFields(actor?.userId)
+          },
+        });
+      } else if (stage === 'cutter') {
+        const sourceRow = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: original.fromItemId } });
+        const destRow = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: original.toItemId } });
+        if (!sourceRow || !destRow) throw new Error('Original items not found');
+
+        // Validate destination has sufficient pieces to reverse
+        const destBobbinQty = destRow.bobbinQuantity || 0;
+        if (destBobbinQty < pieceCount) {
+          throw new Error(`Cannot reverse: destination only has ${destBobbinQty} bobbins, but ${pieceCount} are needed. The pieces may have been dispatched or transferred elsewhere.`);
+        }
+
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: original.fromItemId },
+          data: {
+            bobbinQuantity: (sourceRow.bobbinQuantity || 0) + pieceCount,
+            netWt: roundTo3Decimals((sourceRow.netWt || 0) + weightTransferred),
+            ...actorUpdateFields(actor?.userId)
+          },
+        });
+        await tx.receiveFromCutterMachineRow.update({
+          where: { id: original.toItemId },
+          data: {
+            bobbinQuantity: destBobbinQty - pieceCount,
+            netWt: roundTo3Decimals(Math.max(0, (destRow.netWt || 0) - weightTransferred)),
+            ...actorUpdateFields(actor?.userId)
+          },
+        });
+      }
+
+      // Create reverse transfer record
+      const reverseTransfer = await tx.boxTransfer.create({
+        data: {
+          date: today,
+          stage,
+          fromBarcode: original.toBarcode, // Reversed direction
+          fromItemId: original.toItemId,
+          toBarcode: original.fromBarcode,
+          toItemId: original.fromItemId,
+          pieceCount,
+          weightTransferred,
+          notes: `Reversal of transfer ${original.id}`,
+          reversedById: original.id,
+          ...actorCreateFields(actor?.userId),
+        },
+      });
+
+      // Mark original as reversed
+      await tx.boxTransfer.update({
+        where: { id: original.id },
+        data: { isReversed: true, ...actorUpdateFields(actor?.userId) },
+      });
+
+      return reverseTransfer;
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'boxTransfer',
+      entityId: result.id,
+      action: 'reverse',
+      payload: { originalTransferId: id },
+    });
+
+    res.json({ ok: true, reverseTransfer: result });
+  } catch (err) {
+    console.error('Box transfer reverse failed', err);
+    res.status(500).json({ error: err.message || 'Reverse failed' });
+  }
+});
+
+// Helper function for transfer lookup
+async function lookupBarcodeForTransfer(barcode) {
+  const EPSILON = 1e-9;
+
+  // Try Holo
+  const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({ where: { barcode } });
+  if (holoRow) {
+    const totalNetWeight = holoRow.rollWeight ? (holoRow.rollWeight * holoRow.rollCount) : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+    const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
+    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+    const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
+      ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
+      : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+    return { found: true, stage: 'holo', itemId: holoRow.id, currentCount: availableRolls, currentWeight: roundTo3Decimals(availableWeight) };
+  }
+
+  // Try Coning
+  const coningRow = await prisma.receiveFromConingMachineRow.findUnique({ where: { barcode } });
+  if (coningRow) {
+    const totalNetWeight = Number(coningRow.netWeight || 0);
+    const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
+    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+    const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
+      ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
+      : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+    return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
+  }
+
+  // Try Cutter
+  const cutterRow = await prisma.receiveFromCutterMachineRow.findFirst({
+    where: { OR: [{ barcode }, { vchNo: barcode }], isDeleted: false },
+  });
+  if (cutterRow) {
+    const bobbinQty = Number(cutterRow.bobbinQuantity || 0);
+    const issuedBobbins = Number(cutterRow.issuedBobbins || 0);
+    const netWeight = Number(cutterRow.netWt || 0);
+    const issuedWeight = Number(cutterRow.issuedBobbinWeight || 0);
+    const dispatchedWeight = Number(cutterRow.dispatchedWeight || 0);
+    const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
+    const availableBobbins = availableWeight > EPSILON ? Math.max(0, bobbinQty - issuedBobbins) : 0;
+    return { found: true, stage: 'cutter', itemId: cutterRow.id, currentCount: availableBobbins, currentWeight: roundTo3Decimals(availableWeight) };
+  }
+
+  return { found: false };
+}
+
 export default router;

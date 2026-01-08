@@ -12,6 +12,7 @@ import {
   ReceiveFromMachine,
   Dispatch,
   OpeningStock,
+  BoxTransfer,
   Masters,
   Reports,
   Settings,
@@ -57,6 +58,10 @@ export const router = createBrowserRouter([
       {
         path: "opening-stock",
         element: <OpeningStock />,
+      },
+      {
+        path: "box-transfer",
+        element: <BoxTransfer />,
       },
       {
         path: "masters",

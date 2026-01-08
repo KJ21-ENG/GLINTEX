@@ -227,6 +227,15 @@ export async function createDispatch(data) { return await request('/api/dispatch
 export async function deleteDispatch(id) { return await request(`/api/dispatch/${id}`, { method: 'DELETE' }); }
 export async function getDispatchAvailable(stage) { return await request(`/api/dispatch/available/${stage}`); }
 
+// Box Transfer
+export async function boxTransferLookup(barcode) { return await request('/api/box-transfer/lookup', { method: 'POST', body: { barcode } }); }
+export async function boxTransferExecute(data) { return await request('/api/box-transfer', { method: 'POST', body: data }); }
+export async function boxTransferHistory(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/box-transfer/history${query ? '?' + query : ''}`);
+}
+export async function boxTransferReverse(id) { return await request(`/api/box-transfer/${id}/reverse`, { method: 'POST' }); }
+
 // Reports
 export async function getBarcodeHistory(barcode) { return await request(`/api/reports/barcode-history/${encodeURIComponent(barcode)}`); }
 export async function getProductionReport(params = {}) {

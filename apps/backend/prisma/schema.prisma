@@ -628,3 +628,25 @@ model Dispatch {
   customer        Customer @relation(fields: [customerId], references: [id])
 }
 
+// ========== BOX TRANSFER FEATURE ==========
+
+model BoxTransfer {
+  id                String        @id @default(cuid())
+  date              String
+  stage             String        // "holo" | "coning" | "cutter"
+  fromBarcode       String
+  fromItemId        String        // ID of source receive row
+  toBarcode         String
+  toItemId          String        // ID of destination receive row
+  pieceCount        Int           // Number of pieces transferred
+  weightTransferred Float         // Net weight transferred
+  notes             String?
+  isReversed        Boolean       @default(false)
+  reversedById      String?       @unique
+  reversedBy        BoxTransfer?  @relation("ReverseTransfer", fields: [reversedById], references: [id])
+  reversesTransfer  BoxTransfer?  @relation("ReverseTransfer")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @default(now()) @updatedAt
+  createdByUserId   String?
+  updatedByUserId   String?
+}

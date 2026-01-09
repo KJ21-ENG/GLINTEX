@@ -15,6 +15,7 @@ import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeR
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
+import { generateSummaryPDF } from '../utils/pdfSummary.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
@@ -9884,4 +9885,302 @@ async function lookupBarcodeForTransfer(barcode) {
   return { found: false };
 }
 
+// ========== SUMMARY ENDPOINTS ==========
+
+function getTodayDateString() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatDateForFilename(dateStr) {
+  if (!dateStr) return getTodayDateString().replace(/-/g, '');
+  return String(dateStr).replace(/-/g, '');
+}
+
+// Helper to aggregate by a key
+function aggregateBy(items, keyFn, valueFns) {
+  const map = new Map();
+  for (const item of items) {
+    const key = keyFn(item);
+    if (!map.has(key)) {
+      map.set(key, { key, ...Object.fromEntries(Object.keys(valueFns).map(k => [k, 0])) });
+    }
+    const agg = map.get(key);
+    for (const [propName, fn] of Object.entries(valueFns)) {
+      agg[propName] += fn(item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+// Shared helper to generate summary data (used by both GET and POST endpoints)
+async function generateSummaryData(stage, type, date) {
+  let summary = { stage, type, date };
+
+  if (stage === 'cutter' && type === 'issue') {
+    const issues = await prisma.issueToCutterMachine.findMany({
+      where: { date },
+      include: { machine: true, operator: true, cut: true },
+    });
+
+    summary.totalCount = issues.length;
+    summary.totalPieces = issues.reduce((sum, i) => sum + (i.count || 0), 0);
+    summary.totalWeight = issues.reduce((sum, i) => sum + (i.totalWeight || 0), 0);
+
+    summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
+      count: () => 1,
+      weight: i => i.totalWeight || 0,
+      name: i => 0,
+    }).map(a => ({ name: a.key, count: a.count, weight: a.weight }));
+
+    summary.byMachine = aggregateBy(issues, i => i.machine?.name || 'Unknown', {
+      count: () => 1,
+      weight: i => i.totalWeight || 0,
+    }).map(a => ({ name: a.key, count: a.count, weight: a.weight }));
+
+    summary.byLot = aggregateBy(issues, i => i.lotNo || 'Unknown', {
+      count: () => 1,
+      weight: i => i.totalWeight || 0,
+    }).map(a => ({ lotNo: a.key, count: a.count, weight: a.weight }));
+
+  } else if (stage === 'cutter' && type === 'receive') {
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { date, isDeleted: false },
+      include: { operator: true, challan: true },
+    });
+
+    summary.totalCount = rows.length;
+    summary.totalBobbins = rows.reduce((sum, r) => sum + (r.bobbinQuantity || 0), 0);
+    summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWt || 0), 0);
+    summary.totalChallans = new Set(rows.filter(r => r.challanId).map(r => r.challanId)).size;
+
+    summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
+      count: () => 1,
+      netWeight: r => r.netWt || 0,
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+
+    summary.byPiece = aggregateBy(rows, r => r.pieceId || 'Unknown', {
+      count: () => 1,
+      netWeight: r => r.netWt || 0,
+    }).map(a => ({ pieceId: a.key, count: a.count, netWeight: a.netWeight }));
+
+  } else if (stage === 'holo' && type === 'issue') {
+    const issues = await prisma.issueToHoloMachine.findMany({
+      where: { date },
+      include: { machine: true, operator: true, twist: true, yarn: true },
+    });
+
+    summary.totalCount = issues.length;
+    summary.totalMetallicBobbins = issues.reduce((sum, i) => sum + (i.metallicBobbins || 0), 0);
+    summary.totalBobbinWeight = issues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0), 0);
+    summary.totalYarnKg = issues.reduce((sum, i) => sum + (i.yarnKg || 0), 0);
+
+    summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
+      count: () => 1,
+      bobbinWeight: i => i.metallicBobbinsWeight || 0,
+    }).map(a => ({ name: a.key, count: a.count, bobbinWeight: a.bobbinWeight }));
+
+    summary.byMachine = aggregateBy(issues, i => i.machine?.name || 'Unknown', {
+      count: () => 1,
+      bobbinWeight: i => i.metallicBobbinsWeight || 0,
+    }).map(a => ({ name: a.key, count: a.count, bobbinWeight: a.bobbinWeight }));
+
+  } else if (stage === 'holo' && type === 'receive') {
+    const rows = await prisma.receiveFromHoloMachineRow.findMany({
+      where: { date },
+      include: { operator: true, issue: { include: { machine: true } } },
+    });
+
+    const netWeight = (r) => {
+      const gross = Number(r.grossWeight || 0);
+      const tare = Number(r.tareWeight || 0);
+      return gross - tare;
+    };
+
+    summary.totalCount = rows.length;
+    summary.totalRolls = rows.reduce((sum, r) => sum + (r.rollCount || 0), 0);
+    summary.totalNetWeight = rows.reduce((sum, r) => sum + netWeight(r), 0);
+
+    summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
+      count: () => 1,
+      netWeight: r => netWeight(r),
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+
+    summary.byMachine = aggregateBy(rows, r => r.issue?.machine?.name || 'Unknown', {
+      count: () => 1,
+      netWeight: r => netWeight(r),
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+
+  } else if (stage === 'coning' && type === 'issue') {
+    const issues = await prisma.issueToConingMachine.findMany({
+      where: { date },
+      include: { machine: true, operator: true },
+    });
+
+    summary.totalCount = issues.length;
+    summary.totalRollsIssued = issues.reduce((sum, i) => sum + (i.rollsIssued || 0), 0);
+    summary.totalExpectedCones = issues.reduce((sum, i) => sum + (i.expectedCones || 0), 0);
+
+    summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
+      count: () => 1,
+      rollsIssued: i => i.rollsIssued || 0,
+    }).map(a => ({ name: a.key, count: a.count, rollsIssued: a.rollsIssued }));
+
+    summary.byMachine = aggregateBy(issues, i => i.machine?.name || 'Unknown', {
+      count: () => 1,
+      rollsIssued: i => i.rollsIssued || 0,
+    }).map(a => ({ name: a.key, count: a.count, rollsIssued: a.rollsIssued }));
+
+  } else if (stage === 'coning' && type === 'receive') {
+    const rows = await prisma.receiveFromConingMachineRow.findMany({
+      where: { date },
+      include: { operator: true, issue: { include: { machine: true } } },
+    });
+
+    summary.totalCount = rows.length;
+    summary.totalCones = rows.reduce((sum, r) => sum + (r.coneCount || 0), 0);
+    summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWeight || 0), 0);
+
+    summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
+      count: () => 1,
+      netWeight: r => r.netWeight || 0,
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+
+    summary.byMachine = aggregateBy(rows, r => r.issue?.machine?.name || 'Unknown', {
+      count: () => 1,
+      netWeight: r => r.netWeight || 0,
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+  }
+
+  return summary;
+}
+
+// GET /api/summary/:stage/:type - Get summary data
+router.get('/api/summary/:stage/:type', async (req, res) => {
+  try {
+    const { stage, type } = req.params;
+    const date = req.query.date || getTodayDateString();
+
+    const validStages = ['cutter', 'holo', 'coning'];
+    const validTypes = ['issue', 'receive'];
+
+    if (!validStages.includes(stage)) {
+      return res.status(400).json({ error: `Invalid stage. Must be one of: ${validStages.join(', ')}` });
+    }
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+    }
+
+    const summary = await generateSummaryData(stage, type, date);
+    res.json(summary);
+  } catch (err) {
+    console.error('Failed to get summary', err);
+    res.status(500).json({ error: err.message || 'Failed to get summary' });
+  }
+});
+
+// POST /api/summary/:stage/:type/send - Generate PDF and send via WhatsApp
+router.post('/api/summary/:stage/:type/send', async (req, res) => {
+  try {
+    const { stage, type } = req.params;
+    const date = req.query.date || req.body.date || getTodayDateString();
+
+    const validStages = ['cutter', 'holo', 'coning'];
+    const validTypes = ['issue', 'receive'];
+
+    if (!validStages.includes(stage)) {
+      return res.status(400).json({ error: `Invalid stage. Must be one of: ${validStages.join(', ')}` });
+    }
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+    }
+
+    // Check if template is enabled
+    const templateEvent = `summary_${stage}_${type}`;
+    const template = await prisma.whatsappTemplate.findUnique({ where: { event: templateEvent } });
+
+    if (!template) {
+      return res.status(404).json({ error: `Template not found: ${templateEvent}. Please seed templates.` });
+    }
+    if (!template.enabled) {
+      return res.json({ ok: false, reason: 'template_disabled', message: 'Summary template is disabled' });
+    }
+
+    // Get summary data using shared helper function (no internal HTTP request)
+    const summaryData = await generateSummaryData(stage, type, date);
+
+    // Check if there are any entries
+    if (!summaryData.totalCount || summaryData.totalCount === 0) {
+      return res.json({ ok: false, reason: 'no_data', message: `No ${type} entries found for ${stage} on ${date}` });
+    }
+
+    // Generate PDF
+    const pdfBuffer = await generateSummaryPDF(stage, type, summaryData);
+    const filename = `summary_${stage}_${type}_${formatDateForFilename(date)}.pdf`;
+
+    // Get settings and resolve recipients
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const recipients = [];
+
+    if (template.sendToPrimary !== false && settings?.whatsappNumber) {
+      recipients.push({ type: 'number', value: settings.whatsappNumber });
+    }
+
+    const allowedGroups = Array.isArray(settings?.whatsappGroupIds) ? settings.whatsappGroupIds : [];
+    const templateGroups = Array.isArray(template.groupIds) ? template.groupIds : [];
+    for (const gid of templateGroups.filter(id => allowedGroups.includes(id))) {
+      recipients.push({ type: 'group', value: gid });
+    }
+
+    if (recipients.length === 0) {
+      return res.json({ ok: false, reason: 'no_recipients', message: 'No WhatsApp recipients configured' });
+    }
+
+    // Generate caption from template
+    const caption = interpolateTemplate(template.template, {
+      stage,
+      type,
+      date: summaryData.date,
+      totalCount: summaryData.totalCount,
+      totalWeight: summaryData.totalWeight || summaryData.totalNetWeight || summaryData.totalBobbinWeight || 0,
+      totalPieces: summaryData.totalPieces || summaryData.totalBobbins || summaryData.totalRolls || summaryData.totalCones || 0,
+    });
+
+    // Send to all recipients
+    const results = [];
+    for (const r of recipients) {
+      try {
+        if (r.type === 'number') {
+          await whatsapp.sendMediaSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
+        } else {
+          await whatsapp.sendMediaToChatIdSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
+        }
+        results.push({ recipient: r.value, success: true });
+      } catch (err) {
+        console.error(`Failed to send summary to ${r.value}`, err);
+        results.push({ recipient: r.value, success: false, error: err.message });
+      }
+    }
+
+    const allSuccess = results.every(r => r.success);
+    res.json({
+      ok: allSuccess,
+      results,
+      summary: {
+        stage,
+        type,
+        date,
+        totalCount: summaryData.totalCount,
+      }
+    });
+  } catch (err) {
+    console.error('Failed to send summary', err);
+    res.status(500).json({ error: err.message || 'Failed to send summary' });
+  }
+});
+
 export default router;
+

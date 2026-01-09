@@ -248,6 +248,18 @@ export async function getProductionReport(params = {}) {
   return await request(`/api/reports/production${query ? '?' + query : ''}`);
 }
 
+// Summary
+export async function getSummary(stage, type, date) {
+  const params = date ? `?date=${date}` : '';
+  return await request(`/api/summary/${stage}/${type}${params}`);
+}
+export async function sendSummaryWhatsApp(stage, type, date) {
+  return await request(`/api/summary/${stage}/${type}/send`, {
+    method: 'POST',
+    body: date ? { date } : {}
+  });
+}
+
 export default {
   health,
   getDB,

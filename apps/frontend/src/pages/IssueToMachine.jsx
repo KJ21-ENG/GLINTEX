@@ -5,15 +5,58 @@ import { IssueToHolo } from '../components/issue';
 import { IssueToConing } from '../components/issue';
 import { OnMachineTable } from '../components/issue';
 import { IssueHistory } from './IssueHistory';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui';
+import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/ui';
+import { sendSummaryWhatsApp } from '../api/client';
+import { Send } from 'lucide-react';
 
 export function IssueToMachine() {
   const { process, db, refreshDb } = useInventory();
   const [activeTab, setActiveTab] = useState('on-machine');
+  const [sendingSum, setSendingSum] = useState(false);
+  const [sumMessage, setSumMessage] = useState(null);
+
+  const handleSendSummary = async () => {
+    if (sendingSum) return;
+    setSendingSum(true);
+    setSumMessage(null);
+    try {
+      const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
+      const result = await sendSummaryWhatsApp(stage, 'issue');
+      if (result.ok) {
+        setSumMessage({ type: 'success', text: 'Summary sent successfully!' });
+      } else {
+        setSumMessage({ type: 'error', text: result.message || 'Failed to send summary' });
+      }
+    } catch (err) {
+      setSumMessage({ type: 'error', text: err.message || 'Failed to send summary' });
+    } finally {
+      setSendingSum(false);
+      setTimeout(() => setSumMessage(null), 5000);
+    }
+  };
 
   return (
     <div className="space-y-6 fade-in">
-      <h1 className="text-2xl font-bold tracking-tight">Issue to Machine</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold tracking-tight">Issue to Machine</h1>
+        <div className="flex items-center gap-2">
+          {sumMessage && (
+            <span className={`text-sm ${sumMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+              {sumMessage.text}
+            </span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSendSummary}
+            disabled={sendingSum}
+            className="flex items-center gap-2"
+          >
+            <Send className="h-4 w-4" />
+            {sendingSum ? 'Sending...' : 'Send Summary'}
+          </Button>
+        </div>
+      </div>
 
       {/* Process Specific Form */}
       {process === 'holo' ? (

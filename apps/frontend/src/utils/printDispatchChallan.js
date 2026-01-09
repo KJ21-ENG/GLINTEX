@@ -4,8 +4,8 @@ import { formatDateDDMMYYYY } from './formatting';
 export const printDispatchChallan = (dispatch, firmDetails = {}) => {
     if (!dispatch) return;
 
-    // Company Details (Default to Glintex if not provided)
-    const companyName = firmDetails.name || 'GLINTEX';
+    // Company Details (Default to Aalekhan if not provided)
+    const companyName = firmDetails.name || 'Aalekhan';
     const companyAddress = firmDetails.address || '';
     const companyPhone = firmDetails.mobile || '';
 

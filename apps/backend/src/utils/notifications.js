@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import whatsapp from '../../whatsapp/service.js';
+import whatsapp from './whatsappStub.js';
 import { getTemplateByEvent, interpolateTemplate } from './whatsappTemplates.js';
 
 function resolveRecipients({ template, settings }) {

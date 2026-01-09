@@ -4,6 +4,7 @@ import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 import { initBackupScheduler } from './utils/backup.js';
 
 const PORT = process.env.PORT || 4000;
+const isDemoMode = process.env.DEMO_MODE === 'true';
 
 let server = null;
 
@@ -38,8 +39,12 @@ async function start() {
     console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
   });
 
-  startWhatsapp();
-  await initBackupScheduler();
+  if (isDemoMode) {
+    console.log('Demo mode: WhatsApp and Backup services disabled');
+  } else {
+    startWhatsapp();
+    await initBackupScheduler();
+  }
 }
 
 start();

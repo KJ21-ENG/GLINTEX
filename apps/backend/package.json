@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon --watch src --exec node src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^4.16.2",

@@ -72,8 +72,8 @@ export default function DashboardLayout() {
           )}
         </div>
         <div>
-          <h1 className="font-bold text-lg leading-tight">GLINTEX</h1>
-          <p className="text-xs text-muted-foreground">Inventory System</p>
+          <h1 className="font-bold text-lg leading-tight">Aalekhan</h1>
+          <p className="text-xs text-muted-foreground">Stock Management</p>
         </div>
       </div>
 
@@ -150,7 +150,7 @@ export default function DashboardLayout() {
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(true)}>
               <Menu className="h-5 w-5" />
             </Button>
-            <span className="font-semibold">GLINTEX</span>
+            <span className="font-semibold">Aalekhan</span>
           </div>
         </header>
 

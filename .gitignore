@@ -66,6 +66,9 @@ jspm_packages/
 # Development tools
 .codex/
 .cursor/
+# Supabase CLI temp metadata
+supabase/.temp/
+supabase/.branches/
 # BMAD rules and docs
 .bmad/
 docs/
@@ -90,5 +93,4 @@ desktop.ini
 # gemini
 
 .gemini-clipboard/
-
 

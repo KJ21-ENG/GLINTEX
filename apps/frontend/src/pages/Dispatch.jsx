@@ -507,7 +507,7 @@ export function Dispatch() {
     function handlePrintChallan(dispatch) {
         const settings = db?.settings?.[0] || {};
         const firmDetails = {
-            name: settings.challanFromName || 'GLINTEX',
+            name: settings.challanFromName || 'Aalekhan',
             address: settings.challanFromAddress,
             mobile: settings.challanFromMobile
         };

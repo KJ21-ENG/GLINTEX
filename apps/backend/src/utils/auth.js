@@ -23,10 +23,12 @@ export function getSessionExpiryDate() {
 }
 
 export function getSessionCookieOptions() {
-  const secure = process.env.COOKIE_SECURE === 'true';
+  const rawSameSite = String(process.env.COOKIE_SAMESITE || 'lax').trim().toLowerCase();
+  const sameSite = ['lax', 'strict', 'none'].includes(rawSameSite) ? rawSameSite : 'lax';
+  const secure = process.env.COOKIE_SECURE === 'true' || sameSite === 'none';
   return {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite,
     secure,
     path: '/',
   };
@@ -45,4 +47,3 @@ export async function hashPassword(password) {
 export async function verifyPassword(password, passwordHash) {
   return await bcrypt.compare(String(password || ''), String(passwordHash || ''));
 }
-

@@ -9,7 +9,6 @@ import { execSync } from 'child_process';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
 const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
-const LOCK_FILE = path.join(AUTH_DIR, 'SingletonLock');
 const STALE_LOCK_AGE_MS = 10 * 60 * 1000;
 const DEFAULT_WWEB_VERSION = process.env.WWEBJS_WEB_VERSION || '2.3000.1031548524';
 const WWEB_CACHE_PATH = process.env.WWEBJS_WEB_CACHE_PATH || path.resolve(process.cwd(), '.wwebjs_cache');

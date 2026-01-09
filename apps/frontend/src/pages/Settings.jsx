@@ -1352,7 +1352,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                                         {driveStatus.configured && driveStatus.connected && (
                                             <div className="text-xs text-muted-foreground space-y-1">
                                                 <div>Account: {driveStatus.email || 'Unknown email'}</div>
-                                                <div>Folder: GLINTEX_Backups (keeps last 3 backups)</div>
+                                                <div>Folder: Aalekhan_Backups (keeps last 3 backups)</div>
                                             </div>
                                         )}
 
@@ -1397,7 +1397,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                                         <div className="space-y-2">
                                             <div className="flex items-center justify-between">
                                                 <h4 className="text-sm font-semibold">Drive Backups</h4>
-                                                <span className="text-[10px] text-muted-foreground">GLINTEX_Backups</span>
+                                                <span className="text-[10px] text-muted-foreground">Aalekhan_Backups</span>
                                             </div>
 
                                             {driveFilesLoading ? (
@@ -1578,7 +1578,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
                         <Input
                             value={fromDetails.name}
                             onChange={e => setFromDetails({ ...fromDetails, name: e.target.value })}
-                            placeholder="e.g. GLINTEX INDUSTRIES"
+                            placeholder="e.g. Aalekhan Industries"
                         />
                     </div>
                     <div className="space-y-2">

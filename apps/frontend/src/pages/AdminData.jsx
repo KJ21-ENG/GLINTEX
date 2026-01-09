@@ -100,7 +100,7 @@ export function AdminData({ db, onSaveBrand, savingBrand }) {
         </div>
       </Section>
 
-      <Section title="Branding (GLINTEX)">
+      <Section title="Branding (Aalekhan)">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={`text-xs ${cls.muted}`}>Primary (Blue) — HEX</label>

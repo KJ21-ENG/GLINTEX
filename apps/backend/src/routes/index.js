@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import whatsapp from '../../whatsapp/service.js';
+import whatsapp from '../utils/whatsappStub.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';

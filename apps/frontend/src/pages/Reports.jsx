@@ -147,84 +147,110 @@ function BarcodeHistory() {
             )}
 
             {history && history.found && (
-                <div className="relative">
-                    {/* Timeline Line */}
-                    <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-border" />
+                <div className="space-y-4">
+                    <div className="flex justify-between items-center px-1">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-primary" />
+                            Barcode Journey
+                        </h2>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                    const allExpanded = expandedStages.size === history.lineage.length;
+                                    if (allExpanded) {
+                                        setExpandedStages(new Set());
+                                    } else {
+                                        setExpandedStages(new Set(history.lineage.map((_, i) => i)));
+                                    }
+                                }}
+                                className="h-8 text-xs"
+                            >
+                                {expandedStages.size === history.lineage.length ? 'Collapse All' : 'Expand All'}
+                            </Button>
+                        </div>
+                    </div>
 
-                    <div className="space-y-4">
-                        {history.lineage.map((stage, index) => {
-                            const Icon = STAGE_ICONS[stage.stage] || Package;
-                            const isExpanded = expandedStages.has(index);
-                            const colorClass = STAGE_COLORS[stage.stage] || 'bg-gray-500';
+                    <div className="relative pb-8">
+                        {/* Timeline Line */}
+                        <div className="absolute left-6 top-4 bottom-12 w-0.5 bg-border" />
 
-                            return (
-                                <div key={index} className="relative pl-16">
-                                    {/* Timeline Dot */}
-                                    <div className={cn(
-                                        "absolute left-4 w-4 h-4 rounded-full border-2 border-background z-10",
-                                        colorClass
-                                    )} />
+                        <div className="space-y-4">
+                            {history.lineage.map((stage, index) => {
+                                const Icon = STAGE_ICONS[stage.stage] || Package;
+                                const isExpanded = expandedStages.has(index);
+                                const colorClass = STAGE_COLORS[stage.stage] || 'bg-gray-500';
 
-                                    <Card className={cn(
-                                        "transition-all cursor-pointer hover:shadow-md",
-                                        isExpanded && "ring-1 ring-primary/20"
-                                    )}>
-                                        <div
-                                            className="p-4 flex items-center justify-between"
-                                            onClick={() => toggleStage(index)}
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <div className={cn(
-                                                    "w-10 h-10 rounded-lg flex items-center justify-center text-white",
-                                                    colorClass
-                                                )}>
-                                                    <Icon className="w-5 h-5" />
-                                                </div>
-                                                <div>
-                                                    <div className="font-medium">
-                                                        {STAGE_LABELS[stage.stage] || stage.stage}
+                                return (
+                                    <div key={index} className="relative pl-16">
+                                        {/* Timeline Dot */}
+                                        <div className={cn(
+                                            "absolute left-4 w-4 h-4 rounded-full border-2 border-background z-10",
+                                            colorClass
+                                        )} />
+
+                                        <Card className={cn(
+                                            "transition-all cursor-pointer hover:shadow-md",
+                                            isExpanded && "ring-1 ring-primary/20"
+                                        )}>
+                                            <div
+                                                className="p-4 flex items-center justify-between"
+                                                onClick={() => toggleStage(index)}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <div className={cn(
+                                                        "w-10 h-10 rounded-lg flex items-center justify-center text-white",
+                                                        colorClass
+                                                    )}>
+                                                        <Icon className="w-5 h-5" />
                                                     </div>
-                                                    <div className="text-sm text-muted-foreground flex items-center gap-2">
-                                                        <Clock className="w-3 h-3" />
-                                                        {stage.date ? formatDateDDMMYYYY(stage.date) : 'Date not recorded'}
+                                                    <div>
+                                                        <div className="font-medium">
+                                                            {STAGE_LABELS[stage.stage] || stage.stage}
+                                                        </div>
+                                                        <div className="text-sm text-muted-foreground flex items-center gap-2">
+                                                            <Clock className="w-3 h-3" />
+                                                            {stage.date ? formatDateDDMMYYYY(stage.date) : 'Date not recorded'}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                            <div className="flex items-center gap-4">
-                                                {stage.data?.weight && (
-                                                    <Badge variant="outline" className="text-sm">
-                                                        {formatKg(stage.data.weight)}
-                                                    </Badge>
-                                                )}
-                                                {stage.data?.netWeight && (
-                                                    <Badge variant="outline" className="text-sm">
-                                                        {formatKg(stage.data.netWeight)}
-                                                    </Badge>
-                                                )}
-                                                {stage.barcode && (
-                                                    <span className="font-mono text-sm text-muted-foreground">
-                                                        {stage.barcode}
-                                                    </span>
-                                                )}
-                                                {isExpanded ? (
-                                                    <ChevronDown className="w-5 h-5 text-muted-foreground" />
-                                                ) : (
-                                                    <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        {isExpanded && (
-                                            <div className="px-4 pb-4 pt-0 border-t">
-                                                <div className="pt-4">
-                                                    {renderStageDetails(stage)}
+                                                <div className="flex items-center gap-4">
+                                                    {stage.data?.weight && (
+                                                        <Badge variant="outline" className="text-sm">
+                                                            {formatKg(stage.data.weight)}
+                                                        </Badge>
+                                                    )}
+                                                    {stage.data?.netWeight && (
+                                                        <Badge variant="outline" className="text-sm">
+                                                            {formatKg(stage.data.netWeight)}
+                                                        </Badge>
+                                                    )}
+                                                    {stage.barcode && (
+                                                        <span className="font-mono text-sm text-muted-foreground">
+                                                            {stage.barcode}
+                                                        </span>
+                                                    )}
+                                                    {isExpanded ? (
+                                                        <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                                                    ) : (
+                                                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                                                    )}
                                                 </div>
                                             </div>
-                                        )}
-                                    </Card>
-                                </div>
-                            );
-                        })}
+
+                                            {isExpanded && (
+                                                <div className="px-4 pb-4 pt-0 border-t">
+                                                    <div className="pt-4">
+                                                        {renderStageDetails(stage)}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </Card>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
             )}

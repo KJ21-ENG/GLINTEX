@@ -8,7 +8,7 @@ export function HighlightMatch({ text, query }) {
 
     const textStr = String(text);
     const terms = typeof query === 'string'
-        ? query.split(',').map(t => t.trim()).filter(Boolean)
+        ? query.split(/[,|]/).map(t => t.trim()).filter(Boolean)
         : (Array.isArray(query) ? query : [query]);
 
     if (terms.length === 0) return <span>{textStr}</span>;

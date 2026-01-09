@@ -3,6 +3,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '.
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { LotPopover } from './LotPopover';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -12,7 +13,7 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function BobbinView({ db, filters, search = '', groupBy = false }) {
+export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
@@ -199,6 +200,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         availableWeight: 0,
         crateCount: 0,
         crates: [],
+        lots: [],
         statusType: lot.availableBobbins > 0 ? 'active' : 'inactive',
       };
       existing.totalBobbins += lot.totalBobbins;
@@ -208,6 +210,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
       existing.issuedWeight += lot.issuedWeight;
       existing.availableWeight += lot.availableWeight;
       existing.crateCount += lot.crateCount || lot.crates?.length || 0;
+      existing.lots.push(lot.lotNo);
       map.set(key, existing);
     });
     return Array.from(map.values());
@@ -245,7 +248,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
                       <TableCell className="font-medium">
-                        {groupBy ? '—' : (
+                        {groupBy ? (
+                          <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
                           <HighlightMatch text={l.lotNo || '—'} query={search} />
                         )}
                       </TableCell>
@@ -325,7 +330,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">
-                        {groupBy ? 'Grouped' : (
+                        {groupBy ? (
+                          <LotPopover lots={l.lots || []} onApplyFilter={onApplyFilter} />
+                        ) : (
                           <HighlightMatch text={l.lotNo || '—'} query={search} />
                         )}
                         {!groupBy && (isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)}

@@ -17,30 +17,50 @@ import { fuzzyScore } from './search';
 export function calculateMultiTermScore(item, query, fields) {
     if (!query) return 1;
 
-    const terms = query.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-    if (terms.length === 0) return 1;
+    // Split by | for OR groups
+    const orGroups = query.split('|').map(g => g.trim()).filter(Boolean);
+    if (orGroups.length === 0) return 1;
 
-    let totalScore = 0;
+    let maxOrScore = 0;
+    let anyGroupMatched = false;
 
-    for (const term of terms) {
-        let maxTermScore = 0;
-        for (const field of fields) {
-            const value = item[field];
-            if (value === undefined || value === null) continue;
+    for (const orGroup of orGroups) {
+        // Inside each OR group, split by , for AND terms
+        const andTerms = orGroup.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        if (andTerms.length === 0) continue;
 
-            const score = fuzzyScore(String(value), term);
-            if (score > maxTermScore) maxTermScore = score;
+        let groupScore = 0;
+        let groupMatch = true;
+
+        for (const term of andTerms) {
+            let maxTermScore = 0;
+            for (const field of fields) {
+                const value = item[field];
+                if (value === undefined || value === null) continue;
+
+                const score = fuzzyScore(String(value), term);
+                if (score > maxTermScore) maxTermScore = score;
+            }
+
+            // For multi-term search, we require a higher precision (substring match or better)
+            // Score >= 40 means "Contains query anywhere"
+            const threshold = andTerms.length > 1 ? 40 : 20;
+
+            if (maxTermScore < threshold) {
+                groupMatch = false;
+                break;
+            }
+
+            groupScore += maxTermScore;
         }
 
-        // For multi-term search, we require a higher precision (substring match or better)
-        // Score >= 40 means "Contains query anywhere"
-        // This prevents extremely loose fuzzy matches from passing the "AND" filter.
-        const threshold = terms.length > 1 ? 40 : 20;
-
-        if (maxTermScore < threshold) return 0;
-
-        totalScore += maxTermScore;
+        if (groupMatch) {
+            anyGroupMatched = true;
+            const finalGroupScore = groupScore / andTerms.length;
+            if (finalGroupScore > maxOrScore) maxOrScore = finalGroupScore;
+        }
     }
 
-    return totalScore / terms.length;
+    return anyGroupMatched ? maxOrScore : 0;
 }
+

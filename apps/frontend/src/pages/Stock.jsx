@@ -446,7 +446,7 @@ export function Stock() {
   }
 
   function handleApplyLotFilter(lots) {
-    setSearch(lots.join(" "));
+    setSearch(lots.join("|"));
     setGroupByItem(false); // Optionally disable grouping to see the individual lots
   }
 

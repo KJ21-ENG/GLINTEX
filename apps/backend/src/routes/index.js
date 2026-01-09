@@ -9916,19 +9916,6 @@ function aggregateBy(items, keyFn, valueFns) {
   return Array.from(map.values());
 }
 
-function parseJsonArray(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-      return [];
-    }
-  }
-  return [];
-}
-
 // Shared helper to generate summary data (used by both GET and POST endpoints)
 async function generateSummaryData(stage, type, date) {
   let summary = { stage, type, date };
@@ -9939,16 +9926,9 @@ async function generateSummaryData(stage, type, date) {
       include: { machine: true, operator: true, cut: true },
     });
 
-    const itemIds = Array.from(new Set(issues.map(i => i.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
-
     summary.totalCount = issues.length;
     summary.totalPieces = issues.reduce((sum, i) => sum + (i.count || 0), 0);
     summary.totalWeight = issues.reduce((sum, i) => sum + (i.totalWeight || 0), 0);
-    summary.totalMachines = new Set(issues.map(i => i.machine?.name).filter(Boolean)).size;
 
     summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
       count: () => 1,
@@ -9966,44 +9946,16 @@ async function generateSummaryData(stage, type, date) {
       weight: i => i.totalWeight || 0,
     }).map(a => ({ lotNo: a.key, count: a.count, weight: a.weight }));
 
-    summary.tableRows = issues.map((issue) => ({
-      machine: issue.machine?.name || 'Unknown',
-      item: itemNameMap.get(issue.itemId) || issue.itemId || 'Unknown',
-      lotNo: issue.lotNo || '',
-      cut: issue.cut?.name || 'Unknown',
-      operator: issue.operator?.name || 'Unknown',
-      pieces: issue.count || 0,
-      totalWeight: issue.totalWeight || 0,
-      note: issue.note || '',
-      pieceIds: issue.pieceIds ? issue.pieceIds.split(',') : [],
-    })).sort((a, b) => (
-      a.machine.localeCompare(b.machine)
-      || a.item.localeCompare(b.item)
-      || a.lotNo.localeCompare(b.lotNo)
-    ));
-
   } else if (stage === 'cutter' && type === 'receive') {
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
       where: { date, isDeleted: false },
-      include: { operator: true, challan: true, cutMaster: true },
+      include: { operator: true, challan: true },
     });
-
-    const pieceIds = Array.from(new Set(rows.map(r => r.pieceId).filter(Boolean)));
-    const inboundPieces = pieceIds.length
-      ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } }, select: { id: true, itemId: true } })
-      : [];
-    const itemIds = Array.from(new Set(inboundPieces.map(p => p.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
-    const pieceItemMap = new Map(inboundPieces.map(p => [p.id, itemNameMap.get(p.itemId) || '']));
 
     summary.totalCount = rows.length;
     summary.totalBobbins = rows.reduce((sum, r) => sum + (r.bobbinQuantity || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWt || 0), 0);
     summary.totalChallans = new Set(rows.filter(r => r.challanId).map(r => r.challanId)).size;
-    summary.totalBoxes = rows.length;
 
     summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
       count: () => 1,
@@ -10015,53 +9967,16 @@ async function generateSummaryData(stage, type, date) {
       netWeight: r => r.netWt || 0,
     }).map(a => ({ pieceId: a.key, count: a.count, netWeight: a.netWeight }));
 
-    const grouped = new Map();
-    for (const row of rows) {
-      const itemName = pieceItemMap.get(row.pieceId) || row.itemName || 'Unknown';
-      const cutName = row.cutMaster?.name || row.cut || 'Unknown';
-      const machineNo = row.machineNo || 'Unknown';
-      const shift = row.shift || 'Unknown';
-      const operatorName = row.operator?.name || row.employee || 'Unknown';
-      const key = `${itemName}||${cutName}||${machineNo}||${shift}||${operatorName}`;
-      const current = grouped.get(key) || {
-        item: itemName,
-        cut: cutName,
-        machineNo,
-        shift,
-        operator: operatorName,
-        totalNetWeight: 0,
-        totalBobbins: 0,
-        boxes: 0,
-      };
-      current.totalNetWeight += Number(row.netWt || 0);
-      current.totalBobbins += Number(row.bobbinQuantity || 0);
-      current.boxes += 1;
-      grouped.set(key, current);
-    }
-
-    summary.tableRows = Array.from(grouped.values()).sort((a, b) => (
-      a.item.localeCompare(b.item)
-      || a.machineNo.localeCompare(b.machineNo)
-      || a.operator.localeCompare(b.operator)
-    ));
-
   } else if (stage === 'holo' && type === 'issue') {
     const issues = await prisma.issueToHoloMachine.findMany({
       where: { date },
       include: { machine: true, operator: true, twist: true, yarn: true },
     });
 
-    const itemIds = Array.from(new Set(issues.map(i => i.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
-
     summary.totalCount = issues.length;
     summary.totalMetallicBobbins = issues.reduce((sum, i) => sum + (i.metallicBobbins || 0), 0);
     summary.totalBobbinWeight = issues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0), 0);
     summary.totalYarnKg = issues.reduce((sum, i) => sum + (i.yarnKg || 0), 0);
-    summary.totalMachines = new Set(issues.map(i => i.machine?.name).filter(Boolean)).size;
 
     summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
       count: () => 1,
@@ -10073,24 +9988,6 @@ async function generateSummaryData(stage, type, date) {
       bobbinWeight: i => i.metallicBobbinsWeight || 0,
     }).map(a => ({ name: a.key, count: a.count, bobbinWeight: a.bobbinWeight }));
 
-    summary.tableRows = issues.map((issue) => ({
-      machine: issue.machine?.name || 'Unknown',
-      item: itemNameMap.get(issue.itemId) || issue.itemId || 'Unknown',
-      lotNo: issue.lotNo || '',
-      operator: issue.operator?.name || 'Unknown',
-      shift: issue.shift || '',
-      yarn: issue.yarn?.name || '',
-      twist: issue.twist?.name || '',
-      metallicBobbins: issue.metallicBobbins || 0,
-      bobbinWeight: issue.metallicBobbinsWeight || 0,
-      yarnKg: issue.yarnKg || 0,
-      note: issue.note || '',
-    })).sort((a, b) => (
-      a.machine.localeCompare(b.machine)
-      || a.item.localeCompare(b.item)
-      || a.lotNo.localeCompare(b.lotNo)
-    ));
-
   } else if (stage === 'holo' && type === 'receive') {
     const rows = await prisma.receiveFromHoloMachineRow.findMany({
       where: { date },
@@ -10098,23 +9995,14 @@ async function generateSummaryData(stage, type, date) {
     });
 
     const netWeight = (r) => {
-      const rollWeight = Number(r.rollWeight || 0);
-      if (Number.isFinite(rollWeight) && rollWeight > 0) return rollWeight;
       const gross = Number(r.grossWeight || 0);
       const tare = Number(r.tareWeight || 0);
       return gross - tare;
     };
 
-    const itemIds = Array.from(new Set(rows.map(r => r.issue?.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
-
     summary.totalCount = rows.length;
     summary.totalRolls = rows.reduce((sum, r) => sum + (r.rollCount || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + netWeight(r), 0);
-    summary.totalBoxes = rows.length;
 
     summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
       count: () => 1,
@@ -10126,43 +10014,11 @@ async function generateSummaryData(stage, type, date) {
       netWeight: r => netWeight(r),
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
 
-    const grouped = new Map();
-    for (const row of rows) {
-      const itemName = itemNameMap.get(row.issue?.itemId) || row.issue?.itemId || 'Unknown';
-      const machineNo = row.machineNo || row.issue?.machine?.name || 'Unknown';
-      const operatorName = row.operator?.name || 'Unknown';
-      const key = `${itemName}||${machineNo}||${operatorName}`;
-      const current = grouped.get(key) || {
-        item: itemName,
-        machineNo,
-        operator: operatorName,
-        totalRolls: 0,
-        totalNetWeight: 0,
-        boxes: 0,
-      };
-      current.totalRolls += Number(row.rollCount || 0);
-      current.totalNetWeight += Number(netWeight(row) || 0);
-      current.boxes += 1;
-      grouped.set(key, current);
-    }
-
-    summary.tableRows = Array.from(grouped.values()).sort((a, b) => (
-      a.item.localeCompare(b.item)
-      || a.machineNo.localeCompare(b.machineNo)
-      || a.operator.localeCompare(b.operator)
-    ));
-
   } else if (stage === 'coning' && type === 'issue') {
     const issues = await prisma.issueToConingMachine.findMany({
       where: { date },
       include: { machine: true, operator: true },
     });
-
-    const itemIds = Array.from(new Set(issues.map(i => i.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
 
     summary.totalCount = issues.length;
     summary.totalRollsIssued = issues.reduce((sum, i) => sum + (i.rollsIssued || 0), 0);
@@ -10178,46 +10034,15 @@ async function generateSummaryData(stage, type, date) {
       rollsIssued: i => i.rollsIssued || 0,
     }).map(a => ({ name: a.key, count: a.count, rollsIssued: a.rollsIssued }));
 
-    summary.tableRows = issues.map((issue) => {
-      const refs = parseJsonArray(issue.receivedRowRefs);
-      const issueWeight = refs.reduce((sum, ref) => sum + (Number(ref?.issueWeight) || 0), 0);
-      return {
-        machine: issue.machine?.name || 'Unknown',
-        item: itemNameMap.get(issue.itemId) || issue.itemId || 'Unknown',
-        lotNo: issue.lotNo || '',
-        operator: issue.operator?.name || 'Unknown',
-        shift: issue.shift || '',
-        rollsIssued: issue.rollsIssued || 0,
-        issueWeight,
-        targetWeight: issue.requiredPerConeNetWeight || 0,
-        expectedCones: issue.expectedCones || 0,
-        note: issue.note || '',
-      };
-    }).sort((a, b) => (
-      a.machine.localeCompare(b.machine)
-      || a.item.localeCompare(b.item)
-      || a.lotNo.localeCompare(b.lotNo)
-    ));
-
-    summary.totalIssueWeight = summary.tableRows.reduce((sum, row) => sum + (row.issueWeight || 0), 0);
-    summary.totalWeight = summary.totalIssueWeight;
-
   } else if (stage === 'coning' && type === 'receive') {
     const rows = await prisma.receiveFromConingMachineRow.findMany({
       where: { date },
       include: { operator: true, issue: { include: { machine: true } } },
     });
 
-    const itemIds = Array.from(new Set(rows.map(r => r.issue?.itemId).filter(Boolean)));
-    const items = itemIds.length
-      ? await prisma.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, name: true } })
-      : [];
-    const itemNameMap = new Map(items.map(item => [item.id, item.name]));
-
     summary.totalCount = rows.length;
     summary.totalCones = rows.reduce((sum, r) => sum + (r.coneCount || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWeight || 0), 0);
-    summary.totalBoxes = rows.length;
 
     summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
       count: () => 1,
@@ -10228,32 +10053,6 @@ async function generateSummaryData(stage, type, date) {
       count: () => 1,
       netWeight: r => r.netWeight || 0,
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
-
-    const grouped = new Map();
-    for (const row of rows) {
-      const itemName = itemNameMap.get(row.issue?.itemId) || row.issue?.itemId || 'Unknown';
-      const machineNo = row.machineNo || row.issue?.machine?.name || 'Unknown';
-      const operatorName = row.operator?.name || 'Unknown';
-      const key = `${itemName}||${machineNo}||${operatorName}`;
-      const current = grouped.get(key) || {
-        item: itemName,
-        machineNo,
-        operator: operatorName,
-        totalCones: 0,
-        totalNetWeight: 0,
-        boxes: 0,
-      };
-      current.totalCones += Number(row.coneCount || 0);
-      current.totalNetWeight += Number(row.netWeight || 0);
-      current.boxes += 1;
-      grouped.set(key, current);
-    }
-
-    summary.tableRows = Array.from(grouped.values()).sort((a, b) => (
-      a.item.localeCompare(b.item)
-      || a.machineNo.localeCompare(b.machineNo)
-      || a.operator.localeCompare(b.operator)
-    ));
   }
 
   return summary;
@@ -10384,3 +10183,4 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
 });
 
 export default router;
+

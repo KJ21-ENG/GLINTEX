@@ -48,14 +48,24 @@ export function IssueToConing() {
     async function handleScan() {
         if (!scanInput.trim()) return;
         const normalized = scanInput.trim().toUpperCase();
+        const normalizeValue = (val) => String(val || '').trim().toUpperCase();
 
         // Find in Holo Receive Rows
-        const row = (db.receive_from_holo_machine_rows || []).find(r => (r.barcode || '').toUpperCase() === normalized);
+        const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
+            return normalizeValue(r.barcode) === normalized || normalizeValue(r.notes) === normalized;
+        });
 
-        if (!row) {
+        if (matches.length === 0) {
             alert('Barcode not found in Holo Receive rows');
             return;
         }
+
+        if (matches.length > 1) {
+            alert('Multiple rows match this legacy barcode. Please use the new barcode instead.');
+            return;
+        }
+
+        const row = matches[0];
 
         if (crates.some(c => c.rowId === row.id)) {
             alert('Crate already added');

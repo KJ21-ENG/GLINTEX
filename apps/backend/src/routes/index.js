@@ -5312,6 +5312,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     }
     if (barcodes.length) {
       holoWhere.push({ barcode: { in: barcodes } });
+      barcodes.forEach((code) => {
+        holoWhere.push({ notes: { equals: code, mode: 'insensitive' } });
+      });
     }
 
     const holoRows = holoWhere.length
@@ -5322,17 +5325,57 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       : [];
 
     const rows = [...coningRows, ...holoRows];
-    if (rows.length !== normalizedCrates.length) return res.status(404).json({ error: 'One or more scanned crates were not found' });
+    if (rows.length === 0) return res.status(404).json({ error: 'One or more scanned crates were not found' });
 
     const rowMapById = new Map(rows.map((r) => [r.id, r]));
-    const rowMapByBarcode = new Map(
-      rows
-        .filter((r) => r?.barcode)
-        .map((r) => [normalizeBarcodeInput(r.barcode), r]),
-    );
+    const rowMapByBarcode = new Map();
+    const ambiguousBarcodes = new Set();
+    rows.forEach((row) => {
+      if (!row?.barcode) return;
+      const code = normalizeBarcodeInput(row.barcode);
+      if (!code) return;
+      const existing = rowMapByBarcode.get(code);
+      if (existing && existing.id !== row.id) {
+        rowMapByBarcode.set(code, null);
+        ambiguousBarcodes.add(code);
+        return;
+      }
+      if (!existing) {
+        rowMapByBarcode.set(code, row);
+      }
+    });
+
+    const legacyMap = new Map();
+    const ambiguousLegacy = new Set();
+    holoRows.forEach((row) => {
+      if (!row?.notes) return;
+      const code = normalizeBarcodeInput(row.notes);
+      if (!code) return;
+      const existing = legacyMap.get(code);
+      if (existing && existing.id !== row.id) {
+        legacyMap.set(code, null);
+        ambiguousLegacy.add(code);
+        return;
+      }
+      if (!existing) {
+        legacyMap.set(code, row);
+      }
+    });
+
+    const legacyConflicts = normalizedCrates
+      .map((crate) => crate.barcode)
+      .filter((code) => code && (ambiguousBarcodes.has(code) || ambiguousLegacy.has(code)));
+    if (legacyConflicts.length > 0) {
+      return res.status(409).json({
+        error: `Legacy barcode matches multiple rows: ${Array.from(new Set(legacyConflicts)).join(', ')}`
+      });
+    }
 
     const resolvedCrates = normalizedCrates.map((crate) => {
-      const found = crate.rowId ? rowMapById.get(crate.rowId) : rowMapByBarcode.get(crate.barcode);
+      let found = crate.rowId ? rowMapById.get(crate.rowId) : rowMapByBarcode.get(crate.barcode);
+      if (!found && crate.barcode) {
+        found = legacyMap.get(crate.barcode);
+      }
       return {
         ...crate,
         rowId: found?.id || crate.rowId,
@@ -5346,6 +5389,10 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
           : (typeof found?.rollWeight === 'number' ? found.rollWeight : 0),
       };
     });
+
+    if (resolvedCrates.some((c) => !c.rowId)) {
+      return res.status(404).json({ error: 'One or more scanned crates were not found' });
+    }
 
     const lotSet = new Set(resolvedCrates.map((c) => c.lotNo).filter(Boolean));
     const itemSet = new Set(resolvedCrates.map((c) => c.itemId).filter(Boolean));
@@ -8189,7 +8236,12 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     // Check Holo Receive
     const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      where: {
+        OR: [
+          { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+          { notes: { equals: normalizedBarcode, mode: 'insensitive' } },
+        ],
+      },
       include: { operator: true, rollType: true, box: true },
     });
 
@@ -8986,8 +9038,13 @@ router.post('/api/box-transfer/lookup', async (req, res) => {
     const EPSILON = 1e-9;
 
     // Try Holo receive rows
-    const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({
-      where: { barcode },
+    const holoRow = await prisma.receiveFromHoloMachineRow.findFirst({
+      where: {
+        OR: [
+          { barcode: { equals: barcode, mode: 'insensitive' } },
+          { notes: { equals: barcode, mode: 'insensitive' } },
+        ],
+      },
       include: {
         issue: { include: { machine: true } },
         box: true,
@@ -9474,7 +9531,14 @@ async function lookupBarcodeForTransfer(barcode) {
   const EPSILON = 1e-9;
 
   // Try Holo
-  const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({ where: { barcode } });
+  const holoRow = await prisma.receiveFromHoloMachineRow.findFirst({
+    where: {
+      OR: [
+        { barcode: { equals: barcode, mode: 'insensitive' } },
+        { notes: { equals: barcode, mode: 'insensitive' } },
+      ],
+    },
+  });
   if (holoRow) {
     const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
     const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);

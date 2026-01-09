@@ -10,9 +10,10 @@ let jsPDFModule = null;
 
 async function getJsPDF() {
     if (!jsPDFModule) {
-        // Dynamic import for ES module compatibility
-        const { default: jsPDF } = await import('jspdf');
-        jsPDFModule = jsPDF;
+        // Dynamic import for jsPDF - v4.x exports jsPDF as a named export
+        const jspdfModule = await import('jspdf');
+        // Handle both ESM default export and CJS scenarios
+        jsPDFModule = jspdfModule.jsPDF || jspdfModule.default?.jsPDF || jspdfModule.default;
     }
     return jsPDFModule;
 }

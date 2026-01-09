@@ -51,11 +51,15 @@ export function OpeningStock() {
   const [firmId, setFirmId] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [previewLotNo, setPreviewLotNo] = useState('');
+  const [openingHoloSeries, setOpeningHoloSeries] = useState(null);
+  const [openingConingSeries, setOpeningConingSeries] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingKey, setDeletingKey] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
+  const holoCrateSeqRef = useRef(0);
+  const coningCrateSeqRef = useRef(0);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -247,6 +251,10 @@ export function OpeningStock() {
     setHoloCart([]);
     setConingCart([]);
     setInboundCart([]);
+    setOpeningHoloSeries(null);
+    setOpeningConingSeries(null);
+    holoCrateSeqRef.current = 0;
+    coningCrateSeqRef.current = 0;
   }, [itemId, firmId, supplierId, date]);
 
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
@@ -553,9 +561,23 @@ export function OpeningStock() {
       return;
     }
 
-    // Generate barcode for immediate printing using preview lot
-    const crateIndex = holoCart.length + 1;
-    const barcode = makeHoloReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+    let seriesNumber = openingHoloSeries;
+    if (!seriesNumber) {
+      try {
+        const res = await api.reserveOpeningIssueSeries('holo');
+        const reserved = Number(res?.seriesNumber);
+        if (!Number.isFinite(reserved) || reserved <= 0) throw new Error('Invalid series');
+        seriesNumber = reserved;
+        setOpeningHoloSeries(reserved);
+      } catch (err) {
+        alert(err.message || 'Failed to reserve holo series');
+        return;
+      }
+    }
+
+    holoCrateSeqRef.current += 1;
+    const crateIndex = holoCrateSeqRef.current;
+    const barcode = makeHoloReceiveBarcode({ series: seriesNumber, crateIndex });
 
     const newCrate = {
       id: uid('crate'),
@@ -564,6 +586,7 @@ export function OpeningStock() {
       grossWeight: gross,
       netWeight: net,
       tareWeight: tare,
+      crateIndex,
       barcode,
     };
 
@@ -631,9 +654,23 @@ export function OpeningStock() {
       return;
     }
 
-    // Generate barcode for immediate printing using preview lot
-    const crateIndex = coningCart.length + 1;
-    const barcode = makeConingReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+    let seriesNumber = openingConingSeries;
+    if (!seriesNumber) {
+      try {
+        const res = await api.reserveOpeningIssueSeries('coning');
+        const reserved = Number(res?.seriesNumber);
+        if (!Number.isFinite(reserved) || reserved <= 0) throw new Error('Invalid series');
+        seriesNumber = reserved;
+        setOpeningConingSeries(reserved);
+      } catch (err) {
+        alert(err.message || 'Failed to reserve coning series');
+        return;
+      }
+    }
+
+    coningCrateSeqRef.current += 1;
+    const crateIndex = coningCrateSeqRef.current;
+    const barcode = makeConingReceiveBarcode({ series: seriesNumber, crateIndex });
 
     const newCrate = {
       id: uid('crate'),
@@ -642,6 +679,7 @@ export function OpeningStock() {
       grossWeight: gross,
       netWeight: net,
       tareWeight: tare,
+      crateIndex,
       barcode,
     };
 
@@ -820,6 +858,7 @@ export function OpeningStock() {
     if (!canSaveCommon || !holoIssue.twistId || holoCart.length === 0) return;
     setSaving(true);
     try {
+      if (!openingHoloSeries) throw new Error('Missing reserved holo series. Add a crate again.');
       const payload = {
         date,
         itemId,
@@ -831,6 +870,7 @@ export function OpeningStock() {
         machineId: holoIssue.machineId || null,
         operatorId: holoIssue.operatorId || null,
         shift: holoIssue.shift || null,
+        issueSeries: openingHoloSeries,
         crates: holoCart.map(row => ({
           rollTypeId: row.rollTypeId,
           rollCount: Number(row.rollCount),
@@ -838,11 +878,14 @@ export function OpeningStock() {
           boxId: row.boxId || null,
           crateTareWeight: Number(row.crateTareWeight || 0),
           operatorId: holoIssue.operatorId || null,
+          crateIndex: row.crateIndex,
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
       await refreshDb();
       setHoloCart([]);
+      setOpeningHoloSeries(null);
+      holoCrateSeqRef.current = 0;
       await fetchOpeningPreview();
     } catch (err) {
       alert(err.message || 'Failed to save opening holo stock');
@@ -855,6 +898,7 @@ export function OpeningStock() {
     if (!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0) return;
     setSaving(true);
     try {
+      if (!openingConingSeries) throw new Error('Missing reserved coning series. Add a crate again.');
       const payload = {
         date,
         itemId,
@@ -865,16 +909,20 @@ export function OpeningStock() {
         machineId: coningIssue.machineId || null,
         operatorId: coningIssue.operatorId || null,
         shift: coningIssue.shift || null,
+        issueSeries: openingConingSeries,
         crates: coningCart.map(row => ({
           coneCount: Number(row.coneCount),
           grossWeight: Number(row.grossWeight),
           boxId: row.boxId || null,
           operatorId: coningIssue.operatorId || null,
+          crateIndex: row.crateIndex,
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
       await refreshDb();
       setConingCart([]);
+      setOpeningConingSeries(null);
+      coningCrateSeqRef.current = 0;
       await fetchOpeningPreview();
     } catch (err) {
       alert(err.message || 'Failed to save opening coning stock');

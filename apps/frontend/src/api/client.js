@@ -52,6 +52,9 @@ export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
+export async function reserveOpeningIssueSeries(stage) {
+  return await request('/api/opening_stock/issue_series/reserve', { method: 'POST', body: { stage } });
+}
 
 // Auth
 export async function authStatus() { return await request('/api/auth/status'); }
@@ -271,6 +274,7 @@ export default {
   createOpeningCutterReceive,
   createOpeningHoloReceive,
   createOpeningConingReceive,
+  reserveOpeningIssueSeries,
   importReceiveFromMachine,
   previewReceiveFromMachine,
   manualReceiveFromMachine,

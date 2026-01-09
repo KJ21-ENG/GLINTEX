@@ -1478,6 +1478,42 @@ router.get('/api/opening_stock/sequence/next', async (req, res) => {
   }
 });
 
+// Reserve a holo/coning issue series number for opening stock label printing
+router.post('/api/opening_stock/issue_series/reserve', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const stage = String(req.body?.stage || '').trim().toLowerCase();
+    if (!['holo', 'coning'].includes(stage)) {
+      return res.status(400).json({ error: 'stage must be holo or coning' });
+    }
+
+    const seriesNumber = await prisma.$transaction(async (tx) => {
+      if (stage === 'holo') {
+        await ensureHoloIssueSequence(tx, actorUserId);
+        const seq = await tx.holoIssueSequence.upsert({
+          where: { id: 'holo_issue_seq' },
+          update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+          create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+        });
+        return seq.nextValue - 1;
+      }
+
+      await ensureConingIssueSequence(tx, actorUserId);
+      const seq = await tx.coningIssueSequence.upsert({
+        where: { id: 'coning_issue_seq' },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+      });
+      return seq.nextValue - 1;
+    });
+
+    res.json({ seriesNumber });
+  } catch (err) {
+    console.error('Failed to reserve opening issue series', err);
+    res.status(500).json({ error: err.message || 'Failed to reserve series' });
+  }
+});
+
 router.post('/api/opening_stock/inbound', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
@@ -1778,12 +1814,17 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
 router.post('/api/opening_stock/holo_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { date, itemId, firmId, supplierId, twistId, yarnId, cutId, machineId, operatorId, shift, crates } = req.body || {};
+    const { date, itemId, firmId, supplierId, twistId, yarnId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
     if (!date || !itemId || !supplierId || !twistId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(crates) || crates.length === 0) {
       return res.status(400).json({ error: 'Add at least one crate' });
+    }
+    const hasIssueSeries = issueSeries !== undefined && issueSeries !== null && issueSeries !== '';
+    const requestedIssueSeries = hasIssueSeries ? toInt(issueSeries) : null;
+    if (hasIssueSeries && (!requestedIssueSeries || requestedIssueSeries <= 0)) {
+      return res.status(400).json({ error: 'issueSeries must be a positive integer' });
     }
 
     const [itemRecord, firmRecord, supplierRecord, twistRecord, cutRecord] = await Promise.all([
@@ -1810,8 +1851,19 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
     const rollTypeMap = new Map(rollTypes.map(r => [r.id, r]));
     const boxMap = new Map(boxes.map(b => [b.id, b]));
 
+    const crateIndexSet = new Set();
     const normalizedCrates = crates.map((crate, idx) => {
       const rowIndex = idx + 1;
+      const hasCrateIndex = crate?.crateIndex !== undefined && crate?.crateIndex !== null && crate?.crateIndex !== '';
+      const requestedCrateIndex = hasCrateIndex ? toInt(crate?.crateIndex) : null;
+      if (hasCrateIndex && (!requestedCrateIndex || requestedCrateIndex <= 0)) {
+        throw new Error(`Invalid crate index for crate ${rowIndex}`);
+      }
+      const crateIndex = requestedCrateIndex || rowIndex;
+      if (crateIndexSet.has(crateIndex)) {
+        throw new Error(`Duplicate crate index ${crateIndex}`);
+      }
+      crateIndexSet.add(crateIndex);
       const rollTypeId = crate?.rollTypeId || null;
       const rollType = rollTypeId ? rollTypeMap.get(rollTypeId) : null;
       if (!rollType) throw new Error(`Missing roll type for crate ${rowIndex}`);
@@ -1836,6 +1888,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
       }
 
       return {
+        crateIndex,
         rollTypeId,
         rollCount,
         gross,
@@ -1886,13 +1939,39 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
         },
       });
 
-      await ensureHoloIssueSequence(tx, actorUserId);
-      const holoSeq = await tx.holoIssueSequence.upsert({
-        where: { id: 'holo_issue_seq' },
-        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
-        create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
-      });
-      const seriesNumber = holoSeq.nextValue - 1;
+      let seriesNumber = requestedIssueSeries;
+      let issueBarcode = '';
+      if (seriesNumber) {
+        await ensureHoloIssueSequence(tx, actorUserId);
+        issueBarcode = makeHoloIssueBarcode({ series: seriesNumber });
+        const existingIssue = await tx.issueToHoloMachine.findFirst({
+          where: { barcode: issueBarcode },
+          select: { id: true },
+        });
+        if (existingIssue) {
+          throw new Error(`Holo issue series ${seriesNumber} already used`);
+        }
+        const currentSeq = await tx.holoIssueSequence.findUnique({
+          where: { id: 'holo_issue_seq' },
+          select: { nextValue: true },
+        });
+        const nextValue = Number(currentSeq?.nextValue || 0);
+        if (nextValue <= seriesNumber) {
+          await tx.holoIssueSequence.update({
+            where: { id: 'holo_issue_seq' },
+            data: { nextValue: seriesNumber + 1, ...actorUpdateFields(actorUserId) },
+          });
+        }
+      } else {
+        await ensureHoloIssueSequence(tx, actorUserId);
+        const holoSeq = await tx.holoIssueSequence.upsert({
+          where: { id: 'holo_issue_seq' },
+          update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+          create: { id: 'holo_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+        });
+        seriesNumber = holoSeq.nextValue - 1;
+        issueBarcode = makeHoloIssueBarcode({ series: seriesNumber });
+      }
 
       const issue = await tx.issueToHoloMachine.create({
         data: {
@@ -1904,7 +1983,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
           cutId: cutId || null,
           machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: makeHoloIssueBarcode({ series: seriesNumber }),
+          barcode: issueBarcode,
           note: 'Opening Stock',
           shift: shift || null,
           metallicBobbins: 0,
@@ -1916,10 +1995,8 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
       });
 
       const rows = [];
-      let crateIndex = 0;
       for (const row of normalizedCrates) {
-        crateIndex += 1;
-        const barcode = makeHoloReceiveBarcode({ series: seriesNumber, crateIndex });
+        const barcode = makeHoloReceiveBarcode({ series: seriesNumber, crateIndex: row.crateIndex });
         const created = await tx.receiveFromHoloMachineRow.create({
           data: {
             issueId: issue.id,
@@ -1985,12 +2062,17 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
 router.post('/api/opening_stock/coning_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, crates } = req.body || {};
+    const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
     if (!date || !itemId || !supplierId || !coneTypeId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
     if (!Array.isArray(crates) || crates.length === 0) {
       return res.status(400).json({ error: 'Add at least one crate' });
+    }
+    const hasIssueSeries = issueSeries !== undefined && issueSeries !== null && issueSeries !== '';
+    const requestedIssueSeries = hasIssueSeries ? toInt(issueSeries) : null;
+    if (hasIssueSeries && (!requestedIssueSeries || requestedIssueSeries <= 0)) {
+      return res.status(400).json({ error: 'issueSeries must be a positive integer' });
     }
 
     const [itemRecord, firmRecord, supplierRecord, coneTypeRecord] = await Promise.all([
@@ -2021,8 +2103,19 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
       return res.status(400).json({ error: 'Cone type weight missing. Update cone type first.' });
     }
 
+    const crateIndexSet = new Set();
     const normalizedCrates = crates.map((crate, idx) => {
       const rowIndex = idx + 1;
+      const hasCrateIndex = crate?.crateIndex !== undefined && crate?.crateIndex !== null && crate?.crateIndex !== '';
+      const requestedCrateIndex = hasCrateIndex ? toInt(crate?.crateIndex) : null;
+      if (hasCrateIndex && (!requestedCrateIndex || requestedCrateIndex <= 0)) {
+        throw new Error(`Invalid crate index for crate ${rowIndex}`);
+      }
+      const crateIndex = requestedCrateIndex || rowIndex;
+      if (crateIndexSet.has(crateIndex)) {
+        throw new Error(`Duplicate crate index ${crateIndex}`);
+      }
+      crateIndexSet.add(crateIndex);
       const coneCount = Math.max(0, toInt(crate?.coneCount) || 0);
       if (coneCount <= 0) throw new Error(`Invalid cone count for crate ${rowIndex}`);
       const gross = toNumber(crate?.grossWeight);
@@ -2038,6 +2131,7 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
       }
 
       return {
+        crateIndex,
         coneCount,
         gross,
         tare,
@@ -2086,13 +2180,39 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
         },
       });
 
-      await ensureConingIssueSequence(tx, actorUserId);
-      const coningSeq = await tx.coningIssueSequence.upsert({
-        where: { id: 'coning_issue_seq' },
-        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
-        create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
-      });
-      const seriesNumber = coningSeq.nextValue - 1;
+      let seriesNumber = requestedIssueSeries;
+      let issueBarcode = '';
+      if (seriesNumber) {
+        await ensureConingIssueSequence(tx, actorUserId);
+        issueBarcode = makeConingIssueBarcode({ series: seriesNumber });
+        const existingIssue = await tx.issueToConingMachine.findFirst({
+          where: { barcode: issueBarcode },
+          select: { id: true },
+        });
+        if (existingIssue) {
+          throw new Error(`Coning issue series ${seriesNumber} already used`);
+        }
+        const currentSeq = await tx.coningIssueSequence.findUnique({
+          where: { id: 'coning_issue_seq' },
+          select: { nextValue: true },
+        });
+        const nextValue = Number(currentSeq?.nextValue || 0);
+        if (nextValue <= seriesNumber) {
+          await tx.coningIssueSequence.update({
+            where: { id: 'coning_issue_seq' },
+            data: { nextValue: seriesNumber + 1, ...actorUpdateFields(actorUserId) },
+          });
+        }
+      } else {
+        await ensureConingIssueSequence(tx, actorUserId);
+        const coningSeq = await tx.coningIssueSequence.upsert({
+          where: { id: 'coning_issue_seq' },
+          update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+          create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+        });
+        seriesNumber = coningSeq.nextValue - 1;
+        issueBarcode = makeConingIssueBarcode({ series: seriesNumber });
+      }
 
       const issue = await tx.issueToConingMachine.create({
         data: {
@@ -2101,7 +2221,7 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
           lotNo,
           machineId: machineId || null,
           operatorId: operatorId || null,
-          barcode: makeConingIssueBarcode({ series: seriesNumber }),
+          barcode: issueBarcode,
           note: 'Opening Stock',
           shift: shift || null,
           rollsIssued: 0,
@@ -2113,10 +2233,8 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
       });
 
       const rows = [];
-      let crateIndex = 0;
       for (const row of normalizedCrates) {
-        crateIndex += 1;
-        const barcode = makeConingReceiveBarcode({ series: seriesNumber, crateIndex });
+        const barcode = makeConingReceiveBarcode({ series: seriesNumber, crateIndex: row.crateIndex });
         const created = await tx.receiveFromConingMachineRow.create({
           data: {
             issueId: issue.id,

@@ -52,7 +52,9 @@ export function IssueToConing() {
 
         // Find in Holo Receive Rows
         const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
-            return normalizeValue(r.barcode) === normalized || normalizeValue(r.notes) === normalized;
+            return normalizeValue(r.barcode) === normalized
+                || normalizeValue(r.notes) === normalized
+                || normalizeValue(r.legacyBarcode) === normalized;
         });
 
         if (matches.length === 0) {

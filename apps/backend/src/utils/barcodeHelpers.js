@@ -80,6 +80,19 @@ export function parseConingSeries(barcode) {
   return Number.isFinite(num) ? num : null;
 }
 
+// Parse legacy opening-stock receive barcodes like RHO-OP-194-C001 / RCO-OP-194-C001
+export function parseLegacyReceiveBarcode(barcode) {
+  if (typeof barcode !== 'string') return null;
+  const trimmed = barcode.trim().toUpperCase();
+  const match = trimmed.match(/^(RHO|RCO)-OP-(\d+)-C(\d+)$/);
+  if (!match) return null;
+  const stage = match[1] === 'RCO' ? 'coning' : 'holo';
+  const lotNo = `OP-${String(match[2]).padStart(3, '0')}`;
+  const crateIndex = Number(match[3]);
+  if (!Number.isFinite(crateIndex)) return null;
+  return { stage, lotNo, crateIndex };
+}
+
 // ===== DEPRECATED (kept for backward compatibility) =====
 export function deriveMaterialCodeFromItem(item) {
   // Material code is no longer used in barcodes, kept for backward compatibility

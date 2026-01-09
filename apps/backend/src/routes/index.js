@@ -11,7 +11,7 @@ import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
-import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries } from '../utils/barcodeHelpers.js';
+import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries, parseLegacyReceiveBarcode } from '../utils/barcodeHelpers.js';
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
@@ -24,6 +24,45 @@ let bootstrapToken = null;
 
 function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();
+}
+
+function buildLegacyReceiveBarcode(prefix, lotNo, crateIndex) {
+  if (!lotNo || typeof lotNo !== 'string') return null;
+  const match = lotNo.trim().toUpperCase().match(/^OP-(\d+)$/);
+  if (!match) return null;
+  const lotPart = match[1].padStart(3, '0');
+  if (!Number.isFinite(crateIndex)) return null;
+  const cratePart = String(crateIndex).padStart(3, '0');
+  return `${prefix}-OP-${lotPart}-C${cratePart}`;
+}
+
+async function resolveLegacyReceiveRow(barcode, options = {}) {
+  const parsed = parseLegacyReceiveBarcode(barcode);
+  if (!parsed) return null;
+  const { stage, lotNo, crateIndex } = parsed;
+  const query = { where: { issue: { lotNo } }, ...options };
+  const rows = stage === 'coning'
+    ? await prisma.receiveFromConingMachineRow.findMany(query)
+    : await prisma.receiveFromHoloMachineRow.findMany(query);
+  const matches = rows.filter(row => parseReceiveCrateIndex(row.barcode) === crateIndex);
+  if (matches.length === 1) return { stage, row: matches[0] };
+  if (matches.length > 1) return { stage, error: 'ambiguous' };
+  return { stage, error: 'not_found' };
+}
+
+function dropDuplicateLegacyBarcodes(items = []) {
+  const counts = new Map();
+  items.forEach((item) => {
+    if (item.legacyBarcode) {
+      counts.set(item.legacyBarcode, (counts.get(item.legacyBarcode) || 0) + 1);
+    }
+  });
+  if (counts.size === 0) return items;
+  return items.map((item) => {
+    if (!item.legacyBarcode) return item;
+    if ((counts.get(item.legacyBarcode) || 0) <= 1) return item;
+    return { ...item, legacyBarcode: null };
+  });
 }
 
 function normalizePieceId(raw) {
@@ -1105,7 +1144,9 @@ router.get('/api/db', async (req, res) => {
       issueCopy.lotNos = issueLotNosMap.get(issueCopy.id);
     }
     if (issueCopy) delete issueCopy.receivedRowRefs;
-    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds) };
+    const crateIndex = parseReceiveCrateIndex(r.barcode);
+    const legacyBarcode = buildLegacyReceiveBarcode('RHO', r.issue?.lotNo, crateIndex);
+    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds), legacyBarcode };
   });
 
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
@@ -1187,7 +1228,9 @@ router.get('/api/db', async (req, res) => {
     // Remove receivedRowRefs from issue before sending (not needed on frontend)
     const issueCopy = r.issue ? { ...r.issue } : null;
     if (issueCopy) delete issueCopy.receivedRowRefs;
-    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds) };
+    const crateIndex = parseReceiveCrateIndex(r.barcode);
+    const legacyBarcode = buildLegacyReceiveBarcode('RCO', r.issue?.lotNo, crateIndex);
+    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds), legacyBarcode };
   });
 
   const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
@@ -7608,6 +7651,8 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
       });
       items = holoRows
         .map(row => {
+          const crateIndex = parseReceiveCrateIndex(row.barcode);
+          const legacyBarcode = buildLegacyReceiveBarcode('RHO', row.issue?.lotNo, crateIndex);
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const totalCount = row.rollCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
@@ -7621,6 +7666,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           return {
             id: row.id,
             barcode: row.barcode,
+            legacyBarcode,
             lotNo: row.issue?.lotNo,
             lotLabel: row.issue?.id ? issueLotLabelMap.get(row.issue.id) : null,
             weight: netWeight,
@@ -7635,6 +7681,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           };
         })
         .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
+      items = dropDuplicateLegacyBarcodes(items);
     } else if (stage === 'coning') {
       // Get coning receive rows with remaining weight
       const coningRows = await prisma.receiveFromConingMachineRow.findMany({
@@ -7643,6 +7690,8 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
       });
       items = coningRows
         .map(row => {
+          const crateIndex = parseReceiveCrateIndex(row.barcode);
+          const legacyBarcode = buildLegacyReceiveBarcode('RCO', row.issue?.lotNo, crateIndex);
           const netWeight = row.netWeight || 0;
           const totalCount = row.coneCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
@@ -7656,6 +7705,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           return {
             id: row.id,
             barcode: row.barcode,
+            legacyBarcode,
             lotNo: row.issue?.lotNo,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
@@ -7669,6 +7719,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
           };
         })
         .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
+      items = dropDuplicateLegacyBarcodes(items);
     } else {
       return res.status(400).json({ error: 'Invalid stage. Must be: inbound, cutter, holo, or coning' });
     }
@@ -8198,6 +8249,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     const history = {
       barcode: normalizedBarcode,
+      resolvedBarcode: null,
       searchedStage: null,
       found: false,
       lineage: [],  // Complete lineage from Inbound to Dispatch
@@ -8207,6 +8259,35 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
     const formatStageData = (stage, data) => ({ stage, ...data });
 
     // ============ STEP 1: IDENTIFY WHICH STAGE THE BARCODE BELONGS TO ============
+
+    // Legacy receive barcode resolution (opening stock labels)
+    const legacyParsed = parseLegacyReceiveBarcode(normalizedBarcode);
+    if (legacyParsed?.stage === 'coning') {
+      const legacyResolved = await resolveLegacyReceiveRow(normalizedBarcode, { include: { operator: true, box: true } });
+      if (legacyResolved?.error === 'ambiguous') {
+        return res.status(409).json({ error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' });
+      }
+      if (legacyResolved?.row) {
+        history.found = true;
+        history.searchedStage = 'coning_receive';
+        history.resolvedBarcode = legacyResolved.row.barcode;
+        await traceFromConingReceive(legacyResolved.row, history);
+        return res.json({ history });
+      }
+    }
+    if (legacyParsed?.stage === 'holo') {
+      const legacyResolved = await resolveLegacyReceiveRow(normalizedBarcode, { include: { operator: true, rollType: true, box: true } });
+      if (legacyResolved?.error === 'ambiguous') {
+        return res.status(409).json({ error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' });
+      }
+      if (legacyResolved?.row) {
+        history.found = true;
+        history.searchedStage = 'holo_receive';
+        history.resolvedBarcode = legacyResolved.row.barcode;
+        await traceFromHoloReceive(legacyResolved.row, history);
+        return res.json({ history });
+      }
+    }
 
     // Check Coning Receive
     const coningRecv = await prisma.receiveFromConingMachineRow.findFirst({
@@ -9037,6 +9118,80 @@ router.post('/api/box-transfer/lookup', async (req, res) => {
 
     const EPSILON = 1e-9;
 
+    const legacyResolved = await resolveLegacyReceiveRow(barcode);
+    if (legacyResolved?.error === 'ambiguous') {
+      return res.status(409).json({ error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' });
+    }
+    if (legacyResolved?.row) {
+      if (legacyResolved.stage === 'holo') {
+        const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({
+          where: { id: legacyResolved.row.id },
+          include: {
+            issue: { include: { machine: true } },
+            box: true,
+            rollType: true,
+          },
+        });
+        if (holoRow) {
+          const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+          const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
+          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+          const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
+            ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
+            : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+          return res.json({
+            found: true,
+            stage: 'holo',
+            itemId: holoRow.id,
+            barcode: holoRow.barcode,
+            lotNo: holoRow.issue?.lotNo || null,
+            itemName: holoRow.issue?.itemId || null,
+            currentCount: availableRolls,
+            currentWeight: roundTo3Decimals(availableWeight),
+            totalCount: holoRow.rollCount,
+            totalWeight: roundTo3Decimals(totalNetWeight),
+            boxName: holoRow.box?.name || null,
+            boxId: holoRow.boxId || null,
+            rollTypeName: holoRow.rollType?.name || null,
+            machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
+            date: holoRow.date || null,
+          });
+        }
+      } else if (legacyResolved.stage === 'coning') {
+        const coningRow = await prisma.receiveFromConingMachineRow.findUnique({
+          where: { id: legacyResolved.row.id },
+          include: {
+            issue: { include: { machine: true } },
+            box: true,
+          },
+        });
+        if (coningRow) {
+          const totalNetWeight = Number(coningRow.netWeight || 0);
+          const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
+          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+          const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
+            ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
+            : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+          return res.json({
+            found: true,
+            stage: 'coning',
+            itemId: coningRow.id,
+            barcode: coningRow.barcode,
+            lotNo: coningRow.issue?.lotNo || null,
+            itemName: coningRow.issue?.itemId || null,
+            currentCount: availableCones,
+            currentWeight: roundTo3Decimals(availableWeight),
+            totalCount: coningRow.coneCount,
+            totalWeight: roundTo3Decimals(totalNetWeight),
+            boxName: coningRow.box?.name || null,
+            boxId: coningRow.boxId || null,
+            machineName: coningRow.issue?.machine?.name || coningRow.machineNo || null,
+            date: coningRow.date || null,
+          });
+        }
+      }
+    }
+
     // Try Holo receive rows
     const holoRow = await prisma.receiveFromHoloMachineRow.findFirst({
       where: {
@@ -9181,8 +9336,13 @@ router.post('/api/box-transfer', async (req, res) => {
     const lookupFrom = await lookupBarcodeForTransfer(fromBarcode);
     const lookupTo = await lookupBarcodeForTransfer(toBarcode);
 
+    if (lookupFrom.error) return res.status(409).json({ error: `From barcode issue: ${lookupFrom.error}` });
+    if (lookupTo.error) return res.status(409).json({ error: `To barcode issue: ${lookupTo.error}` });
     if (!lookupFrom.found) return res.status(400).json({ error: `From barcode not found: ${fromBarcode}` });
     if (!lookupTo.found) return res.status(400).json({ error: `To barcode not found: ${toBarcode}` });
+    if (lookupFrom.itemId && lookupTo.itemId && lookupFrom.itemId === lookupTo.itemId) {
+      return res.status(400).json({ error: 'Cannot transfer to the same item' });
+    }
     if (lookupFrom.stage !== lookupTo.stage) {
       return res.status(400).json({ error: `Cannot transfer between different processes (${lookupFrom.stage} → ${lookupTo.stage})` });
     }
@@ -9529,6 +9689,33 @@ router.post('/api/box-transfer/:id/reverse', async (req, res) => {
 // Helper function for transfer lookup
 async function lookupBarcodeForTransfer(barcode) {
   const EPSILON = 1e-9;
+
+  const legacyResolved = await resolveLegacyReceiveRow(barcode);
+  if (legacyResolved?.error === 'ambiguous') {
+    return { found: false, error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' };
+  }
+  if (legacyResolved?.row) {
+    if (legacyResolved.stage === 'holo') {
+      const holoRow = legacyResolved.row;
+      const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+      const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+      const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
+        ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
+        : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+      return { found: true, stage: 'holo', itemId: holoRow.id, currentCount: availableRolls, currentWeight: roundTo3Decimals(availableWeight) };
+    }
+    if (legacyResolved.stage === 'coning') {
+      const coningRow = legacyResolved.row;
+      const totalNetWeight = Number(coningRow.netWeight || 0);
+      const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
+      const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
+        ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
+        : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+      return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
+    }
+  }
 
   // Try Holo
   const holoRow = await prisma.receiveFromHoloMachineRow.findFirst({

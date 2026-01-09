@@ -4,6 +4,14 @@ import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } fro
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 
+const buildGroupKey = (lot) => ([
+  lot.itemId || lot.itemName || '',
+  lot.supplierId || lot.supplierName || '',
+  lot.cutName || '',
+  lot.yarnName || '',
+  lot.twistName || ''
+].join('::'));
+
 export function BobbinView({ db, filters, search = '', groupBy = false }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -173,9 +181,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}`;
+      const key = buildGroupKey(lot);
       const existing = map.get(key) || {
         lotNo: '', // display dash for grouped rows
+        groupKey: key,
         itemId: lot.itemId,
         itemName: lot.itemName,
         cutName: lot.cutName,
@@ -228,7 +237,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
             ) : (
               displayData.map((l, idx) => {
                 const isExpanded = !groupBy && expandedLot === l.lotNo;
-                const rowKey = l.lotNo || idx;
+                const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo || idx);
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
@@ -308,7 +317,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false }) {
         ) : (
           displayData.map((l, idx) => {
             const isExpanded = !groupBy && expandedLot === l.lotNo;
-            const rowKey = l.lotNo || idx;
+            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo || idx);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">

@@ -5,6 +5,14 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
+const buildGroupKey = (lot) => ([
+  lot.itemId || lot.itemName || '',
+  lot.supplierId || lot.supplierName || '',
+  lot.cutName || '',
+  lot.yarnName || '',
+  lot.twistName || ''
+].join('::'));
+
 export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -158,9 +166,10 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}`;
+      const key = buildGroupKey(lot);
       const existing = map.get(key) || {
         lotNo: '', // grouped rows show dash for lot
+        groupKey: key,
         itemId: lot.itemId,
         itemName: lot.itemName,
         firmId: lot.firmId,
@@ -206,7 +215,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
             ) : (
               displayLots.map((lot, idx) => {
-                const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
+                const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotNo || idx);
                 const isExpanded = !groupBy && expandedLot === lot.lotNo;
                 return (
                   <React.Fragment key={rowKey}>
@@ -288,7 +297,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No coning stock found.</div>
         ) : (
           displayLots.map((lot, idx) => {
-            const rowKey = groupBy ? (lot.itemId || lot.itemName || idx) : (lot.lotNo || idx);
+            const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotNo || idx);
             const isExpanded = !groupBy && expandedLot === lot.lotNo;
 
             return (

@@ -28,6 +28,15 @@ function lotStatus(lot) {
   return pending > 0 ? 'active' : 'inactive';
 }
 
+function buildStockGroupKey(lot) {
+  return [
+    lot.itemId || lot.itemName || '',
+    lot.supplierId || lot.supplierName || '',
+    lot.cutName || '',
+    lot.yarnName || '',
+    lot.twistName || ''
+  ].join('::');
+}
 
 export function Stock() {
   const { db, createIssueToMachine, refreshing, refreshDb, process } = useInventory();
@@ -234,9 +243,10 @@ export function Stock() {
     if (!groupByItem) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}`;
+      const key = buildStockGroupKey(lot);
       const existing = map.get(key) || {
         lotNo: `Group-${key}`,
+        groupKey: key,
         itemId: lot.itemId,
         itemName: lot.itemName,
         firmId: lot.firmId,
@@ -531,7 +541,7 @@ export function Stock() {
             <div className="flex items-center gap-2 pb-2 sm:col-span-2 lg:col-span-1 lg:ml-auto">
               <Label className="text-xs cursor-pointer flex items-center gap-2">
                 <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
-                Group by Item
+                Group
               </Label>
             </div>
           </CardContent>
@@ -568,8 +578,9 @@ export function Stock() {
                 ) : (
                   displayedLots.map((l, idx) => {
                     const isExpanded = !groupByItem && expandedLot === l.lotNo;
+                    const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
                     return (
-                      <React.Fragment key={l.lotNo || idx}>
+                      <React.Fragment key={rowKey}>
                         <TableRow
                           className="cursor-pointer hover:bg-muted/50"
                           onClick={() => !groupByItem && toggleExpand(l.lotNo)}
@@ -702,9 +713,10 @@ export function Stock() {
                 const isExpanded = !groupByItem && expandedLot === l.lotNo;
                 const available = l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length;
                 const total = l.totalPieces ?? (l.pieces || []).length;
+                const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
 
                 return (
-                  <div key={l.lotNo || idx} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                  <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                     <div className="p-4" onClick={() => !groupByItem && toggleExpand(l.lotNo)}>
                       <div className="flex justify-between items-start gap-2">
                         <div className="min-w-0 flex-1">

@@ -5,6 +5,14 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 
+const buildGroupKey = (lot) => ([
+  lot.itemId || lot.itemName || '',
+  lot.supplierId || lot.supplierName || '',
+  lot.cutName || '',
+  lot.yarnName || '',
+  lot.twistName || ''
+].join('::'));
+
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -198,9 +206,10 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     if (!groupBy) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
-      const key = `${lot.itemId || ''}::${lot.twistName || ''}`;
+      const key = buildGroupKey(lot);
       const existing = map.get(key) || {
         lotNo: '', // grouped rows show dash in lot column
+        groupKey: key,
         itemId: lot.itemId,
         itemName: lot.itemName,
         firmId: lot.firmId,
@@ -257,7 +266,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
             ) : (
               displayLots.map((l, idx) => {
                 const rowKey = groupBy
-                  ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx)
+                  ? (l.groupKey || idx)
                   : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
                 const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
                 return (
@@ -346,7 +355,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No holo stock found.</div>
         ) : (
           displayLots.map((l, idx) => {
-            const rowKey = groupBy ? (l.itemId ? `${l.itemId}::${l.twistName || ''}` : idx) : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
+            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
             const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
 
             return (

@@ -10075,14 +10075,17 @@ async function generateSummaryData(stage, type, date) {
     summary.totalBobbinWeight = issues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0), 0);
     summary.totalYarnKg = issues.reduce((sum, i) => sum + (i.yarnKg || 0), 0);
 
+    // Helper to check if issue is opening stock
+    const isOpeningStock = (issue) => issue.note && issue.note.toLowerCase().includes('opening stock');
+
     summary.details = issues.map(i => ({
-      machineName: i.machine?.name || '-',
+      machineName: i.machine?.name || (isOpeningStock(i) ? 'Opening Stock' : '-'),
       itemName: itemMap[i.itemId] || i.itemId || '-',
       lotNo: i.lotNo || '-',
       cutName: getCutNameForIssue(i),
       twistName: i.twist?.name || '-',
       yarnName: i.yarn?.name || '-',
-      operatorName: i.operator?.name || '-',
+      operatorName: i.operator?.name || (isOpeningStock(i) ? 'Opening Stock' : '-'),
       shift: i.shift || '-',
       metallicBobbins: i.metallicBobbins || 0,
       metallicBobbinsWeight: i.metallicBobbinsWeight || 0,

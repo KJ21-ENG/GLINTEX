@@ -46,14 +46,17 @@ export async function generateHoloReceivePdf(data) {
         { text: 'Machine', align: 'left' },
         { text: 'Item', align: 'left' },
         { text: 'Lot No', align: 'left' },
+        { text: 'Cut', align: 'left' },
+        { text: 'Twist', align: 'left' },
+        { text: 'Yarn', align: 'left' },
         { text: 'Operator', align: 'left' },
         { text: 'Box', align: 'left' },
-        { text: 'Roll Count', align: 'right' },
+        { text: 'Rolls', align: 'right' },
         { text: 'Net Wt (kg)', align: 'right' },
     ];
 
-    // Column widths for landscape A4
-    const colWidths = [12, 35, 45, 35, 40, 35, 30, 35];
+    // Column widths for landscape A4 (297mm - 30mm margins = 267mm total)
+    const colWidths = [10, 25, 32, 22, 22, 22, 25, 30, 22, 20, 27];
 
     const rows = [];
     let totalRolls = 0;
@@ -72,6 +75,9 @@ export async function generateHoloReceivePdf(data) {
                     { text: item.machineName || '-', align: 'left' },
                     { text: item.itemName || '-', align: 'left' },
                     { text: item.lotNo || '-', align: 'left' },
+                    { text: item.cutName || '-', align: 'left' },
+                    { text: item.twistName || '-', align: 'left' },
+                    { text: item.yarnName || '-', align: 'left' },
                     { text: item.operatorName || '-', align: 'left' },
                     { text: item.boxName || '-', align: 'left' },
                     { text: formatNumber(rolls), align: 'right' },
@@ -86,6 +92,9 @@ export async function generateHoloReceivePdf(data) {
             cells: [
                 { text: '', align: 'center' },
                 { text: 'TOTAL', align: 'left' },
+                { text: '', align: 'left' },
+                { text: '', align: 'left' },
+                { text: '', align: 'left' },
                 { text: '', align: 'left' },
                 { text: '', align: 'left' },
                 { text: '', align: 'left' },

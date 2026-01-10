@@ -10031,6 +10031,46 @@ async function generateSummaryData(stage, type, date) {
     const itemIds = [...new Set(issues.map(i => i.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
 
+    // For issues without cutId, look up from source ReceiveFromCutterMachineRow
+    // Extract all source row IDs from receivedRowRefs
+    const sourceRowIds = [];
+    for (const issue of issues) {
+      if (!issue.cutId && Array.isArray(issue.receivedRowRefs)) {
+        for (const ref of issue.receivedRowRefs) {
+          if (ref.rowId) sourceRowIds.push(ref.rowId);
+        }
+      }
+    }
+
+    // Lookup source rows to get their cutId
+    let sourceRowCutMap = new Map();
+    if (sourceRowIds.length > 0) {
+      const sourceRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: sourceRowIds } },
+        select: { id: true, cutId: true, cut: true, cutMaster: true },
+        include: { cutMaster: true },
+      });
+      for (const row of sourceRows) {
+        sourceRowCutMap.set(row.id, row.cutMaster?.name || row.cut || null);
+      }
+    }
+
+    // Helper to get cut name for an issue
+    function getCutNameForIssue(issue) {
+      // If issue has cut directly (Opening Stock entries)
+      if (issue.cut?.name) return issue.cut.name;
+
+      // Look up from source rows
+      if (Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length > 0) {
+        for (const ref of issue.receivedRowRefs) {
+          if (ref.rowId && sourceRowCutMap.has(ref.rowId)) {
+            return sourceRowCutMap.get(ref.rowId);
+          }
+        }
+      }
+      return '-';
+    }
+
     summary.totalCount = issues.length;
     summary.totalMetallicBobbins = issues.reduce((sum, i) => sum + (i.metallicBobbins || 0), 0);
     summary.totalBobbinWeight = issues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0), 0);
@@ -10040,7 +10080,7 @@ async function generateSummaryData(stage, type, date) {
       machineName: i.machine?.name || '-',
       itemName: itemMap[i.itemId] || i.itemId || '-',
       lotNo: i.lotNo || '-',
-      cutName: i.cut?.name || '-',
+      cutName: getCutNameForIssue(i),
       twistName: i.twist?.name || '-',
       yarnName: i.yarn?.name || '-',
       operatorName: i.operator?.name || '-',
@@ -10063,7 +10103,7 @@ async function generateSummaryData(stage, type, date) {
   } else if (stage === 'holo' && type === 'receive') {
     const rows = await prisma.receiveFromHoloMachineRow.findMany({
       where: { date },
-      include: { operator: true, box: true, issue: { include: { machine: true } } },
+      include: { operator: true, box: true, issue: { include: { machine: true, cut: true, twist: true, yarn: true } } },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -10083,10 +10123,13 @@ async function generateSummaryData(stage, type, date) {
     summary.totalNetWeight = rows.reduce((sum, r) => sum + netWeight(r), 0);
 
     summary.details = rows.map(r => ({
-      machineName: r.issue?.machine?.name || '-',
+      machineName: r.issue?.machine?.name || (r.issue?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
       itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
       lotNo: r.issue?.lotNo || '-',
-      operatorName: r.operator?.name || '-',
+      cutName: r.issue?.cut?.name || '-',
+      twistName: r.issue?.twist?.name || '-',
+      yarnName: r.issue?.yarn?.name || '-',
+      operatorName: r.operator?.name || (r.issue?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
       boxName: r.box?.name || '-',
       rollCount: r.rollCount || 0,
       netWeight: netWeight(r),

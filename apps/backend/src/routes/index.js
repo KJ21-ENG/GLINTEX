@@ -10047,7 +10047,6 @@ async function generateSummaryData(stage, type, date) {
     if (sourceRowIds.length > 0) {
       const sourceRows = await prisma.receiveFromCutterMachineRow.findMany({
         where: { id: { in: sourceRowIds } },
-        select: { id: true, cutId: true, cut: true, cutMaster: true },
         include: { cutMaster: true },
       });
       for (const row of sourceRows) {

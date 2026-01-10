@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { IssueToCutter } from '../components/issue';
 import { IssueToHolo } from '../components/issue';
@@ -7,13 +7,42 @@ import { OnMachineTable } from '../components/issue';
 import { IssueHistory } from './IssueHistory';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/ui';
 import { sendSummaryWhatsApp } from '../api/client';
-import { Send } from 'lucide-react';
+import { Send, Calendar } from 'lucide-react';
+
+function getTodayISO() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return 'Today';
+  const today = getTodayISO();
+  if (dateStr === today) return 'Today';
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}/${y}`;
+}
 
 export function IssueToMachine() {
   const { process, db, refreshDb } = useInventory();
   const [activeTab, setActiveTab] = useState('on-machine');
   const [sendingSum, setSendingSum] = useState(false);
   const [sumMessage, setSumMessage] = useState(null);
+  const [summaryDate, setSummaryDate] = useState(getTodayISO());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
+  const pickerRef = useRef(null);
+
+  // Close date picker on outside click
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+        setShowDatePicker(false);
+      }
+    }
+    if (showDatePicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showDatePicker]);
 
   const handleSendSummary = async () => {
     if (sendingSum) return;
@@ -21,7 +50,7 @@ export function IssueToMachine() {
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      const result = await sendSummaryWhatsApp(stage, 'issue');
+      const result = await sendSummaryWhatsApp(stage, 'issue', summaryDate);
       if (result.ok) {
         setSumMessage({ type: 'success', text: 'Summary sent successfully!' });
       } else {
@@ -35,6 +64,17 @@ export function IssueToMachine() {
     }
   };
 
+  const handleRightClick = (e) => {
+    e.preventDefault();
+    setPickerPosition({ x: e.clientX, y: e.clientY });
+    setShowDatePicker(true);
+  };
+
+  const handleDateChange = (e) => {
+    setSummaryDate(e.target.value);
+    setShowDatePicker(false);
+  };
+
   return (
     <div className="space-y-6 fade-in">
       <div className="flex items-center justify-between">
@@ -45,18 +85,51 @@ export function IssueToMachine() {
               {sumMessage.text}
             </span>
           )}
+          {summaryDate !== getTodayISO() && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <Calendar className="h-3 w-3" />
+              {formatDateDisplay(summaryDate)}
+            </span>
+          )}
           <Button
             variant="outline"
             size="sm"
             onClick={handleSendSummary}
+            onContextMenu={handleRightClick}
             disabled={sendingSum}
             className="flex items-center gap-2"
+            title="Left-click to send, Right-click to change date"
           >
             <Send className="h-4 w-4" />
             {sendingSum ? 'Sending...' : 'Send Summary'}
           </Button>
         </div>
       </div>
+
+      {/* Date Picker Popup */}
+      {showDatePicker && (
+        <div
+          ref={pickerRef}
+          className="fixed z-50 bg-background border rounded-lg shadow-lg p-3"
+          style={{
+            left: Math.min(pickerPosition.x, window.innerWidth - 220),
+            top: Math.min(pickerPosition.y, window.innerHeight - 100),
+          }}
+        >
+          <label className="block text-sm font-medium mb-2">Summary Date</label>
+          <input
+            type="date"
+            value={summaryDate}
+            onChange={handleDateChange}
+            max={getTodayISO()}
+            className="w-full px-3 py-2 border rounded-md text-sm"
+            autoFocus
+          />
+          <p className="text-xs text-muted-foreground mt-2">
+            Select date for summary PDF
+          </p>
+        </div>
+      )}
 
       {/* Process Specific Form */}
       {process === 'holo' ? (

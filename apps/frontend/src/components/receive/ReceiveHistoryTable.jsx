@@ -250,7 +250,18 @@ export function ReceiveHistoryTable() {
 
     const formatInputDate = (value) => {
         if (!value) return '';
-        return String(value).slice(0, 10);
+        try {
+            // Handle DD/MM/YYYY format if passed as string (e.g. from formatted view)
+            if (typeof value === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+                const [d, m, y] = value.split('/');
+                return `${y}-${m}-${d}`;
+            }
+            const d = new Date(value);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toISOString().split('T')[0];
+        } catch (e) {
+            return '';
+        }
     };
 
     const buildPieceOptions = (pieceIds = []) => {
@@ -302,12 +313,36 @@ export function ReceiveHistoryTable() {
     };
 
     const extractWastageFromNote = (note) => {
+        // ... (unchanged)
         if (!note) return 0;
         const match = String(note).match(/([0-9]+(?:\.[0-9]+)?)/);
         if (!match) return 0;
         const value = Number(match[1].replace(/,/g, ''));
         return Number.isFinite(value) ? roundTo3Decimals(value) : 0;
     };
+
+    // ... (keeping other helper functions if they were in the range, but extractingWastageFromNote is usually later. 
+    // Wait, I am replacing a range. I should only replace what I need or be careful with the context.)
+    // logic of openReceiveEditor is what I want to change.
+
+    // I will replace `formatInputDate` at the top and `openReceiveEditor` content.
+    // However, since they are far apart, I should use MULTI_REPLACE or be minimal.
+    // The previous tool call output showed lines 580-640 which is inside openReceiveEditor.
+    // formatInputDate is around line 251.
+    // I should use multi_replace.
+
+    // Actually, I can just redefine formatInputDate locally inside openReceiveEditor? No, it's used elsewhere.
+    // I will change the request to multi_replace or just focus on openReceiveEditor and use a local helper or better logic.
+    // Since I can't use multi_replace in this turn (one tool call per turn constraint was not mentioned but usually best practice to use the right tool).
+    // The prompt says "Use this tool ONLY when you are making MULTIPLE, NON-CONTIGUOUS edits...".
+    // I will use `multi_replace_file_content`.
+
+    // Re-reading: "Do NOT make multiple parallel calls to this tool or the replace_file_content tool for the same file."
+
+    // I will use `multi_replace_file_content` to fix `formatInputDate` AND `openReceiveEditor`.
+
+
+
 
     const resolveWastageResetAmount = ({ pieceId, affected, serverAmount }) => {
         const serverValue = Number(serverAmount);
@@ -584,39 +619,68 @@ export function ReceiveHistoryTable() {
         if (process === 'holo') {
             const pieceOptions = resolveHoloPieceOptions(row);
             const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : '');
-            const grossWeight = row.grossWeight != null
-                ? String(row.grossWeight)
-                : (Number.isFinite(row.rollWeight) && Number.isFinite(row.tareWeight)
-                    ? String(roundTo3Decimals(Number(row.rollWeight) + Number(row.tareWeight)))
-                    : '');
+
+            let grossWeight = '';
+            if (row.grossWeight != null) {
+                grossWeight = String(row.grossWeight);
+            } else if (Number.isFinite(row.rollWeight)) {
+                let tare = row.tareWeight;
+                if (!Number.isFinite(tare)) {
+                    // Fallback: calculate tare from master data
+                    const rollTypeWeight = Number((db.rollTypes || []).find(rt => rt.id === (row.rollTypeId || ''))?.weight || 0);
+                    const boxWeight = Number((db.boxes || []).find(b => b.id === (row.boxId || ''))?.weight || 0);
+                    const count = Number(row.rollCount || 1);
+                    tare = rollTypeWeight * count + boxWeight;
+                }
+                // Only if we have a valid tare can we back-calculate gross
+                if (Number.isFinite(tare)) {
+                    grossWeight = String(roundTo3Decimals(Number(row.rollWeight) + Number(tare)));
+                }
+            }
+
+            // Try to find the related issue to fallback for machine/operator/helper
+            const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
 
             setReceiveDraft({
                 date: formatInputDate(row.date || row.createdAt),
-                rollTypeId: row.rollTypeId || '',
-                boxId: row.boxId || '',
+                rollTypeId: row.rollTypeId || row.rollType?.id || '',
+                boxId: row.boxId || row.box?.id || '',
                 rollCount: row.rollCount != null ? String(row.rollCount) : '',
                 grossWeight,
-                machineNo: row.machineNo || '',
-                operatorId: row.operatorId || '',
-                helperId: row.helperId || '',
+                machineNo: row.machineNo || row.machine?.name || db.machines?.find(m => m.id === issue?.machineId)?.name || '',
+                operatorId: row.operatorId || row.operator?.id || issue?.operatorId || '',
+                helperId: row.helperId || row.helper?.id || issue?.helperId || '',
                 notes: row.notes || row.note || '',
                 pieceId,
             });
         } else if (process === 'coning') {
-            const grossWeight = row.grossWeight != null
-                ? String(row.grossWeight)
-                : (Number.isFinite(row.netWeight) && Number.isFinite(row.tareWeight)
-                    ? String(roundTo3Decimals(Number(row.netWeight) + Number(row.tareWeight)))
-                    : '');
+            let grossWeight = '';
+            if (row.grossWeight != null) {
+                grossWeight = String(row.grossWeight);
+            } else if (Number.isFinite(row.netWeight)) {
+                let tare = row.tareWeight;
+                if (!Number.isFinite(tare)) {
+                    // Fallback: calculate tare from master data for coning
+                    const issue = resolveConingIssue(row);
+                    const coneType = resolveConingConeType(issue);
+                    const coneWeight = Number(coneType?.weight || 0);
+                    const boxWeight = Number((db.boxes || []).find(b => b.id === (row.boxId || ''))?.weight || 0);
+                    const count = Number(row.coneCount || 0);
+                    tare = boxWeight + coneWeight * count;
+                }
+                if (Number.isFinite(tare)) {
+                    grossWeight = String(roundTo3Decimals(Number(row.netWeight) + Number(tare)));
+                }
+            }
 
             setReceiveDraft({
                 date: formatInputDate(row.date || row.createdAt),
-                boxId: row.boxId || '',
+                boxId: row.boxId || row.box?.id || '',
                 coneCount: row.coneCount != null ? String(row.coneCount) : '',
                 grossWeight,
-                machineNo: row.machineNo || '',
-                operatorId: row.operatorId || '',
-                helperId: row.helperId || '',
+                machineNo: row.machineNo || row.machine?.name || '',
+                operatorId: row.operatorId || row.operator?.id || '',
+                helperId: row.helperId || row.helper?.id || '',
                 notes: row.notes || '',
             });
         }

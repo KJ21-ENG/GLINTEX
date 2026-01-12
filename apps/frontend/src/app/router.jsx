@@ -18,8 +18,7 @@ import {
   Settings,
   Login,
   Setup,
-  ScaleTestPage,
-  Boiler
+  ScaleTestPage
 } from "../pages";
 import LabelDesigner from "../pages/Settings/LabelDesigner";
 
@@ -79,10 +78,6 @@ export const router = createBrowserRouter([
       {
         path: "settings/label-designer",
         element: <LabelDesigner />,
-      },
-      {
-        path: "boiler",
-        element: <Boiler />,
       },
     ],
   },

@@ -253,9 +253,6 @@ export async function boxTransferHistory(params = {}) {
 }
 export async function boxTransferReverse(id) { return await request(`/api/box-transfer/${id}/reverse`, { method: 'POST' }); }
 
-// Boiler (Steaming)
-export async function steamBoilerItems(barcodes) { return await request('/api/boiler/steam', { method: 'POST', body: { barcodes } }); }
-
 // Reports
 export async function getBarcodeHistory(barcode) { return await request(`/api/reports/barcode-history/${encodeURIComponent(barcode)}`); }
 export async function getProductionReport(params = {}) {

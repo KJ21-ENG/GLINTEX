@@ -212,17 +212,6 @@ model ReceiveFromHoloMachineRow {
   box         Box?               @relation(fields: [boxId], references: [id])
   operator    Operator?           @relation("OperatorHoloReceive", fields: [operatorId], references: [id])
   helper      Operator?           @relation("HelperHoloReceive", fields: [helperId], references: [id])
-  steamedAt   DateTime?
-  steamedByUserId String?
-  boilerBatchId String?
-  boilerBatch BoilerBatch?       @relation(fields: [boilerBatchId], references: [id])
-}
-
-model BoilerBatch {
-  id              String                        @id @default(cuid())
-  createdAt       DateTime                      @default(now())
-  createdByUserId String?
-  rows            ReceiveFromHoloMachineRow[]
 }
 
 model ReceiveFromHoloMachinePieceTotal {

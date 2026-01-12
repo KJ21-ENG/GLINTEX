@@ -15,8 +15,7 @@ import {
   Moon,
   Sun,
   Factory,
-  ClipboardPlus,
-  Flame
+  ClipboardPlus
 } from "lucide-react";
 import { useInventory } from "../../context/InventoryContext";
 import { Button, Select } from "../ui";
@@ -29,7 +28,6 @@ const NAV_ITEMS = [
   { key: "issue", label: "Issue to Machine", icon: ArrowRightFromLine },
   { key: "receive", label: "Receive from Machine", icon: ArrowLeftToLine },
   { key: "dispatch", label: "Dispatch", icon: Truck },
-  { key: "boiler", label: "Boiler", icon: Flame },
   { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus },
   { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft },
   { key: "masters", label: "Masters", icon: Database },

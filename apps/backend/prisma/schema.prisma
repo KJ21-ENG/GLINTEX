@@ -169,6 +169,9 @@ model IssueToHoloMachine {
   yarnKg              Float    @default(0)
   receivedRowRefs     Json     @default("[]")
   rollsProducedEstimate Int?
+  isDeleted           Boolean  @default(false)
+  deletedAt           DateTime?
+  deletedByUserId     String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
   createdByUserId     String?
@@ -280,6 +283,9 @@ model IssueToConingMachine {
   requiredPerConeNetWeight Float   @default(0)
   expectedCones  Float     @default(0)
   receivedRowRefs Json     @default("[]")
+  isDeleted       Boolean  @default(false)
+  deletedAt       DateTime?
+  deletedByUserId String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -345,6 +351,9 @@ model IssueToCutterMachine {
   machineId   String?
   operatorId  String?
   barcode     String  @unique
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -674,4 +683,3 @@ model BoilerSteamLog {
   createdByUserId  String?
   updatedByUserId  String?
 }
-

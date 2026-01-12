@@ -86,6 +86,20 @@ export async function resetAdminUserPassword(id, password) {
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function updateIssueToCutterMachine(id, payload) {
+  return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToHoloMachine(id, payload) {
+  return await request(`/api/issue_to_holo_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToConingMachine(id, payload) {
+  return await request(`/api/issue_to_coning_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToMachine(id, process = 'cutter', payload) {
+  if (process === 'holo') return await updateIssueToHoloMachine(id, payload);
+  if (process === 'coning') return await updateIssueToConingMachine(id, payload);
+  return await updateIssueToCutterMachine(id, payload);
+}
 export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
 export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }

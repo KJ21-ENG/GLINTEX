@@ -99,7 +99,8 @@ async function isHoloRowReferencedByConing({ rowId, barcode }) {
   const barcodeArray = barcode ? [String(barcode)] : ['__none__'];
   const coningUsage = await prisma.$queryRaw`
     SELECT id FROM "IssueToConingMachine"
-    WHERE EXISTS (
+    WHERE "isDeleted" = false
+      AND EXISTS (
       SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
       WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
          OR elem->>'barcode' = ANY (${barcodeArray}::text[])
@@ -1054,9 +1055,17 @@ router.get('/api/db', async (req, res) => {
   const boxes = await prisma.box.findMany();
   const lots = await prisma.lot.findMany();
   const inbound_items = await prisma.inboundItem.findMany();
-  const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany();
-  const issue_to_holo_machine_raw = await prisma.issueToHoloMachine.findMany({ orderBy: { createdAt: 'desc' } });
-  const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({ orderBy: { createdAt: 'desc' } });
+  const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany({
+    where: { isDeleted: false },
+  });
+  const issue_to_holo_machine_raw = await prisma.issueToHoloMachine.findMany({
+    where: { isDeleted: false },
+    orderBy: { createdAt: 'desc' },
+  });
+  const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({
+    where: { isDeleted: false },
+    orderBy: { createdAt: 'desc' },
+  });
   const settings = await prisma.settings.findMany();
   const customers = await prisma.customer.findMany({ orderBy: { name: 'asc' } });
   const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
@@ -1255,7 +1264,7 @@ router.get('/api/db', async (req, res) => {
   const holoIssueIds = [...new Set(holoRowsForConing.map(r => r.issueId).filter(Boolean))];
   const holoIssuesForConing = holoIssueIds.length > 0
     ? await prisma.issueToHoloMachine.findMany({
-      where: { id: { in: holoIssueIds } },
+      where: { id: { in: holoIssueIds }, isDeleted: false },
       select: { id: true, receivedRowRefs: true },
     })
     : [];
@@ -1390,7 +1399,7 @@ router.get('/api/issue_to_cutter_machine', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode query param' });
-    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findFirst({ where: { barcode, isDeleted: false } });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
@@ -1417,7 +1426,7 @@ router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToCutterMachine.findFirst({ where: { barcode, isDeleted: false } });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
     res.json({ ...issue, pieceIds });
@@ -1431,7 +1440,7 @@ router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToHoloMachine.findUnique({ where: { barcode } });
+    const issue = await prisma.issueToHoloMachine.findFirst({ where: { barcode, isDeleted: false } });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     const receivedRefs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
     const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
@@ -4080,7 +4089,9 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
     if (!inbound) return res.status(404).json({ error: 'Piece not found' });
 
     // Verify piece was issued to machine at least once
-    const issuedCount = await prisma.issueToCutterMachine.count({ where: { pieceIds: { contains: pieceId } } });
+    const issuedCount = await prisma.issueToCutterMachine.count({
+      where: { pieceIds: { contains: pieceId }, isDeleted: false },
+    });
     if (issuedCount === 0) return res.status(400).json({ error: 'Piece was not issued to machine' });
 
     // Fetch current received and wastage totals
@@ -4474,7 +4485,9 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
     let resolvedPieceId = pieceId;
     let resolvedLotNo = lotNo;
     if (normalizedIssueCode) {
-      const issue = await prisma.issueToCutterMachine.findUnique({ where: { barcode: normalizedIssueCode } });
+      const issue = await prisma.issueToCutterMachine.findFirst({
+        where: { barcode: normalizedIssueCode, isDeleted: false },
+      });
       if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
       const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
       if (pieceIds.length !== 1) {
@@ -5402,8 +5415,8 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
 
     const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
-    const issue = await prisma.issueToHoloMachine.findUnique({
-      where: { id: issueId },
+    const issue = await prisma.issueToHoloMachine.findFirst({
+      where: { id: issueId, isDeleted: false },
       select: { lotNo: true, barcode: true, itemId: true, receivedRowRefs: true },
     });
     if (!issue) {
@@ -6009,7 +6022,8 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       existingRowRefs = await prisma.$queryRaw`
         SELECT id, "receivedRowRefs"
         FROM "IssueToConingMachine"
-        WHERE EXISTS (
+        WHERE "isDeleted" = false
+          AND EXISTS (
           SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
           WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
              OR elem->>'barcode' = ANY (${barcodeArray}::text[])
@@ -6151,7 +6165,9 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
     if (!issueId || !pieceId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
       return res.status(400).json({ error: 'Missing required cone or gross weight data' });
     }
-    const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
+    const issue = await prisma.issueToConingMachine.findFirst({
+      where: { id: issueId, isDeleted: false },
+    });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
 
     let boxWeight = null;
@@ -6685,7 +6701,9 @@ router.delete('/api/items/:id', async (req, res) => {
   if (!existingItem) {
     return res.status(404).json({ error: 'Item not found' });
   }
-  const usage = await prisma.lot.count({ where: { itemId: id } }) + await prisma.inboundItem.count({ where: { itemId: id } }) + await prisma.issueToCutterMachine.count({ where: { itemId: id } });
+  const usage = await prisma.lot.count({ where: { itemId: id } }) +
+    await prisma.inboundItem.count({ where: { itemId: id } }) +
+    await prisma.issueToCutterMachine.count({ where: { itemId: id, isDeleted: false } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
@@ -6781,7 +6799,7 @@ router.delete('/api/yarns/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Yarn not found' });
     }
-    const issueUsage = await prisma.issueToHoloMachine.count({ where: { yarnId: id } });
+    const issueUsage = await prisma.issueToHoloMachine.count({ where: { yarnId: id, isDeleted: false } });
     if (issueUsage > 0) {
       return res.status(400).json({ error: 'Yarn has been used in issues and cannot be deleted' });
     }
@@ -6923,7 +6941,7 @@ router.delete('/api/twists/:id', async (req, res) => {
     if (!existing) {
       return res.status(404).json({ error: 'Twist not found' });
     }
-    const usage = await prisma.issueToHoloMachine.count({ where: { twistId: id } });
+    const usage = await prisma.issueToHoloMachine.count({ where: { twistId: id, isDeleted: false } });
     if (usage > 0) {
       return res.status(400).json({ error: 'Twist is in use and cannot be deleted' });
     }
@@ -7047,7 +7065,7 @@ router.delete('/api/machines/:id', async (req, res) => {
   const { id } = req.params;
   const existingMachine = await prisma.machine.findUnique({ where: { id } });
   if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
-  const usage = await prisma.issueToCutterMachine.count({ where: { machineId: id } });
+  const usage = await prisma.issueToCutterMachine.count({ where: { machineId: id, isDeleted: false } });
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
@@ -7102,7 +7120,7 @@ router.delete('/api/operators/:id', async (req, res) => {
   const existingOperator = await prisma.operator.findUnique({ where: { id } });
   if (!existingOperator) return res.status(404).json({ error: 'Operator not found' });
   const usage =
-    (await prisma.issueToCutterMachine.count({ where: { operatorId: id } })) +
+    (await prisma.issueToCutterMachine.count({ where: { operatorId: id, isDeleted: false } })) +
     (await prisma.receiveFromCutterMachineRow.count({
       where: {
         OR: [
@@ -7484,13 +7502,759 @@ router.put('/api/boxes/:id', async (req, res) => {
   }
 });
 
+router.put('/api/issue_to_cutter_machine/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const {
+      date,
+      note,
+      machineId,
+      operatorId,
+      cutId,
+      pieceIds: rawPieceIds,
+    } = req.body || {};
+
+    const issueRecord = await prisma.issueToCutterMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to machine record not found' });
+    }
+
+    const existingPieceIds = issueRecord.pieceIds
+      ? issueRecord.pieceIds.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+    const receiveCount = existingPieceIds.length > 0
+      ? await prisma.receiveFromCutterMachineRow.count({
+        where: { pieceId: { in: existingPieceIds }, isDeleted: false },
+      })
+      : 0;
+
+    let nextPieceIds = null;
+    if (rawPieceIds !== undefined) {
+      if (Array.isArray(rawPieceIds)) {
+        nextPieceIds = rawPieceIds;
+      } else if (typeof rawPieceIds === 'string') {
+        nextPieceIds = rawPieceIds.split(',');
+      } else {
+        return res.status(400).json({ error: 'pieceIds must be an array' });
+      }
+      nextPieceIds = nextPieceIds.map(p => String(p).trim()).filter(Boolean);
+      if (nextPieceIds.length === 0) {
+        return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
+      }
+      const unique = new Set(nextPieceIds);
+      if (unique.size !== nextPieceIds.length) {
+        return res.status(400).json({ error: 'Duplicate piece IDs are not allowed' });
+      }
+    }
+
+    const sameSet = (a, b) => {
+      if (a.length !== b.length) return false;
+      const setA = new Set(a);
+      if (setA.size !== b.length) return false;
+      return b.every((item) => setA.has(item));
+    };
+
+    const isPieceChange = Array.isArray(nextPieceIds) && !sameSet(nextPieceIds, existingPieceIds);
+    if (isPieceChange && receiveCount > 0) {
+      return res.status(400).json({ error: 'Cannot change pieces: receive records exist for this issue' });
+    }
+
+    let updatedIssue = issueRecord;
+
+    await prisma.$transaction(async (tx) => {
+      const data = {};
+
+      if (date !== undefined) {
+        const trimmed = String(date).trim();
+        if (!trimmed) throw new Error('Date is required');
+        data.date = trimmed;
+      }
+      if (note !== undefined) data.note = note ? String(note) : null;
+      if (machineId !== undefined) data.machineId = machineId || null;
+      if (operatorId !== undefined) data.operatorId = operatorId || null;
+      if (cutId !== undefined) data.cutId = cutId || null;
+
+      if (isPieceChange) {
+        const pieces = await tx.inboundItem.findMany({
+          where: { id: { in: nextPieceIds } },
+          orderBy: { seq: 'asc' },
+        });
+        if (pieces.length !== nextPieceIds.length) {
+          throw new Error('One or more pieces do not exist');
+        }
+
+        const itemIds = new Set(pieces.map(p => p.itemId));
+        const lotNos = new Set(pieces.map(p => p.lotNo));
+        if (itemIds.size !== 1) throw new Error('Pieces must belong to a single item');
+        if (lotNos.size !== 1) throw new Error('Pieces must belong to a single lot');
+
+        const existingSet = new Set(existingPieceIds);
+        for (const piece of pieces) {
+          if (piece.status !== 'available' && !existingSet.has(piece.id)) {
+            throw new Error(`Piece ${piece.id} is not available`);
+          }
+        }
+
+        const overlapIssue = await tx.issueToCutterMachine.findFirst({
+          where: {
+            isDeleted: false,
+            id: { not: id },
+            OR: nextPieceIds.map(pid => ({ pieceIds: { contains: pid } })),
+          },
+          select: { id: true },
+        });
+        if (overlapIssue) {
+          throw new Error('One or more selected pieces are already issued');
+        }
+
+        const totalWeight = pieces.reduce((sum, piece) => sum + Number(piece.weight || 0), 0);
+
+        data.itemId = pieces[0].itemId;
+        data.lotNo = pieces[0].lotNo;
+        data.count = nextPieceIds.length;
+        data.totalWeight = totalWeight;
+        data.pieceIds = nextPieceIds.join(',');
+
+        const nextSet = new Set(nextPieceIds);
+        const removed = existingPieceIds.filter(pid => !nextSet.has(pid));
+        const added = nextPieceIds.filter(pid => !existingSet.has(pid));
+
+        if (removed.length > 0) {
+          await tx.inboundItem.updateMany({
+            where: { id: { in: removed } },
+            data: { status: 'available', ...actorUpdateFields(actorUserId) },
+          });
+        }
+        if (added.length > 0) {
+          await tx.inboundItem.updateMany({
+            where: { id: { in: added } },
+            data: { status: 'consumed', ...actorUpdateFields(actorUserId) },
+          });
+        }
+      }
+
+      if (Object.keys(data).length > 0) {
+        updatedIssue = await tx.issueToCutterMachine.update({
+          where: { id },
+          data: { ...data, ...actorUpdateFields(actorUserId) },
+        });
+      }
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'issue_to_cutter_machine',
+      entityId: id,
+      action: 'update',
+      before: issueRecord,
+      after: updatedIssue,
+      payload: {
+        pieceIdsChanged: isPieceChange,
+      },
+    });
+
+    res.json({ ok: true, issueToCutterMachine: updatedIssue, issueToMachine: updatedIssue });
+  } catch (err) {
+    console.error('Failed to update issue_to_cutter_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to update issue_to_cutter_machine' });
+  }
+});
+
+router.put('/api/issue_to_holo_machine/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const {
+      date,
+      machineId,
+      operatorId,
+      yarnId,
+      yarnKg,
+      note,
+      crates,
+      receivedRowRefs,
+      rollsProducedEstimate,
+      twistId,
+      shift,
+      cutId,
+    } = req.body || {};
+
+    const issueRecord = await prisma.issueToHoloMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to Holo machine record not found' });
+    }
+
+    const receiveCount = await prisma.receiveFromHoloMachineRow.count({
+      where: { issueId: id, isDeleted: false },
+    });
+    const hasReceives = receiveCount > 0;
+
+    const cratesInput = Array.isArray(crates)
+      ? crates
+      : (Array.isArray(receivedRowRefs) ? receivedRowRefs : undefined);
+    const wantsCrateUpdate = cratesInput !== undefined;
+
+    if (hasReceives && wantsCrateUpdate) {
+      return res.status(400).json({ error: 'Cannot change crates: receive records exist for this issue' });
+    }
+
+    let updatedIssue = issueRecord;
+
+    await prisma.$transaction(async (tx) => {
+      const data = {};
+
+      if (date !== undefined) {
+        const trimmed = String(date).trim();
+        if (!trimmed) throw new Error('Date is required');
+        data.date = trimmed;
+      }
+      if (note !== undefined) data.note = note ? String(note) : null;
+      if (machineId !== undefined) data.machineId = machineId || null;
+      if (operatorId !== undefined) data.operatorId = operatorId || null;
+      if (shift !== undefined) data.shift = shift || null;
+      if (cutId !== undefined) data.cutId = cutId || null;
+
+      if (!hasReceives) {
+        if (yarnId !== undefined) data.yarnId = yarnId || null;
+        if (twistId !== undefined) data.twistId = twistId || null;
+        if (rollsProducedEstimate !== undefined) {
+          const estimate = Number(rollsProducedEstimate);
+          data.rollsProducedEstimate = Number.isFinite(estimate) ? estimate : null;
+        }
+        if (yarnKg !== undefined) {
+          const yarnKgNum = Number(yarnKg);
+          data.yarnKg = Number.isFinite(yarnKgNum) ? yarnKgNum : 0;
+        }
+      }
+
+      if (wantsCrateUpdate) {
+        const normalizedCrates = cratesInput
+          .map((crate) => ({
+            rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
+            issuedBobbins: Number(crate.issuedBobbins || 0),
+            issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
+          }))
+          .filter((crate) => crate.rowId);
+
+        if (normalizedCrates.length === 0) {
+          throw new Error('Invalid crate payload');
+        }
+        if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbins) || crate.issuedBobbins <= 0)) {
+          throw new Error('Enter bobbin quantity for each scanned crate');
+        }
+        if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbinWeight) || crate.issuedBobbinWeight < 0)) {
+          throw new Error('Invalid bobbin weight for a crate');
+        }
+
+        const rowIds = normalizedCrates.map((crate) => crate.rowId);
+        const uniqueRowIds = new Set(rowIds);
+        if (uniqueRowIds.size !== rowIds.length) {
+          throw new Error('Duplicate crates were scanned. Remove duplicates and try again.');
+        }
+
+        const receiveRows = await tx.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: rowIds }, isDeleted: false },
+          select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
+        });
+        if (receiveRows.length !== normalizedCrates.length) {
+          throw new Error('One or more scanned crates were not found');
+        }
+
+        const pieceIds = Array.from(new Set(receiveRows.map((row) => row.pieceId).filter(Boolean)));
+        const pieces = await tx.inboundItem.findMany({
+          where: { id: { in: pieceIds } },
+          select: { id: true, itemId: true, lotNo: true },
+        });
+        const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
+        if (pieceMap.size !== pieceIds.length) {
+          throw new Error('One or more crates are missing linked inbound pieces');
+        }
+
+        const lotSet = new Set();
+        const itemSet = new Set();
+        for (const row of receiveRows) {
+          const piece = pieceMap.get(row.pieceId);
+          lotSet.add(piece.lotNo);
+          itemSet.add(piece.itemId);
+        }
+        if (itemSet.size !== 1) {
+          throw new Error('Crates must belong to a single item');
+        }
+        const lotNos = Array.from(lotSet).filter(Boolean);
+        if (lotNos.length === 0) {
+          throw new Error('Unable to resolve lot numbers for scanned crates');
+        }
+        const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
+        const itemId = Array.from(itemSet)[0];
+
+        const resolvedTwistId = twistId !== undefined ? (twistId || null) : issueRecord.twistId;
+        if (!resolvedTwistId) {
+          throw new Error('Missing twist selection');
+        }
+        const twistRecord = await tx.twist.findUnique({ where: { id: resolvedTwistId } });
+        if (!twistRecord) {
+          throw new Error('Selected twist not found');
+        }
+
+        let resolvedYarnId = yarnId !== undefined ? (yarnId || null) : issueRecord.yarnId;
+        if (resolvedYarnId) {
+          const yarnRecord = await tx.yarn.findUnique({ where: { id: resolvedYarnId } });
+          if (!yarnRecord) {
+            throw new Error('Selected yarn not found');
+          }
+        }
+
+        const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
+        const totalWeight = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
+
+        const oldRefsRaw = issueRecord.receivedRowRefs;
+        let oldRefs = Array.isArray(oldRefsRaw) ? oldRefsRaw : [];
+        if (typeof oldRefsRaw === 'string') {
+          try { oldRefs = JSON.parse(oldRefsRaw || '[]'); } catch (_) { oldRefs = []; }
+        }
+        const oldMap = new Map();
+        oldRefs.forEach((ref) => {
+          const rowId = typeof ref?.rowId === 'string' ? ref.rowId : null;
+          if (!rowId) return;
+          oldMap.set(rowId, {
+            issuedBobbins: Number(ref.issuedBobbins || 0),
+            issuedBobbinWeight: Number(ref.issuedBobbinWeight || 0),
+          });
+        });
+        const newMap = new Map();
+        normalizedCrates.forEach((ref) => {
+          newMap.set(ref.rowId, {
+            issuedBobbins: Number(ref.issuedBobbins || 0),
+            issuedBobbinWeight: Number(ref.issuedBobbinWeight || 0),
+          });
+        });
+
+        const allRowIds = Array.from(new Set([...oldMap.keys(), ...newMap.keys()]));
+        if (allRowIds.length > 0) {
+          const rowsForUpdate = await tx.receiveFromCutterMachineRow.findMany({
+            where: { id: { in: allRowIds }, isDeleted: false },
+            select: { id: true },
+          });
+          if (rowsForUpdate.length !== allRowIds.length) {
+            throw new Error('One or more referenced crates are missing');
+          }
+        }
+
+        for (const rowId of allRowIds) {
+          const oldVals = oldMap.get(rowId) || { issuedBobbins: 0, issuedBobbinWeight: 0 };
+          const newVals = newMap.get(rowId) || { issuedBobbins: 0, issuedBobbinWeight: 0 };
+          const deltaBobbins = Number(newVals.issuedBobbins || 0) - Number(oldVals.issuedBobbins || 0);
+          const deltaWeight = Number(newVals.issuedBobbinWeight || 0) - Number(oldVals.issuedBobbinWeight || 0);
+          if (deltaBobbins !== 0 || deltaWeight !== 0) {
+            await tx.receiveFromCutterMachineRow.update({
+              where: { id: rowId },
+              data: {
+                issuedBobbins: { increment: deltaBobbins },
+                issuedBobbinWeight: { increment: deltaWeight },
+                ...actorUpdateFields(actorUserId),
+              },
+            });
+          }
+        }
+
+        const yarnKgValue = yarnKg !== undefined
+          ? (Number.isFinite(Number(yarnKg)) ? Number(yarnKg) : 0)
+          : issueRecord.yarnKg;
+
+        data.itemId = itemId;
+        data.lotNo = lotNo;
+        data.twistId = resolvedTwistId;
+        data.yarnId = resolvedYarnId || null;
+        data.metallicBobbins = totalBobbins;
+        data.metallicBobbinsWeight = totalWeight;
+        data.yarnKg = yarnKgValue;
+        data.receivedRowRefs = normalizedCrates;
+      }
+
+      if (Object.keys(data).length > 0) {
+        updatedIssue = await tx.issueToHoloMachine.update({
+          where: { id },
+          data: { ...data, ...actorUpdateFields(actorUserId) },
+        });
+      }
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'issue_to_holo_machine',
+      entityId: id,
+      action: 'update',
+      before: issueRecord,
+      after: updatedIssue,
+      payload: {
+        cratesChanged: wantsCrateUpdate,
+      },
+    });
+
+    res.json({ ok: true, issueToHoloMachine: updatedIssue });
+  } catch (err) {
+    console.error('Failed to update issue_to_holo_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to update issue_to_holo_machine' });
+  }
+});
+
+router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const {
+      date,
+      machineId,
+      operatorId,
+      note,
+      crates,
+      receivedRowRefs,
+      requiredPerConeNetWeight: reqPerConeWt,
+      shift,
+    } = req.body || {};
+
+    const issueRecord = await prisma.issueToConingMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
+    if (!issueRecord) {
+      return res.status(404).json({ error: 'Issue to Coning machine record not found' });
+    }
+
+    const receiveCount = await prisma.receiveFromConingMachineRow.count({
+      where: { issueId: id, isDeleted: false },
+    });
+    const hasReceives = receiveCount > 0;
+
+    const cratesInput = Array.isArray(crates)
+      ? crates
+      : (Array.isArray(receivedRowRefs) ? receivedRowRefs : undefined);
+    const wantsCrateUpdate = cratesInput !== undefined;
+
+    if (hasReceives && (wantsCrateUpdate || reqPerConeWt !== undefined)) {
+      return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
+    }
+
+    let updatedIssue = issueRecord;
+
+    await prisma.$transaction(async (tx) => {
+      const data = {};
+
+      if (date !== undefined) {
+        const trimmed = String(date).trim();
+        if (!trimmed) throw new Error('Date is required');
+        data.date = trimmed;
+      }
+      if (note !== undefined) data.note = note ? String(note) : null;
+      if (machineId !== undefined) data.machineId = machineId || null;
+      if (operatorId !== undefined) data.operatorId = operatorId || null;
+      if (shift !== undefined) data.shift = shift || null;
+
+      if (wantsCrateUpdate) {
+        const requiredPerConeNetWeight = toNumber(reqPerConeWt);
+        const resolvedPerCone = requiredPerConeNetWeight != null
+          ? requiredPerConeNetWeight
+          : Number(issueRecord.requiredPerConeNetWeight || 0);
+        if (!Number.isFinite(resolvedPerCone) || resolvedPerCone <= 0) {
+          throw new Error('Enter required per-cone net weight (grams)');
+        }
+
+        const normalizedCrates = cratesInput
+          .map((crate) => ({
+            rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
+            barcode: typeof crate.barcode === 'string' ? normalizeBarcodeInput(crate.barcode) : '',
+            coneTypeId: typeof crate.coneTypeId === 'string' ? crate.coneTypeId : null,
+            wrapperId: typeof crate.wrapperId === 'string' ? crate.wrapperId : null,
+            boxId: typeof crate.boxId === 'string' ? crate.boxId : null,
+            issueRolls: toNumber(crate.issueRolls),
+            issueWeight: toNumber(crate.issueWeight),
+          }))
+          .filter((c) => c.rowId || c.barcode);
+
+        if (normalizedCrates.length === 0) throw new Error('Invalid crate payload');
+
+        const rowIds = normalizedCrates.map((c) => c.rowId).filter(Boolean);
+        const barcodes = normalizedCrates.map((c) => c.barcode).filter(Boolean);
+
+        const coningRows = rowIds.length
+          ? await tx.receiveFromConingMachineRow.findMany({
+            where: { id: { in: rowIds }, isDeleted: false },
+            include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+          })
+          : [];
+
+        const matchedConingRowIds = new Set(coningRows.map((row) => row.id));
+        const pendingRowIds = rowIds.filter((rid) => !matchedConingRowIds.has(rid));
+
+        const holoWhere = [];
+        if (pendingRowIds.length) {
+          holoWhere.push({ id: { in: pendingRowIds } });
+        }
+        if (barcodes.length) {
+          holoWhere.push({ barcode: { in: barcodes } });
+          barcodes.forEach((code) => {
+            holoWhere.push({ notes: { equals: code, mode: 'insensitive' } });
+          });
+        }
+
+        const holoRows = holoWhere.length
+          ? await tx.receiveFromHoloMachineRow.findMany({
+            where: { OR: holoWhere, isDeleted: false },
+            include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+          })
+          : [];
+
+        const rows = [...coningRows, ...holoRows];
+        if (rows.length === 0) throw new Error('One or more scanned crates were not found');
+
+        const rowMapById = new Map(rows.map((r) => [r.id, r]));
+        const rowMapByBarcode = new Map();
+        const ambiguousBarcodes = new Set();
+        rows.forEach((row) => {
+          if (!row?.barcode) return;
+          const code = normalizeBarcodeInput(row.barcode);
+          if (!code) return;
+          const existing = rowMapByBarcode.get(code);
+          if (existing && existing.id !== row.id) {
+            rowMapByBarcode.set(code, null);
+            ambiguousBarcodes.add(code);
+            return;
+          }
+          if (!existing) {
+            rowMapByBarcode.set(code, row);
+          }
+        });
+
+        const legacyMap = new Map();
+        const ambiguousLegacy = new Set();
+        holoRows.forEach((row) => {
+          if (!row?.notes) return;
+          const code = normalizeBarcodeInput(row.notes);
+          if (!code) return;
+          const existing = legacyMap.get(code);
+          if (existing && existing.id !== row.id) {
+            legacyMap.set(code, null);
+            ambiguousLegacy.add(code);
+            return;
+          }
+          if (!existing) {
+            legacyMap.set(code, row);
+          }
+        });
+
+        const legacyConflicts = normalizedCrates
+          .map((crate) => crate.barcode)
+          .filter((code) => code && (ambiguousBarcodes.has(code) || ambiguousLegacy.has(code)));
+        if (legacyConflicts.length > 0) {
+          throw new Error(`Legacy barcode matches multiple rows: ${Array.from(new Set(legacyConflicts)).join(', ')}`);
+        }
+
+        const resolvedCrates = normalizedCrates.map((crate) => {
+          let found = crate.rowId ? rowMapById.get(crate.rowId) : rowMapByBarcode.get(crate.barcode);
+          if (!found && crate.barcode) {
+            found = legacyMap.get(crate.barcode);
+          }
+          return {
+            ...crate,
+            rowId: found?.id || crate.rowId,
+            lotNo: found?.issue?.lotNo || null,
+            itemId: found?.issue?.itemId || null,
+            baseRolls: typeof found?.coneCount === 'number'
+              ? found.coneCount
+              : (typeof found?.rollCount === 'number' ? found.rollCount : 0),
+            baseWeight: typeof found?.coneWeight === 'number'
+              ? found.coneWeight
+              : (typeof found?.rollWeight === 'number' ? found.rollWeight : 0),
+          };
+        });
+
+        if (resolvedCrates.some((c) => !c.rowId)) {
+          throw new Error('One or more scanned crates were not found');
+        }
+
+        const lotSet = new Set(resolvedCrates.map((c) => c.lotNo).filter(Boolean));
+        const itemSet = new Set(resolvedCrates.map((c) => c.itemId).filter(Boolean));
+        if (lotSet.size !== 1 || itemSet.size !== 1) {
+          throw new Error('Crates must belong to a single lot and item');
+        }
+        const lotNo = Array.from(lotSet)[0];
+        const itemId = Array.from(itemSet)[0];
+
+        const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
+        const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
+        const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
+        if (coneTypeIds.length) {
+          const ctCount = await tx.coneType.count({ where: { id: { in: coneTypeIds } } });
+          if (ctCount !== coneTypeIds.length) throw new Error('One or more cone types not found');
+        }
+        if (coneTypeIds.length > 1) {
+          throw new Error('Crates must use a single cone type for coning issues');
+        }
+        if (wrapperIds.length) {
+          const wCount = await tx.wrapper.count({ where: { id: { in: wrapperIds } } });
+          if (wCount !== wrapperIds.length) throw new Error('One or more wrappers not found');
+        }
+        if (boxIds.length) {
+          const bCount = await tx.box.count({ where: { id: { in: boxIds } } });
+          if (bCount !== boxIds.length) throw new Error('One or more boxes not found');
+        }
+
+        if (resolvedCrates.some((c) => !Number.isFinite(c.issueRolls) || c.issueRolls <= 0)) {
+          throw new Error('Enter issue rolls for each crate');
+        }
+
+        const preparedCrates = resolvedCrates.map((c) => {
+          const baseRolls = Number(c.baseRolls) || 0;
+          const baseWeight = Number(c.baseWeight) || 0;
+          const perRoll = baseRolls > 0 && Number.isFinite(baseWeight) ? baseWeight / baseRolls : 0;
+          const rolls = Number(c.issueRolls) || 0;
+          const providedWeight = Number(c.issueWeight);
+          const issueWeight = Number.isFinite(providedWeight) && providedWeight > 0
+            ? providedWeight
+            : Number((perRoll * rolls).toFixed(3));
+          return {
+            rowId: c.rowId,
+            barcode: c.barcode,
+            lotNo: c.lotNo,
+            itemId: c.itemId,
+            coneTypeId: c.coneTypeId,
+            wrapperId: c.wrapperId,
+            boxId: c.boxId,
+            issueRolls: rolls,
+            issueWeight,
+            baseRolls,
+            baseWeight,
+          };
+        });
+
+        if (preparedCrates.some((c) => !Number.isFinite(c.issueWeight) || c.issueWeight <= 0)) {
+          throw new Error('Issue weight missing for one or more crates');
+        }
+
+        const rowIdsToCheck = preparedCrates.map((c) => c.rowId).filter(Boolean);
+        const barcodesToCheck = preparedCrates.map((c) => c.barcode).filter(Boolean);
+        let existingRowRefs = [];
+
+        if (rowIdsToCheck.length || barcodesToCheck.length) {
+          const rowIdArray = rowIdsToCheck.length ? rowIdsToCheck : ['__none__'];
+          const barcodeArray = barcodesToCheck.length ? barcodesToCheck : ['__none__'];
+          existingRowRefs = await tx.$queryRaw`
+            SELECT id, "receivedRowRefs"
+            FROM "IssueToConingMachine"
+            WHERE "isDeleted" = false
+              AND id <> ${id}
+              AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+                WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+                   OR elem->>'barcode' = ANY (${barcodeArray}::text[])
+              )
+          `;
+        }
+
+        const previouslyIssuedByRowId = new Map();
+        for (const issue of existingRowRefs) {
+          const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
+          for (const ref of refs) {
+            const rid = ref?.rowId || (ref?.barcode ? normalizeBarcodeInput(ref.barcode) : null);
+            if (!rid) continue;
+            const already = previouslyIssuedByRowId.get(rid) || 0;
+            previouslyIssuedByRowId.set(rid, already + (Number(ref.issueRolls) || 0));
+          }
+        }
+
+        const issueTracker = new Map();
+        const overIssuedCrates = [];
+        for (const crate of preparedCrates) {
+          const rid = crate.rowId || (crate.barcode ? normalizeBarcodeInput(crate.barcode) : null);
+          if (!rid) continue;
+          const baseRolls = Number(crate.baseRolls) || 0;
+          const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
+          const alreadyPlanned = issueTracker.get(rid) || 0;
+          const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
+
+          if (baseRolls > 0 && totalAfterRequest > baseRolls) {
+            overIssuedCrates.push({
+              rowId: rid,
+              barcode: crate.barcode,
+              requestedRolls: crate.issueRolls,
+              availableRolls: Math.max(baseRolls - existingIssued - alreadyPlanned, 0),
+            });
+          }
+
+          issueTracker.set(rid, alreadyPlanned + (Number(crate.issueRolls) || 0));
+        }
+
+        if (overIssuedCrates.length) {
+          throw new Error('One or more crates have already been fully issued');
+        }
+
+        const totalRolls = preparedCrates.reduce((sum, c) => sum + (Number(c.issueRolls) || 0), 0);
+        const totalIssueWeightKg = preparedCrates.reduce((sum, c) => sum + (Number(c.issueWeight) || 0), 0);
+        const expectedCones = resolvedPerCone > 0
+          ? Math.floor((totalIssueWeightKg * 1000) / resolvedPerCone)
+          : 0;
+
+        data.itemId = itemId;
+        data.lotNo = lotNo;
+        data.rollsIssued = Number(totalRolls || 0);
+        data.requiredPerConeNetWeight = resolvedPerCone;
+        data.expectedCones = expectedCones;
+        data.receivedRowRefs = preparedCrates;
+      } else if (!hasReceives && reqPerConeWt !== undefined) {
+        const requiredPerConeNetWeight = toNumber(reqPerConeWt);
+        if (!Number.isFinite(requiredPerConeNetWeight) || requiredPerConeNetWeight <= 0) {
+          throw new Error('Enter required per-cone net weight (grams)');
+        }
+        const refsRaw = issueRecord.receivedRowRefs;
+        let refs = Array.isArray(refsRaw) ? refsRaw : [];
+        if (typeof refsRaw === 'string') {
+          try { refs = JSON.parse(refsRaw || '[]'); } catch (_) { refs = []; }
+        }
+        const totalRolls = refs.reduce((sum, r) => sum + (Number(r.issueRolls) || 0), 0);
+        const totalIssueWeightKg = refs.reduce((sum, r) => sum + (Number(r.issueWeight) || 0), 0);
+        const expectedCones = Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight);
+        data.rollsIssued = Number(totalRolls || 0);
+        data.requiredPerConeNetWeight = requiredPerConeNetWeight;
+        data.expectedCones = expectedCones;
+      }
+
+      if (Object.keys(data).length > 0) {
+        updatedIssue = await tx.issueToConingMachine.update({
+          where: { id },
+          data: { ...data, ...actorUpdateFields(actorUserId) },
+        });
+      }
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'issue_to_coning_machine',
+      entityId: id,
+      action: 'update',
+      before: issueRecord,
+      after: updatedIssue,
+      payload: {
+        cratesChanged: wantsCrateUpdate,
+      },
+    });
+
+    res.json({ ok: true, issueToConingMachine: updatedIssue });
+  } catch (err) {
+    console.error('Failed to update issue_to_coning_machine', err);
+    res.status(400).json({ error: err.message || 'Failed to update issue_to_coning_machine' });
+  }
+});
+
 router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
 
     // Find the issue_to_cutter_machine record
-    const issueRecord = await prisma.issueToCutterMachine.findUnique({ where: { id } });
+    const issueRecord = await prisma.issueToCutterMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
@@ -7507,8 +8271,16 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      // Delete the issue_to_cutter_machine record
-      await tx.issueToCutterMachine.delete({ where: { id } });
+      // Soft delete the issue_to_cutter_machine record
+      await tx.issueToCutterMachine.update({
+        where: { id },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedByUserId: actorUserId || null,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
 
       // Mark pieces as available again
       if (cleanPieceIds.length > 0) {
@@ -7555,7 +8327,9 @@ router.delete('/api/issue_to_holo_machine/:id', async (req, res) => {
     const { id } = req.params;
 
     // Find the issue record
-    const issueRecord = await prisma.issueToHoloMachine.findUnique({ where: { id } });
+    const issueRecord = await prisma.issueToHoloMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to Holo machine record not found' });
     }
@@ -7596,8 +8370,16 @@ router.delete('/api/issue_to_holo_machine/:id', async (req, res) => {
         }
       }
 
-      // Delete the issue record
-      await tx.issueToHoloMachine.delete({ where: { id } });
+      // Soft delete the issue record
+      await tx.issueToHoloMachine.update({
+        where: { id },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedByUserId: actorUserId || null,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
 
       await logCrudWithActor(req, {
         entityType: 'issue_to_holo_machine',
@@ -7640,7 +8422,9 @@ router.delete('/api/issue_to_coning_machine/:id', async (req, res) => {
     const { id } = req.params;
 
     // Find the issue record
-    const issueRecord = await prisma.issueToConingMachine.findUnique({ where: { id } });
+    const issueRecord = await prisma.issueToConingMachine.findFirst({
+      where: { id, isDeleted: false },
+    });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to Coning machine record not found' });
     }
@@ -7653,8 +8437,16 @@ router.delete('/api/issue_to_coning_machine/:id', async (req, res) => {
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      // Delete the issue record (no source row updates needed for coning)
-      await tx.issueToConingMachine.delete({ where: { id } });
+      // Soft delete the issue record (no source row updates needed for coning)
+      await tx.issueToConingMachine.update({
+        where: { id },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedByUserId: actorUserId || null,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
 
       await logCrudWithActor(req, {
         entityType: 'issue_to_coning_machine',
@@ -7706,7 +8498,7 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
     }
 
     const issuedCount = await prisma.issueToCutterMachine.count({
-      where: { pieceIds: { contains: existing.id } },
+      where: { pieceIds: { contains: existing.id }, isDeleted: false },
     });
     if (issuedCount > 0) {
       return res.status(400).json({ error: 'Cannot delete piece that was issued to cutter' });
@@ -7963,7 +8755,7 @@ router.delete('/api/lots/:lotNo', async (req, res) => {
   try {
     const { lotNo } = req.params;
     // Do not allow delete if any issue_to_cutter_machine record exists for this lot
-    const consCount = await prisma.issueToCutterMachine.count({ where: { lotNo } });
+    const consCount = await prisma.issueToCutterMachine.count({ where: { lotNo, isDeleted: false } });
     if (consCount > 0) {
       return res.status(400).json({ error: 'Cannot delete lot: one or more pieces have been issued' });
     }
@@ -9043,7 +9835,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     // Check Coning Issue
     const coningIssue = await prisma.issueToConingMachine.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' }, isDeleted: false },
       include: { machine: true, operator: true },
     });
 
@@ -9075,7 +9867,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     // Check Holo Issue
     const holoIssue = await prisma.issueToHoloMachine.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' }, isDeleted: false },
       include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
     });
 
@@ -9107,7 +9899,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     // Check Cutter Issue
     const cutterIssue = await prisma.issueToCutterMachine.findFirst({
-      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' } },
+      where: { barcode: { equals: normalizedBarcode, mode: 'insensitive' }, isDeleted: false },
       include: { machine: true, operator: true, cut: true },
     });
 
@@ -9159,7 +9951,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
       // Forward trace: Check if issued to cutter
       const cutterIssue = await prisma.issueToCutterMachine.findFirst({
-        where: { pieceIds: { contains: item.id } },
+        where: { pieceIds: { contains: item.id }, isDeleted: false },
         include: { machine: true, operator: true, cut: true },
       });
 
@@ -9218,6 +10010,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
       // Forward trace: Check if used in holo issue
       const holoIssues = await prisma.issueToHoloMachine.findMany({
+        where: { isDeleted: false },
         include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
       });
 
@@ -9300,6 +10093,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
       // Forward trace: Check if used in coning issue
       const coningIssues = await prisma.issueToConingMachine.findMany({
+        where: { isDeleted: false },
         include: { machine: true, operator: true },
       });
 
@@ -9409,8 +10203,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
     // ============ BACKWARD TRACING FUNCTIONS ============
 
     async function traceFromConingReceive(recv, history) {
-      const issue = await prisma.issueToConingMachine.findUnique({
-        where: { id: recv.issueId },
+      const issue = await prisma.issueToConingMachine.findFirst({
+        where: { id: recv.issueId, isDeleted: false },
         include: { machine: true, operator: true },
       });
 
@@ -9459,8 +10253,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
     }
 
     async function traceFromHoloReceive(recv, history) {
-      const issue = await prisma.issueToHoloMachine.findUnique({
-        where: { id: recv.issueId },
+      const issue = await prisma.issueToHoloMachine.findFirst({
+        where: { id: recv.issueId, isDeleted: false },
         include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
       });
 
@@ -9591,6 +10385,7 @@ router.get('/api/reports/production', async (req, res) => {
       const cutterIssues = await prisma.issueToCutterMachine.findMany({
         where: {
           date: { gte: fromDate, lte: toDate },
+          isDeleted: false,
         },
       });
       const totalCutterIssued = cutterIssues.reduce((sum, i) => sum + (i.totalWeight || 0), 0);
@@ -9670,6 +10465,7 @@ router.get('/api/reports/production', async (req, res) => {
       const holoIssues = await prisma.issueToHoloMachine.findMany({
         where: {
           date: { gte: fromDate, lte: toDate },
+          isDeleted: false,
         },
       });
       // Holo issued weight = metallicBobbinsWeight + yarnKg
@@ -9748,6 +10544,7 @@ router.get('/api/reports/production', async (req, res) => {
       const coningIssues = await prisma.issueToConingMachine.findMany({
         where: {
           date: { gte: fromDate, lte: toDate },
+          isDeleted: false,
         },
       });
 
@@ -10563,7 +11360,7 @@ async function generateSummaryData(stage, type, date) {
 
   if (stage === 'cutter' && type === 'issue') {
     const issues = await prisma.issueToCutterMachine.findMany({
-      where: { date },
+      where: { date, isDeleted: false },
       include: { machine: true, operator: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -10656,7 +11453,7 @@ async function generateSummaryData(stage, type, date) {
 
   } else if (stage === 'holo' && type === 'issue') {
     const issues = await prisma.issueToHoloMachine.findMany({
-      where: { date },
+      where: { date, isDeleted: false },
       include: { machine: true, operator: true, twist: true, yarn: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -10783,7 +11580,7 @@ async function generateSummaryData(stage, type, date) {
 
   } else if (stage === 'coning' && type === 'issue') {
     const issues = await prisma.issueToConingMachine.findMany({
-      where: { date },
+      where: { date, isDeleted: false },
       include: { machine: true, operator: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -11217,4 +12014,3 @@ router.get('/api/boiler/steamed', async (req, res) => {
 });
 
 export default router;
-

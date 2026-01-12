@@ -10439,7 +10439,10 @@ router.get('/api/reports/production', async (req, res) => {
         // Machine-wise (default)
         const byMachine = new Map();
         for (const row of cutterReceives) {
-          const key = row.machineNo || 'unknown';
+          const fullName = row.machineNo || 'unknown';
+          const parts = fullName.split('-');
+          const key = parts.length > 1 ? parts[0] : fullName;
+
           const current = byMachine.get(key) || { machineNo: key, received: 0, count: 0 };
           current.received += row.netWt || 0;
           current.count += 1;
@@ -10622,7 +10625,10 @@ router.get('/api/reports/production', async (req, res) => {
       } else if (process === 'coning') {
         const byMachine = new Map();
         for (const row of coningReceives) {
-          const key = row.issue?.machine?.name || row.machineNo || 'unknown';
+          const fullName = row.issue?.machine?.name || row.machineNo || 'unknown';
+          const parts = fullName.split('-');
+          const key = parts.length > 1 ? parts[0] : fullName;
+
           const current = byMachine.get(key) || { machineName: key, received: 0, coneCount: 0 };
           current.received += row.netWeight || 0;
           current.coneCount += row.coneCount || 0;
@@ -10678,8 +10684,15 @@ router.get('/api/reports/production/details', async (req, res) => {
       } else if (view === 'shift') {
         where.shift = key === 'Not Specified' ? null : key;
       } else {
-        // Machine View - key is machineNo
-        where.machineNo = key === 'unknown' ? null : key;
+        // Machine View - key is base machine name
+        if (key === 'unknown') {
+          where.machineNo = null;
+        } else {
+          where.OR = [
+            { machineNo: key },
+            { machineNo: { startsWith: `${key}-` } }
+          ];
+        }
       }
 
       const rawRows = await prisma.receiveFromCutterMachineRow.findMany({
@@ -10715,16 +10728,20 @@ router.get('/api/reports/production/details', async (req, res) => {
         };
       } else {
         // Machine view: the key is now the BASE machine name (e.g. "H12")
-        // We want to find all rows where machine name starts with "H12"
         if (key === 'unknown') {
-          // handle unknown if needed
+          where.AND = [
+            { issue: { machineId: null } },
+            { machineNo: null }
+          ];
         } else {
-          where.issue = {
-            machine: { name: { startsWith: key } }
-          };
+          where.OR = [
+            { issue: { machine: { name: key } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } } } },
+            { machineNo: key },
+            { machineNo: { startsWith: `${key}-` } }
+          ];
         }
       }
-
       const rawRows = await prisma.receiveFromHoloMachineRow.findMany({
         where,
         include: {
@@ -10766,14 +10783,19 @@ router.get('/api/reports/production/details', async (req, res) => {
         };
       } else {
         if (key === 'unknown') {
-          // handle unknown
+          where.AND = [
+            { issue: { machineId: null } },
+            { machineNo: null }
+          ];
         } else {
-          where.issue = {
-            machine: { name: key }
-          };
+          where.OR = [
+            { issue: { machine: { name: key } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } } } },
+            { machineNo: key },
+            { machineNo: { startsWith: `${key}-` } }
+          ];
         }
       }
-
       const rawRows = await prisma.receiveFromConingMachineRow.findMany({
         where,
         include: {
@@ -10797,7 +10819,8 @@ router.get('/api/reports/production/details', async (req, res) => {
           weight: 0,
           desc: 'Coning Issue'
         },
-        operatorName: r.operator?.name
+        operatorName: r.operator?.name,
+        machineName: r.issue?.machine?.name || r.machineNo // Return full machine name for grouping
       }));
     }
 

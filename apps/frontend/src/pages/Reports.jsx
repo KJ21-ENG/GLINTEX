@@ -345,10 +345,12 @@ function ProductionReport() {
             setDetailsCache(prev => new Map(prev).set(key, res.rows));
         } catch (err) {
             console.error(err);
-            // Collapse if failed?
-            const safeExpanded = new Set(expandedRows);
-            safeExpanded.delete(key);
-            setExpandedRows(safeExpanded);
+            // Collapse if failed to fetch details
+            setExpandedRows(prev => {
+                const next = new Set(prev);
+                next.delete(key);
+                return next;
+            });
         } finally {
             setLoadingDetails(prev => {
                 const next = new Set(prev);
@@ -551,7 +553,7 @@ function ProductionReport() {
                                                                             {/* Group details by machine section if applicable */}
                                                                             {(() => {
                                                                                 // Grouping logic
-                                                                                const groupedDetails = view === 'machine' && process === 'holo'
+                                                                                const groupedDetails = view === 'machine'
                                                                                     ? details.reduce((acc, row) => {
                                                                                         const key = row.machineName || 'Unknown Section';
                                                                                         if (!acc[key]) acc[key] = [];
@@ -562,11 +564,11 @@ function ProductionReport() {
 
                                                                                 return Object.entries(groupedDetails).map(([sectionName, sectionRows]) => (
                                                                                     <div key={sectionName}>
-                                                                                        {view === 'machine' && process === 'holo' && (
+                                                                                        {view === 'machine' && (
                                                                                             <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
-                                                                                                <span>{sectionName}</span>
+                                                                                                <span>Section: {sectionName}</span>
                                                                                                 <span className="text-muted-foreground">
-                                                                                                    {formatKg(sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0))}
+                                                                                                    Total: {formatKg(sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0))}
                                                                                                 </span>
                                                                                             </div>
                                                                                         )}

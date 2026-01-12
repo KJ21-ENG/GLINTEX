@@ -100,6 +100,7 @@ export function IssueToHolo() {
             itemId: rowItem,
             availCount,
             availWt,
+            cut: row.cut || row.cutMaster?.name || '',
             issuedBobbins: availCount, // Default to all available
             issuedBobbinWeight: availWt
         };
@@ -301,7 +302,8 @@ export function IssueToHolo() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
-                                    <TableHead>Lot</TableHead>
+                                    <TableHead>Item</TableHead>
+                                    <TableHead>Cut</TableHead>
                                     <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Count</TableHead>
                                     <TableHead className="">Issue Count</TableHead>
@@ -311,11 +313,12 @@ export function IssueToHolo() {
                             </TableHeader>
                             <TableBody>
                                 {crates.length === 0 ? (
-                                    <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
-                                        <TableCell>{c.lotNo || '—'}</TableCell>
+                                        <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
+                                        <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceId || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availCount}</TableCell>
                                         <TableCell className="">

@@ -185,6 +185,7 @@ model ReceiveFromHoloMachineRow {
   id          String   @id @default(cuid())
   date        String?
   issueId     String
+  pieceId     String?
   rollCount   Int
   rollWeight  Float?
   rollTypeId  String?
@@ -197,6 +198,9 @@ model ReceiveFromHoloMachineRow {
   helperId    String?
   notes       String?
   createdBy   String?
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -301,6 +305,9 @@ model ReceiveFromConingMachineRow {
   helperId    String?
   notes       String?
   createdBy   String?
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?

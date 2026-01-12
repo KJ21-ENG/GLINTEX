@@ -250,13 +250,22 @@ export function ReceiveHistoryTable() {
 
     const formatInputDate = (value) => {
         if (!value) return '';
+        const input = String(value).trim();
         try {
-            // Handle DD/MM/YYYY format if passed as string (e.g. from formatted view)
-            if (typeof value === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
-                const [d, m, y] = value.split('/');
+            // Handle DD/MM/YYYY or DD-MM-YYYY format
+            if (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{4}$/.test(input)) {
+                const parts = input.split(/[\/-]/);
+                // Assume DD/MM/YYYY
+                const d = parts[0].padStart(2, '0');
+                const m = parts[1].padStart(2, '0');
+                const y = parts[2];
                 return `${y}-${m}-${d}`;
             }
-            const d = new Date(value);
+            // Handle YYYY-MM-DD (already ISO like)
+            if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+                return input;
+            }
+            const d = new Date(input);
             if (Number.isNaN(d.getTime())) return '';
             return d.toISOString().split('T')[0];
         } catch (e) {

@@ -10520,7 +10520,11 @@ router.get('/api/reports/production', async (req, res) => {
       } else { // Default to machine-wise
         const byMachine = new Map();
         for (const row of holoReceives) {
-          const key = row.issue?.machine?.name || row.machineNo || 'unknown';
+          const fullName = row.issue?.machine?.name || row.machineNo || 'unknown';
+          // Extract base machine name (e.g. "H12-B1" -> "H12")
+          const parts = fullName.split('-');
+          const key = parts.length > 1 ? parts[0] : fullName;
+
           const current = byMachine.get(key) || { machineName: key, received: 0, rollCount: 0 };
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           current.received += netWeight;
@@ -10710,13 +10714,13 @@ router.get('/api/reports/production/details', async (req, res) => {
           shift: key === 'Not Specified' ? null : key
         };
       } else {
-        // Machine view: grouped by `issue.machine.name || machineNo`
-        // If key matches machine name
+        // Machine view: the key is now the BASE machine name (e.g. "H12")
+        // We want to find all rows where machine name starts with "H12"
         if (key === 'unknown') {
           // handle unknown if needed
         } else {
           where.issue = {
-            machine: { name: key }
+            machine: { name: { startsWith: key } }
           };
         }
       }
@@ -10744,7 +10748,8 @@ router.get('/api/reports/production/details', async (req, res) => {
           weight: (r.issue?.metallicBobbinsWeight || 0) + (r.issue?.yarnKg || 0),
           desc: `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`
         },
-        operatorName: r.operator?.name
+        operatorName: r.operator?.name,
+        machineName: r.issue?.machine?.name // Return full machine name for grouping
       }));
 
     } else if (process === 'coning') {

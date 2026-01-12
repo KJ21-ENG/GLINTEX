@@ -548,49 +548,74 @@ function ProductionReport() {
                                                                         </div>
                                                                     ) : (
                                                                         <div className="rounded-md border bg-background overflow-hidden">
-                                                                            <Table>
-                                                                                <TableHeader>
-                                                                                    <TableRow className="bg-muted/50 hover:bg-muted/50">
-                                                                                        <TableHead className="h-8 text-xs">Date</TableHead>
-                                                                                        <TableHead className="h-8 text-xs">Barcode</TableHead>
-                                                                                        <TableHead className="h-8 text-xs">Shift</TableHead>
-                                                                                        <TableHead className="h-8 text-xs">Issue Info</TableHead>
-                                                                                        <TableHead className="h-8 text-xs text-right">Received</TableHead>
-                                                                                        <TableHead className="h-8 text-xs text-right">Weight</TableHead>
-                                                                                    </TableRow>
-                                                                                </TableHeader>
-                                                                                <TableBody>
-                                                                                    {details.map((row, idx) => (
-                                                                                        <TableRow key={idx} className="hover:bg-muted/20">
-                                                                                            <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
-                                                                                                {formatDateDDMMYYYY(row.date)}
-                                                                                            </TableCell>
-                                                                                            <TableCell className="py-2 text-xs font-mono">
-                                                                                                {row.barcode || '—'}
-                                                                                            </TableCell>
-                                                                                            <TableCell className="py-2 text-xs">
-                                                                                                <Badge variant="outline" className="text-[10px] font-normal h-4 px-1">
-                                                                                                    {row.shift || '—'}
-                                                                                                </Badge>
-                                                                                            </TableCell>
-                                                                                            <TableCell className="py-2 text-xs text-muted-foreground">
-                                                                                                {row.issueInfo ? (
-                                                                                                    <div className="flex flex-col gap-0.5">
-                                                                                                        <span className="font-medium text-xs text-foreground">{row.issueInfo.desc}</span>
-                                                                                                        {row.issueInfo.weight > 0 && <span>Issued: {formatKg(row.issueInfo.weight)}</span>}
-                                                                                                    </div>
-                                                                                                ) : '—'}
-                                                                                            </TableCell>
-                                                                                            <TableCell className="py-2 text-xs font-medium text-right">
-                                                                                                {row.receivedQty} {process === 'cutter' ? 'Bob' : process === 'holo' ? 'Rolls' : 'Cones'}
-                                                                                            </TableCell>
-                                                                                            <TableCell className="py-2 text-xs font-medium text-right text-foreground">
-                                                                                                {formatKg(row.receivedWeight)}
-                                                                                            </TableCell>
-                                                                                        </TableRow>
-                                                                                    ))}
-                                                                                </TableBody>
-                                                                            </Table>
+                                                                            {/* Group details by machine section if applicable */}
+                                                                            {(() => {
+                                                                                // Grouping logic
+                                                                                const groupedDetails = view === 'machine' && process === 'holo'
+                                                                                    ? details.reduce((acc, row) => {
+                                                                                        const key = row.machineName || 'Unknown Section';
+                                                                                        if (!acc[key]) acc[key] = [];
+                                                                                        acc[key].push(row);
+                                                                                        return acc;
+                                                                                    }, {})
+                                                                                    : { 'All': details };
+
+                                                                                return Object.entries(groupedDetails).map(([sectionName, sectionRows]) => (
+                                                                                    <div key={sectionName}>
+                                                                                        {view === 'machine' && process === 'holo' && (
+                                                                                            <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
+                                                                                                <span>{sectionName}</span>
+                                                                                                <span className="text-muted-foreground">
+                                                                                                    {formatKg(sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0))}
+                                                                                                </span>
+                                                                                            </div>
+                                                                                        )}
+                                                                                        <Table>
+                                                                                            <TableHeader>
+                                                                                                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                                                                                    <TableHead className="h-8 text-xs">Date</TableHead>
+                                                                                                    <TableHead className="h-8 text-xs">Barcode</TableHead>
+                                                                                                    <TableHead className="h-8 text-xs">Shift</TableHead>
+                                                                                                    <TableHead className="h-8 text-xs">Issue Info</TableHead>
+                                                                                                    <TableHead className="h-8 text-xs text-right">Received</TableHead>
+                                                                                                    <TableHead className="h-8 text-xs text-right">Weight</TableHead>
+                                                                                                </TableRow>
+                                                                                            </TableHeader>
+                                                                                            <TableBody>
+                                                                                                {sectionRows.map((row, idx) => (
+                                                                                                    <TableRow key={idx} className="hover:bg-muted/20">
+                                                                                                        <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                                                                                                            {formatDateDDMMYYYY(row.date)}
+                                                                                                        </TableCell>
+                                                                                                        <TableCell className="py-2 text-xs font-mono">
+                                                                                                            {row.barcode || '—'}
+                                                                                                        </TableCell>
+                                                                                                        <TableCell className="py-2 text-xs">
+                                                                                                            <Badge variant="outline" className="text-[10px] font-normal h-4 px-1">
+                                                                                                                {row.shift || '—'}
+                                                                                                            </Badge>
+                                                                                                        </TableCell>
+                                                                                                        <TableCell className="py-2 text-xs text-muted-foreground">
+                                                                                                            {row.issueInfo ? (
+                                                                                                                <div className="flex flex-col gap-0.5">
+                                                                                                                    <span className="font-medium text-xs text-foreground">{row.issueInfo.desc}</span>
+                                                                                                                    {row.issueInfo.weight > 0 && <span>Issued: {formatKg(row.issueInfo.weight)}</span>}
+                                                                                                                </div>
+                                                                                                            ) : '—'}
+                                                                                                        </TableCell>
+                                                                                                        <TableCell className="py-2 text-xs font-medium text-right">
+                                                                                                            {row.receivedQty} {process === 'cutter' ? 'Bob' : process === 'holo' ? 'Rolls' : 'Cones'}
+                                                                                                        </TableCell>
+                                                                                                        <TableCell className="py-2 text-xs font-medium text-right text-foreground">
+                                                                                                            {formatKg(row.receivedWeight)}
+                                                                                                        </TableCell>
+                                                                                                    </TableRow>
+                                                                                                ))}
+                                                                                            </TableBody>
+                                                                                        </Table>
+                                                                                    </div>
+                                                                                ));
+                                                                            })()}
                                                                         </div>
                                                                     )}
                                                                 </div>

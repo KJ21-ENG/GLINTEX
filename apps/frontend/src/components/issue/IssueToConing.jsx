@@ -111,6 +111,22 @@ export function IssueToConing() {
 
         const pieceIdsDisplay = pieceIds.join(', ') || rowLot;
 
+        // Resolve Item & Cut
+        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+        let cutName = '';
+        if (holoIssue) {
+            try {
+                const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                if (Array.isArray(refs) && refs.length > 0) {
+                    const cutterRowId = refs[0].rowId;
+                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
+                    if (cutterRow) {
+                        cutName = cutterRow.cut || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
+                    }
+                }
+            } catch (e) { }
+        }
+
         setCrates(prev => [...prev, {
             rowId: row.id,
             barcode: row.barcode,
@@ -119,7 +135,9 @@ export function IssueToConing() {
             availRolls: row.rollCount,
             unitWeight,
             issueRolls: row.rollCount, // Default all
-            issueWeight: row.rollWeight
+            issueWeight: row.rollWeight,
+            itemId: holoIssue?.itemId,
+            cut: cutName
         }]);
         setScanInput('');
     }
@@ -351,6 +369,8 @@ export function IssueToConing() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
+                                    <TableHead>Item</TableHead>
+                                    <TableHead>Cut</TableHead>
                                     <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Rolls</TableHead>
                                     <TableHead className="">Issue Rolls</TableHead>
@@ -360,10 +380,12 @@ export function IssueToConing() {
                             </TableHeader>
                             <TableBody>
                                 {crates.length === 0 ? (
-                                    <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
+                                        <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
+                                        <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceIdsDisplay || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availRolls}</TableCell>
                                         <TableCell className="">

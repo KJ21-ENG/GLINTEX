@@ -273,6 +273,10 @@ export async function getProductionReport(params = {}) {
   const query = new URLSearchParams(params).toString();
   return await request(`/api/reports/production${query ? '?' + query : ''}`);
 }
+export async function getProductionReportDetails(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/reports/production/details${query ? '?' + query : ''}`);
+}
 
 // Summary
 export async function getSummary(stage, type, date) {

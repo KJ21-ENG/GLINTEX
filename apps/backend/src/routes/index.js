@@ -10647,6 +10647,163 @@ router.get('/api/reports/production', async (req, res) => {
   }
 });
 
+router.get('/api/reports/production/details', async (req, res) => {
+  try {
+    const { process, view, from, to, key } = req.query;
+    if (!process || !from || !to) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    // Default dates
+    const toDate = to;
+    const fromDate = from;
+
+    let rows = [];
+
+    // "All" process not supported for details view specifically, or we just handle case by case.
+    // Ideally UI calls this with specific process.
+
+    if (process === 'cutter') {
+      const where = {
+        isDeleted: false,
+        date: { gte: fromDate, lte: toDate },
+      };
+
+      if (view === 'operator') {
+        where.operatorId = key === 'unknown' ? null : key;
+      } else if (view === 'shift') {
+        where.shift = key === 'Not Specified' ? null : key;
+      } else {
+        // Machine View - key is machineNo
+        where.machineNo = key === 'unknown' ? null : key;
+      }
+
+      const rawRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where,
+        include: { operator: true, challan: true },
+        orderBy: { date: 'desc' },
+        take: 2000
+      });
+
+      rows = rawRows.map(r => ({
+        id: r.id,
+        date: r.date,
+        shift: r.shift,
+        barcode: r.barcode || r.pieceId,
+        receivedQty: r.bobbinQuantity || 0,
+        receivedWeight: r.netWt || 0,
+        issueInfo: null,
+        operatorName: r.operator?.name || r.machineNo || 'Unknown'
+      }));
+
+    } else if (process === 'holo') {
+      const where = {
+        isDeleted: false,
+        date: { gte: fromDate, lte: toDate },
+      };
+
+      if (view === 'operator') {
+        where.operatorId = key === 'unknown' ? null : key;
+      } else if (view === 'shift') {
+        // We grouped by issue.shift in the main report (line 10512)
+        where.issue = {
+          shift: key === 'Not Specified' ? null : key
+        };
+      } else {
+        // Machine view: grouped by `issue.machine.name || machineNo`
+        // If key matches machine name
+        if (key === 'unknown') {
+          // handle unknown if needed
+        } else {
+          where.issue = {
+            machine: { name: key }
+          };
+        }
+      }
+
+      const rawRows = await prisma.receiveFromHoloMachineRow.findMany({
+        where,
+        include: {
+          operator: true,
+          issue: { include: { machine: true, yarn: true, twist: true } }
+        },
+        orderBy: { date: 'desc' },
+        take: 2000
+      });
+
+      rows = rawRows.map(r => ({
+        id: r.id,
+        date: r.date,
+        shift: r.issue?.shift,
+        barcode: r.barcode,
+        receivedQty: r.rollCount || 0,
+        receivedWeight: r.rollWeight || ((r.grossWeight || 0) - (r.tareWeight || 0)),
+        issueInfo: {
+          id: r.issue?.id,
+          barcode: r.issue?.barcode,
+          weight: (r.issue?.metallicBobbinsWeight || 0) + (r.issue?.yarnKg || 0),
+          desc: `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`
+        },
+        operatorName: r.operator?.name
+      }));
+
+    } else if (process === 'coning') {
+      const where = {
+        isDeleted: false,
+        date: { gte: fromDate, lte: toDate },
+      };
+
+      if (view === 'operator') {
+        where.operatorId = key === 'unknown' ? null : key;
+      } else if (view === 'shift') {
+        where.issue = {
+          shift: key === 'Not Specified' ? null : key
+        };
+      } else {
+        if (key === 'unknown') {
+          // handle unknown
+        } else {
+          where.issue = {
+            machine: { name: key }
+          };
+        }
+      }
+
+      const rawRows = await prisma.receiveFromConingMachineRow.findMany({
+        where,
+        include: {
+          operator: true,
+          issue: { include: { machine: true } }
+        },
+        orderBy: { date: 'desc' },
+        take: 2000
+      });
+
+      rows = rawRows.map(r => ({
+        id: r.id,
+        date: r.date,
+        shift: r.issue?.shift,
+        barcode: r.barcode,
+        receivedQty: r.coneCount || 0,
+        receivedWeight: r.netWeight || 0,
+        issueInfo: {
+          id: r.issue?.id,
+          barcode: r.issue?.barcode,
+          weight: 0,
+          desc: 'Coning Issue'
+        },
+        operatorName: r.operator?.name
+      }));
+    }
+
+    res.json({ ok: true, rows });
+
+  } catch (err) {
+    console.error('Production report details failed', err);
+    res.status(500).json({ error: 'Failed to fetch details' });
+  }
+});
+
 // ========== BOX TRANSFER FEATURE ==========
 
 // Lookup barcode for box transfer

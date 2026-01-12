@@ -270,8 +270,16 @@ function ProductionReport() {
     const [loading, setLoading] = useState(false);
     const [report, setReport] = useState(null);
 
+    // Expansion state
+    const [expandedRows, setExpandedRows] = useState(new Set()); // Set of keys
+    const [detailsCache, setDetailsCache] = useState(new Map()); // Map key -> data
+    const [loadingDetails, setLoadingDetails] = useState(new Set()); // Set of keys being fetched
+
     async function loadReport() {
         setLoading(true);
+        setExpandedRows(new Set());
+        setDetailsCache(new Map());
+        setLoadingDetails(new Set());
         try {
             const res = await api.getProductionReport({
                 process,
@@ -290,6 +298,65 @@ function ProductionReport() {
     useEffect(() => {
         loadReport();
     }, [process, view, dateFrom, dateTo]);
+
+    const getRowKey = (item, index) => {
+        if (view === 'operator') return `op-${item.operatorId || index}`;
+        if (view === 'shift') return `sh-${item.shift || index}`;
+        return `mc-${item.machineNo || item.machineName || index}`;
+    };
+
+    const handleToggleRow = async (item, index) => {
+        const key = getRowKey(item, index);
+
+        if (expandedRows.has(key)) {
+            const next = new Set(expandedRows);
+            next.delete(key);
+            setExpandedRows(next);
+            return;
+        }
+
+        // Expand
+        const nextExpanded = new Set(expandedRows);
+        nextExpanded.add(key);
+        setExpandedRows(nextExpanded);
+
+        if (detailsCache.has(key)) return;
+
+        // Fetch details
+        const loadingSet = new Set(loadingDetails);
+        loadingSet.add(key);
+        setLoadingDetails(loadingSet);
+
+        try {
+            // Determine the 'key' param for the API
+            let apiKey = '';
+            if (view === 'operator') apiKey = item.operatorId || 'unknown';
+            else if (view === 'shift') apiKey = item.shift || 'Not Specified';
+            else apiKey = item.machineNo || item.machineName || 'unknown';
+
+            const res = await api.getProductionReportDetails({
+                process,
+                view,
+                from: dateFrom,
+                to: dateTo,
+                key: apiKey
+            });
+
+            setDetailsCache(prev => new Map(prev).set(key, res.rows));
+        } catch (err) {
+            console.error(err);
+            // Collapse if failed?
+            const safeExpanded = new Set(expandedRows);
+            safeExpanded.delete(key);
+            setExpandedRows(safeExpanded);
+        } finally {
+            setLoadingDetails(prev => {
+                const next = new Set(prev);
+                next.delete(key);
+                return next;
+            });
+        }
+    };
 
     const getColumnHeaders = () => {
         if (view === 'operator') return ['Operator', 'Received (kg)', 'Count'];
@@ -433,6 +500,7 @@ function ProductionReport() {
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
+                                            <TableHead className="w-10"></TableHead>
                                             {getColumnHeaders().map((header, i) => (
                                                 <TableHead key={i} className={i > 0 ? 'text-right' : ''}>
                                                     {header}
@@ -443,35 +511,153 @@ function ProductionReport() {
                                     <TableBody>
                                         {report.data.map((item, index) => {
                                             const rowData = getRowData(item);
+                                            const key = getRowKey(item, index);
+                                            const isExpanded = expandedRows.has(key);
+                                            const details = detailsCache.get(key);
+                                            const isLoadingDetails = loadingDetails.has(key);
+
                                             return (
-                                                <TableRow key={index}>
-                                                    {rowData.map((cell, i) => (
-                                                        <TableCell key={i} className={cn(i > 0 && 'text-right', i === 0 && 'font-medium')}>
-                                                            {cell}
+                                                <React.Fragment key={key}>
+                                                    <TableRow
+                                                        className={cn("cursor-pointer hover:bg-muted/50 transition-colors", isExpanded && "bg-muted/30")}
+                                                        onClick={() => handleToggleRow(item, index)}
+                                                    >
+                                                        <TableCell>
+                                                            {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                                                         </TableCell>
-                                                    ))}
-                                                </TableRow>
+                                                        {rowData.map((cell, i) => (
+                                                            <TableCell key={i} className={cn(i > 0 && 'text-right', i === 0 && 'font-medium')}>
+                                                                {cell}
+                                                            </TableCell>
+                                                        ))}
+                                                    </TableRow>
+                                                    {isExpanded && (
+                                                        <TableRow className="bg-muted/10 hover:bg-muted/10">
+                                                            <TableCell colSpan={rowData.length + 1} className="p-0">
+                                                                <div className="p-4 bg-muted/20 border-t border-b animate-in slide-in-from-top-2">
+                                                                    {isLoadingDetails ? (
+                                                                        <div className="py-8 flex justify-center text-muted-foreground text-sm">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                                                                Loading detailed breakdown...
+                                                                            </div>
+                                                                        </div>
+                                                                    ) : !details || details.length === 0 ? (
+                                                                        <div className="py-8 text-center text-muted-foreground text-sm">
+                                                                            No detailed records found.
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="rounded-md border bg-background overflow-hidden">
+                                                                            <Table>
+                                                                                <TableHeader>
+                                                                                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                                                                        <TableHead className="h-8 text-xs">Date</TableHead>
+                                                                                        <TableHead className="h-8 text-xs">Barcode</TableHead>
+                                                                                        <TableHead className="h-8 text-xs">Shift</TableHead>
+                                                                                        <TableHead className="h-8 text-xs">Issue Info</TableHead>
+                                                                                        <TableHead className="h-8 text-xs text-right">Received</TableHead>
+                                                                                        <TableHead className="h-8 text-xs text-right">Weight</TableHead>
+                                                                                    </TableRow>
+                                                                                </TableHeader>
+                                                                                <TableBody>
+                                                                                    {details.map((row, idx) => (
+                                                                                        <TableRow key={idx} className="hover:bg-muted/20">
+                                                                                            <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                                                                                                {formatDateDDMMYYYY(row.date)}
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-2 text-xs font-mono">
+                                                                                                {row.barcode || '—'}
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-2 text-xs">
+                                                                                                <Badge variant="outline" className="text-[10px] font-normal h-4 px-1">
+                                                                                                    {row.shift || '—'}
+                                                                                                </Badge>
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-2 text-xs text-muted-foreground">
+                                                                                                {row.issueInfo ? (
+                                                                                                    <div className="flex flex-col gap-0.5">
+                                                                                                        <span className="font-medium text-xs text-foreground">{row.issueInfo.desc}</span>
+                                                                                                        {row.issueInfo.weight > 0 && <span>Issued: {formatKg(row.issueInfo.weight)}</span>}
+                                                                                                    </div>
+                                                                                                ) : '—'}
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-2 text-xs font-medium text-right">
+                                                                                                {row.receivedQty} {process === 'cutter' ? 'Bob' : process === 'holo' ? 'Rolls' : 'Cones'}
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-2 text-xs font-medium text-right text-foreground">
+                                                                                                {formatKg(row.receivedWeight)}
+                                                                                            </TableCell>
+                                                                                        </TableRow>
+                                                                                    ))}
+                                                                                </TableBody>
+                                                                            </Table>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    )}
+                                                </React.Fragment>
                                             );
                                         })}
                                     </TableBody>
                                 </Table>
                             </div>
 
-                            {/* Mobile Card View */}
+                            {/* Mobile Card View - Simplified for now, just show expand button */}
                             <div className="block sm:hidden space-y-3">
                                 {report.data.map((item, index) => {
                                     const headers = getColumnHeaders();
                                     const rowData = getRowData(item);
+                                    const key = getRowKey(item, index);
+                                    const isExpanded = expandedRows.has(key);
+                                    const details = detailsCache.get(key);
+
                                     return (
-                                        <div key={index} className="border rounded-lg bg-card p-4 shadow-sm">
-                                            <div className="font-medium text-primary mb-2">{rowData[0]}</div>
-                                            <div className="grid grid-cols-2 gap-2 text-sm">
-                                                {headers.slice(1).map((header, i) => (
-                                                    <div key={i} className="flex justify-between">
-                                                        <span className="text-muted-foreground">{header}:</span>
-                                                        <span className="font-medium">{rowData[i + 1]}</span>
+                                        <div key={key} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                                            <div
+                                                className="p-4 flex items-center justify-between bg-muted/10 cursor-pointer"
+                                                onClick={() => handleToggleRow(item, index)}
+                                            >
+                                                <div className="font-medium text-primary">{rowData[0]}</div>
+                                                {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                            </div>
+
+                                            <div className="p-4 border-t border-border/50">
+                                                <div className="grid grid-cols-2 gap-2 text-sm mb-4">
+                                                    {headers.slice(1).map((header, i) => (
+                                                        <div key={i} className="flex justify-between">
+                                                            <span className="text-muted-foreground">{header}:</span>
+                                                            <span className="font-medium">{rowData[i + 1]}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+
+                                                {isExpanded && (
+                                                    <div className="mt-4 pt-4 border-t">
+                                                        {/* Mobile Details - Simplified List */}
+                                                        {!details ? (
+                                                            <p className="text-xs text-center text-muted-foreground">Loading...</p>
+                                                        ) : details.length === 0 ? (
+                                                            <p className="text-xs text-center text-muted-foreground">No details.</p>
+                                                        ) : (
+                                                            <div className="space-y-3">
+                                                                {details.map((row, idx) => (
+                                                                    <div key={idx} className="bg-muted/30 p-2 rounded text-xs space-y-1">
+                                                                        <div className="flex justify-between font-medium">
+                                                                            <span>{row.barcode}</span>
+                                                                            <span>{formatKg(row.receivedWeight)}</span>
+                                                                        </div>
+                                                                        <div className="flex justify-between text-muted-foreground">
+                                                                            <span>{formatDateDDMMYYYY(row.date)}</span>
+                                                                            <span>{row.issueInfo ? row.issueInfo.desc : ''}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                ))}
+                                                )}
                                             </div>
                                         </div>
                                     );

@@ -17,3 +17,4 @@ export { BoxTransfer } from './BoxTransfer.jsx';
 export { Login } from './Login.jsx';
 export { Setup } from './Setup.jsx';
 export { ScaleTestPage } from './ScaleTestPage.jsx';
+export { Boiler } from './Boiler.jsx';

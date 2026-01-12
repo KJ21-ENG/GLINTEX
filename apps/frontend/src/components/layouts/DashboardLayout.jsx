@@ -15,7 +15,8 @@ import {
   Moon,
   Sun,
   Factory,
-  ClipboardPlus
+  ClipboardPlus,
+  Flame
 } from "lucide-react";
 import { useInventory } from "../../context/InventoryContext";
 import { Button, Select } from "../ui";
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { key: "dispatch", label: "Dispatch", icon: Truck },
   { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus },
   { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft },
+  { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo" },
   { key: "masters", label: "Masters", icon: Database },
   { key: "reports", label: "Reports", icon: BarChart3 },
   { key: "settings", label: "Settings", icon: Settings },
@@ -78,25 +80,27 @@ export default function DashboardLayout() {
       </div>
 
       <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.key}
-              to={`/app/${item.key}`}
-              onClick={() => setSidebarOpen(false)}
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-            </NavLink>
-          );
-        })}
+        {NAV_ITEMS
+          .filter(item => !item.process || item.process === process)
+          .map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.key}
+                to={`/app/${item.key}`}
+                onClick={() => setSidebarOpen(false)}
+                className={({ isActive }) => cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </NavLink>
+            );
+          })}
       </nav>
 
       <div className="p-4 border-t border-border/50 space-y-4">

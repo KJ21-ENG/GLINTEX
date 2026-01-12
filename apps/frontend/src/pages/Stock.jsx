@@ -102,6 +102,7 @@ export function Stock() {
     firm: "",
     supplier: "",
     status: (process || 'cutter') === 'cutter' ? "available_to_issue" : "active",
+    steamed: "all", // For Holo process only
     from: "",
     to: ""
   });
@@ -530,6 +531,17 @@ export function Stock() {
                 <option value="all">All</option>
               </Select>
             </div>
+            {isHolo && (
+              <div>
+                <Label className="text-xs mb-1 block">Steamed</Label>
+                <Select className="bg-background w-full" value={filters.steamed} onChange={e => setFilters(f => ({ ...f, steamed: e.target.value }))}>
+                  <option value="all">All</option>
+                  <option value="steamed">Steamed Only</option>
+                  <option value="not_steamed">Not Steamed</option>
+                  <option value="partial">Partially Steamed</option>
+                </Select>
+              </div>
+            )}
             <div>
               <Label className="text-xs mb-1 block">From</Label>
               <Input type="date" className="bg-background w-full" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />

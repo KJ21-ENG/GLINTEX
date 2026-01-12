@@ -661,3 +661,17 @@ model BoxTransfer {
   createdByUserId   String?
   updatedByUserId   String?
 }
+
+// ========== BOILER (STEAMING) FEATURE ==========
+
+model BoilerSteamLog {
+  id               String   @id @default(cuid())
+  barcode          String   @unique  // The holo receive row barcode
+  holoReceiveRowId String?           // Reference to the original receive row
+  steamedAt        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  createdByUserId  String?
+  updatedByUserId  String?
+}
+

@@ -1164,6 +1164,23 @@ router.get('/api/db', async (req, res) => {
     : [];
   const holoCutterRowPieceMap = new Map(cutterRowsForHolo.map(r => [r.id, r.pieceId]));
 
+  // Fetch steam logs for steamed status display on Stock page - Filtered by fetched rows
+  const holoRowIds = receive_from_holo_machine_rows_raw.map(r => r.id);
+  const holoBarcodes = receive_from_holo_machine_rows_raw.map(r => r.barcode).filter(Boolean);
+
+  const steamLogs = await prisma.boilerSteamLog.findMany({
+    where: {
+      OR: [
+        { holoReceiveRowId: { in: holoRowIds } },
+        { barcode: { in: holoBarcodes } }
+      ]
+    },
+    select: { barcode: true, steamedAt: true, holoReceiveRowId: true }
+  });
+  // Create lookup maps (both by barcode and by holo row ID for faster matching)
+  const steamedByBarcode = new Map(steamLogs.map(s => [s.barcode?.toUpperCase(), s]));
+  const steamedByRowId = new Map(steamLogs.filter(s => s.holoReceiveRowId).map(s => [s.holoReceiveRowId, s]));
+
   const receive_from_holo_machine_rows = receive_from_holo_machine_rows_raw.map(r => {
     const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
     const pieceIds = new Set();
@@ -1194,7 +1211,18 @@ router.get('/api/db', async (req, res) => {
     if (issueCopy) delete issueCopy.receivedRowRefs;
     const crateIndex = parseReceiveCrateIndex(r.barcode);
     const legacyBarcode = buildLegacyReceiveBarcode('RHO', r.issue?.lotNo, crateIndex);
-    return { ...r, issue: issueCopy, computedPieceIds: Array.from(pieceIds), legacyBarcode };
+
+    // Check steamed status from BoilerSteamLog
+    const steamLog = steamedByRowId.get(r.id) || steamedByBarcode.get(r.barcode?.toUpperCase());
+
+    return {
+      ...r,
+      issue: issueCopy,
+      computedPieceIds: Array.from(pieceIds),
+      legacyBarcode,
+      isSteamed: !!steamLog,
+      steamedAt: steamLog?.steamedAt || null
+    };
   });
 
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
@@ -10952,4 +10980,241 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
   }
 });
 
+// ========== BOILER (STEAMING) FEATURE ==========
+
+// Lookup barcode for boiler steaming
+router.get('/api/boiler/lookup', async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query?.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Barcode is required' });
+
+    // Check if already steamed
+    const existingSteamLog = await prisma.boilerSteamLog.findUnique({
+      where: { barcode },
+    });
+
+    // Try legacy barcode resolution first
+    const legacyResolved = await resolveLegacyReceiveRow(barcode);
+    if (legacyResolved?.error === 'ambiguous') {
+      return res.status(409).json({ error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' });
+    }
+
+    if (legacyResolved?.row && legacyResolved.stage === 'holo') {
+      const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({
+        where: { id: legacyResolved.row.id },
+        include: {
+          issue: { include: { machine: true } },
+          box: true,
+          rollType: true,
+        },
+      });
+      if (holoRow && !holoRow.isDeleted) {
+        const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+        return res.json({
+          found: true,
+          itemId: holoRow.id,
+          barcode: holoRow.barcode,
+          lotNo: holoRow.issue?.lotNo || null,
+          rollCount: holoRow.rollCount,
+          netWeight: roundTo3Decimals(totalNetWeight),
+          boxName: holoRow.box?.name || null,
+          rollTypeName: holoRow.rollType?.name || null,
+          machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
+          date: holoRow.date || null,
+          isSteamed: Boolean(existingSteamLog),
+          steamedAt: existingSteamLog?.steamedAt || null,
+        });
+      }
+    }
+
+    // Try Holo receive rows by barcode
+    const holoRow = await prisma.receiveFromHoloMachineRow.findFirst({
+      where: {
+        OR: [
+          { barcode: { equals: barcode, mode: 'insensitive' } },
+          { notes: { equals: barcode, mode: 'insensitive' } },
+        ],
+        isDeleted: false,
+      },
+      include: {
+        issue: { include: { machine: true } },
+        box: true,
+        rollType: true,
+      },
+    });
+
+    if (holoRow) {
+      const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+      // Check if already steamed by actual barcode
+      const steamedByActualBarcode = holoRow.barcode
+        ? await prisma.boilerSteamLog.findUnique({ where: { barcode: holoRow.barcode } })
+        : null;
+      const isSteamed = Boolean(existingSteamLog || steamedByActualBarcode);
+      return res.json({
+        found: true,
+        itemId: holoRow.id,
+        barcode: holoRow.barcode,
+        lotNo: holoRow.issue?.lotNo || null,
+        rollCount: holoRow.rollCount,
+        netWeight: roundTo3Decimals(totalNetWeight),
+        boxName: holoRow.box?.name || null,
+        rollTypeName: holoRow.rollType?.name || null,
+        machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
+        date: holoRow.date || null,
+        isSteamed,
+        steamedAt: existingSteamLog?.steamedAt || steamedByActualBarcode?.steamedAt || null,
+      });
+    }
+
+    return res.json({ found: false });
+  } catch (err) {
+    console.error('Failed to lookup boiler barcode', err);
+    res.status(500).json({ error: err.message || 'Failed to lookup barcode' });
+  }
+});
+
+// Mark barcodes as steamed
+router.post('/api/boiler/steam', async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const barcodes = req.body?.barcodes;
+    if (!Array.isArray(barcodes) || barcodes.length === 0) {
+      return res.status(400).json({ error: 'barcodes array is required' });
+    }
+
+    const normalizedBarcodes = barcodes.map(b => normalizeBarcodeInput(b)).filter(Boolean);
+    if (normalizedBarcodes.length === 0) {
+      return res.status(400).json({ error: 'No valid barcodes provided' });
+    }
+
+    // Check which are already steamed
+    const existingSteamLogs = await prisma.boilerSteamLog.findMany({
+      where: { barcode: { in: normalizedBarcodes } },
+      select: { barcode: true },
+    });
+    const alreadySteamed = new Set(existingSteamLogs.map(s => s.barcode));
+    const duplicates = normalizedBarcodes.filter(b => alreadySteamed.has(b));
+
+    if (duplicates.length > 0) {
+      return res.status(409).json({
+        error: 'Some barcodes are already steamed',
+        duplicates,
+      });
+    }
+
+    // Resolve barcodes to holo receive rows for reference - BATCH QUERY
+    // Build OR conditions for all barcodes at once
+    const orConditions = normalizedBarcodes.flatMap(barcode => [
+      { barcode: { equals: barcode, mode: 'insensitive' } },
+      { notes: { equals: barcode, mode: 'insensitive' } },
+    ]);
+
+    const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
+      where: {
+        OR: orConditions,
+        isDeleted: false,
+      },
+      select: { id: true, barcode: true, notes: true },
+    });
+
+    // Create lookup maps for barcode -> holoRow (case-insensitive)
+    const barcodeToHoloId = new Map();
+    for (const row of holoRows) {
+      if (row.barcode) {
+        barcodeToHoloId.set(row.barcode.toUpperCase(), row.id);
+      }
+      if (row.notes) {
+        barcodeToHoloId.set(row.notes.toUpperCase(), row.id);
+      }
+    }
+
+    // Build steam logs using the lookup map
+    const steamLogs = normalizedBarcodes.map(barcode => ({
+      barcode,
+      holoReceiveRowId: barcodeToHoloId.get(barcode.toUpperCase()) || null,
+      steamedAt: new Date(),
+      ...actorCreateFields(actor?.userId),
+    }));
+
+    // Create steam logs
+    const created = await prisma.boilerSteamLog.createMany({
+      data: steamLogs,
+      skipDuplicates: true,
+    });
+
+    res.json({
+      ok: true,
+      steamedCount: created.count,
+      barcodes: normalizedBarcodes,
+    });
+  } catch (err) {
+    console.error('Failed to mark barcodes as steamed', err);
+    res.status(500).json({ error: err.message || 'Failed to mark as steamed' });
+  }
+});
+
+// List steamed items
+router.get('/api/boiler/steamed', async (req, res) => {
+  try {
+    const date = req.query?.date; // Optional date filter (YYYY-MM-DD)
+
+    let where = {};
+    if (date) {
+      const startOfDay = new Date(`${date}T00:00:00.000Z`);
+      const endOfDay = new Date(`${date}T23:59:59.999Z`);
+      where = {
+        steamedAt: {
+          gte: startOfDay,
+          lte: endOfDay,
+        },
+      };
+    }
+
+    const steamLogs = await prisma.boilerSteamLog.findMany({
+      where,
+      orderBy: { steamedAt: 'desc' },
+      take: 500,
+    });
+
+    // Fetch related holo receive row details
+    const holoRowIds = steamLogs.map(s => s.holoReceiveRowId).filter(Boolean);
+    const holoRows = holoRowIds.length > 0
+      ? await prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: holoRowIds } },
+        include: {
+          issue: { select: { lotNo: true, machine: { select: { name: true } } } },
+          box: { select: { name: true } },
+          rollType: { select: { name: true } },
+        },
+      })
+      : [];
+    const holoRowMap = new Map(holoRows.map(r => [r.id, r]));
+
+    const items = steamLogs.map(log => {
+      const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
+      const totalNetWeight = holoRow
+        ? (holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0)))
+        : null;
+      return {
+        id: log.id,
+        barcode: log.barcode,
+        steamedAt: log.steamedAt,
+        holoReceiveRowId: log.holoReceiveRowId,
+        lotNo: holoRow?.issue?.lotNo || null,
+        rollCount: holoRow?.rollCount || null,
+        netWeight: totalNetWeight != null ? roundTo3Decimals(totalNetWeight) : null,
+        boxName: holoRow?.box?.name || null,
+        rollTypeName: holoRow?.rollType?.name || null,
+        machineName: holoRow?.issue?.machine?.name || holoRow?.machineNo || null,
+      };
+    });
+
+    res.json({ items, count: items.length });
+  } catch (err) {
+    console.error('Failed to list steamed items', err);
+    res.status(500).json({ error: err.message || 'Failed to list steamed items' });
+  }
+});
+
 export default router;
+

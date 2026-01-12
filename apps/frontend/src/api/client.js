@@ -272,6 +272,18 @@ export async function sendSummaryWhatsApp(stage, type, date) {
   });
 }
 
+// Boiler (Steaming)
+export async function boilerLookup(barcode) {
+  return await request(`/api/boiler/lookup?barcode=${encodeURIComponent(barcode)}`);
+}
+export async function boilerMarkSteamed(barcodes) {
+  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes } });
+}
+export async function boilerListSteamed(date) {
+  const params = date ? `?date=${date}` : '';
+  return await request(`/api/boiler/steamed${params}`);
+}
+
 export default {
   health,
   getDB,

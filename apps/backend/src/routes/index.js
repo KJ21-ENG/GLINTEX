@@ -10495,7 +10495,7 @@ router.get('/api/reports/production', async (req, res) => {
         where: {
           date: { gte: fromDate, lte: toDate },
           isDeleted: false,
-          note: { not: 'Opening Stock' },
+          note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] },
         },
       });
       // Holo issued weight = metallicBobbinsWeight + yarnKg
@@ -10506,7 +10506,7 @@ router.get('/api/reports/production', async (req, res) => {
         where: {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
-          issue: { note: { not: 'Opening Stock' } },
+          issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
         },
         include: { operator: true, issue: { include: { machine: true, cut: true } } },
       });
@@ -10805,7 +10805,7 @@ router.get('/api/reports/production/details', async (req, res) => {
       const where = {
         isDeleted: false,
         date: { gte: fromDate, lte: toDate },
-        issue: { note: { not: 'Opening Stock' } },
+        issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
       };
 
       if (view === 'operator') {
@@ -10833,16 +10833,16 @@ router.get('/api/reports/production/details', async (req, res) => {
         // Machine view: the key is now the BASE machine name (e.g. "H12")
         if (key === 'unknown') {
           where.AND = [
-            { issue: { machineId: null, note: { not: 'Opening Stock' } } },
+            { issue: { machineId: null, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
             { machineNo: null }
           ];
           delete where.issue;
         } else {
           where.OR = [
-            { issue: { machine: { name: key }, note: { not: 'Opening Stock' } } },
-            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { not: 'Opening Stock' } } },
-            { machineNo: key, issue: { note: { not: 'Opening Stock' } } },
-            { machineNo: { startsWith: `${key}-` }, issue: { note: { not: 'Opening Stock' } } }
+            { issue: { machine: { name: key }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { machineNo: key, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { machineNo: { startsWith: `${key}-` }, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } }
           ];
           delete where.issue;
         }
@@ -10892,7 +10892,7 @@ router.get('/api/reports/production/details', async (req, res) => {
       const where = {
         isDeleted: false,
         date: { gte: fromDate, lte: toDate },
-        issue: { note: { not: 'Opening Stock' } },
+        issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
       };
 
       if (view === 'operator') {
@@ -10914,16 +10914,16 @@ router.get('/api/reports/production/details', async (req, res) => {
       } else {
         if (key === 'unknown') {
           where.AND = [
-            { issue: { machineId: null, note: { not: 'Opening Stock' } } },
+            { issue: { machineId: null, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
             { machineNo: null }
           ];
           delete where.issue;
         } else {
           where.OR = [
-            { issue: { machine: { name: key }, note: { not: 'Opening Stock' } } },
-            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { not: 'Opening Stock' } } },
-            { machineNo: key, issue: { note: { not: 'Opening Stock' } } },
-            { machineNo: { startsWith: `${key}-` }, issue: { note: { not: 'Opening Stock' } } }
+            { issue: { machine: { name: key }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { machineNo: key, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { machineNo: { startsWith: `${key}-` }, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } }
           ];
           delete where.issue;
         }

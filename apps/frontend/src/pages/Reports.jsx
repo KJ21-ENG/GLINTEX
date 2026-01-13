@@ -302,6 +302,8 @@ function ProductionReport() {
     const getRowKey = (item, index) => {
         if (view === 'operator') return `op-${item.operatorId || index}`;
         if (view === 'shift') return `sh-${item.shift || index}`;
+        if (view === 'item') return `it-${item.itemId || item.itemName || index}-${item.cutId || item.cut || index}`;
+        if (view === 'yarn') return `yr-${item.yarnId || item.yarnName || index}`;
         return `mc-${item.machineNo || item.machineName || index}`;
     };
 
@@ -332,6 +334,11 @@ function ProductionReport() {
             let apiKey = '';
             if (view === 'operator') apiKey = item.operatorId || 'unknown';
             else if (view === 'shift') apiKey = item.shift || 'Not Specified';
+            else if (view === 'item') {
+                const itemId = item.itemId || item.itemName || 'unknown';
+                const cutId = item.cutId || item.cut || '';
+                apiKey = cutId ? `${itemId}|${cutId}` : itemId;
+            } else if (view === 'yarn') apiKey = item.yarnId || item.yarnName || 'unknown';
             else apiKey = item.machineNo || item.machineName || 'unknown';
 
             const res = await api.getProductionReportDetails({
@@ -363,12 +370,16 @@ function ProductionReport() {
     const getColumnHeaders = () => {
         if (view === 'operator') return ['Operator', 'Received (kg)', 'Count'];
         if (view === 'shift') return ['Shift', 'Received (kg)', 'Count'];
+        if (view === 'item') return ['Item', 'Cut', 'Received (kg)', 'Count'];
+        if (view === 'yarn') return ['Yarn', 'Received (kg)', 'Count'];
         return ['Machine', 'Received (kg)', 'Count'];
     };
 
     const getRowData = (item) => {
         if (view === 'operator') return [item.operatorName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
         if (view === 'shift') return [item.shift || 'Not Specified', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
+        if (view === 'item') return [item.itemName || 'Unknown Item', item.cutName || item.cut || '—', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
+        if (view === 'yarn') return [item.yarnName || 'Unknown Yarn', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
         return [item.machineNo || item.machineName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
     };
 
@@ -393,6 +404,8 @@ function ProductionReport() {
                                 <option value="machine">Machine-wise</option>
                                 <option value="operator">Operator-wise</option>
                                 <option value="shift">Shift-wise</option>
+                                <option value="item">Item-wise</option>
+                                <option value="yarn">Yarn-wise</option>
                             </Select>
                         </div>
                         <div className="min-w-[150px]">

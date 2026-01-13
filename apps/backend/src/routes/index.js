@@ -10435,6 +10435,32 @@ router.get('/api/reports/production', async (req, res) => {
         if (process === 'cutter') {
           report.data = Array.from(byShift.values());
         }
+      } else if (view === 'item') {
+        const byItem = new Map();
+        for (const row of cutterReceives) {
+          const itemName = row.itemName || 'Unknown Item';
+          const cut = row.cut || '';
+          const key = `${itemName}|${cut}`;
+          const current = byItem.get(key) || { itemName, cut, received: 0, count: 0 };
+          current.received += row.netWt || 0;
+          current.count += 1;
+          byItem.set(key, current);
+        }
+        if (process === 'cutter') {
+          report.data = Array.from(byItem.values());
+        }
+      } else if (view === 'yarn') {
+        const byYarn = new Map();
+        for (const row of cutterReceives) {
+          const key = row.yarnName || 'Unknown Yarn';
+          const current = byYarn.get(key) || { yarnName: key, received: 0, count: 0 };
+          current.received += row.netWt || 0;
+          current.count += 1;
+          byYarn.set(key, current);
+        }
+        if (process === 'cutter') {
+          report.data = Array.from(byYarn.values());
+        }
       } else {
         // Machine-wise (default)
         const byMachine = new Map();
@@ -10520,6 +10546,41 @@ router.get('/api/reports/production', async (req, res) => {
           byShift.set(key, current);
         }
         report.data = Array.from(byShift.values());
+      } else if (view === 'item' && process === 'holo') {
+        const byItem = new Map();
+        const itemIds = [...new Set(holoReceives.map(r => r.issue?.itemId).filter(Boolean))];
+        const items = await prisma.item.findMany({ where: { id: { in: itemIds } } });
+        const itemMap = new Map(items.map(i => [i.id, i.name]));
+
+        for (const row of holoReceives) {
+          const itemId = row.issue?.itemId || 'unknown';
+          const itemName = itemMap.get(itemId) || 'Unknown Item';
+          const cutName = row.issue?.cut?.name || '';
+          const cutId = row.issue?.cutId || 'none';
+          const key = `${itemId}|${cutId}`;
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const current = byItem.get(key) || { itemId, itemName, cutName, cutId, received: 0, rollCount: 0 };
+          current.received += netWeight;
+          current.rollCount += row.rollCount || 0;
+          byItem.set(key, current);
+        }
+        report.data = Array.from(byItem.values());
+      } else if (view === 'yarn' && process === 'holo') {
+        const byYarn = new Map();
+        const yarnIds = [...new Set(holoReceives.map(r => r.issue?.yarnId).filter(Boolean))];
+        const yarns = await prisma.yarn.findMany({ where: { id: { in: yarnIds } } });
+        const yarnMap = new Map(yarns.map(y => [y.id, y.name]));
+
+        for (const row of holoReceives) {
+          const yarnId = row.issue?.yarnId || 'unknown';
+          const yarnName = yarnMap.get(yarnId) || 'Unknown Yarn';
+          const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
+          const current = byYarn.get(yarnId) || { yarnId, yarnName, received: 0, rollCount: 0 };
+          current.received += netWeight;
+          current.rollCount += row.rollCount || 0;
+          byYarn.set(yarnId, current);
+        }
+        report.data = Array.from(byYarn.values());
       } else { // Default to machine-wise
         const byMachine = new Map();
         for (const row of holoReceives) {
@@ -10622,6 +10683,25 @@ router.get('/api/reports/production', async (req, res) => {
           byShift.set(key, current);
         }
         report.data = Array.from(byShift.values());
+      } else if (view === 'item' && process === 'coning') {
+        const byItem = new Map();
+        const itemIds = [...new Set(coningReceives.map(r => r.issue?.itemId).filter(Boolean))];
+        const items = await prisma.item.findMany({ where: { id: { in: itemIds } } });
+        const itemMap = new Map(items.map(i => [i.id, i.name]));
+
+        for (const row of coningReceives) {
+          const itemId = row.issue?.itemId || 'unknown';
+          const itemName = itemMap.get(itemId) || 'Unknown Item';
+          const current = byItem.get(itemId) || { itemId, itemName, received: 0, coneCount: 0 };
+          current.received += row.netWeight || 0;
+          current.coneCount += row.coneCount || 0;
+          byItem.set(itemId, current);
+        }
+        report.data = Array.from(byItem.values());
+      } else if (view === 'yarn' && process === 'coning') {
+        // Coning issue doesn't have yarnId directly. For now, leave as placeholder or try to fetch.
+        // Given complexity, return empty list or group by "Not Specified"
+        report.data = [];
       } else if (process === 'coning') {
         const byMachine = new Map();
         for (const row of coningReceives) {
@@ -10683,6 +10763,12 @@ router.get('/api/reports/production/details', async (req, res) => {
         where.operatorId = key === 'unknown' ? null : key;
       } else if (view === 'shift') {
         where.shift = key === 'Not Specified' ? null : key;
+      } else if (view === 'item') {
+        const [itemName, cut] = key.split('|');
+        where.itemName = itemName;
+        if (cut) where.cut = cut;
+      } else if (view === 'yarn') {
+        where.yarnName = key;
       } else {
         // Machine View - key is base machine name
         if (key === 'unknown') {
@@ -10726,6 +10812,16 @@ router.get('/api/reports/production/details', async (req, res) => {
         where.issue = {
           shift: key === 'Not Specified' ? null : key
         };
+      } else if (view === 'item') {
+        const [itemId, cutId] = key.split('|');
+        where.issue = {
+          itemId: itemId === 'unknown' ? null : itemId,
+          cutId: (cutId && cutId !== 'none') ? cutId : undefined
+        };
+      } else if (view === 'yarn') {
+        where.issue = {
+          yarnId: key === 'unknown' ? null : key
+        };
       } else {
         // Machine view: the key is now the BASE machine name (e.g. "H12")
         if (key === 'unknown') {
@@ -10746,28 +10842,42 @@ router.get('/api/reports/production/details', async (req, res) => {
         where,
         include: {
           operator: true,
-          issue: { include: { machine: true, yarn: true, twist: true } }
+          issue: { include: { machine: true, yarn: true, twist: true, cut: true } }
         },
         orderBy: { date: 'desc' },
         take: 2000
       });
 
-      rows = rawRows.map(r => ({
-        id: r.id,
-        date: r.date,
-        shift: r.issue?.shift,
-        barcode: r.barcode,
-        receivedQty: r.rollCount || 0,
-        receivedWeight: r.rollWeight || ((r.grossWeight || 0) - (r.tareWeight || 0)),
-        issueInfo: {
-          id: r.issue?.id,
-          barcode: r.issue?.barcode,
-          weight: (r.issue?.metallicBobbinsWeight || 0) + (r.issue?.yarnKg || 0),
-          desc: `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`
-        },
-        operatorName: r.operator?.name,
-        machineName: r.issue?.machine?.name // Return full machine name for grouping
-      }));
+      // Fetch all unique item IDs to get item names
+      const itemIds = [...new Set(rawRows.map(r => r.issue?.itemId).filter(Boolean))];
+      const items = await prisma.item.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, name: true }
+      });
+      const itemMap = new Map(items.map(i => [i.id, i.name]));
+
+      rows = rawRows.map(r => {
+        const itemName = r.issue?.itemId ? itemMap.get(r.issue.itemId) : null;
+        const yarnTwist = `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`.trim();
+        const cutName = r.issue?.cut?.name || '';
+        const descParts = [cutName, itemName, yarnTwist].filter(Boolean);
+        return {
+          id: r.id,
+          date: r.date,
+          shift: r.issue?.shift,
+          barcode: r.barcode,
+          receivedQty: r.rollCount || 0,
+          receivedWeight: r.rollWeight || ((r.grossWeight || 0) - (r.tareWeight || 0)),
+          issueInfo: {
+            id: r.issue?.id,
+            barcode: r.issue?.barcode,
+            weight: (r.issue?.metallicBobbinsWeight || 0) + (r.issue?.yarnKg || 0),
+            desc: descParts.length > 0 ? descParts.join(' - ') : null
+          },
+          operatorName: r.operator?.name,
+          machineName: r.issue?.machine?.name // Return full machine name for grouping
+        };
+      });
 
     } else if (process === 'coning') {
       const where = {
@@ -10781,6 +10891,13 @@ router.get('/api/reports/production/details', async (req, res) => {
         where.issue = {
           shift: key === 'Not Specified' ? null : key
         };
+      } else if (view === 'item') {
+        where.issue = {
+          itemId: key === 'unknown' ? null : key
+        };
+      } else if (view === 'yarn') {
+        // Coning issue doesn't have yarnId directly. Return empty.
+        where.issue = { id: 'none' };
       } else {
         if (key === 'unknown') {
           where.AND = [
@@ -10806,22 +10923,33 @@ router.get('/api/reports/production/details', async (req, res) => {
         take: 2000
       });
 
-      rows = rawRows.map(r => ({
-        id: r.id,
-        date: r.date,
-        shift: r.issue?.shift,
-        barcode: r.barcode,
-        receivedQty: r.coneCount || 0,
-        receivedWeight: r.netWeight || 0,
-        issueInfo: {
-          id: r.issue?.id,
-          barcode: r.issue?.barcode,
-          weight: 0,
-          desc: 'Coning Issue'
-        },
-        operatorName: r.operator?.name,
-        machineName: r.issue?.machine?.name || r.machineNo // Return full machine name for grouping
-      }));
+      // Fetch all unique item IDs to get item names for coning
+      const coningItemIds = [...new Set(rawRows.map(r => r.issue?.itemId).filter(Boolean))];
+      const coningItems = await prisma.item.findMany({
+        where: { id: { in: coningItemIds } },
+        select: { id: true, name: true }
+      });
+      const coningItemMap = new Map(coningItems.map(i => [i.id, i.name]));
+
+      rows = rawRows.map(r => {
+        const itemName = r.issue?.itemId ? coningItemMap.get(r.issue.itemId) : null;
+        return {
+          id: r.id,
+          date: r.date,
+          shift: r.issue?.shift,
+          barcode: r.barcode,
+          receivedQty: r.coneCount || 0,
+          receivedWeight: r.netWeight || 0,
+          issueInfo: {
+            id: r.issue?.id,
+            barcode: r.issue?.barcode,
+            weight: 0,
+            desc: itemName || 'Coning Issue'
+          },
+          operatorName: r.operator?.name,
+          machineName: r.issue?.machine?.name || r.machineNo // Return full machine name for grouping
+        };
+      });
     }
 
     res.json({ ok: true, rows });

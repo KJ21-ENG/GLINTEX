@@ -10495,7 +10495,6 @@ router.get('/api/reports/production', async (req, res) => {
         where: {
           date: { gte: fromDate, lte: toDate },
           isDeleted: false,
-          note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] },
         },
       });
       // Holo issued weight = metallicBobbinsWeight + yarnKg
@@ -10506,9 +10505,8 @@ router.get('/api/reports/production', async (req, res) => {
         where: {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
-          issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
         },
-        include: { operator: true, issue: { include: { machine: true, cut: true } } },
+        include: { operator: true, issue: { include: { machine: true } } },
       });
 
       // Calculate totals from date-filtered receive rows
@@ -10805,46 +10803,39 @@ router.get('/api/reports/production/details', async (req, res) => {
       const where = {
         isDeleted: false,
         date: { gte: fromDate, lte: toDate },
-        issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
       };
 
       if (view === 'operator') {
         where.operatorId = key === 'unknown' ? null : key;
-        where.issue = { ...where.issue };
       } else if (view === 'shift') {
         // We grouped by issue.shift in the main report (line 10512)
         where.issue = {
-          ...where.issue,
           shift: key === 'Not Specified' ? null : key
         };
       } else if (view === 'item') {
         const [itemId, cutId] = key.split('|');
         where.issue = {
-          ...where.issue,
           itemId: itemId === 'unknown' ? null : itemId,
           cutId: (cutId && cutId !== 'none') ? cutId : undefined
         };
       } else if (view === 'yarn') {
         where.issue = {
-          ...where.issue,
           yarnId: key === 'unknown' ? null : key
         };
       } else {
         // Machine view: the key is now the BASE machine name (e.g. "H12")
         if (key === 'unknown') {
           where.AND = [
-            { issue: { machineId: null, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { issue: { machineId: null } },
             { machineNo: null }
           ];
-          delete where.issue;
         } else {
           where.OR = [
-            { issue: { machine: { name: key }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { machineNo: key, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { machineNo: { startsWith: `${key}-` }, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } }
+            { issue: { machine: { name: key } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } } } },
+            { machineNo: key },
+            { machineNo: { startsWith: `${key}-` } }
           ];
-          delete where.issue;
         }
       }
       const rawRows = await prisma.receiveFromHoloMachineRow.findMany({
@@ -10892,20 +10883,16 @@ router.get('/api/reports/production/details', async (req, res) => {
       const where = {
         isDeleted: false,
         date: { gte: fromDate, lte: toDate },
-        issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } },
       };
 
       if (view === 'operator') {
         where.operatorId = key === 'unknown' ? null : key;
-        where.issue = { ...where.issue };
       } else if (view === 'shift') {
         where.issue = {
-          ...where.issue,
           shift: key === 'Not Specified' ? null : key
         };
       } else if (view === 'item') {
         where.issue = {
-          ...where.issue,
           itemId: key === 'unknown' ? null : key
         };
       } else if (view === 'yarn') {
@@ -10914,18 +10901,16 @@ router.get('/api/reports/production/details', async (req, res) => {
       } else {
         if (key === 'unknown') {
           where.AND = [
-            { issue: { machineId: null, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
+            { issue: { machineId: null } },
             { machineNo: null }
           ];
-          delete where.issue;
         } else {
           where.OR = [
-            { issue: { machine: { name: key }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { issue: { machine: { name: { startsWith: `${key}-` } }, note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { machineNo: key, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } },
-            { machineNo: { startsWith: `${key}-` }, issue: { note: { notIn: ['Opening Stock', 'Opening Stock Bulk'] } } }
+            { issue: { machine: { name: key } } },
+            { issue: { machine: { name: { startsWith: `${key}-` } } } },
+            { machineNo: key },
+            { machineNo: { startsWith: `${key}-` } }
           ];
-          delete where.issue;
         }
       }
       const rawRows = await prisma.receiveFromConingMachineRow.findMany({

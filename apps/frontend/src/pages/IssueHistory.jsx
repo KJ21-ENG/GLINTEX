@@ -899,6 +899,7 @@ export function IssueHistory({ db, refreshDb }) {
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
+          cut: cutNameById.get(r.cutId) || '—',
           yarnName: yarnNameById.get(r.yarnId) || '—',
           twistName: twistNameById.get(r.twistId) || '—',
           metallicBobbins: r.metallicBobbins || 0,
@@ -907,9 +908,27 @@ export function IssueHistory({ db, refreshDb }) {
           rollsEst: r.rollsProducedEstimate || '',
         };
       } else {
+        // Coning - trace through holo issue for cut and yarn
+        let cut = '—';
+        let yarn = '—';
+        try {
+          const refs = typeof r.receivedRowRefs === 'string' ? JSON.parse(r.receivedRowRefs) : r.receivedRowRefs;
+          if (Array.isArray(refs) && refs.length > 0) {
+            const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
+            if (holoRow) {
+              const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
+              if (holoIssue) {
+                cut = cutNameById.get(holoIssue.cutId) || '—';
+                yarn = yarnNameById.get(holoIssue.yarnId) || '—';
+              }
+            }
+          }
+        } catch (e) { /* ignore parse errors */ }
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
+          cut,
+          yarn,
           rollsIssued: r.count || r.rollsIssued || 0,
         };
       }
@@ -935,6 +954,7 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'date', header: 'Date' },
         { key: 'itemName', header: 'Item' },
         { key: 'lotNo', header: 'Lot' },
+        { key: 'cut', header: 'Cut' },
         { key: 'machineName', header: 'Machine' },
         { key: 'operatorName', header: 'Operator' },
         { key: 'yarnName', header: 'Yarn' },
@@ -951,6 +971,8 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'date', header: 'Date' },
         { key: 'itemName', header: 'Item' },
         { key: 'lotNo', header: 'Lot' },
+        { key: 'cut', header: 'Cut' },
+        { key: 'yarn', header: 'Yarn' },
         { key: 'machineName', header: 'Machine' },
         { key: 'operatorName', header: 'Operator' },
         { key: 'rollsIssued', header: 'Rolls Issued' },

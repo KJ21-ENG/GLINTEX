@@ -1527,9 +1527,13 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === issue?.itemId);
+                const cut = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name || '—' : '—';
+                const yarn = issue?.yarnId ? db.yarns?.find(y => y.id === issue.yarnId)?.name || '—' : '—';
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
+                    cut,
+                    yarn,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
@@ -1543,6 +1547,8 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'rolls', header: 'Rolls' },
@@ -1553,12 +1559,32 @@ export function ReceiveHistoryTable() {
                 { key: 'notes', header: 'Notes' },
             ];
         } else {
+            // Coning - trace through holo issue for cut and yarn
             exportData = history.map(row => {
-                const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                const item = db.items?.find(i => i.id === issue?.itemId);
+                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                let cut = '—';
+                let yarn = '—';
+                try {
+                    const refs = typeof coningIssue?.receivedRowRefs === 'string'
+                        ? JSON.parse(coningIssue.receivedRowRefs)
+                        : coningIssue?.receivedRowRefs;
+                    if (Array.isArray(refs) && refs.length > 0) {
+                        const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
+                        if (holoRow) {
+                            const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
+                            if (holoIssue) {
+                                cut = holoIssue.cutId ? db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '—' : '—';
+                                yarn = holoIssue.yarnId ? db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '—' : '—';
+                            }
+                        }
+                    }
+                } catch (e) { /* ignore parse errors */ }
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
+                    cut,
+                    yarn,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     box: row.box?.name || '—',
@@ -1572,6 +1598,8 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'box', header: 'Box' },

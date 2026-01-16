@@ -42,6 +42,12 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.cuts]);
 
+    const yarnNameById = useMemo(() => {
+        const map = new Map();
+        (db.yarns || []).forEach(y => map.set(y.id, y.name || '—'));
+        return map;
+    }, [db.yarns]);
+
     // Build piece totals lookup maps for each process
     const cutterPieceTotals = useMemo(() => {
         const map = new Map();
@@ -315,7 +321,32 @@ export function OnMachineTable({ db, process }) {
             if (process === 'cutter') {
                 return { ...baseData, cut: cutNameById.get(entry.cutId) || '—' };
             }
-            return baseData;
+            if (process === 'holo') {
+                return {
+                    ...baseData,
+                    cut: cutNameById.get(entry.cutId) || '—',
+                    yarn: yarnNameById.get(entry.yarnId) || '—',
+                };
+            }
+            // Coning - trace through holo issue for cut and yarn
+            let cut = '—';
+            let yarn = '—';
+            try {
+                const refs = typeof entry.receivedRowRefs === 'string'
+                    ? JSON.parse(entry.receivedRowRefs)
+                    : entry.receivedRowRefs;
+                if (Array.isArray(refs) && refs.length > 0) {
+                    const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
+                    if (holoRow) {
+                        const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
+                        if (holoIssue) {
+                            cut = cutNameById.get(holoIssue.cutId) || '—';
+                            yarn = yarnNameById.get(holoIssue.yarnId) || '—';
+                        }
+                    }
+                }
+            } catch (e) { /* ignore parse errors */ }
+            return { ...baseData, cut, yarn };
         });
 
         let columns = [
@@ -325,6 +356,10 @@ export function OnMachineTable({ db, process }) {
         ];
         if (process === 'cutter') {
             columns.push({ key: 'cut', header: 'Cut' });
+        }
+        if (process === 'holo' || process === 'coning') {
+            columns.push({ key: 'cut', header: 'Cut' });
+            columns.push({ key: 'yarn', header: 'Yarn' });
         }
         columns = columns.concat([
             { key: 'machineName', header: 'Machine' },

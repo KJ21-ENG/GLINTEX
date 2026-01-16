@@ -231,6 +231,9 @@ export function OpeningStock() {
   const [coningIssue, setConingIssue] = useState({
     coneTypeId: '',
     wrapperId: '',
+    yarnId: '',
+    twistId: '',
+    cutId: '',
     machineId: '',
     operatorId: '',
     shift: '',
@@ -910,6 +913,9 @@ export function OpeningStock() {
         supplierId,
         coneTypeId: coningIssue.coneTypeId,
         wrapperId: coningIssue.wrapperId || null,
+        yarnId: coningIssue.yarnId || null,
+        twistId: coningIssue.twistId || null,
+        cutId: coningIssue.cutId || null,
         machineId: coningIssue.machineId || null,
         operatorId: coningIssue.operatorId || null,
         shift: coningIssue.shift || null,
@@ -1547,7 +1553,7 @@ export function OpeningStock() {
             <CardTitle>Opening Coning Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4">
               <div className="space-y-2">
                 <Label>Cone Type</Label>
                 <Select value={coningIssue.coneTypeId} onChange={e => setConingIssue(prev => ({ ...prev, coneTypeId: e.target.value }))}>
@@ -1560,6 +1566,27 @@ export function OpeningStock() {
                 <Select value={coningIssue.wrapperId} onChange={e => setConingIssue(prev => ({ ...prev, wrapperId: e.target.value }))}>
                   <option value="">Select Wrapper</option>
                   {db.wrappers?.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Yarn (Optional)</Label>
+                <Select value={coningIssue.yarnId} onChange={e => setConingIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
+                  <option value="">Select Yarn</option>
+                  {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Twist (Optional)</Label>
+                <Select value={coningIssue.twistId} onChange={e => setConingIssue(prev => ({ ...prev, twistId: e.target.value }))}>
+                  <option value="">Select Twist</option>
+                  {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Cut (Optional)</Label>
+                <Select value={coningIssue.cutId} onChange={e => setConingIssue(prev => ({ ...prev, cutId: e.target.value }))}>
+                  <option value="">Select Cut</option>
+                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">

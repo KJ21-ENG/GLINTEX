@@ -2179,7 +2179,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
 router.post('/api/opening_stock/coning_receive', async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
+    const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, yarnId, twistId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
     if (!date || !itemId || !supplierId || !coneTypeId) {
       return res.status(400).json({ error: 'Missing required opening stock fields' });
     }
@@ -2205,6 +2205,18 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
     if (wrapperId) {
       const wrapper = await prisma.wrapper.findUnique({ where: { id: wrapperId } });
       if (!wrapper) return res.status(404).json({ error: 'Wrapper not found' });
+    }
+    if (yarnId) {
+      const yarn = await prisma.yarn.findUnique({ where: { id: yarnId } });
+      if (!yarn) return res.status(404).json({ error: 'Yarn not found' });
+    }
+    if (twistId) {
+      const twist = await prisma.twist.findUnique({ where: { id: twistId } });
+      if (!twist) return res.status(404).json({ error: 'Twist not found' });
+    }
+    if (cutId) {
+      const cut = await prisma.cut.findUnique({ where: { id: cutId } });
+      if (!cut) return res.status(404).json({ error: 'Cut not found' });
     }
 
     const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
@@ -2336,6 +2348,9 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
           date,
           itemId,
           lotNo,
+          yarnId: yarnId || null,
+          twistId: twistId || null,
+          cutId: cutId || null,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: issueBarcode,

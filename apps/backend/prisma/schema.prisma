@@ -26,6 +26,7 @@ model Yarn {
   createdByUserId String?
   updatedByUserId String?
   issues    IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Cut {
@@ -38,6 +39,7 @@ model Cut {
   receiveRows  ReceiveFromCutterMachineRow[]
   cutterIssues IssueToCutterMachine[]
   holoIssues   IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Twist {
@@ -48,6 +50,7 @@ model Twist {
   createdByUserId String?
   updatedByUserId String?
   holoIssues IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Firm {
@@ -274,6 +277,9 @@ model IssueToConingMachine {
   date            String
   itemId          String
   lotNo           String
+  yarnId          String?
+  twistId         String?
+  cutId           String?
   machineId       String?
   operatorId      String?
   barcode         String   @unique
@@ -292,6 +298,9 @@ model IssueToConingMachine {
   updatedByUserId String?
   machine         Machine?  @relation(fields: [machineId], references: [id])
   operator        Operator? @relation("IssueToConingOperator", fields: [operatorId], references: [id])
+  yarn            Yarn?     @relation(fields: [yarnId], references: [id])
+  twist           Twist?    @relation(fields: [twistId], references: [id])
+  cut             Cut?      @relation(fields: [cutId], references: [id])
   receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
 }
 

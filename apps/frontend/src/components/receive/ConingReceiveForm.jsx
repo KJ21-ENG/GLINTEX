@@ -143,6 +143,49 @@ export function ConingReceiveForm() {
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
     const isReceivedOverIssued = totalIssuedWeight > 0 && totalReceivedWeight > totalIssuedWeight + 0.001;
 
+    const issueDetails = useMemo(() => {
+        if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
+
+        let itemName = db.items?.find(i => i.id === issue.itemId)?.name || '';
+        let cutName = '';
+        let coneTypeName = '';
+
+        if (issueRefs.length > 0) {
+            const firstRef = issueRefs[0];
+            if (firstRef.coneTypeId) {
+                coneTypeName = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
+            }
+
+            // Trace back for cut name
+            const rid = firstRef.rowId;
+            if (rid) {
+                const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === rid);
+                if (holoRow) {
+                    const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
+                    if (holoIssue) {
+                        // 1. Check direct cutId on Holo Issue (common for Opening Stock)
+                        if (holoIssue.cutId) {
+                            cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+                        }
+
+                        // 2. Fallback to tracing back to Cutter results (normal production flow)
+                        if (!cutName) {
+                            const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                            if (Array.isArray(hRefs) && hRefs.length > 0) {
+                                const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
+                                if (cutterRow) {
+                                    // cut may be a string field or a relation object; handle both cases
+                                    cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return { itemName, cutName, coneTypeName };
+    }, [issue, issueRefs, db]);
+
     const receiveRowsForIssue = useMemo(() => {
         if (!issue?.id) return [];
         return (db.receive_from_coning_machine_rows || []).filter((row) => row.issueId === issue.id);
@@ -217,7 +260,7 @@ export function ConingReceiveForm() {
                                         if (Array.isArray(hRefs) && hRefs.length > 0) {
                                             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
                                             if (cutterRow) {
-                                                cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                                cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                             }
                                         }
                                     }
@@ -289,20 +332,23 @@ export function ConingReceiveForm() {
                         <div className="p-4 bg-muted rounded-md text-sm space-y-3">
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                                 <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                                <div><strong>Total Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
-                                <div><strong>Expected:</strong> {totalExpected} cones</div>
-                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
+                                <div><strong>Item:</strong> {issueDetails.itemName || '—'}</div>
+                                <div><strong>Cut:</strong> {issueDetails.cutName || '—'}</div>
+                                <div><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
                             </div>
                             <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                                <div><strong>Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
+                                <div><strong>Expected Cones:</strong> {totalExpected}</div>
+                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
                                 <div className="hidden md:block" />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
                                 <div className="flex items-center gap-2">
-                                    <div>
-                                        <strong>Total Received Wt:</strong>{' '}
-                                        <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
-                                            {formatKg(totalReceivedWeight)}
-                                        </span>
-                                    </div>
+                                    <strong>Received Wt:</strong>{' '}
+                                    <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
+                                        {formatKg(totalReceivedWeight)}
+                                    </span>
                                     <InfoPopover
                                         title={`Coning Receives (${issue.lotLabel || issue.lotNo})`}
                                         items={receiveRowsForIssue}
@@ -349,7 +395,8 @@ export function ConingReceiveForm() {
                                     />
                                 </div>
                                 <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
-                                <div><strong>Per Cone Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                                <div><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                                <div className="hidden md:block" />
                             </div>
                         </div>
 

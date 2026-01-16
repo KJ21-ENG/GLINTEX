@@ -94,6 +94,31 @@ export function HoloReceiveForm() {
         return db.inbound_items.find(p => p.id === form.pieceId) || null;
     }, [issue, form.pieceId, db.inbound_items]);
 
+    const cutName = useMemo(() => {
+        if (!issue) return '';
+        // 1. Direct cut from Issue (Opening Stock)
+        if (issue.cutId) {
+            const direct = db.cuts?.find(c => c.id === issue.cutId)?.name;
+            if (direct) return direct;
+        }
+
+        // 2. Trace back (Normal flow)
+        try {
+            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+            if (Array.isArray(refs) && refs.length > 0) {
+                const firstRowId = refs[0].rowId;
+                const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
+                if (sourceRow) {
+                    // cut is a string field, cutMaster is the relation
+                    return sourceRow.cut || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+                }
+            }
+        } catch (e) {
+            console.error('Error resolving cut', e);
+        }
+        return '';
+    }, [issue, db.receive_from_cutter_machine_rows, db.cuts]);
+
     // --- Handlers ---
     async function handleScan() {
         if (!scanInput.trim()) return;
@@ -221,11 +246,12 @@ export function HoloReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-md text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted rounded-md text-sm">
                             <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
                             <div><strong>Item:</strong> {db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId}</div>
-                            <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name}</div>
-                            <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name}</div>
+                            <div><strong>Cut:</strong> {cutName || '—'}</div>
+                            <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'}</div>
+                            <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name || '—'}</div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

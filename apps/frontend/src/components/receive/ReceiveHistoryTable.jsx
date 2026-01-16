@@ -501,7 +501,7 @@ export function ReceiveHistoryTable() {
                     if (Array.isArray(refs) && refs.length > 0) {
                         const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
                         if (cutterRow) {
-                            cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                            cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                         }
                     }
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
@@ -565,7 +565,7 @@ export function ReceiveHistoryTable() {
                                 if (Array.isArray(holoRefs) && holoRefs.length > 0) {
                                     const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
                                     if (cutterRow) {
-                                        cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                        cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                     }
                                 }
                             }

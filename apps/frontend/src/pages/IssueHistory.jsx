@@ -545,7 +545,7 @@ export function IssueHistory({ db, refreshDb }) {
             const firstRef = refs[0];
             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
-              cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+              cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
               netWeight += Number(cutterRow.netWt || 0);
             }
@@ -624,7 +624,7 @@ export function IssueHistory({ db, refreshDb }) {
                 if (Array.isArray(holoRefs) && holoRefs.length > 0) {
                   const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
                   if (cutterRow) {
-                    cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                    cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                   }
                 }
               }

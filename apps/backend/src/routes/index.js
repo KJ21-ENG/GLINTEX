@@ -11159,7 +11159,7 @@ router.post('/api/box-transfer/lookup', async (req, res) => {
         boxName: cutterRow.box?.name || null,
         boxId: cutterRow.boxId || null,
         bobbinName: cutterRow.bobbin?.name || null,
-        cutName: cutterRow.cutMaster?.name || cutterRow.cut || null,
+        cutName: cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || null,
         date: cutterRow.date || null,
       });
     }

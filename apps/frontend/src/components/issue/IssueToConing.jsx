@@ -39,8 +39,8 @@ export function IssueToConing() {
     }, [crates, form.targetWeight]);
 
     const meta = useMemo(() => {
-        if (crates.length === 0) return { lotNo: '' };
-        return { lotNo: crates[0].lotNo };
+        if (crates.length === 0) return { lotNo: '', itemId: null, cut: '' };
+        return { lotNo: crates[0].lotNo, itemId: crates[0].itemId, cut: crates[0].cut };
     }, [crates]);
 
     // --- Handlers ---
@@ -74,7 +74,7 @@ export function IssueToConing() {
             return;
         }
 
-        // Check Lot
+        // Check Lot and get issue info
         const issue = db.issue_to_holo_machine.find(i => i.id === row.issueId);
         const rowLot = issue?.lotNo;
         if (!rowLot) {
@@ -82,9 +82,34 @@ export function IssueToConing() {
             return;
         }
 
+        // Resolve Item & Cut first (needed for mixed lot validation)
+        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+        const scannedItemId = holoIssue?.itemId;
+        let cutName = '';
+        if (holoIssue) {
+            try {
+                const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                if (Array.isArray(refs) && refs.length > 0) {
+                    const cutterRowId = refs[0].rowId;
+                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
+                    if (cutterRow) {
+                        // cut may be a string field or a relation object; handle both cases
+                        const cutVal = cutterRow.cut;
+                        cutName = (typeof cutVal === 'string' ? cutVal : cutVal?.name) || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
+                    }
+                }
+            } catch (e) { }
+        }
+
+        // Allow mixed lots only if item and cut are the same
         if (crates.length > 0 && rowLot !== meta.lotNo) {
-            alert('Mixed lots not allowed');
-            return;
+            // Check if item and cut match
+            if (scannedItemId !== meta.itemId || cutName !== meta.cut) {
+                const existingItemName = db.items?.find(i => i.id === meta.itemId)?.name || 'Unknown';
+                const scannedItemName = db.items?.find(i => i.id === scannedItemId)?.name || 'Unknown';
+                alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${meta.cut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
+                return;
+            }
         }
 
         // Defaults
@@ -111,22 +136,6 @@ export function IssueToConing() {
 
         const pieceIdsDisplay = pieceIds.join(', ') || rowLot;
 
-        // Resolve Item & Cut
-        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-        let cutName = '';
-        if (holoIssue) {
-            try {
-                const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                if (Array.isArray(refs) && refs.length > 0) {
-                    const cutterRowId = refs[0].rowId;
-                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                    if (cutterRow) {
-                        cutName = cutterRow.cut || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
-                    }
-                }
-            } catch (e) { }
-        }
-
         setCrates(prev => [...prev, {
             rowId: row.id,
             barcode: row.barcode,
@@ -136,7 +145,7 @@ export function IssueToConing() {
             unitWeight,
             issueRolls: row.rollCount, // Default all
             issueWeight: row.rollWeight,
-            itemId: holoIssue?.itemId,
+            itemId: scannedItemId,
             cut: cutName
         }]);
         setScanInput('');
@@ -209,7 +218,7 @@ export function IssueToConing() {
                                         const cutterRowId = refs[0].rowId;
                                         const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
                                         if (cutterRow) {
-                                            cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                            cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
                                         }
                                     }
                                 } catch (e) { }

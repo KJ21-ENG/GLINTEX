@@ -27,6 +27,35 @@ function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+function parsePieceIdsCsv(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+async function buildCutterIssueMachineMap(pieceIds) {
+  const uniquePieceIds = Array.from(new Set((pieceIds || []).filter(Boolean)));
+  if (uniquePieceIds.length === 0) return new Map();
+  const orFilters = uniquePieceIds.map(id => ({ pieceIds: { contains: id } }));
+  const issues = await prisma.issueToCutterMachine.findMany({
+    where: { OR: orFilters, isDeleted: false },
+    include: { machine: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const map = new Map();
+  for (const issue of issues) {
+    const ids = parsePieceIdsCsv(issue.pieceIds);
+    const machineName = issue.machine?.name || null;
+    ids.forEach((id) => {
+      if (!map.has(id) && machineName) {
+        map.set(id, machineName);
+      }
+    });
+  }
+  return map;
+}
+
 function buildLegacyReceiveBarcode(prefix, lotNo, crateIndex) {
   if (!lotNo || typeof lotNo !== 'string') return null;
   const match = lotNo.trim().toUpperCase().match(/^OP-(\d+)$/);
@@ -1832,6 +1861,7 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
             pieceId,
             vchNo,
             date,
+            itemName: itemRecord?.name || null,
             grossWt: row.gross,
             tareWt: row.tare,
             netWt: row.net,
@@ -3169,6 +3199,7 @@ async function processOpeningInboundUpload(rows, { date, itemId, firmId, supplie
 }
 
 async function processOpeningCutterUpload(rows, { date, itemId, firmId, supplierId, actorUserId }) {
+  const itemRec = itemId ? await prisma.item.findUnique({ where: { id: itemId } }) : null;
   const uniqueNames = {
     bobbins: new Set(), boxes: new Set(), cuts: new Set(),
     operators: new Set(), helpers: new Set(), machines: new Set()
@@ -3286,6 +3317,7 @@ async function processOpeningCutterUpload(rows, { date, itemId, firmId, supplier
         data: {
           uploadId: upload.id, pieceId, vchNo: `OPEN-BLK-${randomUUID().slice(0, 6)}`,
           date, grossWt: crate.grossWeight, tareWt: crate.tareWeight, netWt: crate.netWeight, totalKg: crate.netWeight,
+          itemName: itemRec?.name || null,
           bobbinId: crate.bobbinId, boxId: crate.boxId, cutId: crate.cutId,
           bobbinQuantity: crate.bobbinQuantity,
           operatorId: crate.operatorId, helperId: crate.helperId, machineNo: crate.machineNo,
@@ -4168,6 +4200,10 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
 
     const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
     if (!piece) return res.status(404).json({ error: 'Piece not found' });
+    const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
+    const itemName = itemRec ? itemRec.name || '' : '';
+    const machineByPieceId = await buildCutterIssueMachineMap([pieceId]);
+    const fallbackMachineName = machineByPieceId.get(pieceId) || null;
 
     const receiveEntries = normalizedEntries.filter(e => !e.isWastage);
     const wastageEntries = normalizedEntries.filter(e => e.isWastage);
@@ -4300,6 +4336,7 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
         pieceId,
         vchNo: `MAN-${randomUUID().slice(0, 8)}`,
         date: receiveDateStr,
+        itemName: itemName || null,
         grossWt: roundTo3Decimals(gross),
         tareWt: tare,
         netWt: net,
@@ -4313,6 +4350,7 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
         bobbinQuantity: bobbinQty,
         employee: operatorRec.name,
         shift: entry.shift || null,
+        machineNo: entry.machineNo || fallbackMachineName,
         helperName: helperRec ? helperRec.name : null,
         cutId: cutRecord ? cutRecord.id : null,
         cut: cutRecord ? cutRecord.name : null,
@@ -4482,6 +4520,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
     if (!operatorId) return res.status(400).json({ error: 'Missing operator' });
 
     const normalizedIssueCode = issueBarcode ? normalizeBarcodeInput(issueBarcode) : '';
+    let issueMachineName = null;
     let resolvedPieceId = pieceId;
     let resolvedLotNo = lotNo;
     if (normalizedIssueCode) {
@@ -4495,6 +4534,10 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       }
       resolvedPieceId = pieceIds[0];
       resolvedLotNo = issue.lotNo;
+      if (issue.machineId) {
+        const machineRec = await prisma.machine.findUnique({ where: { id: issue.machineId } });
+        issueMachineName = machineRec ? machineRec.name : null;
+      }
     }
 
     if (!resolvedPieceId || typeof resolvedPieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
@@ -4502,6 +4545,8 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
     const piece = await prisma.inboundItem.findUnique({ where: { id: resolvedPieceId } });
     if (!piece) return res.status(404).json({ error: 'Piece not found' });
     if (resolvedLotNo && piece.lotNo !== resolvedLotNo) return res.status(400).json({ error: 'Piece does not belong to the scanned issue' });
+    const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
+    const itemName = itemRec ? itemRec.name || '' : '';
 
     const bobbin = await prisma.bobbin.findUnique({ where: { id: bobbinId } });
     if (!bobbin) return res.status(404).json({ error: 'Bobbin not found' });
@@ -4564,6 +4609,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
 
     const receiveDateStr = toOptionalString(receiveDate) || new Date().toISOString().slice(0, 10);
     const vchNo = `MAN-${randomUUID().slice(0, 8)}`;
+    const fallbackMachineName = issueMachineName || (await buildCutterIssueMachineMap([resolvedPieceId])).get(resolvedPieceId) || null;
 
     const txResult = await prisma.$transaction(async (tx) => {
       const upload = await tx.receiveFromCutterMachineUpload.create({
@@ -4587,12 +4633,14 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
       }
       const receiveBarcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: maxCrateIndex + 1 });
 
+      const fallbackMachineName = issueMachineName || (await buildCutterIssueMachineMap([resolvedPieceId])).get(resolvedPieceId) || null;
       const createdRow = await tx.receiveFromCutterMachineRow.create({
         data: {
           uploadId: upload.id,
           pieceId: resolvedPieceId,
           vchNo,
           date: receiveDateStr,
+          itemName: itemName || null,
           grossWt: gross,
           tareWt: computedTare,
           netWt: net,
@@ -4606,6 +4654,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
           bobbinQuantity: bobbinQty,
           employee: operatorRec.name,
           shift: shift || null,
+          machineNo: fallbackMachineName,
           helperName: helperRec ? helperRec.name : null,
           cutId: cutRecord ? cutRecord.id : null,
           cut: cutRecord ? cutRecord.name : null,
@@ -11775,6 +11824,59 @@ async function generateSummaryData(stage, type, date) {
     return Object.fromEntries(items.map(i => [i.id, i.name]));
   }
 
+  const parseRefs = (raw) => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw !== 'string') return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  async function buildHoloCutNameMap(issues) {
+    const issueList = Array.isArray(issues) ? issues : [];
+    if (!issueList.length) return new Map();
+
+    const rowIds = new Set();
+    issueList.forEach((issue) => {
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach((ref) => {
+        if (ref?.rowId) rowIds.add(ref.rowId);
+      });
+    });
+
+    const rowIdArray = Array.from(rowIds);
+    const sourceRowCutMap = new Map();
+    if (rowIdArray.length > 0) {
+      const sourceRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: rowIdArray } },
+        include: { cutMaster: true },
+      });
+      sourceRows.forEach((row) => {
+        const cutName = row.cutMaster?.name || row.cut || null;
+        if (cutName) sourceRowCutMap.set(row.id, cutName);
+      });
+    }
+
+    const issueCutNameMap = new Map();
+    issueList.forEach((issue) => {
+      const cutNames = new Set();
+      if (issue.cut?.name) cutNames.add(issue.cut.name);
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach((ref) => {
+        const cutName = ref?.rowId ? sourceRowCutMap.get(ref.rowId) : null;
+        if (cutName) cutNames.add(cutName);
+      });
+      const cutName = cutNames.size ? Array.from(cutNames).join(', ') : '-';
+      issueCutNameMap.set(issue.id, cutName);
+    });
+
+    return issueCutNameMap;
+  }
+
   if (stage === 'cutter' && type === 'issue') {
     const issues = await prisma.issueToCutterMachine.findMany({
       where: { date, isDeleted: false },
@@ -11826,6 +11928,24 @@ async function generateSummaryData(stage, type, date) {
       orderBy: { createdAt: 'asc' },
     });
 
+    const pieceIds = Array.from(new Set(rows.map(r => r.pieceId).filter(Boolean)));
+    const inboundItems = pieceIds.length > 0
+      ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
+      : [];
+    const pieceMap = new Map(inboundItems.map(p => [p.id, p]));
+    const itemIds = Array.from(new Set(inboundItems.map(p => p.itemId).filter(Boolean)));
+    const itemMap = await getItemNameMap(itemIds);
+    const machineByPieceId = await buildCutterIssueMachineMap(pieceIds);
+    const resolveItemName = (row) => {
+      const piece = pieceMap.get(row.pieceId);
+      return row.itemName || (piece?.itemId ? (itemMap[piece.itemId] || piece.itemId) : '-') || '-';
+    };
+    const resolveMachineName = (row) => {
+      if (row.machineNo && row.machineNo !== '---') return row.machineNo;
+      return machineByPieceId.get(row.pieceId) || '-';
+    };
+    const resolveOperatorName = (row) => row.operator?.name || row.employee || '-';
+
     summary.totalCount = rows.length;
     summary.totalBobbins = rows.reduce((sum, r) => sum + (r.bobbinQuantity || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWt || 0), 0);
@@ -11834,14 +11954,17 @@ async function generateSummaryData(stage, type, date) {
     // Aggregate by item for the receive summary (grouping rows by item/cut/machine/operator)
     const groupedMap = new Map();
     for (const r of rows) {
-      const key = `${r.itemName || '-'}|${r.cut || r.cutMaster?.name || '-'}|${r.machineNo || '-'}|${r.shift || '-'}|${r.operator?.name || '-'}`;
+      const resolvedItemName = resolveItemName(r);
+      const resolvedMachine = resolveMachineName(r);
+      const resolvedOperator = resolveOperatorName(r);
+      const key = `${resolvedItemName}|${r.cut || r.cutMaster?.name || '-'}|${resolvedMachine}|${r.shift || '-'}|${resolvedOperator}`;
       if (!groupedMap.has(key)) {
         groupedMap.set(key, {
-          itemName: r.itemName || '-',
+          itemName: resolvedItemName,
           cutName: r.cut || r.cutMaster?.name || '-',
-          machineNo: r.machineNo || '-',
+          machineNo: resolvedMachine,
           shift: r.shift || '-',
-          operatorName: r.operator?.name || '-',
+          operatorName: resolvedOperator,
           netWeight: 0,
           bobbinCount: 0,
           boxIds: new Set(),
@@ -11858,7 +11981,7 @@ async function generateSummaryData(stage, type, date) {
       boxIds: undefined,
     }));
 
-    summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
+    summary.byOperator = aggregateBy(rows, r => resolveOperatorName(r) || 'Unknown', {
       count: () => 1,
       netWeight: r => r.netWt || 0,
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
@@ -11867,6 +11990,11 @@ async function generateSummaryData(stage, type, date) {
       count: () => 1,
       netWeight: r => r.netWt || 0,
     }).map(a => ({ pieceId: a.key, count: a.count, netWeight: a.netWeight }));
+
+    summary.byMachine = aggregateBy(rows, r => resolveMachineName(r) || 'Unknown', {
+      count: () => 1,
+      netWeight: r => r.netWt || 0,
+    }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
 
   } else if (stage === 'holo' && type === 'issue') {
     const issues = await prisma.issueToHoloMachine.findMany({
@@ -11879,44 +12007,7 @@ async function generateSummaryData(stage, type, date) {
     const itemIds = [...new Set(issues.map(i => i.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
 
-    // For issues without cutId, look up from source ReceiveFromCutterMachineRow
-    // Extract all source row IDs from receivedRowRefs
-    const sourceRowIds = [];
-    for (const issue of issues) {
-      if (!issue.cutId && Array.isArray(issue.receivedRowRefs)) {
-        for (const ref of issue.receivedRowRefs) {
-          if (ref.rowId) sourceRowIds.push(ref.rowId);
-        }
-      }
-    }
-
-    // Lookup source rows to get their cutId
-    let sourceRowCutMap = new Map();
-    if (sourceRowIds.length > 0) {
-      const sourceRows = await prisma.receiveFromCutterMachineRow.findMany({
-        where: { id: { in: sourceRowIds } },
-        include: { cutMaster: true },
-      });
-      for (const row of sourceRows) {
-        sourceRowCutMap.set(row.id, row.cutMaster?.name || row.cut || null);
-      }
-    }
-
-    // Helper to get cut name for an issue
-    function getCutNameForIssue(issue) {
-      // If issue has cut directly (Opening Stock entries)
-      if (issue.cut?.name) return issue.cut.name;
-
-      // Look up from source rows
-      if (Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length > 0) {
-        for (const ref of issue.receivedRowRefs) {
-          if (ref.rowId && sourceRowCutMap.has(ref.rowId)) {
-            return sourceRowCutMap.get(ref.rowId);
-          }
-        }
-      }
-      return '-';
-    }
+    const cutNameMap = await buildHoloCutNameMap(issues);
 
     summary.totalCount = issues.length;
     summary.totalMetallicBobbins = issues.reduce((sum, i) => sum + (i.metallicBobbins || 0), 0);
@@ -11930,7 +12021,7 @@ async function generateSummaryData(stage, type, date) {
       machineName: i.machine?.name || (isOpeningStock(i) ? 'Opening Stock' : '-'),
       itemName: itemMap[i.itemId] || i.itemId || '-',
       lotNo: i.lotNo || '-',
-      cutName: getCutNameForIssue(i),
+      cutName: cutNameMap.get(i.id) || '-',
       twistName: i.twist?.name || '-',
       yarnName: i.yarn?.name || '-',
       operatorName: i.operator?.name || (isOpeningStock(i) ? 'Opening Stock' : '-'),
@@ -11953,12 +12044,22 @@ async function generateSummaryData(stage, type, date) {
   } else if (stage === 'holo' && type === 'receive') {
     const rows = await prisma.receiveFromHoloMachineRow.findMany({
       where: { date, isDeleted: false },
-      include: { operator: true, box: true, issue: { include: { machine: true, cut: true, twist: true, yarn: true } } },
+      include: { operator: true, box: true },
       orderBy: { createdAt: 'asc' },
     });
 
+    const issueIds = [...new Set(rows.map(r => r.issueId).filter(Boolean))];
+    const issuesForRows = issueIds.length > 0
+      ? await prisma.issueToHoloMachine.findMany({
+        where: { id: { in: issueIds }, isDeleted: false },
+        include: { machine: true, cut: true, twist: true, yarn: true },
+      })
+      : [];
+    const issueMap = new Map(issuesForRows.map(i => [i.id, i]));
+    const cutNameMap = await buildHoloCutNameMap(issuesForRows);
+
     // Lookup item names from issue.itemId
-    const itemIds = [...new Set(rows.map(r => r.issue?.itemId).filter(Boolean))];
+    const itemIds = [...new Set(issuesForRows.map(i => i.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
 
     const netWeight = (r) => {
@@ -11973,13 +12074,13 @@ async function generateSummaryData(stage, type, date) {
     summary.totalNetWeight = rows.reduce((sum, r) => sum + netWeight(r), 0);
 
     summary.details = rows.map(r => ({
-      machineName: r.issue?.machine?.name || (r.issue?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
-      itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
-      lotNo: r.issue?.lotNo || '-',
-      cutName: r.issue?.cut?.name || '-',
-      twistName: r.issue?.twist?.name || '-',
-      yarnName: r.issue?.yarn?.name || '-',
-      operatorName: r.operator?.name || (r.issue?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
+      machineName: issueMap.get(r.issueId)?.machine?.name || (issueMap.get(r.issueId)?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
+      itemName: itemMap[issueMap.get(r.issueId)?.itemId] || issueMap.get(r.issueId)?.itemId || '-',
+      lotNo: issueMap.get(r.issueId)?.lotNo || '-',
+      cutName: cutNameMap.get(r.issueId) || '-',
+      twistName: issueMap.get(r.issueId)?.twist?.name || '-',
+      yarnName: issueMap.get(r.issueId)?.yarn?.name || '-',
+      operatorName: r.operator?.name || (issueMap.get(r.issueId)?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
       boxName: r.box?.name || '-',
       rollCount: r.rollCount || 0,
       netWeight: netWeight(r),
@@ -11990,7 +12091,7 @@ async function generateSummaryData(stage, type, date) {
       netWeight: r => netWeight(r),
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
 
-    summary.byMachine = aggregateBy(rows, r => r.issue?.machine?.name || 'Unknown', {
+    summary.byMachine = aggregateBy(rows, r => issueMap.get(r.issueId)?.machine?.name || 'Unknown', {
       count: () => 1,
       netWeight: r => netWeight(r),
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));

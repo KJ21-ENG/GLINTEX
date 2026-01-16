@@ -10708,14 +10708,70 @@ router.get('/api/reports/production', async (req, res) => {
       // Holo issued weight = metallicBobbinsWeight + yarnKg
       const totalHoloIssued = holoIssues.reduce((sum, i) => sum + (i.metallicBobbinsWeight || 0) + (i.yarnKg || 0), 0);
 
+
       // Get holo receive data - aggregate from actual rows with date filter
       const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
         where: {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
         },
-        include: { operator: true, issue: { include: { machine: true, cut: true } } },
+        include: { operator: true, issue: { include: { machine: true, cut: true }, select: { id: true, itemId: true, cutId: true, cut: { select: { name: true } }, yarnId: true, twistId: true, shift: true, machineId: true, machine: { select: { name: true } }, metallicBobbinsWeight: true, yarnKg: true, receivedRowRefs: true } } },
       });
+
+      // Build fallback context: extract all cutter row IDs from receivedRowRefs for cut resolution
+      const allCutterRowIds = new Set();
+      holoReceives.forEach(r => {
+        const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+        refs.forEach(ref => {
+          if (typeof ref?.rowId === 'string') allCutterRowIds.add(ref.rowId);
+        });
+      });
+      const cutterRowsForFallback = allCutterRowIds.size > 0
+        ? await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: Array.from(allCutterRowIds) } },
+          select: { id: true, cutId: true, cut: true, cutMaster: { select: { name: true } } },
+        })
+        : [];
+      const cutterRowMap = new Map(cutterRowsForFallback.map(r => [r.id, r]));
+
+      // Fetch all cuts for lookup
+      const allCutIds = new Set();
+      holoReceives.forEach(r => { if (r.issue?.cutId) allCutIds.add(r.issue.cutId); });
+      cutterRowsForFallback.forEach(r => { if (r.cutId) allCutIds.add(r.cutId); });
+      const cutsForLookup = allCutIds.size > 0
+        ? await prisma.cut.findMany({ where: { id: { in: Array.from(allCutIds) } }, select: { id: true, name: true } })
+        : [];
+      const cutLookupMap = new Map(cutsForLookup.map(c => [c.id, c.name]));
+
+      // Helper: Resolve cut with fallback to source cutter rows
+      const resolveCutWithFallback = (issue) => {
+        // Priority 1: Direct cutId on issue
+        if (issue?.cutId) {
+          const name = issue.cut?.name || cutLookupMap.get(issue.cutId) || '';
+          if (name) return { cutId: issue.cutId, cutName: name };
+        }
+        // Priority 2: Trace through receivedRowRefs to cutter rows
+        const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+        for (const ref of refs) {
+          if (typeof ref?.rowId !== 'string') continue;
+          const cutterRow = cutterRowMap.get(ref.rowId);
+          if (!cutterRow) continue;
+          // Try cutId first
+          if (cutterRow.cutId) {
+            const name = cutLookupMap.get(cutterRow.cutId) || cutterRow.cutMaster?.name || '';
+            if (name) return { cutId: cutterRow.cutId, cutName: name };
+          }
+          // Try string cut field
+          if (typeof cutterRow.cut === 'string' && cutterRow.cut) {
+            return { cutId: 'legacy', cutName: cutterRow.cut };
+          }
+          // Try cutMaster
+          if (cutterRow.cutMaster?.name) {
+            return { cutId: 'legacy', cutName: cutterRow.cutMaster.name };
+          }
+        }
+        return { cutId: 'none', cutName: '' };
+      };
 
       // Calculate totals from date-filtered receive rows
       // rollWeight is the total net weight for holo receives
@@ -10763,8 +10819,9 @@ router.get('/api/reports/production', async (req, res) => {
         for (const row of holoReceives) {
           const itemId = row.issue?.itemId || 'unknown';
           const itemName = itemMap.get(itemId) || 'Unknown Item';
-          const cutName = row.issue?.cut?.name || '';
-          const cutId = row.issue?.cutId || 'none';
+          const resolved = resolveCutWithFallback(row.issue);
+          const cutName = resolved.cutName;
+          const cutId = resolved.cutId;
           const key = `${itemId}|${cutId}`;
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const current = byItem.get(key) || { itemId, itemName, cutName, cutId, received: 0, rollCount: 0 };
@@ -11051,11 +11108,59 @@ router.get('/api/reports/production/details', async (req, res) => {
         where,
         include: {
           operator: true,
-          issue: { include: { machine: true, yarn: true, twist: true, cut: true } }
+          issue: { select: { id: true, itemId: true, cutId: true, cut: { select: { name: true } }, yarnId: true, yarn: { select: { name: true } }, twistId: true, twist: { select: { name: true } }, shift: true, machineId: true, machine: { select: { name: true } }, metallicBobbinsWeight: true, yarnKg: true, barcode: true, receivedRowRefs: true } }
         },
         orderBy: { date: 'desc' },
         take: 2000
       });
+
+      // Build fallback context: extract all cutter row IDs from receivedRowRefs for cut resolution
+      const allCutterRowIdsForDetails = new Set();
+      rawRows.forEach(r => {
+        const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
+        refs.forEach(ref => {
+          if (typeof ref?.rowId === 'string') allCutterRowIdsForDetails.add(ref.rowId);
+        });
+      });
+      const cutterRowsForDetailsFallback = allCutterRowIdsForDetails.size > 0
+        ? await prisma.receiveFromCutterMachineRow.findMany({
+          where: { id: { in: Array.from(allCutterRowIdsForDetails) } },
+          select: { id: true, cutId: true, cut: true, cutMaster: { select: { name: true } } },
+        })
+        : [];
+      const cutterRowMapForDetails = new Map(cutterRowsForDetailsFallback.map(r => [r.id, r]));
+
+      // Fetch all cuts for lookup
+      const allCutIdsForDetails = new Set();
+      rawRows.forEach(r => { if (r.issue?.cutId) allCutIdsForDetails.add(r.issue.cutId); });
+      cutterRowsForDetailsFallback.forEach(r => { if (r.cutId) allCutIdsForDetails.add(r.cutId); });
+      const cutsForDetailsLookup = allCutIdsForDetails.size > 0
+        ? await prisma.cut.findMany({ where: { id: { in: Array.from(allCutIdsForDetails) } }, select: { id: true, name: true } })
+        : [];
+      const cutDetailsLookupMap = new Map(cutsForDetailsLookup.map(c => [c.id, c.name]));
+
+      // Helper: Resolve cut with fallback to source cutter rows (for details)
+      const resolveCutForDetails = (issue) => {
+        // Priority 1: Direct cutId on issue
+        if (issue?.cutId) {
+          const name = issue.cut?.name || cutDetailsLookupMap.get(issue.cutId) || '';
+          if (name) return name;
+        }
+        // Priority 2: Trace through receivedRowRefs to cutter rows
+        const refs = Array.isArray(issue?.receivedRowRefs) ? issue.receivedRowRefs : [];
+        for (const ref of refs) {
+          if (typeof ref?.rowId !== 'string') continue;
+          const cutterRow = cutterRowMapForDetails.get(ref.rowId);
+          if (!cutterRow) continue;
+          if (cutterRow.cutId) {
+            const name = cutDetailsLookupMap.get(cutterRow.cutId) || cutterRow.cutMaster?.name || '';
+            if (name) return name;
+          }
+          if (typeof cutterRow.cut === 'string' && cutterRow.cut) return cutterRow.cut;
+          if (cutterRow.cutMaster?.name) return cutterRow.cutMaster.name;
+        }
+        return '';
+      };
 
       // Fetch all unique item IDs to get item names
       const itemIds = [...new Set(rawRows.map(r => r.issue?.itemId).filter(Boolean))];
@@ -11068,7 +11173,7 @@ router.get('/api/reports/production/details', async (req, res) => {
       rows = rawRows.map(r => {
         const itemName = r.issue?.itemId ? itemMap.get(r.issue.itemId) : null;
         const yarnTwist = `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`.trim();
-        const cutName = r.issue?.cut?.name || '';
+        const cutName = resolveCutForDetails(r.issue);
         const descParts = [cutName, itemName, yarnTwist].filter(Boolean);
         return {
           id: r.id,

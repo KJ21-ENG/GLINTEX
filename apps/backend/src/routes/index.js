@@ -10715,7 +10715,7 @@ router.get('/api/reports/production', async (req, res) => {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
         },
-        include: { operator: true, issue: { include: { machine: true, cut: true }, select: { id: true, itemId: true, cutId: true, cut: { select: { name: true } }, yarnId: true, twistId: true, shift: true, machineId: true, machine: { select: { name: true } }, metallicBobbinsWeight: true, yarnKg: true, receivedRowRefs: true } } },
+        include: { operator: true, issue: { include: { machine: true, cut: true } } },
       });
 
       // Build fallback context: extract all cutter row IDs from receivedRowRefs for cut resolution
@@ -11108,7 +11108,7 @@ router.get('/api/reports/production/details', async (req, res) => {
         where,
         include: {
           operator: true,
-          issue: { select: { id: true, itemId: true, cutId: true, cut: { select: { name: true } }, yarnId: true, yarn: { select: { name: true } }, twistId: true, twist: { select: { name: true } }, shift: true, machineId: true, machine: { select: { name: true } }, metallicBobbinsWeight: true, yarnKg: true, barcode: true, receivedRowRefs: true } }
+          issue: { include: { machine: true, yarn: true, twist: true, cut: true } }
         },
         orderBy: { date: 'desc' },
         take: 2000

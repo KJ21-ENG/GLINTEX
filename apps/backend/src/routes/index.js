@@ -5301,7 +5301,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     }
     const receiveRows = await prisma.receiveFromCutterMachineRow.findMany({
       where: { id: { in: rowIds }, isDeleted: false },
-      select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
+      select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true, cutId: true },
     });
     if (receiveRows.length !== normalizedCrates.length) {
       return res.status(404).json({ error: 'One or more scanned crates were not found' });
@@ -5334,6 +5334,9 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     }
     const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
+
+    // Extract cutId from source cutter rows (use first non-null cutId)
+    const resolvedCutId = receiveRows.map(r => r.cutId).find(Boolean) || null;
 
     let yarnRecord = null;
     if (yarnId) {
@@ -5375,6 +5378,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
           lotNo,
           yarnId: yarnRecord ? yarnRecord.id : null,
           twistId: twistRecord.id,
+          cutId: resolvedCutId,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeHoloIssueBarcode({ series: seriesNumber }),
@@ -10710,7 +10714,7 @@ router.get('/api/reports/production', async (req, res) => {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
         },
-        include: { operator: true, issue: { include: { machine: true } } },
+        include: { operator: true, issue: { include: { machine: true, cut: true } } },
       });
 
       // Calculate totals from date-filtered receive rows

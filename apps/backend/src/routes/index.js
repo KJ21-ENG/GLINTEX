@@ -9992,12 +9992,31 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
     }
 
     async function addCutterReceiveAndForward(recv, history) {
+      // Look up item and cut from the cutter issue (via pieceId -> inbound -> lot)
+      let itemName = null;
+      let cutName = null;
+      if (recv.pieceId) {
+        const piece = await prisma.inboundItem.findUnique({ where: { id: recv.pieceId } });
+        if (piece?.lotNo) {
+          const lot = await prisma.lot.findUnique({ where: { lotNo: piece.lotNo }, include: { item: true } });
+          itemName = lot?.item?.name || null;
+        }
+        // Get cut from the cutter issue that used this piece
+        const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+          where: { pieceIds: { contains: recv.pieceId }, isDeleted: false },
+          include: { cut: true },
+        });
+        cutName = cutterIssue?.cut?.name || null;
+      }
+
       history.lineage.push({
         stage: 'cutter_receive',
         date: recv.date || recv.challan?.date,
         barcode: recv.barcode || recv.vchNo,
         data: {
           receiveId: recv.id,
+          itemName: itemName,
+          cutName: cutName,
           challanNo: recv.challan?.challanNo || null,
           bobbinQuantity: recv.bobbinQuantity,
           netWeight: recv.netWt,
@@ -10076,12 +10095,30 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Otherwise calculate from gross - tare
       const netWeight = recv.rollWeight || ((recv.grossWeight || 0) - (recv.tareWeight || 0));
 
+      // Look up item and cut from the holo issue
+      let itemName = null;
+      let cutName = null;
+      if (recv.issueId) {
+        const holoIssue = await prisma.issueToHoloMachine.findUnique({
+          where: { id: recv.issueId },
+          include: { cut: true },
+        });
+        cutName = holoIssue?.cut?.name || null;
+        // Get item from the lot
+        if (holoIssue?.lotNo) {
+          const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+          itemName = lot?.item?.name || null;
+        }
+      }
+
       history.lineage.push({
         stage: 'holo_receive',
         date: recv.date,
         barcode: recv.barcode,
         data: {
           receiveId: recv.id,
+          itemName: itemName,
+          cutName: cutName,
           rollCount: recv.rollCount,
           netWeight: netWeight,
           rollTypeName: recv.rollType?.name || null,
@@ -10123,12 +10160,42 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Avoid duplicates
       if (history.lineage.find(l => l.stage === 'coning_issue' && l.data.issueId === issue.id)) return;
 
+      // Look up item and cut from holo receives -> holo issue
+      let itemName = null;
+      let cutName = null;
+      try {
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') {
+          refs = JSON.parse(refs || '[]');
+        }
+        refs = refs || [];
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        if (refIds.length > 0) {
+          const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
+            where: { id: { in: refIds }, isDeleted: false },
+          });
+          if (holoRecv?.issueId) {
+            const holoIssue = await prisma.issueToHoloMachine.findUnique({
+              where: { id: holoRecv.issueId },
+              include: { cut: true },
+            });
+            cutName = holoIssue?.cut?.name || null;
+            if (holoIssue?.lotNo) {
+              const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+              itemName = lot?.item?.name || null;
+            }
+          }
+        }
+      } catch { }
+
       history.lineage.push({
         stage: 'coning_issue',
         date: issue.date,
         barcode: issue.barcode,
         data: {
           issueId: issue.id,
+          itemName: itemName,
+          cutName: cutName,
           lotNo: issue.lotNo,
           machineName: issue.machine?.name || null,
           operatorName: issue.operator?.name || null,
@@ -10154,12 +10221,49 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Avoid duplicates
       if (history.lineage.find(l => l.stage === 'coning_receive' && l.data.receiveId === recv.id)) return;
 
+      // Look up item and cut from coning issue -> holo receives -> holo issue
+      let itemName = null;
+      let cutName = null;
+      if (recv.issueId) {
+        const coningIssue = await prisma.issueToConingMachine.findUnique({
+          where: { id: recv.issueId },
+        });
+        if (coningIssue) {
+          try {
+            let refs = coningIssue.receivedRowRefs;
+            if (typeof refs === 'string') {
+              refs = JSON.parse(refs || '[]');
+            }
+            refs = refs || [];
+            const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+            if (refIds.length > 0) {
+              const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
+                where: { id: { in: refIds }, isDeleted: false },
+              });
+              if (holoRecv?.issueId) {
+                const holoIssue = await prisma.issueToHoloMachine.findUnique({
+                  where: { id: holoRecv.issueId },
+                  include: { cut: true },
+                });
+                cutName = holoIssue?.cut?.name || null;
+                if (holoIssue?.lotNo) {
+                  const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+                  itemName = lot?.item?.name || null;
+                }
+              }
+            }
+          } catch { }
+        }
+      }
+
       history.lineage.push({
         stage: 'coning_receive',
         date: recv.date,
         barcode: recv.barcode,
         data: {
           receiveId: recv.id,
+          itemName: itemName,
+          cutName: cutName,
           coneCount: recv.coneCount,
           netWeight: recv.netWeight,
           coneWeight: recv.coneWeight,

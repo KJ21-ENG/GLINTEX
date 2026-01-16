@@ -85,7 +85,7 @@ function BarcodeHistory() {
     function renderStageDetails(stage) {
         const data = stage.data || {};
         const entries = Object.entries(data).filter(([key, value]) =>
-            value !== null && value !== undefined && key !== 'pieceId' && key !== 'issueId' && key !== 'receiveId' && key !== 'dispatchId'
+            value !== null && value !== undefined && key !== 'pieceId' && key !== 'issueId' && key !== 'receiveId' && key !== 'dispatchId' && key !== 'itemName' && key !== 'cutName'
         );
 
         return (
@@ -206,8 +206,22 @@ function BarcodeHistory() {
                                                         <Icon className="w-5 h-5" />
                                                     </div>
                                                     <div>
-                                                        <div className="font-medium">
+                                                        <div className="font-medium flex items-center gap-2">
                                                             {STAGE_LABELS[stage.stage] || stage.stage}
+                                                            {(stage.data?.itemName || stage.data?.cutName) && (
+                                                                <span className="flex items-center gap-1.5">
+                                                                    {stage.data?.itemName && (
+                                                                        <Badge variant="secondary" className="text-xs font-normal h-5">
+                                                                            {stage.data.itemName}
+                                                                        </Badge>
+                                                                    )}
+                                                                    {stage.data?.cutName && (
+                                                                        <Badge variant="outline" className="text-xs font-normal h-5">
+                                                                            {stage.data.cutName}
+                                                                        </Badge>
+                                                                    )}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         <div className="text-sm text-muted-foreground flex items-center gap-2">
                                                             <Clock className="w-3 h-3" />

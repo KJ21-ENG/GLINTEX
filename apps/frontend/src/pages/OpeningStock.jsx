@@ -307,7 +307,7 @@ export function OpeningStock() {
           itemName,
           r.barcode || r.vchNo,
           r.bobbin?.name || db.bobbins?.find(b => b.id === r.bobbinId)?.name,
-          r.cutMaster?.name || r.cut || db.cuts?.find(c => c.id === r.cutId)?.name
+          r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || db.cuts?.find(c => c.id === r.cutId)?.name
         ]);
       })
       .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
@@ -1824,7 +1824,7 @@ export function OpeningStock() {
                         <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
                         <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
                         <TableCell>{row.bobbinQuantity || 0}</TableCell>
-                        <TableCell>{row.cutMaster?.name || row.cut || getCut(row.cutId)?.name || '—'}</TableCell>
+                        <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
                         <TableCell>{formatKg(row.netWt)}</TableCell>
                         <TableCell>
                           <Button

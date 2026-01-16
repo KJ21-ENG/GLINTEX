@@ -33,16 +33,23 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     (db.issue_to_holo_machine || []).forEach((issue) => {
       if (!issue?.id) return;
       let cutName = '';
-      try {
-        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-        if (Array.isArray(refs) && refs.length > 0) {
-          const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-          if (sourceRow) {
-            cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+      // 1. Check direct cutId (Opening Stock)
+      if (issue.cutId) {
+        cutName = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
+      }
+      // 2. Fallback to tracing cutter rows (normal production)
+      if (!cutName) {
+        try {
+          const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+          if (Array.isArray(refs) && refs.length > 0) {
+            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
+            if (sourceRow) {
+              cutName = (typeof sourceRow.cut === 'string' ? sourceRow.cut : sourceRow.cut?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+            }
           }
+        } catch (e) {
+          cutName = '';
         }
-      } catch (e) {
-        cutName = '';
       }
       map.set(issue.id, cutName || '—');
     });

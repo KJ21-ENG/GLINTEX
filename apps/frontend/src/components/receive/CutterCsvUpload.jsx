@@ -416,7 +416,7 @@ export function CutterCsvUpload() {
                   <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No rows imported yet.</TableCell></TableRow>
                 ) : latestRows.map((row) => {
                   const bobbinName = row.bobbin?.name || row.pcsTypeName || '—';
-                  const cutLabel = row.cutMaster?.name || row.cut || '—';
+                  const cutLabel = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
                   return (
                     <TableRow key={row.id}>
                       <TableCell className="font-mono text-xs">{row.pieceId}</TableCell>

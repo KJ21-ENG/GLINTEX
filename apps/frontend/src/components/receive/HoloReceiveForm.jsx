@@ -109,8 +109,9 @@ export function HoloReceiveForm() {
                 const firstRowId = refs[0].rowId;
                 const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
                 if (sourceRow) {
-                    // cut is a string field, cutMaster is the relation
-                    return sourceRow.cut || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+                    // cut may be a string field or relation object; handle both
+                    const cutVal = sourceRow.cut;
+                    return (typeof cutVal === 'string' ? cutVal : cutVal?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
                 }
             }
         } catch (e) {
@@ -178,18 +179,23 @@ export function HoloReceiveForm() {
                     const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
                     const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
 
-                    // Resolve Cut from issue's source rows
+                    // Resolve Cut - first check direct cutId (Opening Stock), then cutter rows
                     let cutName = '';
-                    try {
-                        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                        if (Array.isArray(refs) && refs.length > 0) {
-                            const firstRowId = refs[0].rowId;
-                            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
-                            if (sourceRow) {
-                                cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+                    if (issue.cutId) {
+                        cutName = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
+                    }
+                    if (!cutName) {
+                        try {
+                            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
+                            if (Array.isArray(refs) && refs.length > 0) {
+                                const firstRowId = refs[0].rowId;
+                                const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
+                                if (sourceRow) {
+                                    cutName = (typeof sourceRow.cut === 'string' ? sourceRow.cut : sourceRow.cut?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
+                                }
                             }
-                        }
-                    } catch (e) { console.error('Error resolving cut', e); }
+                        } catch (e) { console.error('Error resolving cut', e); }
+                    }
 
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_RECEIVE,

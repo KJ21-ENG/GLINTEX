@@ -256,11 +256,17 @@ export function ConingReceiveForm() {
                                     if (holoIssue) {
                                         if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
                                         if (holoIssue.twistId) twistName = db.twists.find(t => t.id === holoIssue.twistId)?.name || '';
-                                        const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                        if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
-                                            if (cutterRow) {
-                                                cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                        // Get cut - first check direct cutId (Opening Stock), then cutter row
+                                        if (holoIssue.cutId) {
+                                            cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+                                        }
+                                        if (!cutName) {
+                                            const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                                            if (Array.isArray(hRefs) && hRefs.length > 0) {
+                                                const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
+                                                if (cutterRow) {
+                                                    cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                                }
                                             }
                                         }
                                     }

@@ -100,7 +100,7 @@ export function IssueToHolo() {
             itemId: rowItem,
             availCount,
             availWt,
-            cut: row.cut || row.cutMaster?.name || '',
+            cut: (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || db.cuts?.find(c => c.id === row.cutId)?.name || '',
             issuedBobbins: availCount, // Default to all available
             issuedBobbinWeight: availWt
         };
@@ -166,7 +166,7 @@ export function IssueToHolo() {
                         ? (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && r.id === crates[0].rowId)
                         : null;
                     const bobbinType = firstCrateRow?.bobbin?.name || firstCrateRow?.pcsTypeName || '';
-                    const cut = firstCrateRow?.cut || firstCrateRow?.cutMaster?.name || '';
+                    const cut = (typeof firstCrateRow?.cut === 'string' ? firstCrateRow.cut : firstCrateRow?.cut?.name) || firstCrateRow?.cutMaster?.name || db.cuts?.find(c => c.id === firstCrateRow?.cutId)?.name || '';
 
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_ISSUE,

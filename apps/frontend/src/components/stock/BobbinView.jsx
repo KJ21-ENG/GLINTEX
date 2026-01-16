@@ -67,7 +67,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const availableBobbinsRaw = Math.max(0, bobbinQty - issuedBobbins - dispatchedBobbins);
         const availableBobbins = availableWeight > EPSILON ? availableBobbinsRaw : 0;
 
-        const cutName = row.cut || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+        const cutName = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
 
         return {
           ...row,

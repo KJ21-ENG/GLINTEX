@@ -541,13 +541,27 @@ export function IssueHistory({ db, refreshDb }) {
               bobbinQty += Number(ref.issuedBobbins || 0);
             });
 
-            // Get cut and bobbin type from first ref's source row
-            const firstRef = refs[0];
-            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
-            if (cutterRow) {
-              cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-              bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-              netWeight += Number(cutterRow.netWt || 0);
+            // Get cut - first check direct cutId (Opening Stock), then cutter source row
+            if (row.cutId) {
+              cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
+            }
+            if (!cut) {
+              // Get cut and bobbin type from first ref's source row
+              const firstRef = refs[0];
+              const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
+              if (cutterRow) {
+                cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
+                netWeight += Number(cutterRow.netWt || 0);
+              }
+            } else {
+              // Still need bobbin info even if we got cut from cutId
+              const firstRef = refs[0];
+              const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
+              if (cutterRow) {
+                bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
+                netWeight += Number(cutterRow.netWt || 0);
+              }
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
@@ -619,12 +633,17 @@ export function IssueHistory({ db, refreshDb }) {
                 const twist = db.twists?.find(t => t.id === holoIssue.twistId)?.name || '';
                 const twistName = twist;
 
-                // Get cut from cutter receive row
-                const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                  const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
-                  if (cutterRow) {
-                    cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                // Get cut - first check direct cutId (Opening Stock), then cutter row
+                if (holoIssue.cutId) {
+                  cut = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+                }
+                if (!cut) {
+                  const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                  if (Array.isArray(holoRefs) && holoRefs.length > 0) {
+                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
+                    if (cutterRow) {
+                      cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                    }
                   }
                 }
               }

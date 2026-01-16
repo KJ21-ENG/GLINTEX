@@ -458,7 +458,7 @@ export function ReceiveHistoryTable() {
                 const item = db.items?.find(i => i.id === piece?.itemId || row.itemId);
                 const bobbin = db.bobbins?.find(b => b.id === row.bobbinId);
                 const box = db.boxes?.find(b => b.id === row.boxId);
-                const cut = db.cuts?.find(c => c.id === row.cutId)?.name || row.cutMaster?.name || row.cut || '';
+                const cut = db.cuts?.find(c => c.id === row.cutId)?.name || row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '';
                 const operator = db.operators?.find(o => o.id === row.operatorId);
                 const helper = db.workers?.find(w => w.id === row.helperId);
 
@@ -494,17 +494,22 @@ export function ReceiveHistoryTable() {
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
 
-                // Trace back to get cut from cutter receive row
+                // Trace back to get cut - first check direct cutId (Opening Stock), then cutter receive row
                 let cut = '';
-                try {
-                    const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                    if (Array.isArray(refs) && refs.length > 0) {
-                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-                        if (cutterRow) {
-                            cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                if (issue?.cutId) {
+                    cut = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
+                }
+                if (!cut) {
+                    try {
+                        const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
+                        if (Array.isArray(refs) && refs.length > 0) {
+                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
+                            if (cutterRow) {
+                                cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                            }
                         }
-                    }
-                } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+                    } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+                }
 
                 // Calculate tare weight
                 const boxWeight = box?.weight || 0;
@@ -560,12 +565,17 @@ export function ReceiveHistoryTable() {
                             if (holoIssue) {
                                 yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
 
-                                // Get cut from cutter receive
-                                const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
-                                    if (cutterRow) {
-                                        cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                // Get cut - first check direct cutId (Opening Stock), then cutter receive
+                                if (holoIssue.cutId) {
+                                    cut = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+                                }
+                                if (!cut) {
+                                    const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                                    if (Array.isArray(holoRefs) && holoRefs.length > 0) {
+                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
+                                        if (cutterRow) {
+                                            cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                        }
                                     }
                                 }
                             }
@@ -1492,7 +1502,7 @@ export function ReceiveHistoryTable() {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     piece: row.pieceId || '—',
-                    cut: row.cutMaster?.name || row.cut || '—',
+                    cut: row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '—',
                     barcode: row.barcode || '—',
                     machine: row.machineNo || '—',
                     employee: row.operator?.name || '—',
@@ -1745,7 +1755,7 @@ export function ReceiveHistoryTable() {
                                                         <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
                                                         <TableCell>{item?.name || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                        <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
+                                                        <TableCell>{r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                         <TableCell>{r.machineNo || '—'}</TableCell>
                                                         <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
@@ -1842,7 +1852,7 @@ export function ReceiveHistoryTable() {
                                                         </div>
                                                     </div>
                                                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                        <span>Cut: {r.cutMaster?.name || r.cut || '—'}</span>
+                                                        <span>Cut: {r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</span>
                                                         <span>Mac: {r.machineNo || '—'}</span>
                                                     </div>
                                                 </div>

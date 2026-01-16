@@ -87,18 +87,26 @@ export function IssueToConing() {
         const scannedItemId = holoIssue?.itemId;
         let cutName = '';
         if (holoIssue) {
-            try {
-                const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                if (Array.isArray(refs) && refs.length > 0) {
-                    const cutterRowId = refs[0].rowId;
-                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                    if (cutterRow) {
-                        // cut may be a string field or a relation object; handle both cases
-                        const cutVal = cutterRow.cut;
-                        cutName = (typeof cutVal === 'string' ? cutVal : cutVal?.name) || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
+            // 1. Check direct cutId on Holo Issue (common for Opening Stock)
+            if (holoIssue.cutId) {
+                cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+            }
+
+            // 2. Fallback to tracing back to Cutter results (normal production flow)
+            if (!cutName) {
+                try {
+                    const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                    if (Array.isArray(refs) && refs.length > 0) {
+                        const cutterRowId = refs[0].rowId;
+                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
+                        if (cutterRow) {
+                            // cut may be a string field or a relation object; handle both cases
+                            const cutVal = cutterRow.cut;
+                            cutName = (typeof cutVal === 'string' ? cutVal : cutVal?.name) || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
+                        }
                     }
-                }
-            } catch (e) { }
+                } catch (e) { }
+            }
         }
 
         // Allow mixed lots only if item and cut are the same
@@ -211,17 +219,22 @@ export function IssueToConing() {
                                 itemName = db.items?.find(i => i.id === holoIssue.itemId)?.name || '';
                                 yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
 
-                                // Resolve cut from holo issue refs
-                                try {
-                                    const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                    if (Array.isArray(refs) && refs.length > 0) {
-                                        const cutterRowId = refs[0].rowId;
-                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                                        if (cutterRow) {
-                                            cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                // Resolve cut - first check direct cutId (Opening Stock), then cutter row
+                                if (holoIssue.cutId) {
+                                    cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
+                                }
+                                if (!cutName) {
+                                    try {
+                                        const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
+                                        if (Array.isArray(refs) && refs.length > 0) {
+                                            const cutterRowId = refs[0].rowId;
+                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
+                                            if (cutterRow) {
+                                                cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
+                                            }
                                         }
-                                    }
-                                } catch (e) { }
+                                    } catch (e) { }
+                                }
                             }
                         }
                     }

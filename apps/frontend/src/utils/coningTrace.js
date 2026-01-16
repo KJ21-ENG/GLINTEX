@@ -58,7 +58,15 @@ export const resolveConingTrace = (issue, ctx, visitedIssues = new Set()) => {
     if (name && name !== '—') set.add(name);
   };
 
+  const addFromIssueFields = (issueToUse) => {
+    if (!issueToUse) return;
+    addName(cutNames, issueToUse.cut?.name || (issueToUse.cutId ? ctx.cutsById.get(issueToUse.cutId)?.name : ''));
+    addName(yarnNames, issueToUse.yarn?.name || (issueToUse.yarnId ? ctx.yarnsById.get(issueToUse.yarnId)?.name : ''));
+    addName(twistNames, issueToUse.twist?.name || (issueToUse.twistId ? ctx.twistsById.get(issueToUse.twistId)?.name : ''));
+  };
+
   const walkIssue = (issueToWalk) => {
+    addFromIssueFields(issueToWalk);
     if (!issueToWalk?.receivedRowRefs) return;
     if (issueToWalk?.id) visitedIssues.add(issueToWalk.id);
     const refs = parseRefs(issueToWalk.receivedRowRefs);
@@ -90,6 +98,7 @@ export const resolveConingTrace = (issue, ctx, visitedIssues = new Set()) => {
     });
   };
 
+  addFromIssueFields(issue);
   walkIssue(issue);
 
   const joinNames = (set) => (set.size ? Array.from(set).join(', ') : '—');

@@ -5943,7 +5943,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     const holoRows = holoWhere.length
       ? await prisma.receiveFromHoloMachineRow.findMany({
         where: { OR: holoWhere, isDeleted: false },
-        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true } } },
       })
       : [];
 
@@ -6002,6 +6002,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       return {
         ...crate,
         rowId: found?.id || crate.rowId,
+        sourceIssueId: found?.issue?.id || null,
         lotNo: found?.issue?.lotNo || null,
         itemId: found?.issue?.itemId || null,
         baseRolls: typeof found?.coneCount === 'number'
@@ -6022,6 +6023,20 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     if (lotSet.size !== 1 || itemSet.size !== 1) return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
     const lotNo = Array.from(lotSet)[0];
     const itemId = Array.from(itemSet)[0];
+    const sourceIssueMap = new Map((holoRows || []).map(r => [r.issue?.id, r.issue]));
+    const sourceCutIds = new Set();
+    const sourceYarnIds = new Set();
+    const sourceTwistIds = new Set();
+    resolvedCrates.forEach((c) => {
+      if (!c.sourceIssueId) return;
+      const issue = sourceIssueMap.get(c.sourceIssueId);
+      if (issue?.cutId) sourceCutIds.add(issue.cutId);
+      if (issue?.yarnId) sourceYarnIds.add(issue.yarnId);
+      if (issue?.twistId) sourceTwistIds.add(issue.twistId);
+    });
+    const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+    const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
+    const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
 
     // Validate masters if provided
     const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
@@ -6156,6 +6171,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
           date,
           itemId,
           lotNo,
+          cutId: resolvedCutId,
+          yarnId: resolvedYarnId,
+          twistId: resolvedTwistId,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeConingIssueBarcode({ series: seriesNumber }),
@@ -8066,7 +8084,7 @@ router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
         const holoRows = holoWhere.length
           ? await tx.receiveFromHoloMachineRow.findMany({
             where: { OR: holoWhere, isDeleted: false },
-            include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
+            include: { issue: { select: { id: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true } } },
           })
           : [];
 
@@ -8123,6 +8141,7 @@ router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
           return {
             ...crate,
             rowId: found?.id || crate.rowId,
+            sourceIssueId: found?.issue?.id || null,
             lotNo: found?.issue?.lotNo || null,
             itemId: found?.issue?.itemId || null,
             baseRolls: typeof found?.coneCount === 'number'
@@ -8145,6 +8164,20 @@ router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
         }
         const lotNo = Array.from(lotSet)[0];
         const itemId = Array.from(itemSet)[0];
+        const sourceIssueMap = new Map((holoRows || []).map(r => [r.issue?.id, r.issue]));
+        const sourceCutIds = new Set();
+        const sourceYarnIds = new Set();
+        const sourceTwistIds = new Set();
+        resolvedCrates.forEach((c) => {
+          if (!c.sourceIssueId) return;
+          const issue = sourceIssueMap.get(c.sourceIssueId);
+          if (issue?.cutId) sourceCutIds.add(issue.cutId);
+          if (issue?.yarnId) sourceYarnIds.add(issue.yarnId);
+          if (issue?.twistId) sourceTwistIds.add(issue.twistId);
+        });
+        const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+        const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
+        const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
 
         const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
         const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
@@ -8262,6 +8295,9 @@ router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
 
         data.itemId = itemId;
         data.lotNo = lotNo;
+        if (resolvedCutId) data.cutId = resolvedCutId;
+        if (resolvedYarnId) data.yarnId = resolvedYarnId;
+        if (resolvedTwistId) data.twistId = resolvedTwistId;
         data.rollsIssued = Number(totalRolls || 0);
         data.requiredPerConeNetWeight = resolvedPerCone;
         data.expectedCones = expectedCones;

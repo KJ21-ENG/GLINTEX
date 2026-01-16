@@ -117,6 +117,216 @@ export function exportXlsx(lots, piecesByLot) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Export Stock data to Excel with view-specific columns matching the UI exactly.
+ * @param {Array} data - Array of displayed lots/rows (already filtered & grouped if applicable)
+ * @param {Object} options - Export options
+ * @param {string} options.viewType - 'jumbo' | 'bobbins' | 'holo' | 'coning'
+ * @param {boolean} options.groupBy - Whether grouping is enabled
+ * @param {Object} options.grandTotals - Grand totals object from the view
+ * @param {string} options.statusFilter - Current status filter value (e.g. 'available_to_issue')
+ */
+export function exportStockXlsx(data, options = {}) {
+  const { viewType = 'jumbo', groupBy = false, grandTotals = {}, statusFilter = '' } = options;
+
+  if (!data || data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  // Define columns and value extractors for each view type
+  const getColumns = () => {
+    const hidePending = statusFilter === 'available_to_issue';
+
+    switch (viewType) {
+      case 'jumbo':
+        if (groupBy) {
+          return [
+            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
+            { header: 'Item', key: 'itemName' },
+            { header: 'Supplier', key: 'supplierName' },
+            { header: 'Pieces (Avail/Total)', key: 'pieces', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? 0}` },
+            { header: 'Total Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+            ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
+          ];
+        }
+        return [
+          { header: 'Lot No', key: 'lotNo' },
+          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
+          { header: 'Item', key: 'itemName' },
+          { header: 'Firm', key: 'firmName' },
+          { header: 'Supplier', key: 'supplierName' },
+          { header: 'Pieces (Avail/Total)', key: 'pieces', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? (l.pieces || []).length}` },
+          { header: 'Total Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
+        ];
+
+      case 'bobbins':
+        if (groupBy) {
+          return [
+            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
+            { header: 'Item', key: 'itemName' },
+            { header: 'Cut', key: 'cutName' },
+            { header: 'Supplier', key: 'supplierName' },
+            { header: 'Bobbins (Avail/Total)', key: 'bobbins', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
+            { header: 'Weight (Avail/Total)', key: 'weight', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
+            { header: 'Crates', key: 'crateCount', format: (l) => l.crates?.length || l.crateCount || 0 },
+          ];
+        }
+        return [
+          { header: 'Lot No', key: 'lotNo' },
+          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
+          { header: 'Item', key: 'itemName' },
+          { header: 'Cut', key: 'cutName' },
+          { header: 'Firm', key: 'firmName' },
+          { header: 'Supplier', key: 'supplierName' },
+          { header: 'Bobbins (Avail/Total)', key: 'bobbins', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
+          { header: 'Weight (Avail/Total)', key: 'weight', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
+          { header: 'Crates', key: 'crateCount', format: (l) => l.crates?.length || l.crateCount || 0 },
+        ];
+
+      case 'holo':
+        if (groupBy) {
+          return [
+            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
+            { header: 'Item', key: 'itemName' },
+            { header: 'Cut', key: 'cutName' },
+            { header: 'Yarn / Twist', key: 'yarnTwist', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
+            { header: 'Supplier', key: 'supplierName' },
+            { header: 'Available Rolls', key: 'totalRolls' },
+            { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          ];
+        }
+        return [
+          { header: 'Lot No', key: 'lotNo' },
+          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
+          { header: 'Item', key: 'itemName' },
+          { header: 'Cut', key: 'cutName' },
+          { header: 'Yarn / Twist', key: 'yarnTwist', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
+          { header: 'Firm', key: 'firmName' },
+          { header: 'Supplier', key: 'supplierName' },
+          { header: 'Available Rolls', key: 'totalRolls' },
+          { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          { header: 'Steamed', key: 'steamed', format: (l) => `${l.steamedRolls ?? 0} / ${l.totalRolls ?? 0}` },
+        ];
+
+      case 'coning':
+        if (groupBy) {
+          return [
+            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
+            { header: 'Item', key: 'itemName' },
+            { header: 'Cut', key: 'cutName' },
+            { header: 'Yarn', key: 'yarnName' },
+            { header: 'Supplier', key: 'supplierName' },
+            { header: 'Available Cones', key: 'totalCones' },
+            { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          ];
+        }
+        return [
+          { header: 'Lot No', key: 'lotNo' },
+          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
+          { header: 'Item', key: 'itemName' },
+          { header: 'Cut', key: 'cutName' },
+          { header: 'Yarn', key: 'yarnName' },
+          { header: 'Firm', key: 'firmName' },
+          { header: 'Supplier', key: 'supplierName' },
+          { header: 'Available Cones', key: 'totalCones' },
+          { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        ];
+
+      default:
+        return [];
+    }
+  };
+
+  const columns = getColumns();
+  if (columns.length === 0) {
+    alert('Unknown view type for export');
+    return;
+  }
+
+  // Build rows with formatted values
+  const rows = data.map((item) => {
+    const row = {};
+    columns.forEach((col) => {
+      if (col.format) {
+        row[col.header] = col.format(item);
+      } else {
+        row[col.header] = item[col.key] ?? '';
+      }
+    });
+    return row;
+  });
+
+  // Add Grand Totals row
+  const totalsRow = {};
+  columns.forEach((col, idx) => {
+    if (idx === 0) {
+      totalsRow[col.header] = 'Grand Total';
+    } else {
+      // Try to get matching total value
+      switch (col.key) {
+        case 'pieces':
+          totalsRow[col.header] = `${grandTotals.availableCount ?? 0} / ${grandTotals.totalPieces ?? 0}`;
+          break;
+        case 'totalWeight':
+          totalsRow[col.header] = Number(grandTotals.totalWeight || grandTotals.pendingWeight || 0).toFixed(3);
+          break;
+        case 'pendingWeight':
+          totalsRow[col.header] = Number(grandTotals.pendingWeight || 0).toFixed(3);
+          break;
+        case 'bobbins':
+          totalsRow[col.header] = `${grandTotals.availableBobbins ?? 0} / ${grandTotals.totalBobbins ?? 0}`;
+          break;
+        case 'weight':
+          totalsRow[col.header] = `${Number(grandTotals.availableWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
+          break;
+        case 'crateCount':
+          totalsRow[col.header] = grandTotals.crateCount ?? 0;
+          break;
+        case 'totalRolls':
+          totalsRow[col.header] = grandTotals.totalRolls ?? 0;
+          break;
+        case 'steamed':
+          totalsRow[col.header] = `${grandTotals.steamedRolls ?? 0} / ${grandTotals.totalRolls ?? 0}`;
+          break;
+        case 'totalCones':
+          totalsRow[col.header] = grandTotals.totalCones ?? 0;
+          break;
+        default:
+          totalsRow[col.header] = '';
+      }
+    }
+  });
+  rows.push(totalsRow);
+
+  // Create workbook and sheet
+  const wb = utils.book_new();
+  const ws = utils.json_to_sheet(rows);
+
+  // Auto-calculate column widths
+  const colWidths = columns.map((col) => {
+    const maxDataLen = Math.max(
+      col.header.length,
+      ...rows.map((row) => String(row[col.header] ?? '').length)
+    );
+    return { wch: Math.min(50, Math.max(12, maxDataLen + 2)) };
+  });
+  ws['!cols'] = colWidths;
+
+  const sheetName = groupBy ? 'Stock (Grouped)' : 'Stock';
+  utils.book_append_sheet(wb, ws, sheetName);
+
+  const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stock-${viewType}${groupBy ? '-grouped' : ''}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function exportCsv(lots, piecesByLot) {
   const orderedLots = orderLotsForExport(lots);
   const pieces = flattenLots(orderedLots, piecesByLot);

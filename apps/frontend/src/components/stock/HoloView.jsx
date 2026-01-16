@@ -217,10 +217,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     });
   }, [holoLots, filters, search]);
 
-  // Bubble up data for export
-  useEffect(() => {
-    if (onDataChange) onDataChange(filteredLots);
-  }, [filteredLots, onDataChange]);
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -259,6 +255,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       return { ...rest, cutName };
     });
   }, [filteredLots, groupBy]);
+
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayLots);
+  }, [displayLots, onDataChange]);
 
   const tableColumnCount = groupBy ? 10 : 11;
 

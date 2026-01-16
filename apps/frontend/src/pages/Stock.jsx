@@ -9,7 +9,7 @@ import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
-import { exportXlsx, exportCsv, exportPdf } from '../services';
+import { exportStockXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
@@ -113,6 +113,7 @@ export function Stock() {
 
   // Clear export data when view changes to avoid stale data
   useEffect(() => { setExportData(null); }, [view, processId]);
+
 
   // --- Data Prep (Memoized) ---
 
@@ -302,6 +303,55 @@ export function Stock() {
       pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
     }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0 });
   }, [displayedLots]);
+
+  // --- Export Handler ---
+  const handleExport = () => {
+    // Determine the correct view type for export
+    let viewType = 'jumbo';
+    if (isConing) viewType = 'coning';
+    else if (isHolo) viewType = 'holo';
+    else if (isCutter && view === 'bobbins') viewType = 'bobbins';
+    else if (isCutter && view === 'jumbo') viewType = 'jumbo';
+
+    // For Jumbo view, we use displayedLots directly since it's managed here
+    // For other views, we use exportData from child components
+    const dataToExport = (viewType === 'jumbo') ? displayedLots : exportData;
+
+    // Calculate grandTotals based on view type
+    let totals = {};
+    if (viewType === 'jumbo') {
+      totals = grandTotals;
+    } else if (dataToExport && dataToExport.length > 0) {
+      // Compute totals from exportData for other views
+      if (viewType === 'holo') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalRolls: (acc.totalRolls || 0) + (lot.totalRolls || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+          steamedRolls: (acc.steamedRolls || 0) + (lot.steamedRolls || 0),
+        }), {});
+      } else if (viewType === 'coning') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalCones: (acc.totalCones || 0) + (lot.totalCones || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+        }), {});
+      } else if (viewType === 'bobbins') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalBobbins: (acc.totalBobbins || 0) + (lot.totalBobbins || 0),
+          availableBobbins: (acc.availableBobbins || 0) + (lot.availableBobbins || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+          availableWeight: (acc.availableWeight || 0) + (lot.availableWeight || 0),
+          crateCount: (acc.crateCount || 0) + (lot.crates?.length || lot.crateCount || 0),
+        }), {});
+      }
+    }
+
+    exportStockXlsx(dataToExport, {
+      viewType,
+      groupBy: groupByItem,
+      grandTotals: totals,
+      statusFilter: filters.status,
+    });
+  };
 
   // --- Handlers ---
 
@@ -510,7 +560,7 @@ export function Stock() {
               </div>
             ) : null}
             {/* Export Button */}
-            <Button variant="outline" size="icon" onClick={() => exportXlsx(exportData || filteredLots, {})} className="ml-auto md:ml-0">
+            <Button variant="outline" size="icon" onClick={handleExport} className="ml-auto md:ml-0">
               <Download className="w-4 h-4" />
             </Button>
           </div>

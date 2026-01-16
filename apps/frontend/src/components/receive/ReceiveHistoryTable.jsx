@@ -1484,8 +1484,8 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'piece', header: 'Piece' },
                 { key: 'cut', header: 'Cut' },
+                { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'machine', header: 'Machine' },
                 { key: 'employee', header: 'Employee' },
@@ -1497,12 +1497,13 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === issue?.itemId);
-                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—' };
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     cut: resolved.cutName,
                     yarn: resolved.yarnName,
+                    twist: resolved.twistName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
@@ -1518,6 +1519,7 @@ export function ReceiveHistoryTable() {
                 { key: 'item', header: 'Item' },
                 { key: 'cut', header: 'Cut' },
                 { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'rolls', header: 'Rolls' },
@@ -1532,12 +1534,13 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—' };
+                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     cut: resolved.cutName,
                     yarn: resolved.yarnName,
+                    twist: resolved.twistName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     box: row.box?.name || '—',
@@ -1553,6 +1556,7 @@ export function ReceiveHistoryTable() {
                 { key: 'item', header: 'Item' },
                 { key: 'cut', header: 'Cut' },
                 { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'box', header: 'Box' },
@@ -1595,6 +1599,8 @@ export function ReceiveHistoryTable() {
         const today = new Date().toISOString().split('T')[0];
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
+
+    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 14;
 
     return (
         <Card>
@@ -1694,6 +1700,10 @@ export function ReceiveHistoryTable() {
                                         {process === 'holo' && (
                                             <>
                                                 <TableHead>Date</TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 <TableHead className="text-right">Rolls</TableHead>
@@ -1708,6 +1718,10 @@ export function ReceiveHistoryTable() {
                                         {process === 'coning' && (
                                             <>
                                                 <TableHead>Date</TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 <TableHead>Box</TableHead>
@@ -1723,7 +1737,7 @@ export function ReceiveHistoryTable() {
                                 </TableHeader>
                                 <TableBody>
                                     {history.length === 0 ? (
-                                        <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
                                     ) : (
                                         history.map(r => {
                                             if (process === 'cutter') {
@@ -1763,10 +1777,17 @@ export function ReceiveHistoryTable() {
                                                     </TableRow>
                                                 );
                                             } else if (process === 'holo') {
+                                                const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                                                const item = db.items?.find(i => i.id === issue?.itemId);
+                                                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell>{item?.name || '—'}</TableCell>
+                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
                                                         <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                             {(r.pieceIdsList || []).join(', ') || '—'}
                                                         </TableCell>
@@ -1781,10 +1802,17 @@ export function ReceiveHistoryTable() {
                                                     </TableRow>
                                                 );
                                             } else if (process === 'coning') {
+                                                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                                                const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                                                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell>{item?.name || '—'}</TableCell>
+                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
                                                         <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                             {(r.pieceIdsList || []).join(', ') || '—'}
                                                         </TableCell>
@@ -1843,12 +1871,18 @@ export function ReceiveHistoryTable() {
                                             </div>
                                         );
                                     } else if (process === 'holo') {
+                                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                                        const item = db.items?.find(i => i.id === issue?.itemId);
+                                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                                 Piece: {(r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
@@ -1872,12 +1906,18 @@ export function ReceiveHistoryTable() {
                                             </div>
                                         );
                                     } else if (process === 'coning') {
+                                        const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                                        const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                                        const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                                 Piece: {(r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>

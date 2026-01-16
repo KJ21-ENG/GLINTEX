@@ -190,10 +190,6 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     });
   }, [coningLots, filters, search]);
 
-  // Bubble up data for export
-  useEffect(() => {
-    if (onDataChange) onDataChange(filteredLots);
-  }, [filteredLots, onDataChange]);
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -224,6 +220,11 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     });
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
+
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayLots);
+  }, [displayLots, onDataChange]);
 
   const tableColumnCount = groupBy ? 7 : 8;
 

@@ -179,10 +179,6 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     });
   }, [bobbinLots, filters, search]);
 
-  // Bubble up data for export
-  useEffect(() => {
-    if (onDataChange) onDataChange(filteredLots);
-  }, [filteredLots, onDataChange]);
 
   const displayData = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -221,6 +217,11 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     });
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
+
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayData);
+  }, [displayData, onDataChange]);
 
   // Grand Totals
   const grandTotals = useMemo(() => {

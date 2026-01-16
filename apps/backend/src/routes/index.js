@@ -11000,7 +11000,8 @@ router.get('/api/reports/production/details', async (req, res) => {
         receivedQty: r.bobbinQuantity || 0,
         receivedWeight: r.netWt || 0,
         issueInfo: null,
-        operatorName: r.operator?.name || r.machineNo || 'Unknown'
+        operatorName: r.operator?.name || r.machineNo || 'Unknown',
+        machineName: r.machineNo || null
       }));
 
     } else if (process === 'holo') {

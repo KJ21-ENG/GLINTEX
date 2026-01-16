@@ -510,7 +510,7 @@ function ProductionReport() {
                 <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-lg">
                         {process === 'all' ? 'All Processes' : `${process.charAt(0).toUpperCase() + process.slice(1)} Production`}
-                        {' '}- {view === 'operator' ? 'Operator-wise' : view === 'shift' ? 'Shift-wise' : 'Machine-wise'}
+                        {' '}- {view === 'operator' ? 'Operator-wise' : view === 'shift' ? 'Shift-wise' : view === 'item' ? 'Item-wise' : view === 'yarn' ? 'Yarn-wise' : 'Machine-wise'}
                     </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -604,6 +604,7 @@ function ProductionReport() {
                                                                                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
                                                                                                     <TableHead className="h-8 text-xs">Date</TableHead>
                                                                                                     <TableHead className="h-8 text-xs">Barcode</TableHead>
+                                                                                                    {view !== 'machine' && <TableHead className="h-8 text-xs">Machine</TableHead>}
                                                                                                     <TableHead className="h-8 text-xs">Shift</TableHead>
                                                                                                     <TableHead className="h-8 text-xs">Issue Info</TableHead>
                                                                                                     <TableHead className="h-8 text-xs text-right">Received</TableHead>
@@ -619,6 +620,13 @@ function ProductionReport() {
                                                                                                         <TableCell className="py-2 text-xs font-mono">
                                                                                                             {row.barcode || '—'}
                                                                                                         </TableCell>
+                                                                                                        {view !== 'machine' && (
+                                                                                                            <TableCell className="py-2 text-xs">
+                                                                                                                <Badge variant="secondary" className="text-[10px] font-normal h-4 px-1.5">
+                                                                                                                    {row.machineName || '—'}
+                                                                                                                </Badge>
+                                                                                                            </TableCell>
+                                                                                                        )}
                                                                                                         <TableCell className="py-2 text-xs">
                                                                                                             <Badge variant="outline" className="text-[10px] font-normal h-4 px-1">
                                                                                                                 {row.shift || '—'}
@@ -702,6 +710,14 @@ function ProductionReport() {
                                                                             <span>{row.barcode}</span>
                                                                             <span>{formatKg(row.receivedWeight)}</span>
                                                                         </div>
+                                                                        {view !== 'machine' && row.machineName && (
+                                                                            <div className="flex justify-between text-muted-foreground">
+                                                                                <span>Machine:</span>
+                                                                                <Badge variant="secondary" className="text-[10px] font-normal h-4 px-1.5">
+                                                                                    {row.machineName}
+                                                                                </Badge>
+                                                                            </div>
+                                                                        )}
                                                                         <div className="flex justify-between text-muted-foreground">
                                                                             <span>{formatDateDDMMYYYY(row.date)}</span>
                                                                             <span>{row.issueInfo ? row.issueInfo.desc : ''}</span>

@@ -4,6 +4,8 @@ import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
 import { ArrowRight, Download } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -16,6 +18,8 @@ export function OnMachineTable({ db, process }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     // Build lookup maps
     const itemNameById = useMemo(() => {
@@ -322,31 +326,16 @@ export function OnMachineTable({ db, process }) {
                 return { ...baseData, cut: cutNameById.get(entry.cutId) || '—' };
             }
             if (process === 'holo') {
+                const resolved = entry ? resolveHoloTrace(entry, holoTraceContext) : { cutName: '—' };
                 return {
                     ...baseData,
-                    cut: cutNameById.get(entry.cutId) || '—',
+                    cut: resolved.cutName,
                     yarn: yarnNameById.get(entry.yarnId) || '—',
                 };
             }
-            // Coning - trace through holo issue for cut and yarn
-            let cut = '—';
-            let yarn = '—';
-            try {
-                const refs = typeof entry.receivedRowRefs === 'string'
-                    ? JSON.parse(entry.receivedRowRefs)
-                    : entry.receivedRowRefs;
-                if (Array.isArray(refs) && refs.length > 0) {
-                    const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
-                    if (holoRow) {
-                        const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
-                        if (holoIssue) {
-                            cut = cutNameById.get(holoIssue.cutId) || '—';
-                            yarn = yarnNameById.get(holoIssue.yarnId) || '—';
-                        }
-                    }
-                }
-            } catch (e) { /* ignore parse errors */ }
-            return { ...baseData, cut, yarn };
+            // Coning - resolve cut/yarn from referenced source rows
+            const resolved = entry ? resolveConingTrace(entry, traceContext) : { cutName: '—', yarnName: '—' };
+            return { ...baseData, cut: resolved.cutName, yarn: resolved.yarnName };
         });
 
         let columns = [

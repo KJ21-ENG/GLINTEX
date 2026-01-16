@@ -8,6 +8,8 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 export function ReceiveHistoryTable() {
     const { db, process, refreshDb } = useInventory();
@@ -296,6 +298,9 @@ export function ReceiveHistoryTable() {
         return db.issue_to_coning_machine?.find(i => i.id === row.issueId) || row.issue || null;
     };
 
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+
     const resolveConingConeType = (issue) => {
         if (!issue?.receivedRowRefs) return null;
         try {
@@ -494,22 +499,8 @@ export function ReceiveHistoryTable() {
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
 
-                // Trace back to get cut - first check direct cutId (Opening Stock), then cutter receive row
-                let cut = '';
-                if (issue?.cutId) {
-                    cut = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
-                }
-                if (!cut) {
-                    try {
-                        const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                        if (Array.isArray(refs) && refs.length > 0) {
-                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-                            if (cutterRow) {
-                                cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                            }
-                        }
-                    } catch (e) { console.error('Error parsing receivedRowRefs', e); }
-                }
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                const cut = resolved.cutName === '—' ? '' : resolved.cutName;
 
                 // Calculate tare weight
                 const boxWeight = box?.weight || 0;
@@ -555,31 +546,10 @@ export function ReceiveHistoryTable() {
                         // Get cone type and wrapper
                         if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
                         if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
-
-                        // Trace back through holo receive -> holo issue -> cutter receive
-                        const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === firstRef.rowId);
-                        if (holoRow) {
-                            rollType = db.rollTypes?.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
-
-                            const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                            if (holoIssue) {
-                                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
-
-                                // Get cut - first check direct cutId (Opening Stock), then cutter receive
-                                if (holoIssue.cutId) {
-                                    cut = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-                                }
-                                if (!cut) {
-                                    const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                    if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
-                                        if (cutterRow) {
-                                            cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', rollTypeName: '—' };
+                        cut = resolved.cutName;
+                        yarnName = resolved.yarnName;
+                        rollType = resolved.rollTypeName;
                     }
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
@@ -1527,13 +1497,12 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === issue?.itemId);
-                const cut = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name || '—' : '—';
-                const yarn = issue?.yarnId ? db.yarns?.find(y => y.id === issue.yarnId)?.name || '—' : '—';
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—' };
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
-                    cut,
-                    yarn,
+                    cut: resolved.cutName,
+                    yarn: resolved.yarnName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
@@ -1559,32 +1528,16 @@ export function ReceiveHistoryTable() {
                 { key: 'notes', header: 'Notes' },
             ];
         } else {
-            // Coning - trace through holo issue for cut and yarn
+            // Coning - resolve cut/yarn from referenced source rows
             exportData = history.map(row => {
                 const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                let cut = '—';
-                let yarn = '—';
-                try {
-                    const refs = typeof coningIssue?.receivedRowRefs === 'string'
-                        ? JSON.parse(coningIssue.receivedRowRefs)
-                        : coningIssue?.receivedRowRefs;
-                    if (Array.isArray(refs) && refs.length > 0) {
-                        const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
-                        if (holoRow) {
-                            const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
-                            if (holoIssue) {
-                                cut = holoIssue.cutId ? db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '—' : '—';
-                                yarn = holoIssue.yarnId ? db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '—' : '—';
-                            }
-                        }
-                    }
-                } catch (e) { /* ignore parse errors */ }
+                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—' };
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
-                    cut,
-                    yarn,
+                    cut: resolved.cutName,
+                    yarn: resolved.yarnName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     box: row.box?.name || '—',

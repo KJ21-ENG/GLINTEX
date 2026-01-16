@@ -5,11 +5,13 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
     const { db, refreshDb } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
+    const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
@@ -96,29 +98,9 @@ export function HoloReceiveForm() {
 
     const cutName = useMemo(() => {
         if (!issue) return '';
-        // 1. Direct cut from Issue (Opening Stock)
-        if (issue.cutId) {
-            const direct = db.cuts?.find(c => c.id === issue.cutId)?.name;
-            if (direct) return direct;
-        }
-
-        // 2. Trace back (Normal flow)
-        try {
-            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-            if (Array.isArray(refs) && refs.length > 0) {
-                const firstRowId = refs[0].rowId;
-                const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
-                if (sourceRow) {
-                    // cut may be a string field or relation object; handle both
-                    const cutVal = sourceRow.cut;
-                    return (typeof cutVal === 'string' ? cutVal : cutVal?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
-                }
-            }
-        } catch (e) {
-            console.error('Error resolving cut', e);
-        }
-        return '';
-    }, [issue, db.receive_from_cutter_machine_rows, db.cuts]);
+        const resolved = resolveHoloTrace(issue, traceContext);
+        return resolved.cutName === '—' ? '' : resolved.cutName;
+    }, [issue, traceContext]);
 
     // --- Handlers ---
     async function handleScan() {
@@ -179,23 +161,8 @@ export function HoloReceiveForm() {
                     const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
                     const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
 
-                    // Resolve Cut - first check direct cutId (Opening Stock), then cutter rows
-                    let cutName = '';
-                    if (issue.cutId) {
-                        cutName = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
-                    }
-                    if (!cutName) {
-                        try {
-                            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                            if (Array.isArray(refs) && refs.length > 0) {
-                                const firstRowId = refs[0].rowId;
-                                const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
-                                if (sourceRow) {
-                                    cutName = (typeof sourceRow.cut === 'string' ? sourceRow.cut : sourceRow.cut?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
-                                }
-                            }
-                        } catch (e) { console.error('Error resolving cut', e); }
-                    }
+                    const resolved = resolveHoloTrace(issue, traceContext);
+                    const cutName = resolved.cutName === '—' ? '' : resolved.cutName;
 
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_RECEIVE,

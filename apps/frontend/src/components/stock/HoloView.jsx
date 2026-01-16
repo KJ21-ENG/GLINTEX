@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -14,10 +15,11 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
+  const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
   // --- Data Prep ---
 
@@ -32,29 +34,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     const map = new Map();
     (db.issue_to_holo_machine || []).forEach((issue) => {
       if (!issue?.id) return;
-      let cutName = '';
-      // 1. Check direct cutId (Opening Stock)
-      if (issue.cutId) {
-        cutName = db.cuts?.find(c => c.id === issue.cutId)?.name || '';
-      }
-      // 2. Fallback to tracing cutter rows (normal production)
-      if (!cutName) {
-        try {
-          const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-          if (Array.isArray(refs) && refs.length > 0) {
-            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-            if (sourceRow) {
-              cutName = (typeof sourceRow.cut === 'string' ? sourceRow.cut : sourceRow.cut?.name) || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
-            }
-          }
-        } catch (e) {
-          cutName = '';
-        }
-      }
-      map.set(issue.id, cutName || '—');
+      const resolved = resolveHoloTrace(issue, traceContext);
+      map.set(issue.id, resolved.cutName || '—');
     });
     return map;
-  }, [db.issue_to_holo_machine, db.receive_from_cutter_machine_rows, db.cuts]);
+  }, [db.issue_to_holo_machine, traceContext]);
 
   // 2. Map Lot Metadata
   const lotMetaMap = useMemo(() => {
@@ -109,6 +93,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         firmName,
         supplierId: lotMeta?.supplierId || '',
         supplierName,
+        yarnId: issue?.yarnId || '',
         yarnName: yarn?.name || '—',
         twistName: twist?.name || '—',
         cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
@@ -135,6 +120,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         itemId: row.itemId || '',
         firmId: row.firmId || '',
         supplierId: row.supplierId || '',
+        yarnId: row.yarnId || '',
         itemName: row.itemName,
         firmName: row.firmName,
         supplierName: row.supplierName,
@@ -210,6 +196,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.yarn && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
       if (filters.from && l.date < filters.from) return false;
@@ -229,6 +216,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
   }, [holoLots, filters, search]);
+
+  // Bubble up data for export
+  useEffect(() => {
+    if (onDataChange) onDataChange(filteredLots);
+  }, [filteredLots, onDataChange]);
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -269,6 +261,15 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   }, [filteredLots, groupBy]);
 
   const tableColumnCount = groupBy ? 10 : 11;
+
+  // Grand Totals
+  const grandTotals = useMemo(() => {
+    return displayLots.reduce((acc, lot) => ({
+      totalRolls: acc.totalRolls + (lot.totalRolls || 0),
+      totalWeight: acc.totalWeight + (lot.totalWeight || 0),
+      steamedRolls: acc.steamedRolls + (lot.steamedRolls || 0),
+    }), { totalRolls: 0, totalWeight: 0, steamedRolls: 0 });
+  }, [displayLots]);
 
   return (
     <>
@@ -400,6 +401,22 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 );
               })
             )}
+            {/* Grand Total Row */}
+            {displayLots.length > 0 && (
+              <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                {!groupBy ? <TableCell></TableCell> : null}
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.totalRolls}</TableCell>
+                <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.steamedRolls} / {grandTotals.totalRolls}</TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </div>
@@ -479,6 +496,18 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               </div>
             );
           })
+        )}
+        {/* Mobile Grand Total Card */}
+        {displayLots.length > 0 && (
+          <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+            <div className="flex justify-between items-center">
+              <span className="font-bold text-primary">Grand Total</span>
+              <div className="text-right">
+                <div className="font-mono font-bold text-primary">{formatKg(grandTotals.totalWeight)}</div>
+                <div className="text-xs text-muted-foreground">{grandTotals.totalRolls} rolls • {grandTotals.steamedRolls} steamed</div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </>

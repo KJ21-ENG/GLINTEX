@@ -39,8 +39,68 @@ function flattenLots(lots, piecesByLot) {
 }
 
 export function exportXlsx(lots, piecesByLot) {
+  const hasPieces = piecesByLot && Object.keys(piecesByLot).some((key) => (piecesByLot[key] || []).length > 0);
+
+  if (!hasPieces) {
+    const hasAny = (key) => lots.some(l => l?.[key] !== undefined && l?.[key] !== null && l?.[key] !== '');
+    const rows = (lots || []).map(l => {
+      const row = {
+        Lot: l.lotNo || '',
+        Date: formatDateDDMMYYYY(l.date),
+        Item: l.itemName || '',
+      };
+      if (hasAny('cutName') || hasAny('cut')) row.Cut = l.cutName || l.cut || '';
+      if (hasAny('yarnName') || hasAny('yarn')) row.Yarn = l.yarnName || l.yarn || '';
+      if (hasAny('twistName')) row.Twist = l.twistName || '';
+      if (hasAny('firmName')) row.Firm = l.firmName || '';
+      if (hasAny('supplierName')) row.Supplier = l.supplierName || '';
+
+      if (hasAny('totalRolls') || hasAny('availableRolls') || hasAny('rollCount')) {
+        row['Total Rolls'] = Number(
+          l.totalRolls ?? l.availableRolls ?? l.rollCount ?? 0
+        );
+      }
+      if (hasAny('totalCones') || hasAny('availableCones') || hasAny('coneCount')) {
+        row['Total Cones'] = Number(
+          l.totalCones ?? l.availableCones ?? l.coneCount ?? 0
+        );
+      }
+      if (hasAny('totalWeight') || hasAny('availableWeight') || hasAny('netWeight')) {
+        row['Net Weight (kg)'] = Number(
+          l.totalWeight ?? l.availableWeight ?? l.netWeight ?? 0
+        );
+      }
+      return row;
+    });
+
+    const wb = utils.book_new();
+    const ws = utils.json_to_sheet(rows);
+    utils.book_append_sheet(wb, ws, 'Stock');
+    const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'stock.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
   const orderedLots = orderLotsForExport(lots);
-  const lotsSheet = orderedLots.map(l => ({ Lot: l.lotNo, Date: formatDateDDMMYYYY(l.date), Item: l.itemName, Firm: l.firmName, Supplier: l.supplierName, "Available Pieces": (piecesByLot[l.lotNo] || []).length }));
+  const lotsSheet = orderedLots.map(l => {
+    const row = {
+      Lot: l.lotNo,
+      Date: formatDateDDMMYYYY(l.date),
+      Item: l.itemName,
+      Firm: l.firmName,
+      Supplier: l.supplierName,
+    };
+    if (l.cutName || l.cut) row.Cut = l.cutName || l.cut;
+    if (l.yarnName || l.yarn) row.Yarn = l.yarnName || l.yarn;
+    row["Available Pieces"] = (piecesByLot[l.lotNo] || []).length;
+    return row;
+  });
   const pieces = flattenLots(orderedLots, piecesByLot);
   const wb = utils.book_new();
   const ws1 = utils.json_to_sheet(lotsSheet);

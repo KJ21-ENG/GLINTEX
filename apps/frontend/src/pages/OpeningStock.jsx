@@ -21,6 +21,8 @@ import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
 import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
+import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -45,6 +47,8 @@ const round3 = (val) => {
 
 export function OpeningStock() {
   const { db, refreshDb } = useInventory();
+  const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const [stage, setStage] = useState('inbound');
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState('');
@@ -1868,7 +1872,8 @@ export function OpeningStock() {
                   ) : openingHistory.holo.map(row => {
                     const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '—';
+                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                    const cutName = resolved.cutName;
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
@@ -1920,18 +1925,8 @@ export function OpeningStock() {
                   ) : openingHistory.coning.map(row => {
                     const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    // Trace back through holo for cut
-                    let cutName = '—';
-                    try {
-                      const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                      if (Array.isArray(refs) && refs.length > 0) {
-                        const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === refs[0].rowId);
-                        if (holoRow) {
-                          const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                          if (holoIssue?.cutId) cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '—';
-                        }
-                      }
-                    } catch (e) { /* ignore */ }
+                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+                    const cutName = resolved.cutName;
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>

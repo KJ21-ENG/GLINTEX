@@ -7,6 +7,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 export function ConingReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -17,6 +18,7 @@ export function ConingReceiveForm() {
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [receiveDate, setReceiveDate] = useState(todayISO());
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
     useEffect(() => {
@@ -155,36 +157,11 @@ export function ConingReceiveForm() {
             if (firstRef.coneTypeId) {
                 coneTypeName = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
             }
-
-            // Trace back for cut name
-            const rid = firstRef.rowId;
-            if (rid) {
-                const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === rid);
-                if (holoRow) {
-                    const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                    if (holoIssue) {
-                        // 1. Check direct cutId on Holo Issue (common for Opening Stock)
-                        if (holoIssue.cutId) {
-                            cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-                        }
-
-                        // 2. Fallback to tracing back to Cutter results (normal production flow)
-                        if (!cutName) {
-                            const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                            if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
-                                if (cutterRow) {
-                                    // cut may be a string field or a relation object; handle both cases
-                                    cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
+        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
         return { itemName, cutName, coneTypeName };
-    }, [issue, issueRefs, db]);
+    }, [issue, issueRefs, db, traceContext]);
 
     const receiveRowsForIssue = useMemo(() => {
         if (!issue?.id) return [];
@@ -246,33 +223,12 @@ export function ConingReceiveForm() {
                                     if (r) rollCount += (r.rollCount || 0);
                                 }
                             });
-
-                            const rid = firstRef.rowId;
-                            if (rid) {
-                                const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === rid);
-                                if (holoRow) {
-                                    if (holoRow.rollTypeId) rollType = db.rollTypes.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
-                                    const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                                    if (holoIssue) {
-                                        if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
-                                        if (holoIssue.twistId) twistName = db.twists.find(t => t.id === holoIssue.twistId)?.name || '';
-                                        // Get cut - first check direct cutId (Opening Stock), then cutter row
-                                        if (holoIssue.cutId) {
-                                            cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-                                        }
-                                        if (!cutName) {
-                                            const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                            if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                                const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
-                                                if (cutterRow) {
-                                                    cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
+                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
+                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+                        twistName = resolved.twistName === '—' ? '' : resolved.twistName;
+                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
                     } catch (e) { console.error('Error resolving details', e); }
 
                     labelsToPrint.push({

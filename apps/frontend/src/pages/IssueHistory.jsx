@@ -7,6 +7,8 @@ import { Trash2, Printer, Download, Edit2, Plus } from 'lucide-react';
 import * as api from '../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
+import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 
 export function IssueHistory({ db, refreshDb }) {
   const { process } = useInventory();
@@ -18,6 +20,8 @@ export function IssueHistory({ db, refreshDb }) {
   const [issueDraft, setIssueDraft] = useState(null);
   const [issueScanInput, setIssueScanInput] = useState('');
   const [savingIssue, setSavingIssue] = useState(false);
+  const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
   const formatInputDate = (value) => (value ? String(value).slice(0, 10) : '');
   const parseIssuePieceIds = (row) => (
@@ -542,26 +546,15 @@ export function IssueHistory({ db, refreshDb }) {
             });
 
             // Get cut - first check direct cutId (Opening Stock), then cutter source row
-            if (row.cutId) {
-              cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
-            }
-            if (!cut) {
-              // Get cut and bobbin type from first ref's source row
-              const firstRef = refs[0];
-              const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
-              if (cutterRow) {
-                cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-                netWeight += Number(cutterRow.netWt || 0);
-              }
-            } else {
-              // Still need bobbin info even if we got cut from cutId
-              const firstRef = refs[0];
-              const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
-              if (cutterRow) {
-                bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-                netWeight += Number(cutterRow.netWt || 0);
-              }
+            const resolved = resolveHoloTrace(row, holoTraceContext);
+            cut = resolved.cutName === '—' ? '' : resolved.cutName;
+
+            // Still need bobbin info from first ref
+            const firstRef = refs[0];
+            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
+            if (cutterRow) {
+              bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
+              netWeight += Number(cutterRow.netWt || 0);
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
@@ -598,6 +591,8 @@ export function IssueHistory({ db, refreshDb }) {
         let cut = '';
         let yarnName = '';
         let rollType = '';
+        let twist = '';
+        let twistName = '';
         let rollCount = 0;
         let totalRolls = 0;
         let totalWeight = 0;
@@ -622,32 +617,13 @@ export function IssueHistory({ db, refreshDb }) {
             });
             netWeight = totalWeight;
 
-            // Trace back through holo receive -> holo issue -> cutter receive for cut, yarnName, rollType
-            const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === firstRef.rowId);
-            if (holoRow) {
-              rollType = db.rollTypes?.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
-
-              const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-              if (holoIssue) {
-                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
-                const twist = db.twists?.find(t => t.id === holoIssue.twistId)?.name || '';
-                const twistName = twist;
-
-                // Get cut - first check direct cutId (Opening Stock), then cutter row
-                if (holoIssue.cutId) {
-                  cut = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-                }
-                if (!cut) {
-                  const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                  if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
-                    if (cutterRow) {
-                      cut = cutterRow.cutMaster?.name || (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                    }
-                  }
-                }
-              }
-            }
+            const resolved = resolveConingTrace(row, traceContext);
+            cut = resolved.cutName === '—' ? '' : resolved.cutName;
+            yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+            rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
+            const twistResolved = resolved.twistName;
+            twistName = twistResolved === '—' ? '' : twistResolved;
+            twist = twistName;
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
@@ -899,7 +875,7 @@ export function IssueHistory({ db, refreshDb }) {
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
-          cut: cutNameById.get(r.cutId) || '—',
+          cut: (resolveHoloTrace(r, holoTraceContext).cutName || '—'),
           yarnName: yarnNameById.get(r.yarnId) || '—',
           twistName: twistNameById.get(r.twistId) || '—',
           metallicBobbins: r.metallicBobbins || 0,
@@ -908,27 +884,13 @@ export function IssueHistory({ db, refreshDb }) {
           rollsEst: r.rollsProducedEstimate || '',
         };
       } else {
-        // Coning - trace through holo issue for cut and yarn
-        let cut = '—';
-        let yarn = '—';
-        try {
-          const refs = typeof r.receivedRowRefs === 'string' ? JSON.parse(r.receivedRowRefs) : r.receivedRowRefs;
-          if (Array.isArray(refs) && refs.length > 0) {
-            const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === refs[0].rowId);
-            if (holoRow) {
-              const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
-              if (holoIssue) {
-                cut = cutNameById.get(holoIssue.cutId) || '—';
-                yarn = yarnNameById.get(holoIssue.yarnId) || '—';
-              }
-            }
-          }
-        } catch (e) { /* ignore parse errors */ }
+        // Coning - resolve cut/yarn from referenced source rows
+        const resolved = r ? resolveConingTrace(r, traceContext) : { cutName: '—', yarnName: '—' };
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
-          cut,
-          yarn,
+          cut: resolved.cutName,
+          yarn: resolved.yarnName,
           rollsIssued: r.count || r.rollsIssued || 0,
         };
       }

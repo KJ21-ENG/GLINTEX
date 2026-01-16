@@ -4,9 +4,13 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 export function IssueToConing() {
     const { db, refreshDb } = useInventory();
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -87,26 +91,8 @@ export function IssueToConing() {
         const scannedItemId = holoIssue?.itemId;
         let cutName = '';
         if (holoIssue) {
-            // 1. Check direct cutId on Holo Issue (common for Opening Stock)
-            if (holoIssue.cutId) {
-                cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-            }
-
-            // 2. Fallback to tracing back to Cutter results (normal production flow)
-            if (!cutName) {
-                try {
-                    const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                    if (Array.isArray(refs) && refs.length > 0) {
-                        const cutterRowId = refs[0].rowId;
-                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                        if (cutterRow) {
-                            // cut may be a string field or a relation object; handle both cases
-                            const cutVal = cutterRow.cut;
-                            cutName = (typeof cutVal === 'string' ? cutVal : cutVal?.name) || cutterRow.cutMaster?.name || (db.cuts?.find(c => c.id === cutterRow.cutId)?.name) || '';
-                        }
-                    }
-                } catch (e) { }
-            }
+            const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
+            cutName = resolved.cutName === '—' ? '' : resolved.cutName;
         }
 
         // Allow mixed lots only if item and cut are the same
@@ -211,30 +197,18 @@ export function IssueToConing() {
                     let rollType = '';
 
                     if (crates.length > 0) {
+                        const resolved = created?.issueToConingMachine
+                            ? resolveConingTrace(created.issueToConingMachine, traceContext)
+                            : { cutName: '—', yarnName: '—', rollTypeName: '—' };
+                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
+
                         const firstRow = db.receive_from_holo_machine_rows?.find(r => r.id === crates[0].rowId);
                         if (firstRow) {
-                            rollType = db.rollTypes?.find(rt => rt.id === firstRow.rollTypeId)?.name || '';
                             const holoIssue = db.issue_to_holo_machine?.find(i => i.id === firstRow.issueId);
                             if (holoIssue) {
                                 itemName = db.items?.find(i => i.id === holoIssue.itemId)?.name || '';
-                                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
-
-                                // Resolve cut - first check direct cutId (Opening Stock), then cutter row
-                                if (holoIssue.cutId) {
-                                    cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '';
-                                }
-                                if (!cutName) {
-                                    try {
-                                        const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                        if (Array.isArray(refs) && refs.length > 0) {
-                                            const cutterRowId = refs[0].rowId;
-                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                                            if (cutterRow) {
-                                                cutName = (typeof cutterRow.cut === 'string' ? cutterRow.cut : cutterRow.cut?.name) || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                            }
-                                        }
-                                    } catch (e) { }
-                                }
                             }
                         }
                     }

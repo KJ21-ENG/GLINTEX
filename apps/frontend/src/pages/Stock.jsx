@@ -99,6 +99,7 @@ export function Stock() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState({
     item: "",
+    yarn: "",
     firm: "",
     supplier: "",
     status: (process || 'cutter') === 'cutter' ? "available_to_issue" : "active",
@@ -106,6 +107,12 @@ export function Stock() {
     from: "",
     to: ""
   });
+
+  // --- Export Data State ---
+  const [exportData, setExportData] = useState(null);
+
+  // Clear export data when view changes to avoid stale data
+  useEffect(() => { setExportData(null); }, [view, processId]);
 
   // --- Data Prep (Memoized) ---
 
@@ -139,6 +146,8 @@ export function Stock() {
         wastageTotal: 0,
         wastageCount: 0,
         avgWastage: 0,
+        cutNames: new Set(),
+        yarnNames: new Set(),
       };
     }
     const inbound = db.inbound_items || [];
@@ -153,12 +162,21 @@ export function Stock() {
       const pendingRaw = inboundWeight - receivedWeight - wastageWeight - dispatchedWeight;
       const pendingForPiece = pendingRaw > EPSILON ? pendingRaw : 0;
 
+      // Cut & Yarn Resolution
+      const cutName = piece.cutName || piece.cut?.name || (typeof piece.cut === 'string' ? piece.cut : '') || db.cuts?.find(c => c.id === piece.cutId)?.name || '';
+      if (cutName) m[piece.lotNo].cutNames.add(cutName);
+
+      const yarnName = piece.yarnName || piece.yarn?.name || (typeof piece.yarn === 'string' ? piece.yarn : '') || db.yarns?.find(y => y.id === piece.yarnId)?.name || '';
+      if (yarnName) m[piece.lotNo].yarnNames.add(yarnName);
+
       const pieceEntry = {
         ...piece,
         pendingWeight: pendingForPiece,
         receivedWeight,
         wastageWeight,
-        totalUnits: pieceTotalUnits
+        totalUnits: pieceTotalUnits,
+        cutName,
+        yarnName
       };
 
       m[piece.lotNo].pieces.push(pieceEntry);
@@ -178,6 +196,8 @@ export function Stock() {
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
       lot.statusType = lotStatus(lot);
+      lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
+      lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
     });
     return m;
   }, [db, receiveTotalsMap]);
@@ -272,6 +292,16 @@ export function Stock() {
     });
     return Array.from(map.values());
   }, [filteredLots, groupByItem]);
+
+  // Grand Totals for Jumbo Rolls view
+  const grandTotals = useMemo(() => {
+    return displayedLots.reduce((acc, lot) => ({
+      availableCount: acc.availableCount + (lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length),
+      totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
+      totalWeight: acc.totalWeight + Number(lot.totalWeight || 0),
+      pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
+    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0 });
+  }, [displayedLots]);
 
   // --- Handlers ---
 
@@ -480,7 +510,7 @@ export function Stock() {
               </div>
             ) : null}
             {/* Export Button */}
-            <Button variant="outline" size="icon" onClick={() => exportXlsx(filteredLots, {})} className="ml-auto md:ml-0">
+            <Button variant="outline" size="icon" onClick={() => exportXlsx(exportData || filteredLots, {})} className="ml-auto md:ml-0">
               <Download className="w-4 h-4" />
             </Button>
           </div>
@@ -506,6 +536,13 @@ export function Stock() {
               <Select className="bg-background w-full" value={filters.item} onChange={e => setFilters(f => ({ ...f, item: e.target.value }))}>
                 <option value="">All Items</option>
                 {db?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Yarn</Label>
+              <Select className="bg-background w-full" value={filters.yarn} onChange={e => setFilters(f => ({ ...f, yarn: e.target.value }))}>
+                <option value="">All Yarns</option>
+                {db?.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
               </Select>
             </div>
             <div>
@@ -562,11 +599,11 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {processId === 'coning' ? (
-        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : isHolo ? (
-        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : showBobbins ? (
-        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : (
         <>
           <div className="hidden sm:block rounded-md border bg-card overflow-x-auto">
@@ -712,6 +749,22 @@ export function Stock() {
                     );
                   })
                 )}
+                {/* Grand Total Row */}
+                {displayedLots.length > 0 && (
+                  <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                    <TableCell></TableCell>
+                    <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                    {!groupByItem ? <TableCell></TableCell> : null}
+                    <TableCell></TableCell>
+                    <TableCell className="font-bold text-primary">{grandTotals.availableCount} / {grandTotals.totalPieces}</TableCell>
+                    <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                    {filters.status !== 'available_to_issue' && (
+                      <TableCell className="font-bold text-primary">{formatKg(grandTotals.pendingWeight)}</TableCell>
+                    )}
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
@@ -813,6 +866,21 @@ export function Stock() {
                   </div>
                 );
               })
+            )}
+            {/* Mobile Grand Total Card */}
+            {displayedLots.length > 0 && (
+              <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-primary">Grand Total</span>
+                  <div className="text-right">
+                    <div className="font-mono font-bold text-primary">{formatKg(grandTotals.totalWeight)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {grandTotals.availableCount} / {grandTotals.totalPieces} pieces
+                      {filters.status !== 'available_to_issue' && ` • ${formatKg(grandTotals.pendingWeight)} pending`}
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </>

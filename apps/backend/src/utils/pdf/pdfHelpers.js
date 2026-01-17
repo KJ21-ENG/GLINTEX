@@ -159,15 +159,31 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
     headers.forEach((header, i) => {
         const text = String(header.text || header);
         const align = header.align || 'left';
+        const allowWrap = Boolean(header.wrap);
         let xPos = colPositions[i] + padding;
         if (align === 'right') {
             xPos = colPositions[i + 1] - padding;
         } else if (align === 'center') {
             xPos = colPositions[i] + colWidths[i] / 2;
         }
-        doc.text(text, xPos, y + 5.5, { align });
+        const maxWidth = colWidths[i] - (padding * 2);
+        if (allowWrap) {
+            const lines = doc.splitTextToSize(text, maxWidth);
+            lines.forEach((line, idx) => {
+                doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+            });
+        } else {
+            let displayText = text;
+            while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
+                displayText = displayText.slice(0, -4) + '...';
+            }
+            doc.text(displayText, xPos, y + 5.5, { align });
+        }
     });
     y += headerHeight;
+    let currentPageTopY = y - headerHeight;
+    let currentPageHeight = headerHeight;
+    let hadPageBreak = false;
 
     // Draw rows
     doc.setFont('helvetica', 'normal');
@@ -186,6 +202,10 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
 
         // Check for page break
         if (y + rowHeightDynamic > pageHeight - bottomMargin) {
+            doc.setDrawColor(200, 200, 200);
+            doc.setLineWidth(0.3);
+            doc.rect(startX, currentPageTopY, tableWidth, currentPageHeight);
+            hadPageBreak = true;
             doc.addPage();
             y = 20;
 
@@ -197,16 +217,31 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
             headers.forEach((header, i) => {
                 const text = String(header.text || header);
                 const align = header.align || 'left';
+                const allowWrap = Boolean(header.wrap);
                 let xPos = colPositions[i] + padding;
                 if (align === 'right') {
                     xPos = colPositions[i + 1] - padding;
                 } else if (align === 'center') {
                     xPos = colPositions[i] + colWidths[i] / 2;
                 }
-                doc.text(text, xPos, y + 5.5, { align });
+                const maxWidth = colWidths[i] - (padding * 2);
+                if (allowWrap) {
+                    const lines = doc.splitTextToSize(text, maxWidth);
+                    lines.forEach((line, idx) => {
+                        doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+                    });
+                } else {
+                    let displayText = text;
+                    while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
+                        displayText = displayText.slice(0, -4) + '...';
+                    }
+                    doc.text(displayText, xPos, y + 5.5, { align });
+                }
             });
             y += headerHeight;
             doc.setFont('helvetica', 'normal');
+            currentPageTopY = y - headerHeight;
+            currentPageHeight = headerHeight;
         }
 
         // Alternate row background
@@ -254,12 +289,13 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
         }
 
         y += rowHeightDynamic;
+        currentPageHeight += rowHeightDynamic;
     });
 
     // Draw table border
     doc.setDrawColor(200, 200, 200);
     doc.setLineWidth(0.3);
-    doc.rect(startX, y - (rows.length * rowHeight) - headerHeight, tableWidth, (rows.length * rowHeight) + headerHeight);
+    doc.rect(startX, currentPageTopY, tableWidth, currentPageHeight);
 
     return y + 5;
 }

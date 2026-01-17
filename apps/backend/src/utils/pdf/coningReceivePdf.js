@@ -169,9 +169,9 @@ export async function generateConingReceivePdf(data) {
             { text: 'Cut', align: 'left' },
             { text: 'Cone Type', align: 'left' },
             { text: 'Cones', align: 'right' },
-            { text: 'Total Net Wt (kg)', align: 'right' },
-            { text: 'Target Wt Avg (g)', align: 'right' },
-            { text: 'Actual Wt Avg (g)', align: 'right' },
+            { text: 'Total Net Wt (kg)', align: 'right', wrap: true },
+            { text: 'Target Wt Avg (g)', align: 'right', wrap: true },
+            { text: 'Actual Wt Avg (g)', align: 'right', wrap: true },
         ];
 
         const baseSummaryColWidths = [26, 18, 18, 26, 20, 22, 16, 26, 24, 24];
@@ -223,6 +223,32 @@ export async function generateConingReceivePdf(data) {
             pageWidth,
             title: 'Summary (Avg per Cone)',
         });
+    }
+
+    const estimateTableHeight = (tableHeaders, tableRows, tableColWidths) => {
+        const baseRowHeight = 7;
+        const headerHeight = 8;
+        const padding = 2;
+        const lineHeight = 3.5;
+        let total = headerHeight;
+        tableRows.forEach((row) => {
+            const maxLines = row.cells.reduce((max, cell, i) => {
+                const header = tableHeaders[i] || {};
+                if (!header.wrap) return Math.max(max, 1);
+                const text = String(cell?.text ?? cell ?? '');
+                const maxWidth = tableColWidths[i] - (padding * 2);
+                const lines = doc.splitTextToSize(text, maxWidth);
+                return Math.max(max, lines.length || 1);
+            }, 1);
+            total += baseRowHeight * maxLines;
+        });
+        return total;
+    };
+
+    const detailsHeight = estimateTableHeight(headers, rows, colWidths);
+    if (y + detailsHeight > pageHeight - 25) {
+        doc.addPage();
+        y = 20;
     }
 
     y = drawTable(doc, {

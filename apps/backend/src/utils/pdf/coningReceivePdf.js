@@ -48,8 +48,30 @@ export async function generateConingReceivePdf(data) {
         { text: 'Net Wt (kg)', align: 'right' },
     ];
 
-    // Column widths for landscape A4
-    const colWidths = [8, 24, 18, 18, 26, 20, 22, 22, 16, 16, 16, 22];
+    const baseColWidths = [8, 24, 18, 18, 26, 20, 22, 22, 16, 16, 16, 22];
+    const totalMainWidth = baseColWidths.reduce((sum, w) => sum + w, 0);
+    const itemNameMaxLen = (data.details || []).reduce((max, item) => {
+        const name = String(item?.itemName || '');
+        return Math.max(max, name.length);
+    }, 0);
+    const desiredItemWidth = Math.min(40, Math.max(20, Math.round(itemNameMaxLen * 1.2)));
+    const itemIndex = 4;
+    const machineIndex = 1;
+    const minMachineWidth = 16;
+    let colWidths = [...baseColWidths];
+    const delta = desiredItemWidth - baseColWidths[itemIndex];
+    if (delta !== 0) {
+        const nextMachine = baseColWidths[machineIndex] - delta;
+        if (nextMachine >= minMachineWidth) {
+            colWidths[itemIndex] = desiredItemWidth;
+            colWidths[machineIndex] = nextMachine;
+        } else {
+            const maxItem = baseColWidths[machineIndex] - minMachineWidth + baseColWidths[itemIndex];
+            const clampedItem = Math.min(desiredItemWidth, maxItem);
+            colWidths[itemIndex] = clampedItem;
+            colWidths[machineIndex] = totalMainWidth - colWidths.reduce((sum, w, i) => sum + (i === machineIndex ? 0 : w), 0);
+        }
+    }
 
     const rows = [];
     let totalCones = 0;
@@ -152,7 +174,25 @@ export async function generateConingReceivePdf(data) {
             { text: 'Actual Wt Avg (g)', align: 'right' },
         ];
 
-        const summaryColWidths = [26, 18, 18, 26, 20, 22, 16, 26, 24, 24];
+        const baseSummaryColWidths = [26, 18, 18, 26, 20, 22, 16, 26, 24, 24];
+        const totalSummaryWidth = baseSummaryColWidths.reduce((sum, w) => sum + w, 0);
+        const summaryItemIndex = 3;
+        const summaryMachineIndex = 0;
+        const minSummaryMachine = 16;
+        let summaryColWidths = [...baseSummaryColWidths];
+        const summaryDelta = desiredItemWidth - baseSummaryColWidths[summaryItemIndex];
+        if (summaryDelta !== 0) {
+            const nextMachine = baseSummaryColWidths[summaryMachineIndex] - summaryDelta;
+            if (nextMachine >= minSummaryMachine) {
+                summaryColWidths[summaryItemIndex] = desiredItemWidth;
+                summaryColWidths[summaryMachineIndex] = nextMachine;
+            } else {
+                const maxItem = baseSummaryColWidths[summaryMachineIndex] - minSummaryMachine + baseSummaryColWidths[summaryItemIndex];
+                const clampedItem = Math.min(desiredItemWidth, maxItem);
+                summaryColWidths[summaryItemIndex] = clampedItem;
+                summaryColWidths[summaryMachineIndex] = totalSummaryWidth - summaryColWidths.reduce((sum, w, i) => sum + (i === summaryMachineIndex ? 0 : w), 0);
+            }
+        }
 
         const summaryRows = [];
         summaryMap.forEach((entry) => {

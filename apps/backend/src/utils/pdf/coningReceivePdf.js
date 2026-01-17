@@ -32,14 +32,6 @@ export async function generateConingReceivePdf(data) {
         pageWidth,
     });
 
-    // Overview section
-    const metrics = [
-        { label: 'Total Entries', value: formatNumber(data.totalCount) },
-        { label: 'Total Cones', value: formatNumber(data.totalCones) },
-        { label: 'Total Net Weight', value: `${formatWeight(data.totalNetWeight)} kg` },
-    ];
-    y = drawOverview(doc, { y, metrics, pageWidth });
-
     // Prepare table data
     const headers = [
         { text: 'S.No', align: 'center' },
@@ -109,15 +101,6 @@ export async function generateConingReceivePdf(data) {
         });
     }
 
-    y = drawTable(doc, {
-        y,
-        headers,
-        rows,
-        colWidths,
-        pageWidth,
-        title: 'Receive Details',
-    });
-
     // Summary table (grouped averages)
     if (data.details && data.details.length > 0) {
         const summaryMap = new Map();
@@ -163,12 +146,13 @@ export async function generateConingReceivePdf(data) {
             { text: 'Item', align: 'left' },
             { text: 'Cut', align: 'left' },
             { text: 'Cone Type', align: 'left' },
+            { text: 'Cones', align: 'right' },
             { text: 'Total Net Wt (kg)', align: 'right' },
             { text: 'Target Wt Avg (g)', align: 'right' },
             { text: 'Actual Wt Avg (g)', align: 'right' },
         ];
 
-        const summaryColWidths = [28, 20, 20, 28, 22, 24, 30, 28, 28];
+        const summaryColWidths = [26, 18, 18, 26, 20, 22, 16, 26, 24, 24];
 
         const summaryRows = [];
         summaryMap.forEach((entry) => {
@@ -183,6 +167,7 @@ export async function generateConingReceivePdf(data) {
                     { text: entry.itemName, align: 'left' },
                     { text: entry.cutName, align: 'left' },
                     { text: entry.coneTypeName, align: 'left' },
+                    { text: formatNumber(totalCones), align: 'right' },
                     { text: formatWeight(entry.totalNetWeight), align: 'right' },
                     { text: formatNumber(Math.round(targetAvg || 0)), align: 'right' },
                     { text: formatNumber(Math.round(actualAvg || 0)), align: 'right' },
@@ -199,6 +184,15 @@ export async function generateConingReceivePdf(data) {
             title: 'Summary (Avg per Cone)',
         });
     }
+
+    y = drawTable(doc, {
+        y,
+        headers,
+        rows,
+        colWidths,
+        pageWidth,
+        title: 'Receive Details',
+    });
 
     // Footer
     drawFooter(doc, pageHeight);

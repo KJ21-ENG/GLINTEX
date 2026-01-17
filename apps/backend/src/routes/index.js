@@ -12367,12 +12367,12 @@ async function generateSummaryData(stage, type, date) {
       machineName: r.issue?.machine?.name || '-',
       itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
       lotNo: r.issue?.lotNo || '-',
+      cutName: r.issue?.cut?.name || '-',
       yarnName: r.issue?.yarn?.name || '-',
       twistName: r.issue?.twist?.name || '-',
       coneTypeName: resolveConeTypeName(r.issue),
       perConeTargetG: r.issue?.requiredPerConeNetWeight || 0,
       operatorName: r.operator?.name || '-',
-      boxName: r.box?.name || '-',
       coneCount: r.coneCount || 0,
       netWeight: r.netWeight || 0,
     }));

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as api from '../api/client';
 import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
-    Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge
+    Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Badge
 } from '../components/ui';
 import { formatKg, formatDateDDMMYYYY, todayISO } from '../utils';
 import {
@@ -397,6 +397,12 @@ function ProductionReport() {
         return [item.machineNo || item.machineName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
     };
 
+    const grandTotals = report?.data?.reduce((acc, item) => {
+        acc.received += (Number(item.received) || 0);
+        acc.count += (Number(item.count || item.rollCount || item.coneCount) || 0);
+        return acc;
+    }, { received: 0, count: 0 }) || { received: 0, count: 0 };
+
     return (
         <div className="space-y-6">
             {/* Filters */}
@@ -663,6 +669,15 @@ function ProductionReport() {
                                             );
                                         })}
                                     </TableBody>
+                                    <TableFooter>
+                                        <TableRow className="bg-muted/50 font-bold hover:bg-muted/50">
+                                            <TableCell></TableCell>
+                                            <TableCell className="text-center">Grand Total</TableCell>
+                                            {view === 'item' && <TableCell></TableCell>}
+                                            <TableCell className="text-right">{formatKg(grandTotals.received)}</TableCell>
+                                            <TableCell className="text-right">{grandTotals.count}</TableCell>
+                                        </TableRow>
+                                    </TableFooter>
                                 </Table>
                             </div>
 
@@ -732,6 +747,26 @@ function ProductionReport() {
                                         </div>
                                     );
                                 })}
+
+                                {report.data.length > 0 && (
+                                    <div className="border rounded-lg bg-primary/5 shadow-sm overflow-hidden border-primary/20 mt-4">
+                                        <div className="p-4 flex items-center justify-between bg-primary/10">
+                                            <div className="font-bold text-primary">Grand Total</div>
+                                        </div>
+                                        <div className="p-4 border-t border-primary/10">
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                <div className="flex justify-between">
+                                                    <span className="text-muted-foreground">Received (kg):</span>
+                                                    <span className="font-bold">{formatKg(grandTotals.received)}</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-muted-foreground">Count:</span>
+                                                    <span className="font-bold">{grandTotals.count}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}

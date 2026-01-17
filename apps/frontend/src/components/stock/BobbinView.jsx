@@ -104,7 +104,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         firmId: crate.firmId,
         supplierId: crate.supplierId,
         itemName: crate.itemName,
-        cutName: crate.cutName,
+        cutNames: new Set(),
         firmName: crate.firmName,
         supplierName: crate.supplierName,
         totalBobbins: 0,
@@ -123,10 +123,14 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       existing.totalWeight += crate.netWeight;
       existing.issuedWeight += crate.issuedWeight;
       existing.availableWeight += crate.availableWeight;
+      if (crate.cutName && crate.cutName !== '—') existing.cutNames.add(crate.cutName);
 
       map.set(lotNo, existing);
     });
-    return Array.from(map.values());
+    return Array.from(map.values()).map(l => ({
+      ...l,
+      cutName: l.cutNames.size > 1 ? 'Mixed' : Array.from(l.cutNames)[0] || '—'
+    }));
   }, [bobbinCrates]);
 
   // 5. Filter & Sort
@@ -160,6 +164,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
       if (filters.yarn && l.yarnId && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -177,7 +185,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [bobbinLots, filters, search]);
+  }, [bobbinLots, filters, search, db.cuts]);
 
 
   const displayData = useMemo(() => {

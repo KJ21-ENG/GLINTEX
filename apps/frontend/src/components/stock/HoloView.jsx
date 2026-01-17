@@ -150,7 +150,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return Array.from(map.values()).map((lot) => {
       const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
       const lotNosArr = Array.from(lot.lotNos || []);
-      const { cutNames, lotNos, ...rest } = lot;
+      const { lotNos, ...rest } = lot;
       // Determine steamed status type for filtering
       const steamedStatusType = rest.steamedRolls === 0 ? 'not_steamed'
         : rest.steamedRolls >= rest.totalRolls ? 'steamed'
@@ -158,6 +158,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       return {
         ...rest,
         cutName,
+        cutNames: lot.cutNames,
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
@@ -196,6 +197,10 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
       if (filters.yarn && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -215,7 +220,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [holoLots, filters, search]);
+  }, [holoLots, filters, search, db.cuts]);
 
 
   const displayLots = useMemo(() => {

@@ -99,6 +99,7 @@ export function Stock() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState({
     item: "",
+    cut: "",
     yarn: "",
     firm: "",
     supplier: "",
@@ -238,6 +239,10 @@ export function Stock() {
     return list.filter(l => {
       // Filters
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
       if (filters.from && l.date < filters.from) return false;
@@ -259,7 +264,7 @@ export function Stock() {
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [allLots, search, filters]);
+  }, [allLots, search, filters, db.cuts]);
 
   const displayedLots = useMemo(() => {
     if (!groupByItem) return filteredLots;
@@ -589,6 +594,13 @@ export function Stock() {
               </Select>
             </div>
             <div>
+              <Label className="text-xs mb-1 block">Cut</Label>
+              <Select className="bg-background w-full" value={filters.cut} onChange={e => setFilters(f => ({ ...f, cut: e.target.value }))}>
+                <option value="">All Cuts</option>
+                {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs mb-1 block">Yarn</Label>
               <Select className="bg-background w-full" value={filters.yarn} onChange={e => setFilters(f => ({ ...f, yarn: e.target.value }))}>
                 <option value="">All Yarns</option>
@@ -664,6 +676,7 @@ export function Stock() {
                   <TableHead>Lot No</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
+                  <TableHead>Cut</TableHead>
                   {!groupByItem ? <TableHead>Firm</TableHead> : null}
                   <TableHead>Supplier</TableHead>
                   <TableHead className="">Pieces</TableHead>
@@ -673,7 +686,7 @@ export function Stock() {
               </TableHeader>
               <TableBody>
                 {displayedLots.length === 0 ? (
-                  <TableRow><TableCell colSpan={(groupByItem ? 8 : 9) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={(groupByItem ? 9 : 10) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
                 ) : (
                   displayedLots.map((l, idx) => {
                     const isExpanded = !groupByItem && expandedLot === l.lotNo;
@@ -700,6 +713,9 @@ export function Stock() {
                           <TableCell>
                             <HighlightMatch text={l.itemName} query={search} />
                           </TableCell>
+                          <TableCell>
+                            <HighlightMatch text={l.cutName} query={search} />
+                          </TableCell>
                           {!groupByItem ? (
                             <TableCell>
                               <HighlightMatch text={l.firmName} query={search} />
@@ -720,7 +736,7 @@ export function Stock() {
                         </TableRow>
                         {isExpanded && !groupByItem && (
                           <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableCell colSpan={filters.status === 'available_to_issue' ? 8 : 9} className="p-4">
+                            <TableCell colSpan={filters.status === 'available_to_issue' ? 9 : 10} className="p-4">
                               <div className="bg-background border rounded-lg p-4 shadow-sm">
                                 <div className="flex justify-between items-center mb-4">
                                   <div className="flex gap-2">

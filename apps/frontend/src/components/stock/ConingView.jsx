@@ -175,6 +175,10 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
       if (filters.yarn && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
@@ -188,7 +192,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [coningLots, filters, search]);
+  }, [coningLots, filters, search, db.cuts]);
 
 
   const displayLots = useMemo(() => {

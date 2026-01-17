@@ -6024,8 +6024,14 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
 
     const lotSet = new Set(resolvedCrates.map((c) => c.lotNo).filter(Boolean));
     const itemSet = new Set(resolvedCrates.map((c) => c.itemId).filter(Boolean));
-    if (lotSet.size !== 1 || itemSet.size !== 1) return res.status(400).json({ error: 'Crates must belong to a single lot and item' });
-    const lotNo = Array.from(lotSet)[0];
+    if (itemSet.size !== 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single item' });
+    }
+    const lotNos = Array.from(lotSet).filter(Boolean);
+    if (lotNos.length === 0) {
+      return res.status(400).json({ error: 'Unable to resolve lot numbers for scanned crates' });
+    }
+    const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
     const sourceIssueMap = new Map((holoRows || []).map(r => [r.issue?.id, r.issue]));
     const sourceCutIds = new Set();
@@ -6038,6 +6044,9 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       if (issue?.yarnId) sourceYarnIds.add(issue.yarnId);
       if (issue?.twistId) sourceTwistIds.add(issue.twistId);
     });
+    if (sourceCutIds.size > 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single cut' });
+    }
     const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
     const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
     const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;

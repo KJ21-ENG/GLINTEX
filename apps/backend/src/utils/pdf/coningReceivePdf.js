@@ -222,14 +222,19 @@ export async function generateConingReceivePdf(data) {
             colWidths: summaryColWidths,
             pageWidth,
             title: 'Summary (Avg per Cone)',
+            rowHeight: 6,
+            headerHeight: 7,
+            padding: 1.5,
+            bottomMargin: 15,
+            lineHeight: 3,
         });
     }
 
-    const estimateTableHeight = (tableHeaders, tableRows, tableColWidths) => {
-        const baseRowHeight = 7;
-        const headerHeight = 8;
-        const padding = 2;
-        const lineHeight = 3.5;
+    const estimateTableHeight = (tableHeaders, tableRows, tableColWidths, opts) => {
+        const baseRowHeight = opts.rowHeight ?? 7;
+        const headerHeight = opts.headerHeight ?? 8;
+        const padding = opts.padding ?? 2;
+        const lineHeight = opts.lineHeight ?? 3.5;
         let total = headerHeight;
         tableRows.forEach((row) => {
             const maxLines = row.cells.reduce((max, cell, i) => {
@@ -245,8 +250,15 @@ export async function generateConingReceivePdf(data) {
         return total;
     };
 
-    const detailsHeight = estimateTableHeight(headers, rows, colWidths);
-    if (y + detailsHeight > pageHeight - 25) {
+    const detailsTableOpts = {
+        rowHeight: 6,
+        headerHeight: 7,
+        padding: 1.5,
+        bottomMargin: 15,
+        lineHeight: 3,
+    };
+    const detailsHeight = estimateTableHeight(headers, rows, colWidths, detailsTableOpts);
+    if (y + detailsHeight > pageHeight - detailsTableOpts.bottomMargin) {
         doc.addPage();
         y = 20;
     }
@@ -258,6 +270,7 @@ export async function generateConingReceivePdf(data) {
         colWidths,
         pageWidth,
         title: 'Receive Details',
+        ...detailsTableOpts,
     });
 
     // Footer

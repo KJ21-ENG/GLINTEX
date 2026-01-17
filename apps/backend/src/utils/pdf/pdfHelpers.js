@@ -123,14 +123,21 @@ export function drawOverview(doc, { y, metrics, pageWidth }) {
  * @param {object} options - Table options
  * @returns {number} - New Y position after table
  */
-export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }) {
+export function drawTable(doc, {
+    y,
+    headers,
+    rows,
+    colWidths,
+    pageWidth,
+    title,
+    rowHeight = 7,
+    headerHeight = 8,
+    padding = 2,
+    bottomMargin = 25,
+    lineHeight = 3.5,
+}) {
     const startX = 15;
-    const rowHeight = 7;
-    const headerHeight = 8;
-    const padding = 2;
     const pageHeight = doc.internal.pageSize.getHeight();
-    const bottomMargin = 25;
-    const lineHeight = 3.5;
 
     // Section title if provided
     if (title) {

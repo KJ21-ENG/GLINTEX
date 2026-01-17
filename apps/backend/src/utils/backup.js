@@ -31,8 +31,9 @@ const BACKUP_TIMEZONE = 'Asia/Kolkata';
 let backupTask = null;
 let currentBackupTime = DEFAULT_BACKUP_TIME;
 
-// Ensure backup directory exists
-if (!fs.existsSync(BACKUP_DIR)) {
+// Ensure backup directory exists (skip in demo mode - read-only filesystem)
+const isDemoMode = process.env.DEMO_MODE === 'true';
+if (!isDemoMode && !fs.existsSync(BACKUP_DIR)) {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 

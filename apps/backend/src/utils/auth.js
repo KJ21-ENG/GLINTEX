@@ -23,8 +23,10 @@ export function getSessionExpiryDate() {
 }
 
 export function getSessionCookieOptions() {
-  const rawSameSite = String(process.env.COOKIE_SAMESITE || 'lax').trim().toLowerCase();
-  const sameSite = ['lax', 'strict', 'none'].includes(rawSameSite) ? rawSameSite : 'lax';
+  const isProd = process.env.NODE_ENV === 'production';
+  const defaultSameSite = isProd ? 'none' : 'lax';
+  const rawSameSite = String(process.env.COOKIE_SAMESITE || defaultSameSite).trim().toLowerCase();
+  const sameSite = ['lax', 'strict', 'none'].includes(rawSameSite) ? rawSameSite : defaultSameSite;
   const secure = process.env.COOKIE_SECURE === 'true' || sameSite === 'none';
   return {
     httpOnly: true,

@@ -52,13 +52,12 @@ export async function generateConingReceivePdf(data) {
         { text: 'Target (g)', align: 'right' },
         { text: 'Actual (g)', align: 'right' },
         { text: 'Operator', align: 'left' },
-        { text: 'Box', align: 'left' },
         { text: 'Cones', align: 'right' },
         { text: 'Net Wt (kg)', align: 'right' },
     ];
 
     // Column widths for landscape A4
-    const colWidths = [8, 24, 28, 22, 18, 18, 22, 16, 16, 22, 22, 18, 22];
+    const colWidths = [8, 26, 30, 22, 18, 18, 22, 16, 16, 26, 18, 22];
 
     const rows = [];
     let totalCones = 0;
@@ -82,9 +81,8 @@ export async function generateConingReceivePdf(data) {
                     { text: item.twistName || '-', align: 'left' },
                     { text: item.coneTypeName || '-', align: 'left' },
                     { text: formatNumber(item.perConeTargetG || 0), align: 'right' },
-                    { text: formatNumber(actualPerCone || 0), align: 'right' },
+                    { text: formatNumber(Math.round(actualPerCone || 0)), align: 'right' },
                     { text: item.operatorName || '-', align: 'left' },
-                    { text: item.boxName || '-', align: 'left' },
                     { text: formatNumber(cones), align: 'right' },
                     { text: formatWeight(netWeight), align: 'right' },
                 ],
@@ -104,7 +102,6 @@ export async function generateConingReceivePdf(data) {
                 { text: '', align: 'left' },
                 { text: '', align: 'right' },
                 { text: '', align: 'right' },
-                { text: '', align: 'left' },
                 { text: '', align: 'left' },
                 { text: formatNumber(totalCones), align: 'right' },
                 { text: formatWeight(totalNetWeight), align: 'right' },

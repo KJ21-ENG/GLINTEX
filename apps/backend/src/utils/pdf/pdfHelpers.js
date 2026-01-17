@@ -130,6 +130,7 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
     const padding = 2;
     const pageHeight = doc.internal.pageSize.getHeight();
     const bottomMargin = 25;
+    const lineHeight = 3.5;
 
     // Section title if provided
     if (title) {
@@ -173,8 +174,18 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
     doc.setFontSize(8);
 
     rows.forEach((row, rowIdx) => {
+        const maxLines = row.cells.reduce((max, cell, i) => {
+            const header = headers[i] || {};
+            if (!header.wrap) return Math.max(max, 1);
+            const text = String(cell?.text ?? cell ?? '');
+            const maxWidth = colWidths[i] - (padding * 2);
+            const lines = doc.splitTextToSize(text, maxWidth);
+            return Math.max(max, lines.length || 1);
+        }, 1);
+        const rowHeightDynamic = rowHeight * maxLines;
+
         // Check for page break
-        if (y + rowHeight > pageHeight - bottomMargin) {
+        if (y + rowHeightDynamic > pageHeight - bottomMargin) {
             doc.addPage();
             y = 20;
 
@@ -201,14 +212,14 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
         // Alternate row background
         if (rowIdx % 2 === 0) {
             doc.setFillColor(248, 249, 250);
-            doc.rect(startX, y, tableWidth, rowHeight, 'F');
+            doc.rect(startX, y, tableWidth, rowHeightDynamic, 'F');
         }
 
         // Check if this is a totals row
         const isTotalsRow = row.isTotal;
         if (isTotalsRow) {
             doc.setFillColor(233, 236, 239);
-            doc.rect(startX, y, tableWidth, rowHeight, 'F');
+            doc.rect(startX, y, tableWidth, rowHeightDynamic, 'F');
             doc.setFont('helvetica', 'bold');
         }
 
@@ -223,21 +234,26 @@ export function drawTable(doc, { y, headers, rows, colWidths, pageWidth, title }
                 xPos = colPositions[i] + colWidths[i] / 2;
             }
 
-            // Truncate text if too long
             const maxWidth = colWidths[i] - (padding * 2);
-            let displayText = text;
-            while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
-                displayText = displayText.slice(0, -4) + '...';
+            if (headers[i]?.wrap) {
+                const lines = doc.splitTextToSize(text, maxWidth);
+                lines.forEach((line, idx) => {
+                    doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+                });
+            } else {
+                let displayText = text;
+                while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
+                    displayText = displayText.slice(0, -4) + '...';
+                }
+                doc.text(displayText, xPos, y + 5, { align });
             }
-
-            doc.text(displayText, xPos, y + 5, { align });
         });
 
         if (isTotalsRow) {
             doc.setFont('helvetica', 'normal');
         }
 
-        y += rowHeight;
+        y += rowHeightDynamic;
     });
 
     // Draw table border

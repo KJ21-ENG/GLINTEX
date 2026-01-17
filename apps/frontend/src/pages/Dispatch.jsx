@@ -137,6 +137,7 @@ export function Dispatch() {
         return availableItems.filter(item => {
             const searchable = [
                 item.barcode,
+                item.legacyBarcode,
                 item.lotLabel || item.lotNo,
                 item.pieceId,
                 String(item.weight),
@@ -291,28 +292,32 @@ export function Dispatch() {
 
     function handleScanSubmit(e) {
         e.preventDefault();
-        const barcode = scanInput.trim();
-        if (!barcode) return;
+        const normalized = scanInput.trim().toUpperCase();
+        if (!normalized) return;
         setScanInput('');
 
         setScanQueue(prev => {
-            if (prev.some(entry => entry.barcode === barcode)) {
+            if (prev.some(entry => entry.barcode === normalized)) {
                 return prev;
             }
             const match = availableItems.find(item =>
-                item.barcode === barcode ||
-                item.lotNo === barcode ||
-                item.pieceId === barcode
+                (item.barcode || '').toUpperCase() === normalized ||
+                (item.legacyBarcode || '').toUpperCase() === normalized ||
+                (item.lotNo || '').toUpperCase() === normalized ||
+                (item.pieceId || '').toUpperCase() === normalized
             );
             if (!match) {
-                return [{ barcode, status: 'not_found', error: `Not found in ${selectedStage}` }, ...prev];
+                return [{ barcode: normalized, status: 'not_found', error: `Not found in ${selectedStage}` }, ...prev];
+            }
+            if (prev.some(entry => entry.itemId === match.id)) {
+                return prev;
             }
             setSelectedIds(ids => {
                 const next = new Set(ids);
                 next.add(match.id);
                 return next;
             });
-            return [{ barcode, status: 'found', itemId: match.id, label: match.lotLabel || match.lotNo || match.pieceId || '—' }, ...prev];
+            return [{ barcode: normalized, status: 'found', itemId: match.id, label: match.lotLabel || match.lotNo || match.pieceId || '—' }, ...prev];
         });
     }
 

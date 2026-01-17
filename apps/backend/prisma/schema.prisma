@@ -26,6 +26,7 @@ model Yarn {
   createdByUserId String?
   updatedByUserId String?
   issues    IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Cut {
@@ -38,6 +39,7 @@ model Cut {
   receiveRows  ReceiveFromCutterMachineRow[]
   cutterIssues IssueToCutterMachine[]
   holoIssues   IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Twist {
@@ -48,6 +50,7 @@ model Twist {
   createdByUserId String?
   updatedByUserId String?
   holoIssues IssueToHoloMachine[]
+  coningIssues IssueToConingMachine[]
 }
 
 model Firm {
@@ -169,6 +172,9 @@ model IssueToHoloMachine {
   yarnKg              Float    @default(0)
   receivedRowRefs     Json     @default("[]")
   rollsProducedEstimate Int?
+  isDeleted           Boolean  @default(false)
+  deletedAt           DateTime?
+  deletedByUserId     String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
   createdByUserId     String?
@@ -185,6 +191,7 @@ model ReceiveFromHoloMachineRow {
   id          String   @id @default(cuid())
   date        String?
   issueId     String
+  pieceId     String?
   rollCount   Int
   rollWeight  Float?
   rollTypeId  String?
@@ -197,6 +204,9 @@ model ReceiveFromHoloMachineRow {
   helperId    String?
   notes       String?
   createdBy   String?
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -267,6 +277,9 @@ model IssueToConingMachine {
   date            String
   itemId          String
   lotNo           String
+  yarnId          String?
+  twistId         String?
+  cutId           String?
   machineId       String?
   operatorId      String?
   barcode         String   @unique
@@ -276,12 +289,18 @@ model IssueToConingMachine {
   requiredPerConeNetWeight Float   @default(0)
   expectedCones  Float     @default(0)
   receivedRowRefs Json     @default("[]")
+  isDeleted       Boolean  @default(false)
+  deletedAt       DateTime?
+  deletedByUserId String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   machine         Machine?  @relation(fields: [machineId], references: [id])
   operator        Operator? @relation("IssueToConingOperator", fields: [operatorId], references: [id])
+  yarn            Yarn?     @relation(fields: [yarnId], references: [id])
+  twist           Twist?    @relation(fields: [twistId], references: [id])
+  cut             Cut?      @relation(fields: [cutId], references: [id])
   receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
 }
 
@@ -301,6 +320,9 @@ model ReceiveFromConingMachineRow {
   helperId    String?
   notes       String?
   createdBy   String?
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -338,6 +360,9 @@ model IssueToCutterMachine {
   machineId   String?
   operatorId  String?
   barcode     String  @unique
+  isDeleted   Boolean  @default(false)
+  deletedAt   DateTime?
+  deletedByUserId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -653,4 +678,17 @@ model BoxTransfer {
   updatedAt         DateTime      @default(now()) @updatedAt
   createdByUserId   String?
   updatedByUserId   String?
+}
+
+// ========== BOILER (STEAMING) FEATURE ==========
+
+model BoilerSteamLog {
+  id               String   @id @default(cuid())
+  barcode          String   @unique  // The holo receive row barcode
+  holoReceiveRowId String?           // Reference to the original receive row
+  steamedAt        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  createdByUserId  String?
+  updatedByUserId  String?
 }

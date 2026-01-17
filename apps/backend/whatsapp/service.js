@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, MessageMedia } = pkg;
 import EventEmitter from 'events';
 import qrcode from 'qrcode';
 import os from 'os';
@@ -328,6 +328,63 @@ class WhatsappService {
       try { await this.init(); } catch (_) { /* ignore, will enqueue */ }
     }
     return this.enqueueSend(null, text, { chatId });
+  }
+
+  /**
+   * Send media (PDF, image, etc.) to a phone number
+   * @param {string} number - Phone number
+   * @param {Buffer|string} data - File data as Buffer or base64 string
+   * @param {string} filename - Filename with extension (e.g. 'summary.pdf')
+   * @param {string} mimetype - MIME type (e.g. 'application/pdf')
+   * @param {string} [caption] - Optional caption/message
+   */
+  async sendMediaSafe(number, data, filename, mimetype, caption = '') {
+    try {
+      await this._waitUntilConnected(15000);
+    } catch (err) {
+      try { await this.init(); } catch (_) { /* will fail below */ }
+    }
+
+    if (this.status !== 'connected' || !this.client) {
+      throw new Error('WhatsApp client not connected');
+    }
+
+    const normalized = normalizeNumber(number);
+    const chatId = `${normalized}@c.us`;
+
+    // Convert Buffer to base64 if needed
+    const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
+    const media = new MessageMedia(mimetype, base64Data, filename);
+
+    await this.client.sendMessage(chatId, media, { caption });
+    return true;
+  }
+
+  /**
+   * Send media to a chat ID (group or individual)
+   * @param {string} chatId - Chat ID (e.g. 'xxx@g.us' for groups)
+   * @param {Buffer|string} data - File data as Buffer or base64 string
+   * @param {string} filename - Filename with extension
+   * @param {string} mimetype - MIME type
+   * @param {string} [caption] - Optional caption
+   */
+  async sendMediaToChatIdSafe(chatId, data, filename, mimetype, caption = '') {
+    try {
+      await this._waitUntilConnected(15000);
+    } catch (err) {
+      try { await this.init(); } catch (_) { /* will fail below */ }
+    }
+
+    if (this.status !== 'connected' || !this.client) {
+      throw new Error('WhatsApp client not connected');
+    }
+
+    // Convert Buffer to base64 if needed
+    const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
+    const media = new MessageMedia(mimetype, base64Data, filename);
+
+    await this.client.sendMessage(chatId, media, { caption });
+    return true;
   }
 
   enqueueSend(number, text, opts = {}) {

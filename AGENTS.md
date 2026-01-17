@@ -23,6 +23,9 @@
 - `npm run build`: build frontend and backend; output in `apps/frontend/dist`.
 - `docker compose up -d`: start Postgres + services; `docker compose logs -f backend` for migrations; `docker compose down -v` resets volumes.
 
+## Data Resolution Rules
+- **Cut tracing (default):** When displaying or summarizing Cut for any stage that depends on upstream flow (especially coning), prefer tracing from Coning Issue → `receivedRowRefs` → Holo Receive rows → Holo Issue (and cutter lineage if needed). Only fall back to `IssueToConingMachine.cutId` when trace data is unavailable (e.g., opening stock).
+
 ## Coding Style & Naming Conventions
 - JavaScript/TypeScript, 2-space indentation; prefer `async/await` and descriptive helpers (e.g., `handleIssueSave`, `normalizeReceiveCsv`).
 - React components use PascalCase; hooks/utilities use camelCase.

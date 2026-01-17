@@ -63,19 +63,20 @@ export function MobileDispatchView({
 
     // Look up a barcode and add to scanned items
     const handleBarcodeScan = useCallback(async (barcode) => {
+        const normalized = barcode.trim().toUpperCase();
         // Check if already scanned
-        if (scannedItems.some(item => item.barcode === barcode)) {
+        if (scannedItems.some(item => item.barcode === normalized)) {
             return; // Already in list
         }
 
         // Add placeholder item
         const placeholderItem = {
-            barcode,
+            barcode: normalized,
             status: 'loading',
-            id: `temp-${barcode}`,
+            id: `temp-${normalized}`,
         };
         setScannedItems(prev => [placeholderItem, ...prev]);
-        setLookingUp(barcode);
+        setLookingUp(normalized);
 
         try {
             // Fetch available items for the stage
@@ -84,22 +85,24 @@ export function MobileDispatchView({
 
             // Find matching item
             const matchedItem = items.find(item =>
-                item.barcode === barcode ||
-                item.lotNo === barcode ||
-                item.pieceId === barcode
+                (item.barcode || '').toUpperCase() === normalized ||
+                (item.legacyBarcode || '').toUpperCase() === normalized ||
+                (item.lotNo || '').toUpperCase() === normalized ||
+                (item.pieceId || '').toUpperCase() === normalized
             );
 
             if (matchedItem) {
                 // Update with found item
-                setScannedItems(prev => prev.map(item =>
-                    item.barcode === barcode
-                        ? { ...matchedItem, barcode, status: 'found' }
-                        : item
-                ));
+                setScannedItems(prev => {
+                    const hasExisting = prev.some(item => item.id === matchedItem.id);
+                    const withoutPlaceholder = prev.filter(item => item.barcode !== normalized);
+                    if (hasExisting) return withoutPlaceholder;
+                    return [{ ...matchedItem, barcode: normalized, status: 'found' }, ...withoutPlaceholder];
+                });
             } else {
                 // Not found
                 setScannedItems(prev => prev.map(item =>
-                    item.barcode === barcode
+                    item.barcode === normalized
                         ? { ...item, status: 'not_found', error: 'Not found in this stage' }
                         : item
                 ));
@@ -107,7 +110,7 @@ export function MobileDispatchView({
         } catch (err) {
             console.error('Lookup failed:', err);
             setScannedItems(prev => prev.map(item =>
-                item.barcode === barcode
+                item.barcode === normalized
                     ? { ...item, status: 'error', error: err.message || 'Lookup failed' }
                     : item
             ));

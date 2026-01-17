@@ -4,9 +4,13 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 export function IssueToConing() {
     const { db, refreshDb } = useInventory();
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -39,8 +43,8 @@ export function IssueToConing() {
     }, [crates, form.targetWeight]);
 
     const meta = useMemo(() => {
-        if (crates.length === 0) return { lotNo: '' };
-        return { lotNo: crates[0].lotNo };
+        if (crates.length === 0) return { lotNo: '', itemId: null, cut: '' };
+        return { lotNo: crates[0].lotNo, itemId: crates[0].itemId, cut: crates[0].cut };
     }, [crates]);
 
     // --- Handlers ---
@@ -48,21 +52,33 @@ export function IssueToConing() {
     async function handleScan() {
         if (!scanInput.trim()) return;
         const normalized = scanInput.trim().toUpperCase();
+        const normalizeValue = (val) => String(val || '').trim().toUpperCase();
 
         // Find in Holo Receive Rows
-        const row = (db.receive_from_holo_machine_rows || []).find(r => (r.barcode || '').toUpperCase() === normalized);
+        const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
+            return normalizeValue(r.barcode) === normalized
+                || normalizeValue(r.notes) === normalized
+                || normalizeValue(r.legacyBarcode) === normalized;
+        });
 
-        if (!row) {
+        if (matches.length === 0) {
             alert('Barcode not found in Holo Receive rows');
             return;
         }
+
+        if (matches.length > 1) {
+            alert('Multiple rows match this legacy barcode. Please use the new barcode instead.');
+            return;
+        }
+
+        const row = matches[0];
 
         if (crates.some(c => c.rowId === row.id)) {
             alert('Crate already added');
             return;
         }
 
-        // Check Lot
+        // Check Lot and get issue info
         const issue = db.issue_to_holo_machine.find(i => i.id === row.issueId);
         const rowLot = issue?.lotNo;
         if (!rowLot) {
@@ -70,9 +86,24 @@ export function IssueToConing() {
             return;
         }
 
+        // Resolve Item & Cut first (needed for mixed lot validation)
+        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+        const scannedItemId = holoIssue?.itemId;
+        let cutName = '';
+        if (holoIssue) {
+            const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
+            cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+        }
+
+        // Allow mixed lots only if item and cut are the same
         if (crates.length > 0 && rowLot !== meta.lotNo) {
-            alert('Mixed lots not allowed');
-            return;
+            // Check if item and cut match
+            if (scannedItemId !== meta.itemId || cutName !== meta.cut) {
+                const existingItemName = db.items?.find(i => i.id === meta.itemId)?.name || 'Unknown';
+                const scannedItemName = db.items?.find(i => i.id === scannedItemId)?.name || 'Unknown';
+                alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${meta.cut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
+                return;
+            }
         }
 
         // Defaults
@@ -107,7 +138,9 @@ export function IssueToConing() {
             availRolls: row.rollCount,
             unitWeight,
             issueRolls: row.rollCount, // Default all
-            issueWeight: row.rollWeight
+            issueWeight: row.rollWeight,
+            itemId: scannedItemId,
+            cut: cutName
         }]);
         setScanInput('');
     }
@@ -164,25 +197,18 @@ export function IssueToConing() {
                     let rollType = '';
 
                     if (crates.length > 0) {
+                        const resolved = created?.issueToConingMachine
+                            ? resolveConingTrace(created.issueToConingMachine, traceContext)
+                            : { cutName: '—', yarnName: '—', rollTypeName: '—' };
+                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
+
                         const firstRow = db.receive_from_holo_machine_rows?.find(r => r.id === crates[0].rowId);
                         if (firstRow) {
-                            rollType = db.rollTypes?.find(rt => rt.id === firstRow.rollTypeId)?.name || '';
                             const holoIssue = db.issue_to_holo_machine?.find(i => i.id === firstRow.issueId);
                             if (holoIssue) {
                                 itemName = db.items?.find(i => i.id === holoIssue.itemId)?.name || '';
-                                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
-
-                                // Resolve cut from holo issue refs
-                                try {
-                                    const refs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                    if (Array.isArray(refs) && refs.length > 0) {
-                                        const cutterRowId = refs[0].rowId;
-                                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === cutterRowId);
-                                        if (cutterRow) {
-                                            cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                        }
-                                    }
-                                } catch (e) { }
                             }
                         }
                     }
@@ -339,6 +365,8 @@ export function IssueToConing() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Barcode</TableHead>
+                                    <TableHead>Item</TableHead>
+                                    <TableHead>Cut</TableHead>
                                     <TableHead>Piece</TableHead>
                                     <TableHead className="">Avail Rolls</TableHead>
                                     <TableHead className="">Issue Rolls</TableHead>
@@ -348,10 +376,12 @@ export function IssueToConing() {
                             </TableHeader>
                             <TableBody>
                                 {crates.length === 0 ? (
-                                    <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No crates scanned.</TableCell></TableRow>
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
+                                        <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
+                                        <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceIdsDisplay || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availRolls}</TableCell>
                                         <TableCell className="">

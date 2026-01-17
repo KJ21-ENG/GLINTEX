@@ -13,6 +13,7 @@ import {
   Dispatch,
   OpeningStock,
   BoxTransfer,
+  Boiler,
   Masters,
   Reports,
   Settings,
@@ -62,6 +63,10 @@ export const router = createBrowserRouter([
       {
         path: "box-transfer",
         element: <BoxTransfer />,
+      },
+      {
+        path: "boiler",
+        element: <Boiler />,
       },
       {
         path: "masters",

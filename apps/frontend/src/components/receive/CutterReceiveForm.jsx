@@ -471,7 +471,7 @@ export function CutterReceiveForm() {
                                                         <td className="py-1 px-1">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
                                                         <td className="py-1 px-1 text-right">{row.bobbinQuantity || 0}</td>
                                                         <td className="py-1 px-1 text-right font-medium">{formatKg(row.netWt)}</td>
-                                                        <td className="py-1 px-1">{row.cutMaster?.name || row.cut || '—'}</td>
+                                                        <td className="py-1 px-1">{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—'}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>

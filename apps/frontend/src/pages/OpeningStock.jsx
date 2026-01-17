@@ -21,6 +21,8 @@ import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
 import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
+import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -45,17 +47,23 @@ const round3 = (val) => {
 
 export function OpeningStock() {
   const { db, refreshDb } = useInventory();
+  const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const [stage, setStage] = useState('inbound');
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState('');
   const [firmId, setFirmId] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [previewLotNo, setPreviewLotNo] = useState('');
+  const [openingHoloSeries, setOpeningHoloSeries] = useState(null);
+  const [openingConingSeries, setOpeningConingSeries] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deletingKey, setDeletingKey] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const fileInputRef = useRef(null);
+  const holoCrateSeqRef = useRef(0);
+  const coningCrateSeqRef = useRef(0);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -223,6 +231,9 @@ export function OpeningStock() {
   const [coningIssue, setConingIssue] = useState({
     coneTypeId: '',
     wrapperId: '',
+    yarnId: '',
+    twistId: '',
+    cutId: '',
     machineId: '',
     operatorId: '',
     shift: '',
@@ -247,6 +258,10 @@ export function OpeningStock() {
     setHoloCart([]);
     setConingCart([]);
     setInboundCart([]);
+    setOpeningHoloSeries(null);
+    setOpeningConingSeries(null);
+    holoCrateSeqRef.current = 0;
+    coningCrateSeqRef.current = 0;
   }, [itemId, firmId, supplierId, date]);
 
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
@@ -299,7 +314,7 @@ export function OpeningStock() {
           itemName,
           r.barcode || r.vchNo,
           r.bobbin?.name || db.bobbins?.find(b => b.id === r.bobbinId)?.name,
-          r.cutMaster?.name || r.cut || db.cuts?.find(c => c.id === r.cutId)?.name
+          r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || db.cuts?.find(c => c.id === r.cutId)?.name
         ]);
       })
       .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
@@ -553,9 +568,23 @@ export function OpeningStock() {
       return;
     }
 
-    // Generate barcode for immediate printing using preview lot
-    const crateIndex = holoCart.length + 1;
-    const barcode = makeHoloReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+    let seriesNumber = openingHoloSeries;
+    if (!seriesNumber) {
+      try {
+        const res = await api.reserveOpeningIssueSeries('holo');
+        const reserved = Number(res?.seriesNumber);
+        if (!Number.isFinite(reserved) || reserved <= 0) throw new Error('Invalid series');
+        seriesNumber = reserved;
+        setOpeningHoloSeries(reserved);
+      } catch (err) {
+        alert(err.message || 'Failed to reserve holo series');
+        return;
+      }
+    }
+
+    holoCrateSeqRef.current += 1;
+    const crateIndex = holoCrateSeqRef.current;
+    const barcode = makeHoloReceiveBarcode({ series: seriesNumber, crateIndex });
 
     const newCrate = {
       id: uid('crate'),
@@ -564,6 +593,7 @@ export function OpeningStock() {
       grossWeight: gross,
       netWeight: net,
       tareWeight: tare,
+      crateIndex,
       barcode,
     };
 
@@ -631,9 +661,23 @@ export function OpeningStock() {
       return;
     }
 
-    // Generate barcode for immediate printing using preview lot
-    const crateIndex = coningCart.length + 1;
-    const barcode = makeConingReceiveBarcode({ series: previewLotNo || 'OP-XXX', crateIndex });
+    let seriesNumber = openingConingSeries;
+    if (!seriesNumber) {
+      try {
+        const res = await api.reserveOpeningIssueSeries('coning');
+        const reserved = Number(res?.seriesNumber);
+        if (!Number.isFinite(reserved) || reserved <= 0) throw new Error('Invalid series');
+        seriesNumber = reserved;
+        setOpeningConingSeries(reserved);
+      } catch (err) {
+        alert(err.message || 'Failed to reserve coning series');
+        return;
+      }
+    }
+
+    coningCrateSeqRef.current += 1;
+    const crateIndex = coningCrateSeqRef.current;
+    const barcode = makeConingReceiveBarcode({ series: seriesNumber, crateIndex });
 
     const newCrate = {
       id: uid('crate'),
@@ -642,6 +686,7 @@ export function OpeningStock() {
       grossWeight: gross,
       netWeight: net,
       tareWeight: tare,
+      crateIndex,
       barcode,
     };
 
@@ -820,6 +865,7 @@ export function OpeningStock() {
     if (!canSaveCommon || !holoIssue.twistId || holoCart.length === 0) return;
     setSaving(true);
     try {
+      if (!openingHoloSeries) throw new Error('Missing reserved holo series. Add a crate again.');
       const payload = {
         date,
         itemId,
@@ -831,6 +877,7 @@ export function OpeningStock() {
         machineId: holoIssue.machineId || null,
         operatorId: holoIssue.operatorId || null,
         shift: holoIssue.shift || null,
+        issueSeries: openingHoloSeries,
         crates: holoCart.map(row => ({
           rollTypeId: row.rollTypeId,
           rollCount: Number(row.rollCount),
@@ -838,11 +885,14 @@ export function OpeningStock() {
           boxId: row.boxId || null,
           crateTareWeight: Number(row.crateTareWeight || 0),
           operatorId: holoIssue.operatorId || null,
+          crateIndex: row.crateIndex,
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
       await refreshDb();
       setHoloCart([]);
+      setOpeningHoloSeries(null);
+      holoCrateSeqRef.current = 0;
       await fetchOpeningPreview();
     } catch (err) {
       alert(err.message || 'Failed to save opening holo stock');
@@ -855,6 +905,7 @@ export function OpeningStock() {
     if (!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0) return;
     setSaving(true);
     try {
+      if (!openingConingSeries) throw new Error('Missing reserved coning series. Add a crate again.');
       const payload = {
         date,
         itemId,
@@ -862,19 +913,26 @@ export function OpeningStock() {
         supplierId,
         coneTypeId: coningIssue.coneTypeId,
         wrapperId: coningIssue.wrapperId || null,
+        yarnId: coningIssue.yarnId || null,
+        twistId: coningIssue.twistId || null,
+        cutId: coningIssue.cutId || null,
         machineId: coningIssue.machineId || null,
         operatorId: coningIssue.operatorId || null,
         shift: coningIssue.shift || null,
+        issueSeries: openingConingSeries,
         crates: coningCart.map(row => ({
           coneCount: Number(row.coneCount),
           grossWeight: Number(row.grossWeight),
           boxId: row.boxId || null,
           operatorId: coningIssue.operatorId || null,
+          crateIndex: row.crateIndex,
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
       await refreshDb();
       setConingCart([]);
+      setOpeningConingSeries(null);
+      coningCrateSeqRef.current = 0;
       await fetchOpeningPreview();
     } catch (err) {
       alert(err.message || 'Failed to save opening coning stock');
@@ -1495,7 +1553,7 @@ export function OpeningStock() {
             <CardTitle>Opening Coning Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4">
               <div className="space-y-2">
                 <Label>Cone Type</Label>
                 <Select value={coningIssue.coneTypeId} onChange={e => setConingIssue(prev => ({ ...prev, coneTypeId: e.target.value }))}>
@@ -1508,6 +1566,27 @@ export function OpeningStock() {
                 <Select value={coningIssue.wrapperId} onChange={e => setConingIssue(prev => ({ ...prev, wrapperId: e.target.value }))}>
                   <option value="">Select Wrapper</option>
                   {db.wrappers?.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Yarn (Optional)</Label>
+                <Select value={coningIssue.yarnId} onChange={e => setConingIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
+                  <option value="">Select Yarn</option>
+                  {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Twist (Optional)</Label>
+                <Select value={coningIssue.twistId} onChange={e => setConingIssue(prev => ({ ...prev, twistId: e.target.value }))}>
+                  <option value="">Select Twist</option>
+                  {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Cut (Optional)</Label>
+                <Select value={coningIssue.cutId} onChange={e => setConingIssue(prev => ({ ...prev, cutId: e.target.value }))}>
+                  <option value="">Select Cut</option>
+                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
               <div className="space-y-2">
@@ -1776,7 +1855,7 @@ export function OpeningStock() {
                         <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
                         <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
                         <TableCell>{row.bobbinQuantity || 0}</TableCell>
-                        <TableCell>{row.cutMaster?.name || row.cut || getCut(row.cutId)?.name || '—'}</TableCell>
+                        <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
                         <TableCell>{formatKg(row.netWt)}</TableCell>
                         <TableCell>
                           <Button
@@ -1820,7 +1899,8 @@ export function OpeningStock() {
                   ) : openingHistory.holo.map(row => {
                     const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '—';
+                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                    const cutName = resolved.cutName;
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
@@ -1872,18 +1952,8 @@ export function OpeningStock() {
                   ) : openingHistory.coning.map(row => {
                     const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                     const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    // Trace back through holo for cut
-                    let cutName = '—';
-                    try {
-                      const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                      if (Array.isArray(refs) && refs.length > 0) {
-                        const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === refs[0].rowId);
-                        if (holoRow) {
-                          const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                          if (holoIssue?.cutId) cutName = db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '—';
-                        }
-                      }
-                    } catch (e) { /* ignore */ }
+                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+                    const cutName = resolved.cutName;
                     return (
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>

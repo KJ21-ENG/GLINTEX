@@ -200,6 +200,60 @@ async function seed() {
         '📝 *Error:* @error\n' +
         '📂 *File:* @filename'
     },
+    // Summary templates for PDF reports
+    {
+      event: 'summary_cutter_issue',
+      enabled: true,
+      template: '📊 *Cutter Issue Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Issues:* @totalCount\n' +
+        '🧩 *Total Pieces:* @totalPieces\n' +
+        '⚖️ *Total Weight:* @totalWeight kg'
+    },
+    {
+      event: 'summary_cutter_receive',
+      enabled: true,
+      template: '📊 *Cutter Receive Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Receives:* @totalCount\n' +
+        '🧶 *Total Bobbins:* @totalPieces\n' +
+        '⚖️ *Total Weight:* @totalWeight kg'
+    },
+    {
+      event: 'summary_holo_issue',
+      enabled: true,
+      template: '📊 *Holo Issue Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Issues:* @totalCount\n' +
+        '🧶 *Total Bobbins:* @totalPieces\n' +
+        '⚖️ *Total Weight:* @totalWeight kg'
+    },
+    {
+      event: 'summary_holo_receive',
+      enabled: true,
+      template: '📊 *Holo Receive Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Receives:* @totalCount\n' +
+        '📜 *Total Rolls:* @totalPieces\n' +
+        '⚖️ *Total Weight:* @totalWeight kg'
+    },
+    {
+      event: 'summary_coning_issue',
+      enabled: true,
+      template: '📊 *Coning Issue Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Issues:* @totalCount\n' +
+        '📜 *Total Rolls:* @totalPieces'
+    },
+    {
+      event: 'summary_coning_receive',
+      enabled: true,
+      template: '📊 *Coning Receive Summary*\n\n' +
+        '📅 *Date:* @date\n' +
+        '📝 *Total Receives:* @totalCount\n' +
+        '🍦 *Total Cones:* @totalPieces\n' +
+        '⚖️ *Total Weight:* @totalWeight kg'
+    },
   ];
 
   for (const t of defaults) {

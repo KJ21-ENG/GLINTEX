@@ -4,6 +4,7 @@ import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } fro
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -13,18 +14,14 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
-  const issueMap = useMemo(() => {
-    const map = new Map();
-    (db.issue_to_coning_machine || []).forEach((issue) => {
-      if (issue?.id) map.set(issue.id, issue);
-    });
-    return map;
-  }, [db.issue_to_coning_machine]);
+  const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+
+  const issueMap = useMemo(() => new Map((db.issue_to_coning_machine || []).map(i => [i.id, i])), [db.issue_to_coning_machine]);
 
   const lotMetaMap = useMemo(() => {
     const map = new Map();
@@ -66,6 +63,15 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       const availableCones = Math.max(0, coneCount - dispatchedCones);
       const grossWeight = Number(row.grossWeight ?? 0);
 
+      // Trace Cut & Yarn from source holo crates used in coning issue
+      let cutName = '—';
+      let yarnName = '—';
+      if (issue) {
+        const resolved = resolveConingTrace(issue, traceContext);
+        cutName = resolved.cutName;
+        yarnName = resolved.yarnName;
+      }
+
       return {
         ...row,
         lotNo: lotLabel,
@@ -76,6 +82,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         firmName: lotMeta?.firmName || '—',
         supplierId: lotMeta?.supplierId || '',
         supplierName: lotMeta?.supplierName || '—',
+        yarnId: issue?.yarnId || '',
+        yarnName,
+        cutName,
         coneCount,
         dispatchedCones,
         availableCones,
@@ -90,7 +99,14 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         statusType: availableWeight > EPSILON ? 'active' : 'inactive',
       };
     });
-  }, [db.receive_from_coning_machine_rows, issueMap, lotMetaMap, db.items, db.machines]);
+  }, [
+    db.receive_from_coning_machine_rows,
+    issueMap,
+    lotMetaMap,
+    db.items,
+    db.machines,
+    traceContext
+  ]);
 
   const coningLots = useMemo(() => {
     const map = new Map();
@@ -104,6 +120,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         firmName: row.firmName || '—',
         supplierId: row.supplierId || '',
         supplierName: row.supplierName || '—',
+        yarnId: row.yarnId || '',
+        cutNames: new Set(),
+        yarnNames: new Set(),
         totalCones: 0,
         totalWeight: 0,
         rows: []
@@ -111,12 +130,20 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       existing.rows.push(row);
       existing.totalCones += row.availableCones;
       existing.totalWeight += row.availableWeight;
+      if (row.cutName && row.cutName !== '—') {
+        row.cutName.split(',').map(v => v.trim()).filter(Boolean).forEach(v => existing.cutNames.add(v));
+      }
+      if (row.yarnName && row.yarnName !== '—') {
+        row.yarnName.split(',').map(v => v.trim()).filter(Boolean).forEach(v => existing.yarnNames.add(v));
+      }
       map.set(lotNo, existing);
     });
     return Array.from(map.values()).map((lot) => ({
       ...lot,
       statusType: lot.totalWeight > EPSILON ? 'active' : 'inactive',
       date: lot.rows?.[0]?.date || '',
+      cutName: lot.cutNames?.size ? Array.from(lot.cutNames).join(', ') : '—',
+      yarnName: lot.yarnNames?.size ? Array.from(lot.yarnNames).join(', ') : '—',
     }));
   }, [coningRows]);
 
@@ -148,6 +175,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.yarn && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
       if (filters.from && l.date < filters.from) return false;
@@ -161,6 +189,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
   }, [coningLots, filters, search]);
+
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -192,7 +221,20 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
 
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayLots);
+  }, [displayLots, onDataChange]);
+
   const tableColumnCount = groupBy ? 7 : 8;
+
+  // Grand Totals
+  const grandTotals = useMemo(() => {
+    return displayLots.reduce((acc, lot) => ({
+      totalCones: acc.totalCones + (lot.totalCones || 0),
+      totalWeight: acc.totalWeight + (lot.totalWeight || 0),
+    }), { totalCones: 0, totalWeight: 0 });
+  }, [displayLots]);
 
   return (
     <>
@@ -204,6 +246,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               <TableHead>Lot No</TableHead>
               <TableHead>Date</TableHead>
               <TableHead>Item</TableHead>
+              <TableHead>Cut</TableHead>
+              <TableHead>Yarn</TableHead>
               {!groupBy ? <TableHead>Firm</TableHead> : null}
               <TableHead>Supplier</TableHead>
               <TableHead className="">Available Cones</TableHead>
@@ -233,6 +277,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                       <TableCell>{formatDateDDMMYYYY(lot.date) || '—'}</TableCell>
                       <TableCell>
                         <HighlightMatch text={lot.itemName} query={search} />
+                      </TableCell>
+                      <TableCell>
+                        <HighlightMatch text={lot.cutName || '—'} query={search} />
+                      </TableCell>
+                      <TableCell>
+                        <HighlightMatch text={lot.yarnName || '—'} query={search} />
                       </TableCell>
                       {!groupBy ? (
                         <TableCell>
@@ -286,6 +336,21 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                   </React.Fragment>
                 );
               })
+            )}
+            {/* Grand Total Row */}
+            {displayLots.length > 0 && (
+              <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                {!groupBy ? <TableCell></TableCell> : null}
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.totalCones}</TableCell>
+                <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+              </TableRow>
             )}
           </TableBody>
         </Table>
@@ -350,6 +415,18 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               </div>
             );
           })
+        )}
+        {/* Mobile Grand Total Card */}
+        {displayLots.length > 0 && (
+          <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+            <div className="flex justify-between items-center">
+              <span className="font-bold text-primary">Grand Total</span>
+              <div className="text-right">
+                <div className="font-mono font-bold text-primary">{formatKg(grandTotals.totalWeight)}</div>
+                <div className="text-xs text-muted-foreground">{grandTotals.totalCones} cones</div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </>

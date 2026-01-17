@@ -8,6 +8,8 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 export function ReceiveHistoryTable() {
     const { db, process, refreshDb } = useInventory();
@@ -16,6 +18,12 @@ export function ReceiveHistoryTable() {
     const [editRows, setEditRows] = useState([]);
     const [removedRowIds, setRemovedRowIds] = useState(new Set());
     const [savingEdit, setSavingEdit] = useState(false);
+    const [editingReceiveRow, setEditingReceiveRow] = useState(null);
+    const [receiveDraft, setReceiveDraft] = useState(null);
+    const [savingReceive, setSavingReceive] = useState(false);
+    const [deletingReceive, setDeletingReceive] = useState(false);
+    const [deletePrompt, setDeletePrompt] = useState(null);
+    const [pieceOptionsOverride, setPieceOptionsOverride] = useState(null);
     const [logChallan, setLogChallan] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
@@ -24,9 +32,9 @@ export function ReceiveHistoryTable() {
     const history = useMemo(() => {
         let rows = [];
         if (process === 'holo') {
-            rows = db.receive_from_holo_machine_rows || [];
+            rows = (db.receive_from_holo_machine_rows || []).filter(row => !row.isDeleted);
         } else if (process === 'coning') {
-            rows = db.receive_from_coning_machine_rows || [];
+            rows = (db.receive_from_coning_machine_rows || []).filter(row => !row.isDeleted);
         } else {
             rows = (db.receive_from_cutter_machine_rows || []).filter(row => !row.isDeleted);
         }
@@ -242,13 +250,127 @@ export function ReceiveHistoryTable() {
         return Math.round(num * 1000) / 1000;
     };
 
+    const formatInputDate = (value) => {
+        if (!value) return '';
+        const input = String(value).trim();
+        try {
+            // Handle DD/MM/YYYY or DD-MM-YYYY format
+            if (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{4}$/.test(input)) {
+                const parts = input.split(/[\/-]/);
+                // Assume DD/MM/YYYY
+                const d = parts[0].padStart(2, '0');
+                const m = parts[1].padStart(2, '0');
+                const y = parts[2];
+                return `${y}-${m}-${d}`;
+            }
+            // Handle YYYY-MM-DD (already ISO like)
+            if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+                return input;
+            }
+            const d = new Date(input);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toISOString().split('T')[0];
+        } catch (e) {
+            return '';
+        }
+    };
+
+    const buildPieceOptions = (pieceIds = []) => {
+        const unique = Array.from(new Set(pieceIds.filter(Boolean)));
+        return unique.map((pid) => {
+            const piece = db.inbound_items?.find(p => p.id === pid);
+            const label = piece ? `${piece.id} (${piece.lotNo})` : pid;
+            return { id: pid, name: label };
+        });
+    };
+
+    const resolveHoloPieceOptions = (row) => {
+        if (!row) return [];
+        const ids = [];
+        if (Array.isArray(row.computedPieceIds)) ids.push(...row.computedPieceIds);
+        if (Array.isArray(row.pieceIdsList)) ids.push(...row.pieceIdsList);
+        if (row.pieceId) ids.push(row.pieceId);
+        return buildPieceOptions(ids);
+    };
+
+    const resolveConingIssue = (row) => {
+        if (!row?.issueId) return row?.issue || null;
+        return db.issue_to_coning_machine?.find(i => i.id === row.issueId) || row.issue || null;
+    };
+
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+
+    const resolveConingConeType = (issue) => {
+        if (!issue?.receivedRowRefs) return null;
+        try {
+            const refs = typeof issue.receivedRowRefs === 'string'
+                ? JSON.parse(issue.receivedRowRefs || '[]')
+                : issue.receivedRowRefs;
+            if (!Array.isArray(refs) || refs.length === 0) return null;
+            const coneTypeId = refs[0]?.coneTypeId;
+            if (!coneTypeId) return null;
+            return db.cone_types?.find(c => c.id === coneTypeId) || null;
+        } catch {
+            return null;
+        }
+    };
+
+    const formatPerConeNet = (value) => {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num <= 0) return '—';
+        return `${num} g`;
+    };
+
+    const formatActualPerCone = (netWeightKg, coneCount) => {
+        const net = Number(netWeightKg);
+        const cones = Number(coneCount);
+        if (!Number.isFinite(net) || !Number.isFinite(cones) || cones <= 0) return '—';
+        const perCone = (net * 1000) / cones;
+        return `${perCone.toFixed(2)} g`;
+    };
+
+    const buildMachineNameOptions = (processType, currentValue) => {
+        const options = (db.machines || [])
+            .filter(m => m.processType === 'all' || m.processType === processType)
+            .map(m => ({ id: m.name, name: m.name }));
+        if (currentValue && !options.some(o => o.id === currentValue)) {
+            options.unshift({ id: currentValue, name: currentValue });
+        }
+        return options;
+    };
+
     const extractWastageFromNote = (note) => {
+        // ... (unchanged)
         if (!note) return 0;
         const match = String(note).match(/([0-9]+(?:\.[0-9]+)?)/);
         if (!match) return 0;
         const value = Number(match[1].replace(/,/g, ''));
         return Number.isFinite(value) ? roundTo3Decimals(value) : 0;
     };
+
+    // ... (keeping other helper functions if they were in the range, but extractingWastageFromNote is usually later. 
+    // Wait, I am replacing a range. I should only replace what I need or be careful with the context.)
+    // logic of openReceiveEditor is what I want to change.
+
+    // I will replace `formatInputDate` at the top and `openReceiveEditor` content.
+    // However, since they are far apart, I should use MULTI_REPLACE or be minimal.
+    // The previous tool call output showed lines 580-640 which is inside openReceiveEditor.
+    // formatInputDate is around line 251.
+    // I should use multi_replace.
+
+    // Actually, I can just redefine formatInputDate locally inside openReceiveEditor? No, it's used elsewhere.
+    // I will change the request to multi_replace or just focus on openReceiveEditor and use a local helper or better logic.
+    // Since I can't use multi_replace in this turn (one tool call per turn constraint was not mentioned but usually best practice to use the right tool).
+    // The prompt says "Use this tool ONLY when you are making MULTIPLE, NON-CONTIGUOUS edits...".
+    // I will use `multi_replace_file_content`.
+
+    // Re-reading: "Do NOT make multiple parallel calls to this tool or the replace_file_content tool for the same file."
+
+    // I will use `multi_replace_file_content` to fix `formatInputDate` AND `openReceiveEditor`.
+
+
+
 
     const resolveWastageResetAmount = ({ pieceId, affected, serverAmount }) => {
         const serverValue = Number(serverAmount);
@@ -355,7 +477,7 @@ export function ReceiveHistoryTable() {
                 const item = db.items?.find(i => i.id === piece?.itemId || row.itemId);
                 const bobbin = db.bobbins?.find(b => b.id === row.bobbinId);
                 const box = db.boxes?.find(b => b.id === row.boxId);
-                const cut = db.cuts?.find(c => c.id === row.cutId)?.name || row.cutMaster?.name || row.cut || '';
+                const cut = db.cuts?.find(c => c.id === row.cutId)?.name || row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '';
                 const operator = db.operators?.find(o => o.id === row.operatorId);
                 const helper = db.workers?.find(w => w.id === row.helperId);
 
@@ -391,17 +513,8 @@ export function ReceiveHistoryTable() {
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
 
-                // Trace back to get cut from cutter receive row
-                let cut = '';
-                try {
-                    const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                    if (Array.isArray(refs) && refs.length > 0) {
-                        const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-                        if (cutterRow) {
-                            cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                        }
-                    }
-                } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                const cut = resolved.cutName === '—' ? '' : resolved.cutName;
 
                 // Calculate tare weight
                 const boxWeight = box?.weight || 0;
@@ -447,26 +560,10 @@ export function ReceiveHistoryTable() {
                         // Get cone type and wrapper
                         if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
                         if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
-
-                        // Trace back through holo receive -> holo issue -> cutter receive
-                        const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === firstRef.rowId);
-                        if (holoRow) {
-                            rollType = db.rollTypes?.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
-
-                            const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                            if (holoIssue) {
-                                yarnName = db.yarns?.find(y => y.id === holoIssue.yarnId)?.name || '';
-
-                                // Get cut from cutter receive
-                                const holoRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                if (Array.isArray(holoRefs) && holoRefs.length > 0) {
-                                    const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === holoRefs[0].rowId);
-                                    if (cutterRow) {
-                                        cut = cutterRow.cutMaster?.name || cutterRow.cut || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                    }
-                                }
-                            }
-                        }
+                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', rollTypeName: '—' };
+                        cut = resolved.cutName;
+                        yarnName = resolved.yarnName;
+                        rollType = resolved.rollTypeName;
                     }
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
@@ -507,6 +604,245 @@ export function ReceiveHistoryTable() {
             // Silent success
         } catch (err) {
             alert(err.message || 'Failed to reprint sticker');
+        }
+    };
+
+    const getEditPieceOptions = (row) => {
+        if (Array.isArray(pieceOptionsOverride) && pieceOptionsOverride.length > 0) {
+            return buildPieceOptions(pieceOptionsOverride);
+        }
+        return resolveHoloPieceOptions(row);
+    };
+
+    const openReceiveEditor = (row) => {
+        if (!row) return;
+        setPieceOptionsOverride(null);
+        setEditingReceiveRow(row);
+
+        if (process === 'holo') {
+            const pieceOptions = resolveHoloPieceOptions(row);
+            const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : '');
+
+            let grossWeight = '';
+            if (row.grossWeight != null) {
+                grossWeight = String(row.grossWeight);
+            } else if (Number.isFinite(row.rollWeight)) {
+                let tare = row.tareWeight;
+                if (!Number.isFinite(tare)) {
+                    // Fallback: calculate tare from master data
+                    const rollTypeWeight = Number((db.rollTypes || []).find(rt => rt.id === (row.rollTypeId || ''))?.weight || 0);
+                    const boxWeight = Number((db.boxes || []).find(b => b.id === (row.boxId || ''))?.weight || 0);
+                    const count = Number(row.rollCount || 1);
+                    tare = rollTypeWeight * count + boxWeight;
+                }
+                // Only if we have a valid tare can we back-calculate gross
+                if (Number.isFinite(tare)) {
+                    grossWeight = String(roundTo3Decimals(Number(row.rollWeight) + Number(tare)));
+                }
+            }
+
+            // Try to find the related issue to fallback for machine/operator/helper
+            const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+
+            setReceiveDraft({
+                date: formatInputDate(row.date || row.createdAt),
+                rollTypeId: row.rollTypeId || row.rollType?.id || '',
+                boxId: row.boxId || row.box?.id || '',
+                rollCount: row.rollCount != null ? String(row.rollCount) : '',
+                grossWeight,
+                machineNo: row.machineNo || row.machine?.name || db.machines?.find(m => m.id === issue?.machineId)?.name || '',
+                operatorId: row.operatorId || row.operator?.id || issue?.operatorId || '',
+                helperId: row.helperId || row.helper?.id || issue?.helperId || '',
+                notes: row.notes || row.note || '',
+                pieceId,
+            });
+        } else if (process === 'coning') {
+            let grossWeight = '';
+            if (row.grossWeight != null) {
+                grossWeight = String(row.grossWeight);
+            } else if (Number.isFinite(row.netWeight)) {
+                let tare = row.tareWeight;
+                if (!Number.isFinite(tare)) {
+                    // Fallback: calculate tare from master data for coning
+                    const issue = resolveConingIssue(row);
+                    const coneType = resolveConingConeType(issue);
+                    const coneWeight = Number(coneType?.weight || 0);
+                    const boxWeight = Number((db.boxes || []).find(b => b.id === (row.boxId || ''))?.weight || 0);
+                    const count = Number(row.coneCount || 0);
+                    tare = boxWeight + coneWeight * count;
+                }
+                if (Number.isFinite(tare)) {
+                    grossWeight = String(roundTo3Decimals(Number(row.netWeight) + Number(tare)));
+                }
+            }
+
+            setReceiveDraft({
+                date: formatInputDate(row.date || row.createdAt),
+                boxId: row.boxId || row.box?.id || '',
+                coneCount: row.coneCount != null ? String(row.coneCount) : '',
+                grossWeight,
+                machineNo: row.machineNo || row.machine?.name || '',
+                operatorId: row.operatorId || row.operator?.id || '',
+                helperId: row.helperId || row.helper?.id || '',
+                notes: row.notes || '',
+            });
+        }
+    };
+
+    const closeReceiveEditor = () => {
+        setEditingReceiveRow(null);
+        setReceiveDraft(null);
+        setPieceOptionsOverride(null);
+    };
+
+    const updateReceiveDraft = (field, value) => {
+        setReceiveDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+    };
+
+    const handleSaveReceiveEdits = async () => {
+        if (!editingReceiveRow || !receiveDraft) return;
+        if (process !== 'holo' && process !== 'coning') return;
+
+        if (process === 'holo') {
+            const rollCount = Number(receiveDraft.rollCount);
+            const grossWeight = Number(receiveDraft.grossWeight);
+            if (!Number.isFinite(rollCount) || rollCount <= 0) {
+                alert('Enter a valid roll count.');
+                return;
+            }
+            if (!Number.isFinite(grossWeight) || grossWeight <= 0) {
+                alert('Enter a valid gross weight.');
+                return;
+            }
+            if (!receiveDraft.rollTypeId) {
+                alert('Select a roll type.');
+                return;
+            }
+            if (!receiveDraft.boxId) {
+                alert('Select a box.');
+                return;
+            }
+
+            const pieceOptions = getEditPieceOptions(editingReceiveRow);
+            if (!editingReceiveRow.pieceId && pieceOptions.length > 1 && !receiveDraft.pieceId) {
+                alert('Select a piece for this receive row.');
+                return;
+            }
+        } else if (process === 'coning') {
+            const coneCount = Number(receiveDraft.coneCount);
+            const grossWeight = Number(receiveDraft.grossWeight);
+            if (!Number.isFinite(coneCount) || coneCount <= 0) {
+                alert('Enter a valid cone count.');
+                return;
+            }
+            if (!Number.isFinite(grossWeight) || grossWeight <= 0) {
+                alert('Enter a valid gross weight.');
+                return;
+            }
+        }
+
+        setSavingReceive(true);
+        try {
+            if (process === 'holo') {
+                const payload = {
+                    date: receiveDraft.date || null,
+                    rollTypeId: receiveDraft.rollTypeId,
+                    boxId: receiveDraft.boxId,
+                    rollCount: Number(receiveDraft.rollCount),
+                    grossWeight: Number(receiveDraft.grossWeight),
+                    machineNo: receiveDraft.machineNo,
+                    operatorId: receiveDraft.operatorId,
+                    helperId: receiveDraft.helperId,
+                    notes: receiveDraft.notes,
+                };
+                if (!editingReceiveRow.pieceId && receiveDraft.pieceId) {
+                    payload.pieceId = receiveDraft.pieceId;
+                }
+                await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+            } else if (process === 'coning') {
+                const payload = {
+                    date: receiveDraft.date || null,
+                    boxId: receiveDraft.boxId,
+                    coneCount: Number(receiveDraft.coneCount),
+                    grossWeight: Number(receiveDraft.grossWeight),
+                    machineNo: receiveDraft.machineNo,
+                    operatorId: receiveDraft.operatorId,
+                    helperId: receiveDraft.helperId,
+                    notes: receiveDraft.notes,
+                };
+                await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+            }
+
+            await refreshDb();
+            closeReceiveEditor();
+        } catch (err) {
+            if (err.status === 409 && err.details?.error === 'piece_id_required') {
+                const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
+                if (pieceIds.length > 0) {
+                    setPieceOptionsOverride(pieceIds);
+                    setReceiveDraft((prev) => (prev ? { ...prev, pieceId: '' } : prev));
+                    alert('Select a piece for this receive row.');
+                    return;
+                }
+            }
+            alert(err.message || 'Failed to update receive row');
+        } finally {
+            setSavingReceive(false);
+        }
+    };
+
+    const handleDeleteReceiveRow = async (row) => {
+        if (!row || (process !== 'holo' && process !== 'coning')) return;
+
+        if (process === 'holo') {
+            const pieceOptions = resolveHoloPieceOptions(row);
+            if (!row.pieceId && pieceOptions.length > 1) {
+                setDeletePrompt({ row, pieceOptions, pieceId: '' });
+                return;
+            }
+        }
+
+        const label = row.barcode || row.id;
+        const ok = window.confirm(`Delete receive ${label}? This will remove the row and update totals.`);
+        if (!ok) return;
+
+        try {
+            if (process === 'holo') {
+                const pieceOptions = resolveHoloPieceOptions(row);
+                const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : null);
+                await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
+            } else {
+                await api.deleteConingReceiveRow(row.id);
+            }
+            await refreshDb();
+        } catch (err) {
+            if (err.status === 409 && err.details?.error === 'piece_id_required') {
+                const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
+                if (pieceIds.length > 0) {
+                    setDeletePrompt({ row, pieceOptions: buildPieceOptions(pieceIds), pieceId: '' });
+                    return;
+                }
+            }
+            alert(err.message || 'Failed to delete receive row');
+        }
+    };
+
+    const confirmDeleteReceiveRow = async () => {
+        if (!deletePrompt?.row) return;
+        if (!deletePrompt.pieceId) {
+            alert('Select a piece for this receive row.');
+            return;
+        }
+
+        setDeletingReceive(true);
+        try {
+            await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
+            await refreshDb();
+            setDeletePrompt(null);
+        } catch (err) {
+            alert(err.message || 'Failed to delete receive row');
+        } finally {
+            setDeletingReceive(false);
         }
     };
 
@@ -1067,6 +1403,19 @@ export function ReceiveHistoryTable() {
             icon: <Printer className="w-4 h-4" />,
             onClick: () => handleReprint(row),
         },
+        ...((process === 'holo' || process === 'coning') ? [
+            {
+                label: 'Edit',
+                icon: <Edit2 className="w-4 h-4" />,
+                onClick: () => openReceiveEditor(row),
+            },
+            {
+                label: 'Delete',
+                icon: <Trash2 className="w-4 h-4" />,
+                onClick: () => handleDeleteReceiveRow(row),
+                variant: 'destructive',
+            },
+        ] : []),
     ];
 
     const getChallanActions = (challan) => ([
@@ -1098,6 +1447,30 @@ export function ReceiveHistoryTable() {
         },
     ]);
 
+    const holoEditTotals = useMemo(() => {
+        if (process !== 'holo' || !receiveDraft) return null;
+        const rollCount = Number(receiveDraft.rollCount || 0);
+        const grossWeight = Number(receiveDraft.grossWeight || 0);
+        const rollTypeWeight = Number((db.rollTypes || []).find(rt => rt.id === receiveDraft.rollTypeId)?.weight || 0);
+        const boxWeight = Number((db.boxes || []).find(b => b.id === receiveDraft.boxId)?.weight || 0);
+        const tare = roundTo3Decimals(rollTypeWeight * rollCount + boxWeight);
+        const net = roundTo3Decimals(grossWeight - tare);
+        return { tare, net };
+    }, [process, receiveDraft, db.rollTypes, db.boxes]);
+
+    const coningEditTotals = useMemo(() => {
+        if (process !== 'coning' || !receiveDraft || !editingReceiveRow) return null;
+        const issue = resolveConingIssue(editingReceiveRow);
+        const coneType = resolveConingConeType(issue);
+        const coneWeight = Number(coneType?.weight || 0);
+        const boxWeight = Number((db.boxes || []).find(b => b.id === receiveDraft.boxId)?.weight || 0);
+        const coneCount = Number(receiveDraft.coneCount || 0);
+        const grossWeight = Number(receiveDraft.grossWeight || 0);
+        const tare = roundTo3Decimals(boxWeight + coneWeight * coneCount);
+        const net = roundTo3Decimals(grossWeight - tare);
+        return { tare, net, coneTypeName: coneType?.name || '—', coneWeight };
+    }, [process, receiveDraft, editingReceiveRow, db.boxes, db.issue_to_coning_machine, db.cone_types]);
+
     const showHistory = process !== 'cutter' || activeTab === 'history';
     const showChallans = process === 'cutter' && activeTab === 'challan';
 
@@ -1113,7 +1486,7 @@ export function ReceiveHistoryTable() {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     piece: row.pieceId || '—',
-                    cut: row.cutMaster?.name || row.cut || '—',
+                    cut: row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '—',
                     barcode: row.barcode || '—',
                     machine: row.machineNo || '—',
                     employee: row.operator?.name || '—',
@@ -1125,8 +1498,8 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'piece', header: 'Piece' },
                 { key: 'cut', header: 'Cut' },
+                { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'machine', header: 'Machine' },
                 { key: 'employee', header: 'Employee' },
@@ -1138,9 +1511,13 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === issue?.itemId);
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
+                    cut: resolved.cutName,
+                    yarn: resolved.yarnName,
+                    twist: resolved.twistName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
@@ -1154,6 +1531,9 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'rolls', header: 'Rolls' },
@@ -1164,14 +1544,25 @@ export function ReceiveHistoryTable() {
                 { key: 'notes', header: 'Notes' },
             ];
         } else {
+            // Coning - resolve cut/yarn from referenced source rows
             exportData = history.map(row => {
-                const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                const item = db.items?.find(i => i.id === issue?.itemId);
+                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                const perConeNet = Number(coningIssue?.requiredPerConeNetWeight);
+                const actualPerConeNet = formatActualPerCone(row.netWeight ?? row.grossWeight, row.coneCount);
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
+                    cut: resolved.cutName,
+                    yarn: resolved.yarnName,
+                    twist: resolved.twistName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
+                    coneType: coneType?.name || '—',
+                    perConeNetG: Number.isFinite(perConeNet) && perConeNet > 0 ? perConeNet : '',
+                    actualPerConeG: actualPerConeNet,
                     box: row.box?.name || '—',
                     cones: row.coneCount || 0,
                     weight: formatKg(row.netWeight ?? row.grossWeight),
@@ -1183,8 +1574,14 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
+                { key: 'coneType', header: 'Cone Type' },
+                { key: 'perConeNetG', header: 'Per Cone (g)' },
+                { key: 'actualPerConeG', header: 'Actual Per Cone (g)' },
                 { key: 'box', header: 'Box' },
                 { key: 'cones', header: 'Cones' },
                 { key: 'weight', header: 'Weight (kg)' },
@@ -1225,6 +1622,8 @@ export function ReceiveHistoryTable() {
         const today = new Date().toISOString().split('T')[0];
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
+
+    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 17;
 
     return (
         <Card>
@@ -1324,6 +1723,10 @@ export function ReceiveHistoryTable() {
                                         {process === 'holo' && (
                                             <>
                                                 <TableHead>Date</TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 <TableHead className="text-right">Rolls</TableHead>
@@ -1338,8 +1741,15 @@ export function ReceiveHistoryTable() {
                                         {process === 'coning' && (
                                             <>
                                                 <TableHead>Date</TableHead>
+                                                <TableHead>Item</TableHead>
+                                                <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Barcode</TableHead>
+                                                <TableHead>Cone Type</TableHead>
+                                                <TableHead className="text-right">Per Cone (g)</TableHead>
+                                                <TableHead className="text-right">Actual (g)</TableHead>
                                                 <TableHead>Box</TableHead>
                                                 <TableHead className="text-right">Cones</TableHead>
                                                 <TableHead className="text-right">Weight (kg)</TableHead>
@@ -1353,7 +1763,7 @@ export function ReceiveHistoryTable() {
                                 </TableHeader>
                                 <TableBody>
                                     {history.length === 0 ? (
-                                        <TableRow><TableCell colSpan={10} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
                                     ) : (
                                         history.map(r => {
                                             if (process === 'cutter') {
@@ -1366,7 +1776,7 @@ export function ReceiveHistoryTable() {
                                                         <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
                                                         <TableCell>{item?.name || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                        <TableCell>{r.cutMaster?.name || r.cut || '—'}</TableCell>
+                                                        <TableCell>{r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                         <TableCell>{r.machineNo || '—'}</TableCell>
                                                         <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
@@ -1393,10 +1803,17 @@ export function ReceiveHistoryTable() {
                                                     </TableRow>
                                                 );
                                             } else if (process === 'holo') {
+                                                const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                                                const item = db.items?.find(i => i.id === issue?.itemId);
+                                                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell>{item?.name || '—'}</TableCell>
+                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
                                                         <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                             {(r.pieceIdsList || []).join(', ') || '—'}
                                                         </TableCell>
@@ -1411,14 +1828,27 @@ export function ReceiveHistoryTable() {
                                                     </TableRow>
                                                 );
                                             } else if (process === 'coning') {
+                                                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                                                const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                                                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                                                const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                                const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell>{dateDisplay}</TableCell>
+                                                        <TableCell>{item?.name || '—'}</TableCell>
+                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
                                                         <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                             {(r.pieceIdsList || []).join(', ') || '—'}
                                                         </TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                        <TableCell>{coneType?.name || '—'}</TableCell>
+                                                        <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
+                                                        <TableCell className="text-right">{actualPerCone}</TableCell>
                                                         <TableCell>{r.box?.name || '—'}</TableCell>
                                                         <TableCell className="text-right">{r.coneCount}</TableCell>
                                                         <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
@@ -1463,7 +1893,7 @@ export function ReceiveHistoryTable() {
                                                         </div>
                                                     </div>
                                                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                        <span>Cut: {r.cutMaster?.name || r.cut || '—'}</span>
+                                                        <span>Cut: {r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</span>
                                                         <span>Mac: {r.machineNo || '—'}</span>
                                                     </div>
                                                 </div>
@@ -1473,12 +1903,18 @@ export function ReceiveHistoryTable() {
                                             </div>
                                         );
                                     } else if (process === 'holo') {
+                                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                                        const item = db.items?.find(i => i.id === issue?.itemId);
+                                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                                 Piece: {(r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
@@ -1502,12 +1938,27 @@ export function ReceiveHistoryTable() {
                                             </div>
                                         );
                                     } else if (process === 'coning') {
+                                        const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                                        const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                                        const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                        const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                                        const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                        const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
+                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                Cone: {coneType?.name || '—'} • Per Cone: {formatPerConeNet(perConeNet)}
+                                                            </p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                Actual: {actualPerCone}
+                                                            </p>
                                                             <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                                 Piece: {(r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
@@ -1626,6 +2077,280 @@ export function ReceiveHistoryTable() {
                     </>
                 )}
             </CardContent>
+
+            <Dialog open={Boolean(editingReceiveRow)} onOpenChange={(open) => { if (!open) closeReceiveEditor(); }}>
+                <DialogContent
+                    title={process === 'holo' ? 'Edit Holo Receive' : 'Edit Coning Receive'}
+                    className="max-w-4xl"
+                    onOpenChange={(open) => { if (!open) closeReceiveEditor(); }}
+                >
+                    {editingReceiveRow && receiveDraft && (
+                        <div className="space-y-4">
+                            <div className="text-xs text-muted-foreground">
+                                Barcode {editingReceiveRow.barcode || editingReceiveRow.id || '—'}
+                            </div>
+
+                            {process === 'holo' && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Date</label>
+                                            <Input
+                                                type="date"
+                                                value={receiveDraft.date}
+                                                onChange={(e) => updateReceiveDraft('date', e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Piece</label>
+                                            {editingReceiveRow.pieceId ? (
+                                                <Input value={editingReceiveRow.pieceId} disabled />
+                                            ) : (
+                                                <Select
+                                                    value={receiveDraft.pieceId}
+                                                    onChange={(e) => updateReceiveDraft('pieceId', e.target.value)}
+                                                    options={getEditPieceOptions(editingReceiveRow)}
+                                                    labelKey="name"
+                                                    valueKey="id"
+                                                    placeholder="Select Piece"
+                                                />
+                                            )}
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Machine</label>
+                                            <Select
+                                                value={receiveDraft.machineNo}
+                                                onChange={(e) => updateReceiveDraft('machineNo', e.target.value)}
+                                                options={buildMachineNameOptions('holo', receiveDraft.machineNo)}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Machine"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Operator</label>
+                                            <Select
+                                                value={receiveDraft.operatorId}
+                                                onChange={(e) => updateReceiveDraft('operatorId', e.target.value)}
+                                                options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'holo').map(o => ({ id: o.id, name: o.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Operator"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Helper</label>
+                                            <Select
+                                                value={receiveDraft.helperId}
+                                                onChange={(e) => updateReceiveDraft('helperId', e.target.value)}
+                                                options={(db.helpers || []).filter(h => h.processType === 'all' || h.processType === 'holo').map(h => ({ id: h.id, name: h.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Helper"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Notes</label>
+                                            <Input
+                                                value={receiveDraft.notes}
+                                                onChange={(e) => updateReceiveDraft('notes', e.target.value)}
+                                                placeholder="Notes"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Roll Type</label>
+                                            <Select
+                                                value={receiveDraft.rollTypeId}
+                                                onChange={(e) => updateReceiveDraft('rollTypeId', e.target.value)}
+                                                options={(db.rollTypes || []).map(r => ({ id: r.id, name: r.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Roll Type"
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Box</label>
+                                            <Select
+                                                value={receiveDraft.boxId}
+                                                onChange={(e) => updateReceiveDraft('boxId', e.target.value)}
+                                                options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'holo').map(b => ({ id: b.id, name: b.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Box"
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Roll Count</label>
+                                            <Input
+                                                type="number"
+                                                value={receiveDraft.rollCount}
+                                                onChange={(e) => updateReceiveDraft('rollCount', e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Gross Weight</label>
+                                            <Input
+                                                type="number"
+                                                value={receiveDraft.grossWeight}
+                                                onChange={(e) => updateReceiveDraft('grossWeight', e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="flex justify-between text-sm">
+                                        <span>Tare: {formatKg(holoEditTotals?.tare || 0)}</span>
+                                        <span className="font-bold">Net: {formatKg(holoEditTotals?.net || 0)}</span>
+                                    </div>
+                                </>
+                            )}
+
+                            {process === 'coning' && (
+                                <>
+                                    <div className="text-xs text-muted-foreground">
+                                        Cone Type: {coningEditTotals?.coneTypeName || '—'}
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Date</label>
+                                            <Input
+                                                type="date"
+                                                value={receiveDraft.date}
+                                                onChange={(e) => updateReceiveDraft('date', e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Box</label>
+                                            <Select
+                                                value={receiveDraft.boxId}
+                                                onChange={(e) => updateReceiveDraft('boxId', e.target.value)}
+                                                options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => ({ id: b.id, name: b.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Box"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Cone Count</label>
+                                            <Input
+                                                type="number"
+                                                value={receiveDraft.coneCount}
+                                                onChange={(e) => updateReceiveDraft('coneCount', e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Gross Weight</label>
+                                            <Input
+                                                type="number"
+                                                value={receiveDraft.grossWeight}
+                                                onChange={(e) => updateReceiveDraft('grossWeight', e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Machine</label>
+                                            <Select
+                                                value={receiveDraft.machineNo}
+                                                onChange={(e) => updateReceiveDraft('machineNo', e.target.value)}
+                                                options={buildMachineNameOptions('coning', receiveDraft.machineNo)}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Machine"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Operator</label>
+                                            <Select
+                                                value={receiveDraft.operatorId}
+                                                onChange={(e) => updateReceiveDraft('operatorId', e.target.value)}
+                                                options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Operator"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Helper</label>
+                                            <Select
+                                                value={receiveDraft.helperId}
+                                                onChange={(e) => updateReceiveDraft('helperId', e.target.value)}
+                                                options={(db.helpers || []).filter(h => h.processType === 'all' || h.processType === 'coning').map(h => ({ id: h.id, name: h.name }))}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                placeholder="Select Helper"
+                                                clearable
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-medium text-muted-foreground uppercase">Notes</label>
+                                            <Input
+                                                value={receiveDraft.notes}
+                                                onChange={(e) => updateReceiveDraft('notes', e.target.value)}
+                                                placeholder="Notes"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="flex justify-between text-sm">
+                                        <span>Tare: {formatKg(coningEditTotals?.tare || 0)}</span>
+                                        <span className="font-bold">Net: {formatKg(coningEditTotals?.net || 0)}</span>
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="flex justify-end gap-2">
+                                <Button variant="ghost" onClick={closeReceiveEditor} disabled={savingReceive}>Cancel</Button>
+                                <Button onClick={handleSaveReceiveEdits} disabled={savingReceive}>
+                                    {savingReceive ? 'Saving...' : 'Save Changes'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={Boolean(deletePrompt)} onOpenChange={(open) => { if (!open) setDeletePrompt(null); }}>
+                <DialogContent
+                    title="Confirm Delete"
+                    className="max-w-md"
+                    onOpenChange={(open) => { if (!open) setDeletePrompt(null); }}
+                >
+                    {deletePrompt && (
+                        <div className="space-y-4">
+                            <div className="text-sm">
+                                Delete receive {deletePrompt.row?.barcode || deletePrompt.row?.id || '—'}? This will update totals.
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs font-medium text-muted-foreground uppercase">Piece</label>
+                                <Select
+                                    value={deletePrompt.pieceId}
+                                    onChange={(e) => setDeletePrompt((prev) => (prev ? { ...prev, pieceId: e.target.value } : prev))}
+                                    options={deletePrompt.pieceOptions}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Piece"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2">
+                                <Button variant="ghost" onClick={() => setDeletePrompt(null)} disabled={deletingReceive}>Cancel</Button>
+                                <Button variant="destructive" onClick={confirmDeleteReceiveRow} disabled={deletingReceive || !deletePrompt.pieceId}>
+                                    {deletingReceive ? 'Deleting...' : 'Delete'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={Boolean(editingChallan)} onOpenChange={(open) => { if (!open) closeEditDialog(); }}>
                 <DialogContent

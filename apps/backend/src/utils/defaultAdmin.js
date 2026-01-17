@@ -31,9 +31,25 @@ export async function ensureDefaultAdminUser() {
     throw new Error('DEFAULT_ADMIN_PASSWORD must be at least 6 characters');
   }
 
-  const adminRole = await prisma.role.findUnique({ where: { key: 'admin' } });
+  let adminRole = await prisma.role.findUnique({ where: { key: 'admin' } });
   if (!adminRole) {
-    throw new Error('Admin role missing; run migrations');
+    console.log('Admin role missing. Creating "admin" role...');
+    try {
+      adminRole = await prisma.role.create({
+        data: {
+          key: 'admin',
+          name: 'Administrator',
+          description: 'System Administrator with full access',
+        },
+      });
+    } catch (err) {
+      // Race protection: if another instance created it concurrently (P2002), fetch it.
+      if (err.code === 'P2002') {
+        adminRole = await prisma.role.findUnique({ where: { key: 'admin' } });
+      } else {
+        throw err;
+      }
+    }
   }
 
   const passwordHash = await hashPassword(password);

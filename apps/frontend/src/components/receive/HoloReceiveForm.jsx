@@ -5,11 +5,13 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
     const { db, refreshDb } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
+    const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
@@ -94,6 +96,12 @@ export function HoloReceiveForm() {
         return db.inbound_items.find(p => p.id === form.pieceId) || null;
     }, [issue, form.pieceId, db.inbound_items]);
 
+    const cutName = useMemo(() => {
+        if (!issue) return '';
+        const resolved = resolveHoloTrace(issue, traceContext);
+        return resolved.cutName === '—' ? '' : resolved.cutName;
+    }, [issue, traceContext]);
+
     // --- Handlers ---
     async function handleScan() {
         if (!scanInput.trim()) return;
@@ -153,18 +161,8 @@ export function HoloReceiveForm() {
                     const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
                     const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
 
-                    // Resolve Cut from issue's source rows
-                    let cutName = '';
-                    try {
-                        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                        if (Array.isArray(refs) && refs.length > 0) {
-                            const firstRowId = refs[0].rowId;
-                            const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRowId);
-                            if (sourceRow) {
-                                cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
-                            }
-                        }
-                    } catch (e) { console.error('Error resolving cut', e); }
+                    const resolved = resolveHoloTrace(issue, traceContext);
+                    const cutName = resolved.cutName === '—' ? '' : resolved.cutName;
 
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.HOLO_RECEIVE,
@@ -221,11 +219,12 @@ export function HoloReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-md text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted rounded-md text-sm">
                             <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
                             <div><strong>Item:</strong> {db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId}</div>
-                            <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name}</div>
-                            <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name}</div>
+                            <div><strong>Cut:</strong> {cutName || '—'}</div>
+                            <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'}</div>
+                            <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name || '—'}</div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -1,9 +1,11 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
+import { cn } from '../../lib/utils';
+import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -13,10 +15,11 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
+  const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
   // --- Data Prep ---
 
@@ -31,22 +34,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     const map = new Map();
     (db.issue_to_holo_machine || []).forEach((issue) => {
       if (!issue?.id) return;
-      let cutName = '';
-      try {
-        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-        if (Array.isArray(refs) && refs.length > 0) {
-          const sourceRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === refs[0].rowId);
-          if (sourceRow) {
-            cutName = sourceRow.cut?.name || sourceRow.cutMaster?.name || db.cuts?.find(c => c.id === sourceRow.cutId)?.name || '';
-          }
-        }
-      } catch (e) {
-        cutName = '';
-      }
-      map.set(issue.id, cutName || '—');
+      const resolved = resolveHoloTrace(issue, traceContext);
+      map.set(issue.id, resolved.cutName || '—');
     });
     return map;
-  }, [db.issue_to_holo_machine, db.receive_from_cutter_machine_rows, db.cuts]);
+  }, [db.issue_to_holo_machine, traceContext]);
 
   // 2. Map Lot Metadata
   const lotMetaMap = useMemo(() => {
@@ -101,6 +93,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         firmName,
         supplierId: lotMeta?.supplierId || '',
         supplierName,
+        yarnId: issue?.yarnId || '',
         yarnName: yarn?.name || '—',
         twistName: twist?.name || '—',
         cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
@@ -110,6 +103,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         rollWeight: Number(row.rollWeight || 0),
         netWeight: baseNetWeight,
         availableWeight,
+        isSteamed: !!row.isSteamed,
+        steamedAt: row.steamedAt || null,
       };
     });
   }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId]);
@@ -125,6 +120,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         itemId: row.itemId || '',
         firmId: row.firmId || '',
         supplierId: row.supplierId || '',
+        yarnId: row.yarnId || '',
         itemName: row.itemName,
         firmName: row.firmName,
         supplierName: row.supplierName,
@@ -133,6 +129,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         cutNames: new Set(),
         totalRolls: 0,
         totalWeight: 0,
+        steamedRolls: 0,
+        steamedWeight: 0,
         lotNos: new Set(),
         rows: []
       };
@@ -142,18 +140,28 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.totalWeight += row.availableWeight;
       existing.cutNames.add(row.cutName || '—');
       (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
+      // Track steamed status
+      if (row.isSteamed) {
+        existing.steamedRolls += row.availableRolls;
+        existing.steamedWeight += row.availableWeight;
+      }
       map.set(lotKey, existing);
     });
     return Array.from(map.values()).map((lot) => {
       const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
       const lotNosArr = Array.from(lot.lotNos || []);
       const { cutNames, lotNos, ...rest } = lot;
+      // Determine steamed status type for filtering
+      const steamedStatusType = rest.steamedRolls === 0 ? 'not_steamed'
+        : rest.steamedRolls >= rest.totalRolls ? 'steamed'
+          : 'partial';
       return {
         ...rest,
         cutName,
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
+        steamedStatusType,
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
       };
     });
@@ -188,11 +196,18 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.yarn && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;
+      // Steamed filter support
+      if (filters.steamed && filters.steamed !== 'all') {
+        if (filters.steamed === 'steamed' && l.steamedStatusType !== 'steamed') return false;
+        if (filters.steamed === 'not_steamed' && l.steamedStatusType !== 'not_steamed') return false;
+        if (filters.steamed === 'partial' && l.steamedStatusType !== 'partial') return false;
+      }
       return true;
     }).sort((a, b) => {
       if (search && a.searchScore !== b.searchScore) {
@@ -201,6 +216,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
   }, [holoLots, filters, search]);
+
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -240,7 +256,21 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     });
   }, [filteredLots, groupBy]);
 
-  const tableColumnCount = groupBy ? 9 : 10;
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayLots);
+  }, [displayLots, onDataChange]);
+
+  const tableColumnCount = groupBy ? 10 : 11;
+
+  // Grand Totals
+  const grandTotals = useMemo(() => {
+    return displayLots.reduce((acc, lot) => ({
+      totalRolls: acc.totalRolls + (lot.totalRolls || 0),
+      totalWeight: acc.totalWeight + (lot.totalWeight || 0),
+      steamedRolls: acc.steamedRolls + (lot.steamedRolls || 0),
+    }), { totalRolls: 0, totalWeight: 0, steamedRolls: 0 });
+  }, [displayLots]);
 
   return (
     <>
@@ -258,6 +288,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               <TableHead>Supplier</TableHead>
               <TableHead className="">Available Rolls</TableHead>
               <TableHead className="">Net Weight</TableHead>
+              <TableHead className="">Steamed</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -306,6 +337,21 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       </TableCell>
                       <TableCell className="">{l.totalRolls}</TableCell>
                       <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-xs",
+                            l.steamedStatusType === 'steamed' && "bg-green-500/10 text-green-600 border-green-500/50",
+                            l.steamedStatusType === 'partial' && "bg-orange-500/10 text-orange-600 border-orange-500/50",
+                            l.steamedStatusType === 'not_steamed' && "bg-gray-500/10 text-gray-500 border-gray-500/30"
+                          )}
+                        >
+                          {l.steamedStatusType === 'steamed' && <Flame className="w-3 h-3 mr-1" />}
+                          {l.steamedStatusType === 'partial' && <FlameKindling className="w-3 h-3 mr-1" />}
+                          {l.steamedRolls} / {l.totalRolls}
+                        </Badge>
+                      </TableCell>
                     </TableRow>
                     {isExpanded && (
                       <TableRow className="bg-muted/30">
@@ -321,11 +367,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                   <TableHead className="">Net Wt</TableHead>
                                   <TableHead className="">Gross Wt</TableHead>
                                   <TableHead>Machine</TableHead>
+                                  <TableHead>Steamed</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {l.rows.map(r => (
-                                  <TableRow key={r.id}>
+                                  <TableRow key={r.id} className={r.isSteamed ? 'bg-green-500/5' : ''}>
                                     <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                     <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                     <TableCell>{r.rollType?.name || '—'}</TableCell>
@@ -333,6 +380,16 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                     <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
                                     <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
                                     <TableCell>{r.machineNo}</TableCell>
+                                    <TableCell>
+                                      {r.isSteamed ? (
+                                        <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/50">
+                                          <Flame className="w-3 h-3 mr-1" />
+                                          Steamed
+                                        </Badge>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">—</span>
+                                      )}
+                                    </TableCell>
                                   </TableRow>
                                 ))}
                               </TableBody>
@@ -344,6 +401,22 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                   </React.Fragment>
                 );
               })
+            )}
+            {/* Grand Total Row */}
+            {displayLots.length > 0 && (
+              <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                {!groupBy ? <TableCell></TableCell> : null}
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.totalRolls}</TableCell>
+                <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.steamedRolls} / {grandTotals.totalRolls}</TableCell>
+              </TableRow>
             )}
           </TableBody>
         </Table>
@@ -381,6 +454,18 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                     <div className="text-right">
                       <div className="font-mono font-semibold">{formatKg(l.totalWeight)}</div>
                       <div className="text-[10px] text-muted-foreground uppercase">{l.totalRolls} rolls</div>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px] mt-1",
+                          l.steamedStatusType === 'steamed' && "bg-green-500/10 text-green-600 border-green-500/50",
+                          l.steamedStatusType === 'partial' && "bg-orange-500/10 text-orange-600 border-orange-500/50",
+                          l.steamedStatusType === 'not_steamed' && "bg-gray-500/10 text-gray-500 border-gray-500/30"
+                        )}
+                      >
+                        {l.steamedStatusType === 'steamed' && <Flame className="w-3 h-3 mr-1" />}
+                        {l.steamedRolls}/{l.totalRolls} steamed
+                      </Badge>
                     </div>
                   </div>
                   <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
@@ -393,14 +478,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Roll Details</p>
                     {l.rows.map(r => (
-                      <div key={r.id} className="bg-background border rounded p-2 space-y-1">
+                      <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30")}>
                         <div className="flex justify-between font-mono text-xs">
                           <span className="font-semibold text-primary">{r.barcode}</span>
                           <span>{formatKg(r.availableWeight)}</span>
                         </div>
                         <div className="flex justify-between text-[11px] text-muted-foreground">
                           <span>{r.rollType?.name} • Rolls: {r.availableRolls}</span>
-                          <span>Mac: {r.machineNo}</span>
+                          <span className="flex items-center gap-1">
+                            {r.isSteamed && <Flame className="w-3 h-3 text-green-600" />}
+                            Mac: {r.machineNo}
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -409,6 +497,18 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               </div>
             );
           })
+        )}
+        {/* Mobile Grand Total Card */}
+        {displayLots.length > 0 && (
+          <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+            <div className="flex justify-between items-center">
+              <span className="font-bold text-primary">Grand Total</span>
+              <div className="text-right">
+                <div className="font-mono font-bold text-primary">{formatKg(grandTotals.totalWeight)}</div>
+                <div className="text-xs text-muted-foreground">{grandTotals.totalRolls} rolls • {grandTotals.steamedRolls} steamed</div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </>

@@ -7,6 +7,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
+import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 export function ConingReceiveForm() {
     const { db, refreshDb } = useInventory();
@@ -17,6 +18,7 @@ export function ConingReceiveForm() {
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [receiveDate, setReceiveDate] = useState(todayISO());
+    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
     useEffect(() => {
@@ -143,6 +145,24 @@ export function ConingReceiveForm() {
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
     const isReceivedOverIssued = totalIssuedWeight > 0 && totalReceivedWeight > totalIssuedWeight + 0.001;
 
+    const issueDetails = useMemo(() => {
+        if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
+
+        let itemName = db.items?.find(i => i.id === issue.itemId)?.name || '';
+        let cutName = '';
+        let coneTypeName = '';
+
+        if (issueRefs.length > 0) {
+            const firstRef = issueRefs[0];
+            if (firstRef.coneTypeId) {
+                coneTypeName = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
+            }
+        }
+        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+        return { itemName, cutName, coneTypeName };
+    }, [issue, issueRefs, db, traceContext]);
+
     const receiveRowsForIssue = useMemo(() => {
         if (!issue?.id) return [];
         return (db.receive_from_coning_machine_rows || []).filter((row) => row.issueId === issue.id);
@@ -203,27 +223,12 @@ export function ConingReceiveForm() {
                                     if (r) rollCount += (r.rollCount || 0);
                                 }
                             });
-
-                            const rid = firstRef.rowId;
-                            if (rid) {
-                                const holoRow = db.receive_from_holo_machine_rows?.find(r => r.id === rid);
-                                if (holoRow) {
-                                    if (holoRow.rollTypeId) rollType = db.rollTypes.find(rt => rt.id === holoRow.rollTypeId)?.name || '';
-                                    const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-                                    if (holoIssue) {
-                                        if (holoIssue.yarnId) yarnName = db.yarns.find(y => y.id === holoIssue.yarnId)?.name || '';
-                                        if (holoIssue.twistId) twistName = db.twists.find(t => t.id === holoIssue.twistId)?.name || '';
-                                        const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                        if (Array.isArray(hRefs) && hRefs.length > 0) {
-                                            const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === hRefs[0].rowId);
-                                            if (cutterRow) {
-                                                cutName = cutterRow.cut?.name || cutterRow.cutMaster?.name || db.cuts?.find(c => c.id === cutterRow.cutId)?.name || '';
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
+                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
+                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
+                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+                        twistName = resolved.twistName === '—' ? '' : resolved.twistName;
+                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
                     } catch (e) { console.error('Error resolving details', e); }
 
                     labelsToPrint.push({
@@ -289,20 +294,23 @@ export function ConingReceiveForm() {
                         <div className="p-4 bg-muted rounded-md text-sm space-y-3">
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                                 <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                                <div><strong>Total Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
-                                <div><strong>Expected:</strong> {totalExpected} cones</div>
-                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
+                                <div><strong>Item:</strong> {issueDetails.itemName || '—'}</div>
+                                <div><strong>Cut:</strong> {issueDetails.cutName || '—'}</div>
+                                <div><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
                             </div>
                             <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                                <div><strong>Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
+                                <div><strong>Expected Cones:</strong> {totalExpected}</div>
+                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
                                 <div className="hidden md:block" />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
                                 <div className="flex items-center gap-2">
-                                    <div>
-                                        <strong>Total Received Wt:</strong>{' '}
-                                        <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
-                                            {formatKg(totalReceivedWeight)}
-                                        </span>
-                                    </div>
+                                    <strong>Received Wt:</strong>{' '}
+                                    <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
+                                        {formatKg(totalReceivedWeight)}
+                                    </span>
                                     <InfoPopover
                                         title={`Coning Receives (${issue.lotLabel || issue.lotNo})`}
                                         items={receiveRowsForIssue}
@@ -349,7 +357,8 @@ export function ConingReceiveForm() {
                                     />
                                 </div>
                                 <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
-                                <div><strong>Per Cone Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                                <div><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                                <div className="hidden md:block" />
                             </div>
                         </div>
 

@@ -52,6 +52,9 @@ export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
+export async function reserveOpeningIssueSeries(stage) {
+  return await request('/api/opening_stock/issue_series/reserve', { method: 'POST', body: { stage } });
+}
 
 // Auth
 export async function authStatus() { return await request('/api/auth/status'); }
@@ -83,6 +86,20 @@ export async function resetAdminUserPassword(id, password) {
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function updateIssueToCutterMachine(id, payload) {
+  return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToHoloMachine(id, payload) {
+  return await request(`/api/issue_to_holo_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToConingMachine(id, payload) {
+  return await request(`/api/issue_to_coning_machine/${id}`, { method: 'PUT', body: payload });
+}
+export async function updateIssueToMachine(id, process = 'cutter', payload) {
+  if (process === 'holo') return await updateIssueToHoloMachine(id, payload);
+  if (process === 'coning') return await updateIssueToConingMachine(id, payload);
+  return await updateIssueToCutterMachine(id, payload);
+}
 export async function importReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/import', { method: 'POST', body: payload }); }
 export async function previewReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/preview', { method: 'POST', body: payload }); }
 export async function manualReceiveFromCutterMachine(payload) { return await request('/api/receive_from_cutter_machine/manual', { method: 'POST', body: payload }); }
@@ -107,6 +124,18 @@ export async function deleteOpeningHoloReceiveRow(id) { return await request(`/a
 export async function deleteOpeningConingReceiveRow(id) { return await request(`/api/opening_stock/coning_receive_rows/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 export async function manualReceiveFromHoloMachine(payload) { return await request('/api/receive_from_holo_machine/manual', { method: 'POST', body: payload }); }
 export async function manualReceiveFromConingMachine(payload) { return await request('/api/receive_from_coning_machine/manual', { method: 'POST', body: payload }); }
+export async function updateHoloReceiveRow(id, payload) {
+  return await request(`/api/receive_from_holo_machine/rows/${encodeURIComponent(id)}`, { method: 'PUT', body: payload });
+}
+export async function deleteHoloReceiveRow(id, payload) {
+  return await request(`/api/receive_from_holo_machine/rows/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload });
+}
+export async function updateConingReceiveRow(id, payload) {
+  return await request(`/api/receive_from_coning_machine/rows/${encodeURIComponent(id)}`, { method: 'PUT', body: payload });
+}
+export async function deleteConingReceiveRow(id, payload) {
+  return await request(`/api/receive_from_coning_machine/rows/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload });
+}
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
@@ -244,6 +273,34 @@ export async function getProductionReport(params = {}) {
   const query = new URLSearchParams(params).toString();
   return await request(`/api/reports/production${query ? '?' + query : ''}`);
 }
+export async function getProductionReportDetails(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/reports/production/details${query ? '?' + query : ''}`);
+}
+
+// Summary
+export async function getSummary(stage, type, date) {
+  const params = date ? `?date=${date}` : '';
+  return await request(`/api/summary/${stage}/${type}${params}`);
+}
+export async function sendSummaryWhatsApp(stage, type, date) {
+  return await request(`/api/summary/${stage}/${type}/send`, {
+    method: 'POST',
+    body: date ? { date } : {}
+  });
+}
+
+// Boiler (Steaming)
+export async function boilerLookup(barcode) {
+  return await request(`/api/boiler/lookup?barcode=${encodeURIComponent(barcode)}`);
+}
+export async function boilerMarkSteamed(barcodes) {
+  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes } });
+}
+export async function boilerListSteamed(date) {
+  const params = date ? `?date=${date}` : '';
+  return await request(`/api/boiler/steamed${params}`);
+}
 
 export default {
   health,
@@ -271,6 +328,7 @@ export default {
   createOpeningCutterReceive,
   createOpeningHoloReceive,
   createOpeningConingReceive,
+  reserveOpeningIssueSeries,
   importReceiveFromMachine,
   previewReceiveFromMachine,
   manualReceiveFromMachine,

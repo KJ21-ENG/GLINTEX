@@ -9,7 +9,7 @@ import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
-import { exportXlsx, exportCsv, exportPdf } from '../services';
+import { exportStockXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
@@ -99,12 +99,21 @@ export function Stock() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState({
     item: "",
+    yarn: "",
     firm: "",
     supplier: "",
     status: (process || 'cutter') === 'cutter' ? "available_to_issue" : "active",
+    steamed: "all", // For Holo process only
     from: "",
     to: ""
   });
+
+  // --- Export Data State ---
+  const [exportData, setExportData] = useState(null);
+
+  // Clear export data when view changes to avoid stale data
+  useEffect(() => { setExportData(null); }, [view, processId]);
+
 
   // --- Data Prep (Memoized) ---
 
@@ -138,6 +147,8 @@ export function Stock() {
         wastageTotal: 0,
         wastageCount: 0,
         avgWastage: 0,
+        cutNames: new Set(),
+        yarnNames: new Set(),
       };
     }
     const inbound = db.inbound_items || [];
@@ -152,12 +163,21 @@ export function Stock() {
       const pendingRaw = inboundWeight - receivedWeight - wastageWeight - dispatchedWeight;
       const pendingForPiece = pendingRaw > EPSILON ? pendingRaw : 0;
 
+      // Cut & Yarn Resolution
+      const cutName = piece.cutName || piece.cut?.name || (typeof piece.cut === 'string' ? piece.cut : '') || db.cuts?.find(c => c.id === piece.cutId)?.name || '';
+      if (cutName) m[piece.lotNo].cutNames.add(cutName);
+
+      const yarnName = piece.yarnName || piece.yarn?.name || (typeof piece.yarn === 'string' ? piece.yarn : '') || db.yarns?.find(y => y.id === piece.yarnId)?.name || '';
+      if (yarnName) m[piece.lotNo].yarnNames.add(yarnName);
+
       const pieceEntry = {
         ...piece,
         pendingWeight: pendingForPiece,
         receivedWeight,
         wastageWeight,
-        totalUnits: pieceTotalUnits
+        totalUnits: pieceTotalUnits,
+        cutName,
+        yarnName
       };
 
       m[piece.lotNo].pieces.push(pieceEntry);
@@ -177,6 +197,8 @@ export function Stock() {
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
       lot.statusType = lotStatus(lot);
+      lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
+      lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
     });
     return m;
   }, [db, receiveTotalsMap]);
@@ -271,6 +293,65 @@ export function Stock() {
     });
     return Array.from(map.values());
   }, [filteredLots, groupByItem]);
+
+  // Grand Totals for Jumbo Rolls view
+  const grandTotals = useMemo(() => {
+    return displayedLots.reduce((acc, lot) => ({
+      availableCount: acc.availableCount + (lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length),
+      totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
+      totalWeight: acc.totalWeight + Number(lot.totalWeight || 0),
+      pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
+    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0 });
+  }, [displayedLots]);
+
+  // --- Export Handler ---
+  const handleExport = () => {
+    // Determine the correct view type for export
+    let viewType = 'jumbo';
+    if (isConing) viewType = 'coning';
+    else if (isHolo) viewType = 'holo';
+    else if (isCutter && view === 'bobbins') viewType = 'bobbins';
+    else if (isCutter && view === 'jumbo') viewType = 'jumbo';
+
+    // For Jumbo view, we use displayedLots directly since it's managed here
+    // For other views, we use exportData from child components
+    const dataToExport = (viewType === 'jumbo') ? displayedLots : exportData;
+
+    // Calculate grandTotals based on view type
+    let totals = {};
+    if (viewType === 'jumbo') {
+      totals = grandTotals;
+    } else if (dataToExport && dataToExport.length > 0) {
+      // Compute totals from exportData for other views
+      if (viewType === 'holo') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalRolls: (acc.totalRolls || 0) + (lot.totalRolls || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+          steamedRolls: (acc.steamedRolls || 0) + (lot.steamedRolls || 0),
+        }), {});
+      } else if (viewType === 'coning') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalCones: (acc.totalCones || 0) + (lot.totalCones || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+        }), {});
+      } else if (viewType === 'bobbins') {
+        totals = dataToExport.reduce((acc, lot) => ({
+          totalBobbins: (acc.totalBobbins || 0) + (lot.totalBobbins || 0),
+          availableBobbins: (acc.availableBobbins || 0) + (lot.availableBobbins || 0),
+          totalWeight: (acc.totalWeight || 0) + (lot.totalWeight || 0),
+          availableWeight: (acc.availableWeight || 0) + (lot.availableWeight || 0),
+          crateCount: (acc.crateCount || 0) + (lot.crates?.length || lot.crateCount || 0),
+        }), {});
+      }
+    }
+
+    exportStockXlsx(dataToExport, {
+      viewType,
+      groupBy: groupByItem,
+      grandTotals: totals,
+      statusFilter: filters.status,
+    });
+  };
 
   // --- Handlers ---
 
@@ -479,7 +560,7 @@ export function Stock() {
               </div>
             ) : null}
             {/* Export Button */}
-            <Button variant="outline" size="icon" onClick={() => exportXlsx(filteredLots, {})} className="ml-auto md:ml-0">
+            <Button variant="outline" size="icon" onClick={handleExport} className="ml-auto md:ml-0">
               <Download className="w-4 h-4" />
             </Button>
           </div>
@@ -508,6 +589,13 @@ export function Stock() {
               </Select>
             </div>
             <div>
+              <Label className="text-xs mb-1 block">Yarn</Label>
+              <Select className="bg-background w-full" value={filters.yarn} onChange={e => setFilters(f => ({ ...f, yarn: e.target.value }))}>
+                <option value="">All Yarns</option>
+                {db?.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs mb-1 block">Firm</Label>
               <Select className="bg-background w-full" value={filters.firm} onChange={e => setFilters(f => ({ ...f, firm: e.target.value }))}>
                 <option value="">All Firms</option>
@@ -530,6 +618,17 @@ export function Stock() {
                 <option value="all">All</option>
               </Select>
             </div>
+            {isHolo && (
+              <div>
+                <Label className="text-xs mb-1 block">Steamed</Label>
+                <Select className="bg-background w-full" value={filters.steamed} onChange={e => setFilters(f => ({ ...f, steamed: e.target.value }))}>
+                  <option value="all">All</option>
+                  <option value="steamed">Steamed Only</option>
+                  <option value="not_steamed">Not Steamed</option>
+                  <option value="partial">Partially Steamed</option>
+                </Select>
+              </div>
+            )}
             <div>
               <Label className="text-xs mb-1 block">From</Label>
               <Input type="date" className="bg-background w-full" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
@@ -550,11 +649,11 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {processId === 'coning' ? (
-        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : isHolo ? (
-        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : showBobbins ? (
-        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} />
+        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : (
         <>
           <div className="hidden sm:block rounded-md border bg-card overflow-x-auto">
@@ -700,6 +799,22 @@ export function Stock() {
                     );
                   })
                 )}
+                {/* Grand Total Row */}
+                {displayedLots.length > 0 && (
+                  <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                    <TableCell></TableCell>
+                    <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                    {!groupByItem ? <TableCell></TableCell> : null}
+                    <TableCell></TableCell>
+                    <TableCell className="font-bold text-primary">{grandTotals.availableCount} / {grandTotals.totalPieces}</TableCell>
+                    <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                    {filters.status !== 'available_to_issue' && (
+                      <TableCell className="font-bold text-primary">{formatKg(grandTotals.pendingWeight)}</TableCell>
+                    )}
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
@@ -801,6 +916,21 @@ export function Stock() {
                   </div>
                 );
               })
+            )}
+            {/* Mobile Grand Total Card */}
+            {displayedLots.length > 0 && (
+              <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-primary">Grand Total</span>
+                  <div className="text-right">
+                    <div className="font-mono font-bold text-primary">{formatKg(grandTotals.totalWeight)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {grandTotals.availableCount} / {grandTotals.totalPieces} pieces
+                      {filters.status !== 'available_to_issue' && ` • ${formatKg(grandTotals.pendingWeight)} pending`}
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </>

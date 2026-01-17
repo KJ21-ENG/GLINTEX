@@ -13,7 +13,7 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter }) {
+export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
@@ -67,7 +67,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const availableBobbinsRaw = Math.max(0, bobbinQty - issuedBobbins - dispatchedBobbins);
         const availableBobbins = availableWeight > EPSILON ? availableBobbinsRaw : 0;
 
-        const cutName = row.cut || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+        const cutName = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
 
         return {
           ...row,
@@ -160,6 +160,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
     return list.filter(l => {
       if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.yarn && l.yarnId && l.yarnId !== filters.yarn) return false;
       if (filters.firm && l.firmId !== filters.firm) return false;
       if (filters.supplier && l.supplierId !== filters.supplier) return false;
       if (filters.from && l.date < filters.from) return false;
@@ -177,6 +178,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
   }, [bobbinLots, filters, search]);
+
 
   const displayData = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -215,6 +217,22 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     });
     return Array.from(map.values());
   }, [filteredLots, groupBy]);
+
+  // Bubble up data for export (pass displayed data which respects groupBy)
+  useEffect(() => {
+    if (onDataChange) onDataChange(displayData);
+  }, [displayData, onDataChange]);
+
+  // Grand Totals
+  const grandTotals = useMemo(() => {
+    return displayData.reduce((acc, lot) => ({
+      totalBobbins: acc.totalBobbins + (lot.totalBobbins || 0),
+      availableBobbins: acc.availableBobbins + (lot.availableBobbins || 0),
+      totalWeight: acc.totalWeight + (lot.totalWeight || 0),
+      availableWeight: acc.availableWeight + (lot.availableWeight || 0),
+      crateCount: acc.crateCount + (lot.crates?.length || lot.crateCount || 0),
+    }), { totalBobbins: 0, availableBobbins: 0, totalWeight: 0, availableWeight: 0, crateCount: 0 });
+  }, [displayData]);
 
   return (
     <div className="space-y-4">
@@ -311,6 +329,21 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                 )
               })
             )}
+            {/* Grand Total Row */}
+            {displayData.length > 0 && (
+              <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">Grand Total</TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                <TableCell></TableCell>
+                {!groupBy ? <TableCell></TableCell> : null}
+                <TableCell></TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.availableBobbins} / {grandTotals.totalBobbins}</TableCell>
+                <TableCell className="font-bold text-primary">{formatKg(grandTotals.availableWeight)} / {formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="font-bold text-primary">{grandTotals.crateCount}</TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </div>
@@ -375,6 +408,18 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
               </div>
             );
           })
+        )}
+        {/* Mobile Grand Total Card */}
+        {displayData.length > 0 && (
+          <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
+            <div className="flex justify-between items-center">
+              <span className="font-bold text-primary">Grand Total</span>
+              <div className="text-right">
+                <div className="font-mono font-bold text-primary">{formatKg(grandTotals.availableWeight)} / {formatKg(grandTotals.totalWeight)}</div>
+                <div className="text-xs text-muted-foreground">{grandTotals.availableBobbins} / {grandTotals.totalBobbins} bobbins • {grandTotals.crateCount} crates</div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

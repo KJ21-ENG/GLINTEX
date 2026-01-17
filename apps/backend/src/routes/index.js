@@ -12269,13 +12269,31 @@ async function generateSummaryData(stage, type, date) {
   } else if (stage === 'coning' && type === 'issue') {
     const issues = await prisma.issueToConingMachine.findMany({
       where: { date, isDeleted: false },
-      include: { machine: true, operator: true },
+      include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
 
     // Lookup item names
     const itemIds = [...new Set(issues.map(i => i.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
+
+    const coneTypeIds = new Set();
+    issues.forEach((issue) => {
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach(ref => {
+        if (ref?.coneTypeId) coneTypeIds.add(ref.coneTypeId);
+      });
+    });
+    const coneTypes = coneTypeIds.size
+      ? await prisma.coneType.findMany({ where: { id: { in: Array.from(coneTypeIds) } } })
+      : [];
+    const coneTypeMap = new Map(coneTypes.map(c => [c.id, c.name]));
+    const resolveConeTypeName = (issue) => {
+      const refs = parseRefs(issue?.receivedRowRefs);
+      const ids = new Set(refs.map(ref => ref?.coneTypeId).filter(Boolean));
+      if (!ids.size) return '-';
+      return Array.from(ids).map(id => coneTypeMap.get(id) || id).join(', ');
+    };
 
     summary.totalCount = issues.length;
     summary.totalRollsIssued = issues.reduce((sum, i) => sum + (i.rollsIssued || 0), 0);
@@ -12285,6 +12303,10 @@ async function generateSummaryData(stage, type, date) {
       machineName: i.machine?.name || '-',
       itemName: itemMap[i.itemId] || i.itemId || '-',
       lotNo: i.lotNo || '-',
+      yarnName: i.yarn?.name || '-',
+      twistName: i.twist?.name || '-',
+      coneTypeName: resolveConeTypeName(i),
+      perConeTargetG: i.requiredPerConeNetWeight || 0,
       operatorName: i.operator?.name || '-',
       shift: i.shift || '-',
       note: i.note || '',
@@ -12305,13 +12327,37 @@ async function generateSummaryData(stage, type, date) {
   } else if (stage === 'coning' && type === 'receive') {
     const rows = await prisma.receiveFromConingMachineRow.findMany({
       where: { date, isDeleted: false },
-      include: { operator: true, box: true, issue: { include: { machine: true } } },
+      include: { operator: true, box: true, issue: { include: { machine: true, yarn: true, twist: true, cut: true } } },
       orderBy: { createdAt: 'asc' },
     });
 
     // Lookup item names from issue.itemId
     const itemIds = [...new Set(rows.map(r => r.issue?.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
+
+    const issueMap = new Map();
+    rows.forEach((row) => {
+      if (row.issue?.id && !issueMap.has(row.issue.id)) {
+        issueMap.set(row.issue.id, row.issue);
+      }
+    });
+    const coneTypeIds = new Set();
+    issueMap.forEach((issue) => {
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach(ref => {
+        if (ref?.coneTypeId) coneTypeIds.add(ref.coneTypeId);
+      });
+    });
+    const coneTypes = coneTypeIds.size
+      ? await prisma.coneType.findMany({ where: { id: { in: Array.from(coneTypeIds) } } })
+      : [];
+    const coneTypeMap = new Map(coneTypes.map(c => [c.id, c.name]));
+    const resolveConeTypeName = (issue) => {
+      const refs = parseRefs(issue?.receivedRowRefs);
+      const ids = new Set(refs.map(ref => ref?.coneTypeId).filter(Boolean));
+      if (!ids.size) return '-';
+      return Array.from(ids).map(id => coneTypeMap.get(id) || id).join(', ');
+    };
 
     summary.totalCount = rows.length;
     summary.totalCones = rows.reduce((sum, r) => sum + (r.coneCount || 0), 0);
@@ -12321,6 +12367,10 @@ async function generateSummaryData(stage, type, date) {
       machineName: r.issue?.machine?.name || '-',
       itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
       lotNo: r.issue?.lotNo || '-',
+      yarnName: r.issue?.yarn?.name || '-',
+      twistName: r.issue?.twist?.name || '-',
+      coneTypeName: resolveConeTypeName(r.issue),
+      perConeTargetG: r.issue?.requiredPerConeNetWeight || 0,
       operatorName: r.operator?.name || '-',
       boxName: r.box?.name || '-',
       coneCount: r.coneCount || 0,

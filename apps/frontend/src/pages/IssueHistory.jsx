@@ -40,6 +40,21 @@ export function IssueHistory({ db, refreshDb }) {
     }
   };
 
+  const resolveConingConeTypeName = (issue) => {
+    const refs = parseIssueRefs(issue);
+    if (!refs.length) return '';
+    const ids = new Set(refs.map(ref => ref?.coneTypeId).filter(Boolean));
+    if (!ids.size) return '';
+    const names = Array.from(ids).map(id => db.cone_types?.find(c => c.id === id)?.name || id);
+    return names.join(', ');
+  };
+
+  const formatPerConeNet = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return '—';
+    return `${num} g`;
+  };
+
   const handleDelete = async (issueId) => {
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
       return;
@@ -891,6 +906,8 @@ export function IssueHistory({ db, refreshDb }) {
           lotNo: lotLabelFor(r),
           cut: resolved.cutName,
           yarn: resolved.yarnName,
+          coneType: resolveConingConeTypeName(r) || '—',
+          perConeNetG: Number.isFinite(Number(r.requiredPerConeNetWeight)) ? Number(r.requiredPerConeNetWeight) : '',
           rollsIssued: r.count || r.rollsIssued || 0,
         };
       }
@@ -935,6 +952,8 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'lotNo', header: 'Lot' },
         { key: 'cut', header: 'Cut' },
         { key: 'yarn', header: 'Yarn' },
+        { key: 'coneType', header: 'Cone Type' },
+        { key: 'perConeNetG', header: 'Per Cone (g)' },
         { key: 'machineName', header: 'Machine' },
         { key: 'operatorName', header: 'Operator' },
         { key: 'rollsIssued', header: 'Rolls Issued' },
@@ -1090,6 +1109,8 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Lot</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
+                  <TableHead>Cone Type</TableHead>
+                  <TableHead>Per Cone (g)</TableHead>
                   <TableHead>Rolls Issued</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
@@ -1142,6 +1163,8 @@ export function IssueHistory({ db, refreshDb }) {
                       <TableCell>{lotLabelFor(r) || '—'}</TableCell>
                       <TableCell>{machineNameById.get(r.machineId)}</TableCell>
                       <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                      <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
+                      <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
                       <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
                       <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
                       <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
@@ -1177,6 +1200,11 @@ export function IssueHistory({ db, refreshDb }) {
                     <p className="text-xs text-muted-foreground mt-1">
                       {formatDateDDMMYYYY(r.date)} • {itemNameById.get(r.itemId)}
                     </p>
+                    {process === 'coning' && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Cone: {resolveConingConeTypeName(r) || '—'} • Per Cone: {formatPerConeNet(r.requiredPerConeNetWeight)}
+                      </p>
+                    )}
                   </div>
                   <Badge variant="outline" className="whitespace-nowrap">
                     {process === 'cutter' ? formatKg(r.totalWeight) : (r.count || r.rollsIssued || r.metallicBobbins || 0)}

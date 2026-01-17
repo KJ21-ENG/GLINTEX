@@ -316,6 +316,20 @@ export function ReceiveHistoryTable() {
         }
     };
 
+    const formatPerConeNet = (value) => {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num <= 0) return '—';
+        return `${num} g`;
+    };
+
+    const formatActualPerCone = (netWeightKg, coneCount) => {
+        const net = Number(netWeightKg);
+        const cones = Number(coneCount);
+        if (!Number.isFinite(net) || !Number.isFinite(cones) || cones <= 0) return '—';
+        const perCone = (net * 1000) / cones;
+        return `${perCone.toFixed(2)} g`;
+    };
+
     const buildMachineNameOptions = (processType, currentValue) => {
         const options = (db.machines || [])
             .filter(m => m.processType === 'all' || m.processType === processType)
@@ -1535,6 +1549,9 @@ export function ReceiveHistoryTable() {
                 const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                 const item = db.items?.find(i => i.id === coningIssue?.itemId);
                 const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                const perConeNet = Number(coningIssue?.requiredPerConeNetWeight);
+                const actualPerConeNet = formatActualPerCone(row.netWeight ?? row.grossWeight, row.coneCount);
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
@@ -1543,6 +1560,9 @@ export function ReceiveHistoryTable() {
                     twist: resolved.twistName,
                     piece: (row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
+                    coneType: coneType?.name || '—',
+                    perConeNetG: Number.isFinite(perConeNet) && perConeNet > 0 ? perConeNet : '',
+                    actualPerConeG: actualPerConeNet,
                     box: row.box?.name || '—',
                     cones: row.coneCount || 0,
                     weight: formatKg(row.netWeight ?? row.grossWeight),
@@ -1559,6 +1579,9 @@ export function ReceiveHistoryTable() {
                 { key: 'twist', header: 'Twist' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'barcode', header: 'Barcode' },
+                { key: 'coneType', header: 'Cone Type' },
+                { key: 'perConeNetG', header: 'Per Cone (g)' },
+                { key: 'actualPerConeG', header: 'Actual Per Cone (g)' },
                 { key: 'box', header: 'Box' },
                 { key: 'cones', header: 'Cones' },
                 { key: 'weight', header: 'Weight (kg)' },
@@ -1600,7 +1623,7 @@ export function ReceiveHistoryTable() {
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 14;
+    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 17;
 
     return (
         <Card>
@@ -1724,6 +1747,9 @@ export function ReceiveHistoryTable() {
                                                 <TableHead>Twist</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Barcode</TableHead>
+                                                <TableHead>Cone Type</TableHead>
+                                                <TableHead className="text-right">Per Cone (g)</TableHead>
+                                                <TableHead className="text-right">Actual (g)</TableHead>
                                                 <TableHead>Box</TableHead>
                                                 <TableHead className="text-right">Cones</TableHead>
                                                 <TableHead className="text-right">Weight (kg)</TableHead>
@@ -1805,6 +1831,9 @@ export function ReceiveHistoryTable() {
                                                 const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
                                                 const item = db.items?.find(i => i.id === coningIssue?.itemId);
                                                 const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                                                const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                                const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
@@ -1817,6 +1846,9 @@ export function ReceiveHistoryTable() {
                                                             {(r.pieceIdsList || []).join(', ') || '—'}
                                                         </TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
+                                                        <TableCell>{coneType?.name || '—'}</TableCell>
+                                                        <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
+                                                        <TableCell className="text-right">{actualPerCone}</TableCell>
                                                         <TableCell>{r.box?.name || '—'}</TableCell>
                                                         <TableCell className="text-right">{r.coneCount}</TableCell>
                                                         <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
@@ -1909,6 +1941,9 @@ export function ReceiveHistoryTable() {
                                         const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
                                         const item = db.items?.find(i => i.id === coningIssue?.itemId);
                                         const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                        const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                                        const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                        const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
@@ -1918,6 +1953,12 @@ export function ReceiveHistoryTable() {
                                                             <p className="font-medium mt-1">{item?.name || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                Cone: {coneType?.name || '—'} • Per Cone: {formatPerConeNet(perConeNet)}
+                                                            </p>
+                                                            <p className="text-xs text-muted-foreground mt-1">
+                                                                Actual: {actualPerCone}
+                                                            </p>
                                                             <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
                                                                 Piece: {(r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>

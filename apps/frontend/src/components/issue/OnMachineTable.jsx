@@ -52,6 +52,25 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.yarns]);
 
+    const resolveConingConeTypeName = (issue) => {
+        if (!issue?.receivedRowRefs) return '—';
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') {
+            try { refs = JSON.parse(refs || '[]'); } catch { refs = []; }
+        }
+        if (!Array.isArray(refs) || refs.length === 0) return '—';
+        const ids = new Set(refs.map(ref => ref?.coneTypeId).filter(Boolean));
+        if (!ids.size) return '—';
+        const names = Array.from(ids).map(id => db.cone_types?.find(c => c.id === id)?.name || id);
+        return names.join(', ');
+    };
+
+    const formatPerConeNet = (value) => {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num <= 0) return '—';
+        return `${num} g`;
+    };
+
     // Build piece totals lookup maps for each process
     const cutterPieceTotals = useMemo(() => {
         const map = new Map();
@@ -335,7 +354,13 @@ export function OnMachineTable({ db, process }) {
             }
             // Coning - resolve cut/yarn from referenced source rows
             const resolved = entry ? resolveConingTrace(entry, traceContext) : { cutName: '—', yarnName: '—' };
-            return { ...baseData, cut: resolved.cutName, yarn: resolved.yarnName };
+            return {
+                ...baseData,
+                cut: resolved.cutName,
+                yarn: resolved.yarnName,
+                coneType: resolveConingConeTypeName(entry),
+                perConeNetG: Number.isFinite(Number(entry.requiredPerConeNetWeight)) ? Number(entry.requiredPerConeNetWeight) : '',
+            };
         });
 
         let columns = [
@@ -350,6 +375,10 @@ export function OnMachineTable({ db, process }) {
             columns.push({ key: 'cut', header: 'Cut' });
             columns.push({ key: 'yarn', header: 'Yarn' });
         }
+        if (process === 'coning') {
+            columns.push({ key: 'coneType', header: 'Cone Type' });
+            columns.push({ key: 'perConeNetG', header: 'Per Cone (g)' });
+        }
         columns = columns.concat([
             { key: 'machineName', header: 'Machine' },
             { key: 'operatorName', header: 'Operator' },
@@ -363,6 +392,8 @@ export function OnMachineTable({ db, process }) {
         const today = new Date().toISOString().split('T')[0];
         exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
     };
+
+    const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 11 : 13;
 
     return (
         <div className="space-y-4">
@@ -456,6 +487,8 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
                                     <TableHead>Piece</TableHead>
+                                    <TableHead>Cone Type</TableHead>
+                                    <TableHead>Per Cone (g)</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -471,7 +504,7 @@ export function OnMachineTable({ db, process }) {
                     <TableBody>
                         {onMachineEntries.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                                <TableCell colSpan={emptyColSpan} className="text-center py-8 text-muted-foreground">
                                     No pending entries on machine for {process}.
                                 </TableCell>
                             </TableRow>
@@ -486,6 +519,12 @@ export function OnMachineTable({ db, process }) {
                                             {(process === 'cutter' || process === 'holo' || process === 'coning') ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || '—')) : (entry.lotNo || '—')}
                                         </TableCell>
                                         {process === 'cutter' && <TableCell>{cutNameById.get(entry.cutId) || '—'}</TableCell>}
+                                        {process === 'coning' && (
+                                            <>
+                                                <TableCell>{resolveConingConeTypeName(entry)}</TableCell>
+                                                <TableCell>{formatPerConeNet(entry.requiredPerConeNetWeight)}</TableCell>
+                                            </>
+                                        )}
                                         <TableCell>{machineNameById.get(entry.machineId)}</TableCell>
                                         <TableCell>{operatorNameById.get(entry.operatorId)}</TableCell>
                                         <TableCell>{formatKg(entry.issuedWeight)}</TableCell>

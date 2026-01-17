@@ -46,6 +46,10 @@ export async function generateConingIssuePdf(data) {
         { text: 'Machine', align: 'left' },
         { text: 'Item', align: 'left' },
         { text: 'Lot No', align: 'left' },
+        { text: 'Yarn', align: 'left' },
+        { text: 'Twist', align: 'left' },
+        { text: 'Cone Type', align: 'left' },
+        { text: 'Per Cone (g)', align: 'right' },
         { text: 'Operator', align: 'left' },
         { text: 'Shift', align: 'center' },
         { text: 'Note', align: 'left' },
@@ -54,7 +58,7 @@ export async function generateConingIssuePdf(data) {
     ];
 
     // Column widths for landscape A4
-    const colWidths = [12, 35, 45, 35, 40, 20, 40, 30, 30];
+    const colWidths = [10, 28, 30, 24, 22, 20, 24, 18, 28, 16, 32, 22, 22];
 
     const rows = [];
     let totalRolls = 0;
@@ -73,6 +77,10 @@ export async function generateConingIssuePdf(data) {
                     { text: item.machineName || '-', align: 'left' },
                     { text: item.itemName || '-', align: 'left' },
                     { text: item.lotNo || '-', align: 'left' },
+                    { text: item.yarnName || '-', align: 'left' },
+                    { text: item.twistName || '-', align: 'left' },
+                    { text: item.coneTypeName || '-', align: 'left' },
+                    { text: formatNumber(item.perConeTargetG || 0), align: 'right' },
                     { text: item.operatorName || '-', align: 'left' },
                     { text: item.shift || '-', align: 'center' },
                     { text: item.note || '-', align: 'left' },
@@ -90,6 +98,10 @@ export async function generateConingIssuePdf(data) {
                 { text: 'TOTAL', align: 'left' },
                 { text: '', align: 'left' },
                 { text: '', align: 'left' },
+                { text: '', align: 'left' },
+                { text: '', align: 'left' },
+                { text: '', align: 'left' },
+                { text: '', align: 'right' },
                 { text: '', align: 'left' },
                 { text: '', align: 'center' },
                 { text: '', align: 'left' },

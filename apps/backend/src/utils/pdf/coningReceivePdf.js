@@ -168,7 +168,7 @@ export async function generateConingReceivePdf(data) {
             { text: 'Actual Wt Avg (g)', align: 'right' },
         ];
 
-        const summaryColWidths = [26, 18, 18, 26, 20, 22, 24, 22, 22];
+        const summaryColWidths = [28, 20, 20, 28, 22, 24, 30, 28, 28];
 
         const summaryRows = [];
         summaryMap.forEach((entry) => {

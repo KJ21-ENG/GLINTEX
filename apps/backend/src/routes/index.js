@@ -12341,6 +12341,45 @@ async function generateSummaryData(stage, type, date) {
         issueMap.set(row.issue.id, row.issue);
       }
     });
+    const issueList = Array.from(issueMap.values());
+    const holoRowIds = new Set();
+    issueList.forEach((issue) => {
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach(ref => {
+        if (ref?.rowId) holoRowIds.add(ref.rowId);
+      });
+    });
+
+    const holoRows = holoRowIds.size
+      ? await prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: Array.from(holoRowIds) }, isDeleted: false },
+        select: { id: true, issueId: true },
+      })
+      : [];
+    const holoIssueIds = [...new Set(holoRows.map(r => r.issueId).filter(Boolean))];
+    const holoIssues = holoIssueIds.length
+      ? await prisma.issueToHoloMachine.findMany({
+        where: { id: { in: holoIssueIds }, isDeleted: false },
+        include: { cut: true },
+      })
+      : [];
+    const holoIssueMap = new Map(holoIssues.map(i => [i.id, i]));
+    const holoRowIssueMap = new Map(holoRows.map(r => [r.id, r.issueId]));
+    const holoCutNameMap = await buildHoloCutNameMap(holoIssues);
+    const coningIssueCutMap = new Map();
+    issueList.forEach((issue) => {
+      const cutNames = new Set();
+      if (issue.cut?.name) cutNames.add(issue.cut.name);
+      const refs = parseRefs(issue.receivedRowRefs);
+      refs.forEach((ref) => {
+        const holoIssueId = ref?.rowId ? holoRowIssueMap.get(ref.rowId) : null;
+        if (holoIssueId) {
+          const cutName = holoCutNameMap.get(holoIssueId);
+          if (cutName) cutNames.add(cutName);
+        }
+      });
+      coningIssueCutMap.set(issue.id, cutNames.size ? Array.from(cutNames).join(', ') : '-');
+    });
     const coneTypeIds = new Set();
     issueMap.forEach((issue) => {
       const refs = parseRefs(issue.receivedRowRefs);
@@ -12367,7 +12406,7 @@ async function generateSummaryData(stage, type, date) {
       machineName: r.issue?.machine?.name || '-',
       itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
       lotNo: r.issue?.lotNo || '-',
-      cutName: r.issue?.cut?.name || '-',
+      cutName: coningIssueCutMap.get(r.issue?.id) || r.issue?.cut?.name || '-',
       yarnName: r.issue?.yarn?.name || '-',
       twistName: r.issue?.twist?.name || '-',
       coneTypeName: resolveConeTypeName(r.issue),

@@ -106,13 +106,28 @@ export function IssueToConing() {
             }
         }
 
-        // Defaults
-        const remainingRolls = Math.max(0, (row.rollCount || 0) - (row.issuedRolls || 0)); // Simplified logic, assumes 'issuedRolls' tracking exists or we rely on manual check
-        // Note: Real implementation needs strict 'issuedSoFar' check from db.issue_to_coning_machine refs. 
-        // For now assuming full crate availability if not tracking partially. 
-        // Actually, let's calculate unit weight.
+        // Defaults (factor in dispatch)
+        const totalRolls = Number(row.rollCount || 0);
+        const totalWeight = Number(row.rollWeight || 0);
+        const dispatchedRolls = Number(row.dispatchedCount || 0);
+        const dispatchedWeight = Number(row.dispatchedWeight || 0);
+        const availableWeight = Math.max(0, totalWeight - dispatchedWeight);
+        const countBasedAvailable = Math.max(0, totalRolls - dispatchedRolls);
+        const weightBasedAvailable = totalRolls > 0 && totalWeight > 0
+            ? Math.floor(((availableWeight / totalWeight) * totalRolls) + 1e-6)
+            : countBasedAvailable;
+        const availableRolls = totalRolls > 0
+            ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
+            : countBasedAvailable;
 
-        const unitWeight = row.rollCount > 0 ? (row.rollWeight / row.rollCount) : 0;
+        if (availableRolls <= 0 || availableWeight <= 0) {
+            alert('No rolls available for issue (may have been dispatched).');
+            setScanInput('');
+            return;
+        }
+
+        const unitWeight = totalRolls > 0 ? (totalWeight / totalRolls) : 0;
+        const defaultIssueWeight = Number((availableRolls * unitWeight).toFixed(3));
 
         // Trace piece IDs
         let pieceIds = [];
@@ -135,10 +150,10 @@ export function IssueToConing() {
             barcode: row.barcode,
             lotNo: rowLot,
             pieceIdsDisplay, // Show piece IDs in the 'Piece' column
-            availRolls: row.rollCount,
+            availRolls: availableRolls,
             unitWeight,
-            issueRolls: row.rollCount, // Default all
-            issueWeight: row.rollWeight,
+            issueRolls: availableRolls, // Default all available
+            issueWeight: defaultIssueWeight,
             itemId: scannedItemId,
             cut: cutName
         }]);

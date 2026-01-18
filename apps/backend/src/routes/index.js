@@ -180,6 +180,22 @@ function roundTo3Decimals(val) {
   return Math.round(num * 1000) / 1000;
 }
 
+function calcAvailableCountFromWeight({ totalCount, issuedCount, dispatchedCount, totalWeight, availableWeight }) {
+  const total = Number(totalCount || 0);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const issued = Number(issuedCount || 0);
+  const dispatched = Number(dispatchedCount || 0);
+  const countBased = Math.max(0, total - issued - dispatched);
+  const totalWt = Number(totalWeight || 0);
+  if (!Number.isFinite(totalWt) || totalWt <= 0) return countBased;
+  const availWt = Number(availableWeight || 0);
+  if (!Number.isFinite(availWt) || availWt <= 0) return 0;
+  const ratio = availWt / totalWt;
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  const weightBased = Math.floor((ratio * total) + 1e-6);
+  return Math.max(0, Math.min(countBased, weightBased));
+}
+
 function isOpeningLotNo(lotNo) {
   return typeof lotNo === 'string' && lotNo.startsWith('OP-');
 }
@@ -3893,6 +3909,9 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
         if (piece.status !== 'available') {
           throw new Error(`Piece ${piece.id} is not available`);
         }
+        if (Number(piece.dispatchedWeight || 0) > 0) {
+          throw new Error(`Piece ${piece.id} has been partially dispatched and cannot be issued to cutter`);
+        }
         if (piece.lotNo !== lotNo) {
           throw new Error(`Piece ${piece.id} does not belong to lot ${lotNo}`);
         }
@@ -5301,7 +5320,17 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     }
     const receiveRows = await prisma.receiveFromCutterMachineRow.findMany({
       where: { id: { in: rowIds }, isDeleted: false },
-      select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true, cutId: true },
+      select: {
+        id: true,
+        pieceId: true,
+        cutId: true,
+        bobbinQuantity: true,
+        netWt: true,
+        issuedBobbins: true,
+        issuedBobbinWeight: true,
+        dispatchedCount: true,
+        dispatchedWeight: true,
+      },
     });
     if (receiveRows.length !== normalizedCrates.length) {
       return res.status(404).json({ error: 'One or more scanned crates were not found' });
@@ -5352,6 +5381,48 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
     const twistRecord = await prisma.twist.findUnique({ where: { id: twistId } });
     if (!twistRecord) {
       return res.status(404).json({ error: 'Selected twist not found' });
+    }
+
+    const overIssuedCrates = [];
+    for (const crate of normalizedCrates) {
+      const sourceRow = rowMap.get(crate.rowId);
+      if (!sourceRow) continue;
+      const totalCount = Number(sourceRow.bobbinQuantity || 0);
+      const issuedCount = Number(sourceRow.issuedBobbins || 0);
+      const dispatchedCount = Number(sourceRow.dispatchedCount || 0);
+      const netWeight = Number(sourceRow.netWt || 0);
+      const issuedWeight = Number(sourceRow.issuedBobbinWeight || 0);
+      const dispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
+      const availableCount = calcAvailableCountFromWeight({
+        totalCount,
+        issuedCount,
+        dispatchedCount,
+        totalWeight: netWeight,
+        availableWeight,
+      });
+
+      const requestedCount = Number(crate.issuedBobbins || 0);
+      const requestedWeight = Number(crate.issuedBobbinWeight || 0);
+      const exceedsCount = availableCount != null && requestedCount > availableCount;
+      const exceedsWeight = requestedWeight > availableWeight + 1e-6;
+
+      if (exceedsCount || exceedsWeight) {
+        overIssuedCrates.push({
+          rowId: crate.rowId,
+          requestedCount,
+          availableCount,
+          requestedWeight: roundTo3Decimals(requestedWeight),
+          availableWeight: roundTo3Decimals(availableWeight),
+        });
+      }
+    }
+
+    if (overIssuedCrates.length > 0) {
+      return res.status(400).json({
+        error: 'Insufficient bobbins/weight available for one or more crates (may have been dispatched).',
+        crates: overIssuedCrates,
+      });
     }
 
     const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
@@ -6015,6 +6086,8 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
         baseWeight: typeof found?.coneWeight === 'number'
           ? found.coneWeight
           : (typeof found?.rollWeight === 'number' ? found.rollWeight : 0),
+        dispatchedCount: Number(found?.dispatchedCount || 0),
+        dispatchedWeight: Number(found?.dispatchedWeight || 0),
       };
     });
 
@@ -6124,6 +6197,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
     }
 
     const previouslyIssuedByRowId = new Map();
+    const previouslyIssuedWeightByRowId = new Map();
     for (const issue of existingRowRefs) {
       const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
       for (const ref of refs) {
@@ -6131,34 +6205,61 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
         if (!rid) continue;
         const already = previouslyIssuedByRowId.get(rid) || 0;
         previouslyIssuedByRowId.set(rid, already + (Number(ref.issueRolls) || 0));
+        const weightAlready = previouslyIssuedWeightByRowId.get(rid) || 0;
+        previouslyIssuedWeightByRowId.set(rid, weightAlready + (Number(ref.issueWeight) || 0));
       }
     }
 
     const issueTracker = new Map();
+    const issueWeightTracker = new Map();
     const overIssuedCrates = [];
     for (const crate of preparedCrates) {
       const rid = crate.rowId || (crate.barcode ? normalizeBarcodeInput(crate.barcode) : null);
       if (!rid) continue;
       const baseRolls = Number(crate.baseRolls) || 0;
+      const baseWeight = Number(crate.baseWeight) || 0;
+      const dispatchedCount = Number(crate.dispatchedCount || 0);
+      const dispatchedWeight = Number(crate.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, baseWeight - dispatchedWeight);
+      const countBasedAvailable = Math.max(0, baseRolls - dispatchedCount);
+      const weightBasedAvailable = baseRolls > 0 && baseWeight > 0
+        ? Math.floor(((availableWeight / baseWeight) * baseRolls) + 1e-6)
+        : countBasedAvailable;
+      const baseAvailableRolls = baseRolls > 0
+        ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
+        : 0;
+
       const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
       const alreadyPlanned = issueTracker.get(rid) || 0;
       const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
 
-      if (baseRolls > 0 && totalAfterRequest > baseRolls) {
+      const existingIssuedWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
+      const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
+      const totalWeightAfter = existingIssuedWeight + alreadyPlannedWeight + (Number(crate.issueWeight) || 0);
+
+      const exceedsRolls = totalAfterRequest > baseAvailableRolls;
+      const exceedsWeight = availableWeight <= 0
+        ? (Number(crate.issueWeight) || 0) > 0
+        : totalWeightAfter > availableWeight + 1e-6;
+
+      if (exceedsRolls || exceedsWeight) {
         overIssuedCrates.push({
           rowId: rid,
           barcode: crate.barcode,
           requestedRolls: crate.issueRolls,
-          availableRolls: Math.max(baseRolls - existingIssued - alreadyPlanned, 0),
+          availableRolls: Math.max(baseAvailableRolls - existingIssued - alreadyPlanned, 0),
+          requestedWeight: roundTo3Decimals(crate.issueWeight),
+          availableWeight: roundTo3Decimals(Math.max(availableWeight - existingIssuedWeight - alreadyPlannedWeight, 0)),
         });
       }
 
       issueTracker.set(rid, alreadyPlanned + (Number(crate.issueRolls) || 0));
+      issueWeightTracker.set(rid, alreadyPlannedWeight + (Number(crate.issueWeight) || 0));
     }
 
     if (overIssuedCrates.length) {
       return res.status(400).json({
-        error: 'One or more crates have already been fully issued',
+        error: 'One or more crates do not have enough rolls/weight available (may have been dispatched).',
         crates: overIssuedCrates,
       });
     }

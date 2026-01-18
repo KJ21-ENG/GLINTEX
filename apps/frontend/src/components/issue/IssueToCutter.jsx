@@ -37,7 +37,7 @@ export function IssueToCutter() {
     const availablePieces = useMemo(() => {
         if (!lotNo) return [];
         return inboundItems
-            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && ii.status === 'available')
+            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && ii.status === 'available' && Number(ii.dispatchedWeight || 0) <= 0)
             .sort((a, b) => a.seq - b.seq);
     }, [inboundItems, lotNo, itemId]);
 
@@ -59,6 +59,9 @@ export function IssueToCutter() {
             const piece = await api.getInboundByBarcode(barcodeScan.trim());
             if (!piece) throw new Error('Barcode not found');
             if (piece.status !== 'available') throw new Error('Piece is not available');
+            if (Number(piece.dispatchedWeight || 0) > 0) {
+                throw new Error('Piece has been partially dispatched and cannot be issued to cutter');
+            }
 
             // Auto-select context
             if (itemId !== piece.itemId) setItemId(piece.itemId);

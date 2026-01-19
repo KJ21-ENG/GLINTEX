@@ -597,13 +597,15 @@ function ProductionReport() {
 
                                                                                 return Object.entries(groupedDetails).map(([sectionName, sectionRows]) => (
                                                                                     <div key={sectionName}>
-                                                                                        {view === 'machine' && (() => {
+                                                                                        {(() => {
                                                                                             const totalWeight = sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0);
                                                                                             const totalCount = sectionRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
                                                                                             const unitLabel = process === 'cutter' ? 'Bobbins' : process === 'holo' ? 'Rolls' : 'Cones';
+                                                                                            // Only show section label for machine view (where we have multiple sections)
+                                                                                            const showSectionLabel = view === 'machine' && sectionName !== 'All';
                                                                                             return (
                                                                                                 <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
-                                                                                                    <span>Section: {sectionName}</span>
+                                                                                                    <span>{showSectionLabel ? `Section: ${sectionName}` : 'Details Summary'}</span>
                                                                                                     <span className="text-muted-foreground">
                                                                                                         Total: {totalCount} {unitLabel} | {formatKg(totalWeight)} kg
                                                                                                     </span>

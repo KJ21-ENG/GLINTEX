@@ -432,9 +432,7 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
   // Enhanced buffer clearing sequence to prevent ghosting from previous print jobs
   // This addresses printer buffer conflicts when multiple jobs are sent rapidly
   const lines = [
-    'HOME',           // Return to home position and clear any pending state
-    'CLS',            // Clear image buffer - first pass
-    'CODEPAGE UTF-8', // Reset codepage to known state
+    'CLS',            // Clear image buffer first to discard any pending data
     `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
     `GAP ${verticalGap.toFixed(2)} mm,0`,
     `DENSITY ${baseDensity}`,

@@ -11026,7 +11026,7 @@ router.get('/api/reports/production', async (req, res) => {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
         },
-        include: { operator: true, issue: { include: { machine: true } } },
+        include: { operator: true, issue: { include: { machine: true, yarn: true, twist: true, cut: true } } },
       });
 
       // Calculate totals from date-filtered receive rows
@@ -11069,16 +11069,27 @@ router.get('/api/reports/production', async (req, res) => {
         for (const row of coningReceives) {
           const itemId = row.issue?.itemId || 'unknown';
           const itemName = itemMap.get(itemId) || 'Unknown Item';
-          const current = byItem.get(itemId) || { itemId, itemName, received: 0, coneCount: 0 };
+          const cutId = row.issue?.cutId || 'none';
+          const cutName = row.issue?.cut?.name || '';
+          const key = `${itemId}|${cutId}`;
+          const current = byItem.get(key) || { itemId, itemName, cutId, cutName, received: 0, coneCount: 0 };
           current.received += row.netWeight || 0;
           current.coneCount += row.coneCount || 0;
-          byItem.set(itemId, current);
+          byItem.set(key, current);
         }
         report.data = Array.from(byItem.values());
       } else if (view === 'yarn' && process === 'coning') {
-        // Coning issue doesn't have yarnId directly. For now, leave as placeholder or try to fetch.
-        // Given complexity, return empty list or group by "Not Specified"
-        report.data = [];
+        // Coning issue has yarnId - group by yarn
+        const byYarn = new Map();
+        for (const row of coningReceives) {
+          const yarnId = row.issue?.yarnId || 'unknown';
+          const yarnName = row.issue?.yarn?.name || 'Unknown Yarn';
+          const current = byYarn.get(yarnId) || { yarnId, yarnName, received: 0, coneCount: 0 };
+          current.received += row.netWeight || 0;
+          current.coneCount += row.coneCount || 0;
+          byYarn.set(yarnId, current);
+        }
+        report.data = Array.from(byYarn.values());
       } else if (process === 'coning') {
         const byMachine = new Map();
         for (const row of coningReceives) {
@@ -11318,12 +11329,16 @@ router.get('/api/reports/production/details', async (req, res) => {
           shift: key === 'Not Specified' ? null : key
         };
       } else if (view === 'item') {
+        const [itemId, cutId] = key.split('|');
         where.issue = {
-          itemId: key === 'unknown' ? null : key
+          itemId: itemId === 'unknown' ? null : itemId,
+          cutId: (cutId && cutId !== 'none') ? cutId : undefined
         };
       } else if (view === 'yarn') {
-        // Coning issue doesn't have yarnId directly. Return empty.
-        where.issue = { id: 'none' };
+        // Coning issue has yarnId - filter by it
+        where.issue = {
+          yarnId: key === 'unknown' ? null : key
+        };
       } else {
         if (key === 'unknown') {
           where.AND = [
@@ -11343,7 +11358,7 @@ router.get('/api/reports/production/details', async (req, res) => {
         where,
         include: {
           operator: true,
-          issue: { include: { machine: true } }
+          issue: { include: { machine: true, yarn: true, twist: true, cut: true } }
         },
         orderBy: { date: 'desc' },
         take: 2000
@@ -11359,6 +11374,9 @@ router.get('/api/reports/production/details', async (req, res) => {
 
       rows = rawRows.map(r => {
         const itemName = r.issue?.itemId ? coningItemMap.get(r.issue.itemId) : null;
+        const yarnTwist = `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`.trim();
+        const cutName = r.issue?.cut?.name || '';
+        const descParts = [cutName, itemName, yarnTwist].filter(Boolean);
         return {
           id: r.id,
           date: r.date,
@@ -11370,7 +11388,7 @@ router.get('/api/reports/production/details', async (req, res) => {
             id: r.issue?.id,
             barcode: r.issue?.barcode,
             weight: 0,
-            desc: itemName || 'Coning Issue'
+            desc: descParts.length > 0 ? descParts.join(' - ') : null
           },
           operatorName: r.operator?.name,
           machineName: r.issue?.machine?.name || r.machineNo // Return full machine name for grouping

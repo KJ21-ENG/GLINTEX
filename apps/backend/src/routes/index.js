@@ -5505,6 +5505,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
       const machineRec = created.machineId ? await prisma.machine.findUnique({ where: { id: created.machineId } }) : null;
       const operatorRec = created.operatorId ? await prisma.operator.findUnique({ where: { id: created.operatorId } }) : null;
       const twistRec = await prisma.twist.findUnique({ where: { id: created.twistId } });
+      const yarnRec = created.yarnId ? await prisma.yarn.findUnique({ where: { id: created.yarnId } }) : null;
 
       sendNotification('issue_to_holo_machine_created', {
         itemName,
@@ -5513,6 +5514,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
         metallicBobbins: created.metallicBobbins,
         metallicBobbinsWeight: created.metallicBobbinsWeight,
         yarnKg: created.yarnKg,
+        yarnName: yarnRec ? yarnRec.name : '',
         machineName: machineRec ? machineRec.name : '',
         operatorName: operatorRec ? operatorRec.name : '',
         twistName: twistRec ? twistRec.name : '',

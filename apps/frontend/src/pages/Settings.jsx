@@ -40,6 +40,7 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'metallicBobbins', label: 'Bobbins' },
             { key: 'metallicBobbinsWeight', label: 'Bobbin Weight' },
             { key: 'yarnKg', label: 'Yarn Weight' },
+            { key: 'yarnName', label: 'Yarn Name' },
             { key: 'machineName', label: 'Machine' },
             { key: 'operatorName', label: 'Operator' },
             { key: 'twistName', label: 'Twist Name' },

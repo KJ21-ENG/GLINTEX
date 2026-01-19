@@ -429,14 +429,19 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
     orientation,
   } = dims;
   const totalWidth = Math.max(pageWidth, width * columns + horizontalGap * (columns - 1));
+  // Enhanced buffer clearing sequence to prevent ghosting from previous print jobs
+  // This addresses printer buffer conflicts when multiple jobs are sent rapidly
   const lines = [
+    'HOME',           // Return to home position and clear any pending state
+    'CLS',            // Clear image buffer - first pass
+    'CODEPAGE UTF-8', // Reset codepage to known state
     `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
     `GAP ${verticalGap.toFixed(2)} mm,0`,
     `DENSITY ${baseDensity}`,
     'SPEED 4',
     `DIRECTION ${orientation === 'landscape' ? 1 : 0}`,
     'REFERENCE 0,0',
-    'CLS',
+    'CLS',            // Clear image buffer again after setup for clean slate
   ];
 
   const fontName = '3';
@@ -882,6 +887,23 @@ export const setPreferredPrinter = (printerName) => {
   }
 };
 
+// Print queue to prevent rapid consecutive prints from causing buffer conflicts
+// This addresses the ghosting issue where fast consecutive jobs overlap in printer memory
+const PRINT_JOB_MIN_INTERVAL_MS = 800; // Minimum delay between print jobs
+let lastPrintJobTime = 0;
+let printQueuePromise = Promise.resolve();
+
+const waitForPrintQueue = () => {
+  const now = Date.now();
+  const elapsed = now - lastPrintJobTime;
+  const waitTime = Math.max(0, PRINT_JOB_MIN_INTERVAL_MS - elapsed);
+
+  if (waitTime > 0) {
+    return new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  return Promise.resolve();
+};
+
 export const sendToLocalPrinter = async ({
   printer,
   content,
@@ -891,26 +913,40 @@ export const sendToLocalPrinter = async ({
   if (!content) {
     return { success: false, error: 'Missing print content' };
   }
-  try {
-    const resolved = serviceBase
-      ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
-      : await resolvePrintServiceBase();
-    if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
-    const base = resolved.serviceBase;
 
-    const response = await fetch(`${base}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ printer, content, type }),
-    });
-    const result = await response.json();
-    if (result.success) {
-      return { success: true, result };
+  // Queue this print job to ensure sequential execution with delay
+  // This prevents printer buffer conflicts when users create multiple issues rapidly
+  const executeJob = async () => {
+    await waitForPrintQueue();
+
+    try {
+      const resolved = serviceBase
+        ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
+        : await resolvePrintServiceBase();
+      if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
+      const base = resolved.serviceBase;
+
+      const response = await fetch(`${base}/print`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printer, content, type }),
+      });
+
+      lastPrintJobTime = Date.now(); // Record time after job is sent
+
+      const result = await response.json();
+      if (result.success) {
+        return { success: true, result };
+      }
+      return { success: false, error: result.error || 'Failed to send print job', result };
+    } catch (err) {
+      return { success: false, error: err.message || 'Failed to send print job' };
     }
-    return { success: false, error: result.error || 'Failed to send print job', result };
-  } catch (err) {
-    return { success: false, error: err.message || 'Failed to send print job' };
-  }
+  };
+
+  // Chain this job to the queue to ensure sequential execution
+  printQueuePromise = printQueuePromise.then(executeJob).catch(() => executeJob());
+  return printQueuePromise;
 };
 
 export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {}) => {

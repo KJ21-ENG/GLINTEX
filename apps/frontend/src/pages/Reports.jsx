@@ -597,14 +597,19 @@ function ProductionReport() {
 
                                                                                 return Object.entries(groupedDetails).map(([sectionName, sectionRows]) => (
                                                                                     <div key={sectionName}>
-                                                                                        {view === 'machine' && (
-                                                                                            <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
-                                                                                                <span>Section: {sectionName}</span>
-                                                                                                <span className="text-muted-foreground">
-                                                                                                    Total: {formatKg(sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0))}
-                                                                                                </span>
-                                                                                            </div>
-                                                                                        )}
+                                                                                        {view === 'machine' && (() => {
+                                                                                            const totalWeight = sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0);
+                                                                                            const totalCount = sectionRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+                                                                                            const unitLabel = process === 'cutter' ? 'Bobbins' : process === 'holo' ? 'Rolls' : 'Cones';
+                                                                                            return (
+                                                                                                <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
+                                                                                                    <span>Section: {sectionName}</span>
+                                                                                                    <span className="text-muted-foreground">
+                                                                                                        Total: {totalCount} {unitLabel} | {formatKg(totalWeight)} kg
+                                                                                                    </span>
+                                                                                                </div>
+                                                                                            );
+                                                                                        })()}
                                                                                         <Table>
                                                                                             <TableHeader>
                                                                                                 <TableRow className="bg-muted/50 hover:bg-muted/50">

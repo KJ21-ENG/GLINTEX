@@ -8,9 +8,11 @@ import { formatKg, formatDateDDMMYYYY, todayISO } from '../utils';
 import {
     BarChart3, Search, ChevronDown, ChevronRight,
     Package, Truck, Factory, Clock, Users, Gauge,
-    Calendar, FileBarChart2
+    Calendar, FileBarChart2, ScanLine
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useMobileDetect } from '../utils/useMobileDetect';
+import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
 
 const STAGE_ICONS = {
     inbound: Package,
@@ -785,6 +787,43 @@ function ProductionReport() {
 
 export function Reports() {
     const [activeTab, setActiveTab] = useState('barcode');
+    const { isMobile, isTouchDevice } = useMobileDetect();
+    const [useMobileMode, setUseMobileMode] = useState(false);
+
+    // Auto-enable mobile mode on mobile touch devices
+    useEffect(() => {
+        if (isMobile && isTouchDevice) {
+            setUseMobileMode(true);
+        }
+    }, [isMobile, isTouchDevice]);
+
+    // Mobile view for Barcode History
+    if (useMobileMode && activeTab === 'barcode') {
+        return (
+            <div className="space-y-4">
+                {/* Header with toggle */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div>
+                        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                            <BarChart3 className="w-6 h-6" />
+                            Reports & Analytics
+                        </h1>
+                        <p className="text-muted-foreground text-sm">Scan barcode to trace history</p>
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setUseMobileMode(false)}
+                        className="flex items-center gap-2"
+                    >
+                        <Package className="w-4 h-4" />
+                        <span>Desktop View</span>
+                    </Button>
+                </div>
+                <MobileBarcodeHistory />
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6 fade-in">
@@ -798,32 +837,47 @@ export function Reports() {
                     <p className="text-muted-foreground text-sm">Track inventory lifecycle and production metrics</p>
                 </div>
 
-                {/* Tab Toggle */}
-                <div className="flex p-1 bg-muted rounded-lg">
-                    <button
-                        onClick={() => setActiveTab('barcode')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'barcode'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <Search className="w-4 h-4" />
-                        Barcode History
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('production')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'production'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <Factory className="w-4 h-4" />
-                        Production Report
-                    </button>
+                {/* Scanner Toggle + Tab Toggle */}
+                <div className="flex gap-2">
+                    {activeTab === 'barcode' && (
+                        <Button
+                            variant={useMobileMode ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setUseMobileMode(!useMobileMode)}
+                            className="flex items-center gap-2"
+                        >
+                            <ScanLine className="w-4 h-4" />
+                            <span className="hidden sm:inline">Scanner</span>
+                        </Button>
+                    )}
+
+                    {/* Tab Toggle */}
+                    <div className="flex p-1 bg-muted rounded-lg">
+                        <button
+                            onClick={() => setActiveTab('barcode')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'barcode'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Search className="w-4 h-4" />
+                            Barcode History
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('production')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'production'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Factory className="w-4 h-4" />
+                            Production Report
+                        </button>
+                    </div>
                 </div>
             </div>
 

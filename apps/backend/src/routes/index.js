@@ -301,9 +301,10 @@ async function resolveHoloIssueDetails(issue, caches) {
   };
 }
 
-async function resolveConingTraceDetails(issue) {
+async function resolveConingTraceDetails(issue, options = {}) {
   if (!issue) return { cutName: '', yarnName: '', twistName: '', rollTypeName: '', yarnKg: null };
-  const caches = createTraceCaches();
+  const caches = options.caches || createTraceCaches();
+  const holoIssueDetailsCache = options.holoIssueDetailsCache || new Map();
   const cutNames = new Set();
   const yarnNames = new Set();
   const twistNames = new Set();
@@ -368,7 +369,11 @@ async function resolveConingTraceDetails(issue) {
         select: { id: true, cutId: true, yarnId: true, twistId: true, yarnKg: true, receivedRowRefs: true },
       });
       for (const holoIssue of holoIssues) {
-        const resolved = await resolveHoloIssueDetails(holoIssue, caches);
+        let resolved = holoIssueDetailsCache.get(holoIssue.id);
+        if (!resolved) {
+          resolved = await resolveHoloIssueDetails(holoIssue, caches);
+          holoIssueDetailsCache.set(holoIssue.id, resolved);
+        }
         addName(cutNames, resolved.cutName);
         addName(yarnNames, resolved.yarnName);
         addName(twistNames, resolved.twistName);
@@ -10234,6 +10239,28 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 
     // Helper to format stage data
     const formatStageData = (stage, data) => ({ stage, ...data });
+    const traceCaches = createTraceCaches();
+    const holoIssueDetailsCache = new Map();
+    const coningTraceCache = new Map();
+    const holoTraceCache = new Map();
+
+    const resolveHoloTrace = async (issue) => {
+      if (!issue?.id) return { cutName: '', yarnName: '', twistName: '', yarnKg: null };
+      const cached = holoTraceCache.get(issue.id);
+      if (cached) return cached;
+      const resolved = await resolveHoloIssueDetails(issue, traceCaches);
+      holoTraceCache.set(issue.id, resolved);
+      return resolved;
+    };
+
+    const resolveConingTrace = async (issue) => {
+      if (!issue?.id) return { cutName: '', yarnName: '', twistName: '', rollTypeName: '', yarnKg: null };
+      const cached = coningTraceCache.get(issue.id);
+      if (cached) return cached;
+      const resolved = await resolveConingTraceDetails(issue, { caches: traceCaches, holoIssueDetailsCache });
+      coningTraceCache.set(issue.id, resolved);
+      return resolved;
+    };
 
     // ============ STEP 1: IDENTIFY WHICH STAGE THE BARCODE BELONGS TO ============
 
@@ -10503,6 +10530,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Avoid duplicates
       if (history.lineage.find(l => l.stage === 'holo_issue' && l.data.issueId === issue.id)) return;
 
+      const resolved = await resolveHoloTrace(issue);
+
       history.lineage.push({
         stage: 'holo_issue',
         date: issue.date,
@@ -10512,9 +10541,10 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
           lotNo: issue.lotNo,
           machineName: issue.machine?.name || null,
           operatorName: issue.operator?.name || null,
-          yarnName: issue.yarn?.name || null,
-          twistName: issue.twist?.name || null,
-          cutName: issue.cut?.name || null,
+          yarnName: resolved.yarnName || null,
+          twistName: resolved.twistName || null,
+          cutName: resolved.cutName || null,
+          yarnKg: resolved.yarnKg != null ? resolved.yarnKg : (Number.isFinite(Number(issue.yarnKg)) ? Number(issue.yarnKg) : null),
           metallicBobbins: issue.metallicBobbins,
           metallicBobbinsWeight: issue.metallicBobbinsWeight,
           shift: issue.shift,
@@ -10544,12 +10574,19 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Look up item and cut from the holo issue
       let itemName = null;
       let cutName = null;
+      let yarnName = null;
+      let twistName = null;
       if (recv.issueId) {
         const holoIssue = await prisma.issueToHoloMachine.findUnique({
           where: { id: recv.issueId },
           include: { cut: true },
         });
-        cutName = holoIssue?.cut?.name || null;
+        if (holoIssue) {
+          const resolved = await resolveHoloTrace(holoIssue);
+          cutName = resolved.cutName || null;
+          yarnName = resolved.yarnName || null;
+          twistName = resolved.twistName || null;
+        }
         // Get item from the lot
         if (holoIssue?.lotNo) {
           const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
@@ -10565,6 +10602,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
           receiveId: recv.id,
           itemName: itemName,
           cutName: cutName,
+          yarnName: yarnName,
+          twistName: twistName,
           rollCount: recv.rollCount,
           netWeight: netWeight,
           rollTypeName: recv.rollType?.name || null,
@@ -10634,6 +10673,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
         }
       } catch { }
 
+      const resolved = await resolveConingTrace(issue);
+
       history.lineage.push({
         stage: 'coning_issue',
         date: issue.date,
@@ -10641,7 +10682,10 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
         data: {
           issueId: issue.id,
           itemName: itemName,
-          cutName: cutName,
+          cutName: resolved.cutName || cutName,
+          yarnName: resolved.yarnName || null,
+          twistName: resolved.twistName || null,
+          yarnKg: resolved.yarnKg != null ? resolved.yarnKg : null,
           lotNo: issue.lotNo,
           machineName: issue.machine?.name || null,
           operatorName: issue.operator?.name || null,
@@ -10670,6 +10714,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
       // Look up item and cut from coning issue -> holo receives -> holo issue
       let itemName = null;
       let cutName = null;
+      let yarnName = null;
+      let twistName = null;
       if (recv.issueId) {
         const coningIssue = await prisma.issueToConingMachine.findUnique({
           where: { id: recv.issueId },
@@ -10691,7 +10737,12 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
                   where: { id: holoRecv.issueId },
                   include: { cut: true },
                 });
-                cutName = holoIssue?.cut?.name || null;
+                if (holoIssue) {
+                  const resolved = await resolveHoloTrace(holoIssue);
+                  cutName = resolved.cutName || null;
+                  yarnName = resolved.yarnName || null;
+                  twistName = resolved.twistName || null;
+                }
                 if (holoIssue?.lotNo) {
                   const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
                   itemName = lot?.item?.name || null;
@@ -10699,6 +10750,11 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
               }
             }
           } catch { }
+
+          const resolvedConing = await resolveConingTrace(coningIssue);
+          cutName = resolvedConing.cutName || cutName;
+          yarnName = resolvedConing.yarnName || yarnName;
+          twistName = resolvedConing.twistName || twistName;
         }
       }
 
@@ -10710,6 +10766,8 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
           receiveId: recv.id,
           itemName: itemName,
           cutName: cutName,
+          yarnName: yarnName,
+          twistName: twistName,
           coneCount: recv.coneCount,
           netWeight: recv.netWeight,
           coneWeight: recv.coneWeight,
@@ -11256,8 +11314,49 @@ router.get('/api/reports/production', async (req, res) => {
           isDeleted: false,
           date: { gte: fromDate, lte: toDate },
         },
-        include: { operator: true, issue: { include: { machine: true, yarn: true, twist: true, cut: true } } },
+        include: {
+          operator: true,
+          issue: {
+            select: {
+              id: true,
+              lotNo: true,
+              itemId: true,
+              cutId: true,
+              yarnId: true,
+              twistId: true,
+              shift: true,
+              requiredPerConeNetWeight: true,
+              expectedCones: true,
+              receivedRowRefs: true,
+              machine: true,
+              yarn: true,
+              twist: true,
+              cut: true,
+            },
+          },
+        },
       });
+
+      const coningTraceCaches = createTraceCaches();
+      const coningHoloIssueDetailsCache = new Map();
+      const coningIssueTraceCache = new Map();
+      const resolveConingIssueTrace = async (issue) => {
+        if (!issue?.id) return null;
+        const cached = coningIssueTraceCache.get(issue.id);
+        if (cached) return cached;
+        const resolved = await resolveConingTraceDetails(issue, { caches: coningTraceCaches, holoIssueDetailsCache: coningHoloIssueDetailsCache });
+        coningIssueTraceCache.set(issue.id, resolved);
+        return resolved;
+      };
+      const issuesForTrace = new Map();
+      coningReceives.forEach((row) => {
+        if (row.issue?.id && !issuesForTrace.has(row.issue.id)) {
+          issuesForTrace.set(row.issue.id, row.issue);
+        }
+      });
+      for (const issue of issuesForTrace.values()) {
+        await resolveConingIssueTrace(issue);
+      }
 
       // Calculate totals from date-filtered receive rows
       const totalConingReceived = coningReceives.reduce((sum, r) => sum + (r.netWeight || 0), 0);
@@ -11297,10 +11396,12 @@ router.get('/api/reports/production', async (req, res) => {
         const itemMap = new Map(items.map(i => [i.id, i.name]));
 
         for (const row of coningReceives) {
+          const trace = row.issue?.id ? coningIssueTraceCache.get(row.issue.id) : null;
+          const resolvedCutName = trace?.cutName || row.issue?.cut?.name || '';
           const itemId = row.issue?.itemId || 'unknown';
           const itemName = itemMap.get(itemId) || 'Unknown Item';
-          const cutId = row.issue?.cutId || 'none';
-          const cutName = row.issue?.cut?.name || '';
+          const cutId = row.issue?.cutId || (resolvedCutName ? `name:${resolvedCutName}` : 'none');
+          const cutName = resolvedCutName || '';
           const key = `${itemId}|${cutId}`;
           const current = byItem.get(key) || { itemId, itemName, cutId, cutName, received: 0, coneCount: 0 };
           current.received += row.netWeight || 0;
@@ -11312,8 +11413,10 @@ router.get('/api/reports/production', async (req, res) => {
         // Coning issue has yarnId - group by yarn
         const byYarn = new Map();
         for (const row of coningReceives) {
-          const yarnId = row.issue?.yarnId || 'unknown';
-          const yarnName = row.issue?.yarn?.name || 'Unknown Yarn';
+          const trace = row.issue?.id ? coningIssueTraceCache.get(row.issue.id) : null;
+          const resolvedYarnName = trace?.yarnName || row.issue?.yarn?.name || '';
+          const yarnId = row.issue?.yarnId || (resolvedYarnName ? `name:${resolvedYarnName}` : 'unknown');
+          const yarnName = resolvedYarnName || 'Unknown Yarn';
           const current = byYarn.get(yarnId) || { yarnId, yarnName, received: 0, coneCount: 0 };
           current.received += row.netWeight || 0;
           current.coneCount += row.coneCount || 0;
@@ -11551,6 +11654,8 @@ router.get('/api/reports/production/details', async (req, res) => {
         isDeleted: false,
         date: { gte: fromDate, lte: toDate },
       };
+      let cutNameFilter = null;
+      let yarnNameFilter = null;
 
       if (view === 'operator') {
         where.operatorId = key === 'unknown' ? null : key;
@@ -11559,15 +11664,19 @@ router.get('/api/reports/production/details', async (req, res) => {
           shift: key === 'Not Specified' ? null : key
         };
       } else if (view === 'item') {
-        const [itemId, cutId] = key.split('|');
+        const [itemId, cutKey] = key.split('|');
+        const isNameKey = cutKey && cutKey.startsWith('name:');
+        if (isNameKey) cutNameFilter = cutKey.slice(5);
         where.issue = {
           itemId: itemId === 'unknown' ? null : itemId,
-          cutId: (cutId && cutId !== 'none') ? cutId : undefined
+          cutId: (!isNameKey && cutKey && cutKey !== 'none') ? cutKey : undefined
         };
       } else if (view === 'yarn') {
+        const isNameKey = key && key.startsWith('name:');
+        if (isNameKey) yarnNameFilter = key.slice(5);
         // Coning issue has yarnId - filter by it
         where.issue = {
-          yarnId: key === 'unknown' ? null : key
+          yarnId: (!isNameKey && key !== 'unknown') ? key : (key === 'unknown' ? null : undefined)
         };
       } else {
         if (key === 'unknown') {
@@ -11588,24 +11697,80 @@ router.get('/api/reports/production/details', async (req, res) => {
         where,
         include: {
           operator: true,
-          issue: { include: { machine: true, yarn: true, twist: true, cut: true } }
+          issue: {
+            select: {
+              id: true,
+              itemId: true,
+              lotNo: true,
+              barcode: true,
+              shift: true,
+              cutId: true,
+              yarnId: true,
+              twistId: true,
+              receivedRowRefs: true,
+              machine: true,
+              yarn: true,
+              twist: true,
+              cut: true,
+            }
+          }
         },
         orderBy: { date: 'desc' },
         take: 2000
       });
 
+      const coningTraceCaches = createTraceCaches();
+      const coningHoloIssueDetailsCache = new Map();
+      const coningIssueTraceCache = new Map();
+      const resolveConingIssueTrace = async (issue) => {
+        if (!issue?.id) return null;
+        const cached = coningIssueTraceCache.get(issue.id);
+        if (cached) return cached;
+        const resolved = await resolveConingTraceDetails(issue, { caches: coningTraceCaches, holoIssueDetailsCache: coningHoloIssueDetailsCache });
+        coningIssueTraceCache.set(issue.id, resolved);
+        return resolved;
+      };
+      const issuesForTrace = new Map();
+      rawRows.forEach((row) => {
+        if (row.issue?.id && !issuesForTrace.has(row.issue.id)) {
+          issuesForTrace.set(row.issue.id, row.issue);
+        }
+      });
+      for (const issue of issuesForTrace.values()) {
+        await resolveConingIssueTrace(issue);
+      }
+
+      let filteredRows = rawRows;
+      if (cutNameFilter) {
+        filteredRows = filteredRows.filter((row) => {
+          const trace = row.issue?.id ? coningIssueTraceCache.get(row.issue.id) : null;
+          const resolvedCutName = trace?.cutName || row.issue?.cut?.name || '';
+          return resolvedCutName === cutNameFilter;
+        });
+      }
+      if (yarnNameFilter) {
+        filteredRows = filteredRows.filter((row) => {
+          const trace = row.issue?.id ? coningIssueTraceCache.get(row.issue.id) : null;
+          const resolvedYarnName = trace?.yarnName || row.issue?.yarn?.name || '';
+          return resolvedYarnName === yarnNameFilter;
+        });
+      }
+
       // Fetch all unique item IDs to get item names for coning
-      const coningItemIds = [...new Set(rawRows.map(r => r.issue?.itemId).filter(Boolean))];
+      const coningItemIds = [...new Set(filteredRows.map(r => r.issue?.itemId).filter(Boolean))];
       const coningItems = await prisma.item.findMany({
         where: { id: { in: coningItemIds } },
         select: { id: true, name: true }
       });
       const coningItemMap = new Map(coningItems.map(i => [i.id, i.name]));
 
-      rows = rawRows.map(r => {
+      rows = filteredRows.map(r => {
+        const trace = r.issue?.id ? coningIssueTraceCache.get(r.issue.id) : null;
+        const cutName = trace?.cutName || r.issue?.cut?.name || '';
+        const yarnName = trace?.yarnName || r.issue?.yarn?.name || '';
+        const twistName = trace?.twistName || r.issue?.twist?.name || '';
         const itemName = r.issue?.itemId ? coningItemMap.get(r.issue.itemId) : null;
-        const yarnTwist = `${r.issue?.yarn?.name || ''} ${r.issue?.twist?.name || ''}`.trim();
-        const cutName = r.issue?.cut?.name || '';
+        const yarnTwist = `${yarnName} ${twistName}`.trim();
         const descParts = [cutName, itemName, yarnTwist].filter(Boolean);
         return {
           id: r.id,
@@ -11620,6 +11785,9 @@ router.get('/api/reports/production/details', async (req, res) => {
             weight: 0,
             desc: descParts.length > 0 ? descParts.join(' - ') : null
           },
+          cutName,
+          yarnName,
+          twistName,
           operatorName: r.operator?.name,
           machineName: r.issue?.machine?.name || r.machineNo // Return full machine name for grouping
         };
@@ -12624,6 +12792,21 @@ async function generateSummaryData(stage, type, date) {
       orderBy: { createdAt: 'asc' },
     });
 
+    const coningTraceCaches = createTraceCaches();
+    const coningHoloIssueDetailsCache = new Map();
+    const coningIssueTraceCache = new Map();
+    const resolveConingIssueTrace = async (issue) => {
+      if (!issue?.id) return null;
+      const cached = coningIssueTraceCache.get(issue.id);
+      if (cached) return cached;
+      const resolved = await resolveConingTraceDetails(issue, { caches: coningTraceCaches, holoIssueDetailsCache: coningHoloIssueDetailsCache });
+      coningIssueTraceCache.set(issue.id, resolved);
+      return resolved;
+    };
+    for (const issue of issues) {
+      await resolveConingIssueTrace(issue);
+    }
+
     // Lookup item names
     const itemIds = [...new Set(issues.map(i => i.itemId).filter(Boolean))];
     const itemMap = await getItemNameMap(itemIds);
@@ -12650,20 +12833,27 @@ async function generateSummaryData(stage, type, date) {
     summary.totalRollsIssued = issues.reduce((sum, i) => sum + (i.rollsIssued || 0), 0);
     summary.totalExpectedCones = issues.reduce((sum, i) => sum + (i.expectedCones || 0), 0);
 
-    summary.details = issues.map(i => ({
-      machineName: i.machine?.name || '-',
-      itemName: itemMap[i.itemId] || i.itemId || '-',
-      lotNo: i.lotNo || '-',
-      yarnName: i.yarn?.name || '-',
-      twistName: i.twist?.name || '-',
-      coneTypeName: resolveConeTypeName(i),
-      perConeTargetG: i.requiredPerConeNetWeight || 0,
-      operatorName: i.operator?.name || '-',
-      shift: i.shift || '-',
-      note: i.note || '',
-      rollsIssued: i.rollsIssued || 0,
-      expectedCones: i.expectedCones || 0,
-    }));
+    summary.details = issues.map(i => {
+      const trace = coningIssueTraceCache.get(i.id);
+      const yarnName = trace?.yarnName || i.yarn?.name || '-';
+      const twistName = trace?.twistName || i.twist?.name || '-';
+      const cutName = trace?.cutName || i.cut?.name || '-';
+      return {
+        machineName: i.machine?.name || '-',
+        itemName: itemMap[i.itemId] || i.itemId || '-',
+        lotNo: i.lotNo || '-',
+        cutName,
+        yarnName,
+        twistName,
+        coneTypeName: resolveConeTypeName(i),
+        perConeTargetG: i.requiredPerConeNetWeight || 0,
+        operatorName: i.operator?.name || '-',
+        shift: i.shift || '-',
+        note: i.note || '',
+        rollsIssued: i.rollsIssued || 0,
+        expectedCones: i.expectedCones || 0,
+      };
+    });
 
     summary.byOperator = aggregateBy(issues, i => i.operator?.name || 'Unknown', {
       count: () => 1,
@@ -12693,6 +12883,20 @@ async function generateSummaryData(stage, type, date) {
       }
     });
     const issueList = Array.from(issueMap.values());
+    const coningTraceCaches = createTraceCaches();
+    const coningHoloIssueDetailsCache = new Map();
+    const coningIssueTraceCache = new Map();
+    const resolveConingIssueTrace = async (issue) => {
+      if (!issue?.id) return null;
+      const cached = coningIssueTraceCache.get(issue.id);
+      if (cached) return cached;
+      const resolved = await resolveConingTraceDetails(issue, { caches: coningTraceCaches, holoIssueDetailsCache: coningHoloIssueDetailsCache });
+      coningIssueTraceCache.set(issue.id, resolved);
+      return resolved;
+    };
+    for (const issue of issueList) {
+      await resolveConingIssueTrace(issue);
+    }
     const holoRowIds = new Set();
     issueList.forEach((issue) => {
       const refs = parseRefs(issue.receivedRowRefs);
@@ -12753,19 +12957,25 @@ async function generateSummaryData(stage, type, date) {
     summary.totalCones = rows.reduce((sum, r) => sum + (r.coneCount || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + (r.netWeight || 0), 0);
 
-    summary.details = rows.map(r => ({
-      machineName: r.issue?.machine?.name || '-',
-      itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
-      lotNo: r.issue?.lotNo || '-',
-      cutName: coningIssueCutMap.get(r.issue?.id) || r.issue?.cut?.name || '-',
-      yarnName: r.issue?.yarn?.name || '-',
-      twistName: r.issue?.twist?.name || '-',
-      coneTypeName: resolveConeTypeName(r.issue),
-      perConeTargetG: r.issue?.requiredPerConeNetWeight || 0,
-      operatorName: r.operator?.name || '-',
-      coneCount: r.coneCount || 0,
-      netWeight: r.netWeight || 0,
-    }));
+    summary.details = rows.map(r => {
+      const trace = r.issue?.id ? coningIssueTraceCache.get(r.issue.id) : null;
+      const cutName = trace?.cutName || coningIssueCutMap.get(r.issue?.id) || r.issue?.cut?.name || '-';
+      const yarnName = trace?.yarnName || r.issue?.yarn?.name || '-';
+      const twistName = trace?.twistName || r.issue?.twist?.name || '-';
+      return {
+        machineName: r.issue?.machine?.name || '-',
+        itemName: itemMap[r.issue?.itemId] || r.issue?.itemId || '-',
+        lotNo: r.issue?.lotNo || '-',
+        cutName,
+        yarnName,
+        twistName,
+        coneTypeName: resolveConeTypeName(r.issue),
+        perConeTargetG: r.issue?.requiredPerConeNetWeight || 0,
+        operatorName: r.operator?.name || '-',
+        coneCount: r.coneCount || 0,
+        netWeight: r.netWeight || 0,
+      };
+    });
 
     summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
       count: () => 1,

@@ -124,7 +124,7 @@ export function MobileBarcodeHistory() {
             </div>
 
             {/* Top section - Scanner or Manual Entry */}
-            <div className="h-[35%] shrink-0 relative">
+            <div className="h-[45%] shrink-0 relative">
                 {isManualMode ? (
                     <div className="h-full flex flex-col items-center justify-center p-4 bg-muted/30">
                         <Keyboard className="w-12 h-12 text-muted-foreground mb-4" />

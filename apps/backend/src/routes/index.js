@@ -196,6 +196,221 @@ function calcAvailableCountFromWeight({ totalCount, issuedCount, dispatchedCount
   return Math.max(0, Math.min(countBased, weightBased));
 }
 
+function parseRefs(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function createTraceCaches() {
+  return {
+    cutNames: new Map(),
+    yarnNames: new Map(),
+    twistNames: new Map(),
+    rollTypeNames: new Map(),
+  };
+}
+
+async function hydrateNameCache(modelKey, ids, cache) {
+  const uniqueIds = Array.from(new Set((ids || []).filter(Boolean)));
+  const missing = uniqueIds.filter((id) => !cache.has(id));
+  if (missing.length === 0) return;
+  const rows = await prisma[modelKey].findMany({
+    where: { id: { in: missing } },
+    select: { id: true, name: true },
+  });
+  rows.forEach((row) => cache.set(row.id, row.name || ''));
+  missing.forEach((id) => {
+    if (!cache.has(id)) cache.set(id, '');
+  });
+}
+
+async function resolveHoloIssueDetails(issue, caches) {
+  if (!issue) return { cutName: '', yarnName: '', twistName: '', yarnKg: null };
+  const traceCaches = caches || createTraceCaches();
+  const cutNames = new Set();
+
+  const addName = (set, value) => {
+    const name = String(value || '').trim();
+    if (name) set.add(name);
+  };
+
+  if (issue.cut?.name) {
+    addName(cutNames, issue.cut.name);
+  } else if (issue.cutId) {
+    await hydrateNameCache('cut', [issue.cutId], traceCaches.cutNames);
+    addName(cutNames, traceCaches.cutNames.get(issue.cutId));
+  }
+
+  if (cutNames.size === 0) {
+    const refs = parseRefs(issue.receivedRowRefs);
+    const rowIds = refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+    if (rowIds.length > 0) {
+      const cutterRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: rowIds }, isDeleted: false },
+        select: { id: true, cutId: true, cut: true, cutMaster: { select: { name: true } } },
+      });
+      const cutIds = new Set();
+      const fallbackNames = new Set();
+      cutterRows.forEach((row) => {
+        if (row.cutId) cutIds.add(row.cutId);
+        if (row.cutMaster?.name) fallbackNames.add(row.cutMaster.name);
+        if (typeof row.cut === 'string' && row.cut) fallbackNames.add(row.cut);
+      });
+      if (cutIds.size > 0) {
+        await hydrateNameCache('cut', Array.from(cutIds), traceCaches.cutNames);
+        cutIds.forEach((id) => fallbackNames.add(traceCaches.cutNames.get(id)));
+      }
+      fallbackNames.forEach((name) => addName(cutNames, name));
+    }
+  }
+
+  if (issue.yarnId && !traceCaches.yarnNames.has(issue.yarnId)) {
+    await hydrateNameCache('yarn', [issue.yarnId], traceCaches.yarnNames);
+  }
+  if (issue.twistId && !traceCaches.twistNames.has(issue.twistId)) {
+    await hydrateNameCache('twist', [issue.twistId], traceCaches.twistNames);
+  }
+
+  const yarnName = (() => {
+    if (issue.yarn?.name) return issue.yarn.name;
+    if (issue.yarnId) return traceCaches.yarnNames.get(issue.yarnId) || '';
+    return '';
+  })();
+
+  const twistName = (() => {
+    if (issue.twist?.name) return issue.twist.name;
+    if (issue.twistId) return traceCaches.twistNames.get(issue.twistId) || '';
+    return '';
+  })();
+
+  const yarnKgNum = Number(issue.yarnKg);
+  const yarnKg = Number.isFinite(yarnKgNum) ? yarnKgNum : null;
+
+  return {
+    cutName: cutNames.size ? Array.from(cutNames).join(', ') : '',
+    yarnName,
+    twistName,
+    yarnKg,
+  };
+}
+
+async function resolveConingTraceDetails(issue) {
+  if (!issue) return { cutName: '', yarnName: '', twistName: '', rollTypeName: '', yarnKg: null };
+  const caches = createTraceCaches();
+  const cutNames = new Set();
+  const yarnNames = new Set();
+  const twistNames = new Set();
+  const rollTypeNames = new Set();
+  let yarnKgTotal = 0;
+  let yarnKgFound = false;
+  const countedHoloIssues = new Set();
+  const visitedConingIssues = new Set();
+
+  const addName = (set, value) => {
+    const name = String(value || '').trim();
+    if (name) set.add(name);
+  };
+
+  const addFromConingIssue = async (coningIssue) => {
+    if (!coningIssue) return;
+    if (coningIssue.cut?.name) {
+      addName(cutNames, coningIssue.cut.name);
+    } else if (coningIssue.cutId) {
+      await hydrateNameCache('cut', [coningIssue.cutId], caches.cutNames);
+      addName(cutNames, caches.cutNames.get(coningIssue.cutId));
+    }
+    if (coningIssue.yarn?.name) {
+      addName(yarnNames, coningIssue.yarn.name);
+    } else if (coningIssue.yarnId) {
+      await hydrateNameCache('yarn', [coningIssue.yarnId], caches.yarnNames);
+      addName(yarnNames, caches.yarnNames.get(coningIssue.yarnId));
+    }
+    if (coningIssue.twist?.name) {
+      addName(twistNames, coningIssue.twist.name);
+    } else if (coningIssue.twistId) {
+      await hydrateNameCache('twist', [coningIssue.twistId], caches.twistNames);
+      addName(twistNames, caches.twistNames.get(coningIssue.twistId));
+    }
+  };
+
+  const walkConingIssue = async (coningIssue) => {
+    if (!coningIssue?.id || visitedConingIssues.has(coningIssue.id)) return;
+    visitedConingIssues.add(coningIssue.id);
+    await addFromConingIssue(coningIssue);
+
+    const refs = parseRefs(coningIssue.receivedRowRefs);
+    const rowIds = refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
+    if (rowIds.length === 0) return;
+
+    const holoRows = await prisma.receiveFromHoloMachineRow.findMany({
+      where: { id: { in: rowIds }, isDeleted: false },
+      select: { id: true, issueId: true, rollTypeId: true },
+    });
+    const holoRowIds = new Set(holoRows.map(r => r.id));
+
+    const rollTypeIds = Array.from(new Set(holoRows.map(r => r.rollTypeId).filter(Boolean)));
+    if (rollTypeIds.length > 0) {
+      await hydrateNameCache('rollType', rollTypeIds, caches.rollTypeNames);
+      rollTypeIds.forEach((id) => addName(rollTypeNames, caches.rollTypeNames.get(id)));
+    }
+
+    const holoIssueIds = Array.from(new Set(holoRows.map(r => r.issueId).filter(Boolean)));
+    if (holoIssueIds.length > 0) {
+      const holoIssues = await prisma.issueToHoloMachine.findMany({
+        where: { id: { in: holoIssueIds }, isDeleted: false },
+        select: { id: true, cutId: true, yarnId: true, twistId: true, yarnKg: true, receivedRowRefs: true },
+      });
+      for (const holoIssue of holoIssues) {
+        const resolved = await resolveHoloIssueDetails(holoIssue, caches);
+        addName(cutNames, resolved.cutName);
+        addName(yarnNames, resolved.yarnName);
+        addName(twistNames, resolved.twistName);
+        if (!countedHoloIssues.has(holoIssue.id)) {
+          const kg = Number(resolved.yarnKg);
+          if (Number.isFinite(kg)) {
+            yarnKgTotal += kg;
+            yarnKgFound = true;
+          }
+          countedHoloIssues.add(holoIssue.id);
+        }
+      }
+    }
+
+    const remainingRowIds = rowIds.filter(id => !holoRowIds.has(id));
+    if (remainingRowIds.length === 0) return;
+    const coningRows = await prisma.receiveFromConingMachineRow.findMany({
+      where: { id: { in: remainingRowIds }, isDeleted: false },
+      select: { id: true, issueId: true },
+    });
+    const parentIssueIds = Array.from(new Set(coningRows.map(r => r.issueId).filter(Boolean)));
+    if (parentIssueIds.length === 0) return;
+    const parentIssues = await prisma.issueToConingMachine.findMany({
+      where: { id: { in: parentIssueIds }, isDeleted: false },
+      select: { id: true, cutId: true, yarnId: true, twistId: true, receivedRowRefs: true },
+    });
+    for (const parentIssue of parentIssues) {
+      await walkConingIssue(parentIssue);
+    }
+  };
+
+  await walkConingIssue(issue);
+
+  return {
+    cutName: cutNames.size ? Array.from(cutNames).join(', ') : '',
+    yarnName: yarnNames.size ? Array.from(yarnNames).join(', ') : '',
+    twistName: twistNames.size ? Array.from(twistNames).join(', ') : '',
+    rollTypeName: rollTypeNames.size ? Array.from(rollTypeNames).join(', ') : '',
+    yarnKg: yarnKgFound ? roundTo3Decimals(yarnKgTotal) : null,
+  };
+}
+
 function isOpeningLotNo(lotNo) {
   return typeof lotNo === 'string' && lotNo.startsWith('OP-');
 }
@@ -5504,9 +5719,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
       const itemName = itemRec ? itemRec.name : '';
       const machineRec = created.machineId ? await prisma.machine.findUnique({ where: { id: created.machineId } }) : null;
       const operatorRec = created.operatorId ? await prisma.operator.findUnique({ where: { id: created.operatorId } }) : null;
-      const twistRec = await prisma.twist.findUnique({ where: { id: created.twistId } });
-      const yarnRec = created.yarnId ? await prisma.yarn.findUnique({ where: { id: created.yarnId } }) : null;
-      const cutRec = created.cutId ? await prisma.cut.findUnique({ where: { id: created.cutId } }) : null;
+      const trace = await resolveHoloIssueDetails(created);
 
       sendNotification('issue_to_holo_machine_created', {
         itemName,
@@ -5514,12 +5727,12 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
         date: created.date,
         metallicBobbins: created.metallicBobbins,
         metallicBobbinsWeight: created.metallicBobbinsWeight,
-        yarnKg: created.yarnKg,
-        yarnName: yarnRec ? yarnRec.name : '',
+        yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
+        yarnName: trace.yarnName || '',
         machineName: machineRec ? machineRec.name : '',
         operatorName: operatorRec ? operatorRec.name : '',
-        twistName: twistRec ? twistRec.name : '',
-        cutName: cutRec ? cutRec.name : '',
+        twistName: trace.twistName || '',
+        cutName: trace.cutName || '',
         barcode: created.barcode,
       });
     } catch (e) { console.error('notify issue_to_holo_machine error', e); }
@@ -5661,9 +5874,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
       const itemRec = await prisma.item.findUnique({ where: { id: issue.itemId } });
       const itemName = itemRec ? itemRec.name || '' : '';
       const operatorRec = operatorId ? await prisma.operator.findUnique({ where: { id: operatorId } }) : null;
-      const cutRec = issue.cutId ? await prisma.cut.findUnique({ where: { id: issue.cutId } }) : null;
-      const twistRec = issue.twistId ? await prisma.twist.findUnique({ where: { id: issue.twistId } }) : null;
-      const yarnRec = issue.yarnId ? await prisma.yarn.findUnique({ where: { id: issue.yarnId } }) : null;
+      const trace = await resolveHoloIssueDetails(issue);
 
       sendNotification('receive_from_holo_machine_created', {
         itemName,
@@ -5675,9 +5886,10 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
         rollCount: rollCountNum,
         machineName: machineNo || '',
         operatorName: operatorRec ? operatorRec.name : '',
-        cutName: cutRec ? cutRec.name : '',
-        twistName: twistRec ? twistRec.name : '',
-        yarnName: yarnRec ? yarnRec.name : '',
+        cutName: trace.cutName || '',
+        twistName: trace.twistName || '',
+        yarnName: trace.yarnName || '',
+        yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode,
       });
     } catch (e) { console.error('notify receive_from_holo_machine manual error', e); }
@@ -6332,9 +6544,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
       const itemName = itemRec ? itemRec.name : '';
       const machineRec = created.machineId ? await prisma.machine.findUnique({ where: { id: created.machineId } }) : null;
       const operatorRec = created.operatorId ? await prisma.operator.findUnique({ where: { id: created.operatorId } }) : null;
-      const cutRec = created.cutId ? await prisma.cut.findUnique({ where: { id: created.cutId } }) : null;
-      const twistRec = created.twistId ? await prisma.twist.findUnique({ where: { id: created.twistId } }) : null;
-      const yarnRec = created.yarnId ? await prisma.yarn.findUnique({ where: { id: created.yarnId } }) : null;
+      const trace = await resolveConingTraceDetails(created);
 
       sendNotification('issue_to_coning_machine_created', {
         itemName,
@@ -6345,9 +6555,10 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
         expectedCones: created.expectedCones,
         machineName: machineRec ? machineRec.name : '',
         operatorName: operatorRec ? operatorRec.name : '',
-        cutName: cutRec ? cutRec.name : '',
-        twistName: twistRec ? twistRec.name : '',
-        yarnName: yarnRec ? yarnRec.name : '',
+        cutName: trace.cutName || '',
+        twistName: trace.twistName || '',
+        yarnName: trace.yarnName || '',
+        yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode: created.barcode,
       });
     } catch (e) { console.error('notify issue_to_coning_machine error', e); }
@@ -6451,9 +6662,7 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
       const itemRec = await prisma.item.findUnique({ where: { id: issue.itemId } });
       const itemName = itemRec ? itemRec.name : '';
       const operatorRec = (operatorId || issue.operatorId) ? await prisma.operator.findUnique({ where: { id: (operatorId || issue.operatorId) } }) : null;
-      const cutRec = issue.cutId ? await prisma.cut.findUnique({ where: { id: issue.cutId } }) : null;
-      const twistRec = issue.twistId ? await prisma.twist.findUnique({ where: { id: issue.twistId } }) : null;
-      const yarnRec = issue.yarnId ? await prisma.yarn.findUnique({ where: { id: issue.yarnId } }) : null;
+      const trace = await resolveConingTraceDetails(issue);
 
       let machineName = machineNo || '';
       if (issue.machineId && !machineName) {
@@ -6471,9 +6680,10 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
         coneCount,
         machineName: machineName,
         operatorName: operatorRec ? operatorRec.name : '',
-        cutName: cutRec ? cutRec.name : '',
-        twistName: twistRec ? twistRec.name : '',
-        yarnName: yarnRec ? yarnRec.name : '',
+        cutName: trace.cutName || '',
+        twistName: trace.twistName || '',
+        yarnName: trace.yarnName || '',
+        yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode,
       });
     } catch (e) { console.error('notify receive_from_coning_machine manual error', e); }

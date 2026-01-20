@@ -44,6 +44,7 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'machineName', label: 'Machine' },
             { key: 'operatorName', label: 'Operator' },
             { key: 'twistName', label: 'Twist Name' },
+            { key: 'cutName', label: 'Cut Name' },
         ]
     },
     issue_to_coning_machine_created: {
@@ -54,9 +55,11 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'date', label: 'Date' },
             { key: 'rollsIssued', label: 'Rolls' },
             { key: 'requiredPerConeNetWeight', label: 'Target Cone Wt' },
-            { key: 'expectedCones', label: 'Expected Cones' },
             { key: 'machineName', label: 'Machine' },
             { key: 'operatorName', label: 'Operator' },
+            { key: 'cutName', label: 'Cut Name' },
+            { key: 'twistName', label: 'Twist Name' },
+            { key: 'yarnName', label: 'Yarn Name' },
         ]
     },
     receive_from_cutter_machine_created: {
@@ -82,6 +85,9 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'machineName', label: 'Machine' },
             { key: 'operatorName', label: 'Operator' },
             { key: 'barcode', label: 'Barcode' },
+            { key: 'cutName', label: 'Cut Name' },
+            { key: 'twistName', label: 'Twist Name' },
+            { key: 'yarnName', label: 'Yarn Name' },
         ]
     },
     receive_from_coning_machine_created: {
@@ -95,6 +101,9 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'machineName', label: 'Machine' },
             { key: 'operatorName', label: 'Operator' },
             { key: 'barcode', label: 'Barcode' },
+            { key: 'cutName', label: 'Cut Name' },
+            { key: 'twistName', label: 'Twist Name' },
+            { key: 'yarnName', label: 'Yarn Name' },
         ]
     },
     piece_wastage_marked_cutter: {

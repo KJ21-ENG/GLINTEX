@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { BarcodeScanner } from '../scanner/BarcodeScanner';
 import {
     Button, Input, Card, CardContent, Badge
@@ -55,18 +55,23 @@ export function MobileBarcodeHistory() {
     const [searching, setSearching] = useState(false);
     const [history, setHistory] = useState(null);
     const [expandedStages, setExpandedStages] = useState(new Set());
-    const [lastScanned, setLastScanned] = useState(null);
+    const lastScannedRef = useRef(null);
 
     // Handle barcode scan from camera
     const handleBarcodeScan = useCallback(async (barcode) => {
         const normalized = barcode.trim().toUpperCase();
 
-        // Avoid re-scanning same barcode
-        if (lastScanned === normalized) return;
-        setLastScanned(normalized);
+        // Avoid re-scanning same barcode (ref-based to prevent stale closure)
+        if (lastScannedRef.current === normalized) return;
+        lastScannedRef.current = normalized;
 
         await fetchBarcodeHistory(normalized);
-    }, [lastScanned]);
+
+        // Reset after 2 seconds to allow re-scanning
+        setTimeout(() => {
+            lastScannedRef.current = null;
+        }, 2000);
+    }, []);
 
     // Fetch barcode history
     const fetchBarcodeHistory = async (barcode) => {

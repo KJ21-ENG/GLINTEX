@@ -363,7 +363,7 @@ export function MobileDispatchView({
                             <Input
                                 placeholder="Enter barcode manually..."
                                 value={manualBarcode}
-                                onChange={e => setManualBarcode(e.target.value)}
+                                onChange={e => setManualBarcode(e.target.value.toUpperCase())}
                                 className="text-center text-lg"
                                 autoFocus
                             />
@@ -377,6 +377,7 @@ export function MobileDispatchView({
                     <BarcodeScanner
                         onScan={handleBarcodeScan}
                         className="h-full"
+                        disabled={lookingUp !== null}
                     />
                 )}
 

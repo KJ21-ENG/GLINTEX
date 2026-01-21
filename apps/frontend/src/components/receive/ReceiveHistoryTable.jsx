@@ -168,6 +168,34 @@ export function ReceiveHistoryTable() {
         ];
     };
 
+    const resolvePieceCutName = (piece) => {
+        if (!piece) return '';
+        const cutVal = piece.cut;
+        return piece.cutName
+            || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
+            || piece.cutMaster?.name
+            || (piece.cutId ? db.cuts?.find(c => c.id === piece.cutId)?.name : '')
+            || '';
+    };
+
+    const resolvePieceYarnName = (piece) => {
+        if (!piece) return '';
+        const yarnVal = piece.yarn;
+        return piece.yarnName
+            || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name)
+            || (piece.yarnId ? db.yarns?.find(y => y.id === piece.yarnId)?.name : '')
+            || '';
+    };
+
+    const resolvePieceTwistName = (piece) => {
+        if (!piece) return '';
+        const twistVal = piece.twist;
+        return piece.twistName
+            || (typeof twistVal === 'string' ? twistVal : twistVal?.name)
+            || (piece.twistId ? db.twists?.find(t => t.id === piece.twistId)?.name : '')
+            || '';
+    };
+
     const getCutterChallanMeta = (challan) => {
         const item = db.items?.find(i => i.id === challan.itemId);
         const operator = db.operators?.find(o => o.id === challan.operatorId) || db.workers?.find(w => w.id === challan.operatorId);
@@ -1482,11 +1510,16 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const piece = db.inbound_items?.find(p => p.id === row.pieceId);
                 const item = db.items?.find(i => i.id === piece?.itemId);
+                const resolvedCut = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || resolvePieceCutName(piece) || '—';
+                const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                const resolvedTwist = resolvePieceTwistName(piece) || '—';
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     piece: row.pieceId || '—',
-                    cut: row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '—',
+                    cut: resolvedCut,
+                    yarn: resolvedYarn,
+                    twist: resolvedTwist,
                     barcode: row.barcode || '—',
                     machine: row.machineNo || '—',
                     employee: row.operator?.name || '—',
@@ -1498,8 +1531,10 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'cut', header: 'Cut' },
                 { key: 'piece', header: 'Piece' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'machine', header: 'Machine' },
                 { key: 'employee', header: 'Employee' },
@@ -1623,7 +1658,7 @@ export function ReceiveHistoryTable() {
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 17;
+    const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 14 : 17;
 
     return (
         <Card>
@@ -1711,6 +1746,8 @@ export function ReceiveHistoryTable() {
                                                 <TableHead>Item</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 <TableHead>Machine</TableHead>
                                                 <TableHead>Employee</TableHead>
@@ -1770,13 +1807,18 @@ export function ReceiveHistoryTable() {
                                                 const infoItems = getCutterReceiveInfo(r);
                                                 const piece = db.inbound_items?.find(p => p.id === r.pieceId);
                                                 const item = db.items?.find(i => i.id === piece?.itemId);
+                                                const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
+                                                const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                                                const resolvedTwist = resolvePieceTwistName(piece) || '—';
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
                                                         <TableCell>{item?.name || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                        <TableCell>{r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</TableCell>
+                                                        <TableCell>{resolvedCut}</TableCell>
+                                                        <TableCell>{resolvedYarn}</TableCell>
+                                                        <TableCell>{resolvedTwist}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                         <TableCell>{r.machineNo || '—'}</TableCell>
                                                         <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
@@ -1876,6 +1918,9 @@ export function ReceiveHistoryTable() {
                                     if (process === 'cutter') {
                                         const piece = db.inbound_items?.find(p => p.id === r.pieceId);
                                         const item = db.items?.find(i => i.id === piece?.itemId);
+                                        const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
+                                        const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                                        const resolvedTwist = resolvePieceTwistName(piece) || '—';
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
@@ -1892,9 +1937,12 @@ export function ReceiveHistoryTable() {
                                                             <div className="text-[10px] text-muted-foreground uppercase">{r.bobbinQuantity} bobbins</div>
                                                         </div>
                                                     </div>
-                                                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                        <span>Cut: {r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</span>
-                                                        <span>Mac: {r.machineNo || '—'}</span>
+                                                    <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                                        <div className="flex items-center justify-between">
+                                                            <span>Cut: {resolvedCut}</span>
+                                                            <span>Mac: {r.machineNo || '—'}</span>
+                                                        </div>
+                                                        <div>Yarn: {resolvedYarn} • Twist: {resolvedTwist}</div>
                                                     </div>
                                                 </div>
                                                 <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">

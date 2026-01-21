@@ -52,6 +52,99 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.yarns]);
 
+    const twistNameById = useMemo(() => {
+        const map = new Map();
+        (db.twists || []).forEach(t => map.set(t.id, t.name || '—'));
+        return map;
+    }, [db.twists]);
+
+    const resolvePieceCutName = (piece) => {
+        if (!piece) return '';
+        const cutVal = piece.cut;
+        return piece.cutName
+            || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
+            || piece.cutMaster?.name
+            || (piece.cutId ? cutNameById.get(piece.cutId) : '')
+            || '';
+    };
+
+    const resolvePieceYarnName = (piece) => {
+        if (!piece) return '';
+        const yarnVal = piece.yarn;
+        return piece.yarnName
+            || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name)
+            || (piece.yarnId ? yarnNameById.get(piece.yarnId) : '')
+            || '';
+    };
+
+    const resolvePieceTwistName = (piece) => {
+        if (!piece) return '';
+        const twistVal = piece.twist;
+        return piece.twistName
+            || (typeof twistVal === 'string' ? twistVal : twistVal?.name)
+            || (piece.twistId ? twistNameById.get(piece.twistId) : '')
+            || '';
+    };
+
+    const pickName = (primary, fallback) => {
+        const primaryClean = String(primary || '').trim();
+        if (primaryClean && primaryClean !== '—') return primaryClean;
+        const fallbackClean = String(fallback || '').trim();
+        return fallbackClean || '—';
+    };
+
+    const resolveEntryNames = (entry) => {
+        if (!entry) return { cutName: '—', yarnName: '—', twistName: '—' };
+        const firstPieceId = Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList[0] : null;
+        const piece = firstPieceId ? db.inbound_items?.find(p => p.id === firstPieceId) : null;
+        const fallbackCut = resolvePieceCutName(piece);
+        const fallbackYarn = resolvePieceYarnName(piece);
+        const fallbackTwist = resolvePieceTwistName(piece);
+
+        if (process === 'cutter') {
+            const directCut = cutNameById.get(entry.cutId) || '';
+            return {
+                cutName: pickName(directCut, fallbackCut),
+                yarnName: pickName('', fallbackYarn),
+                twistName: pickName('', fallbackTwist),
+            };
+        }
+
+        if (process === 'holo') {
+            const resolved = resolveHoloTrace(entry, holoTraceContext);
+            return {
+                cutName: pickName(resolved.cutName, fallbackCut),
+                yarnName: pickName(resolved.yarnName, fallbackYarn),
+                twistName: pickName(resolved.twistName, fallbackTwist),
+            };
+        }
+
+        if (process === 'coning') {
+            const resolved = resolveConingTrace(entry, traceContext);
+            return {
+                cutName: pickName(resolved.cutName, fallbackCut),
+                yarnName: pickName(resolved.yarnName, fallbackYarn),
+                twistName: pickName(resolved.twistName, fallbackTwist),
+            };
+        }
+
+        return { cutName: '—', yarnName: '—', twistName: '—' };
+    };
+
+    const resolvePieceDisplay = (entry) => {
+        if (!entry) return '-';
+        if (Array.isArray(entry.pieceIdsList) && entry.pieceIdsList.length > 0) {
+            return entry.pieceIdsList.join(', ');
+        }
+        if (Array.isArray(entry.pieceIds) && entry.pieceIds.length > 0) {
+            return entry.pieceIds.join(', ');
+        }
+        if (typeof entry.pieceIds === 'string' && entry.pieceIds.trim()) {
+            return entry.pieceIds.trim();
+        }
+        return '-';
+    };
+
     const resolveConingConeTypeName = (issue) => {
         if (!issue?.receivedRowRefs) return '—';
         let refs = issue.receivedRowRefs;
@@ -205,6 +298,7 @@ export function OnMachineTable({ db, process }) {
 
                 // Calculate issued weight from receivedRowRefs
                 let issuedWeight = 0;
+                let rollsIssued = 0;
                 let pieceIds = [];
                 try {
                     const refs = typeof issue.receivedRowRefs === 'string'
@@ -214,10 +308,14 @@ export function OnMachineTable({ db, process }) {
                         const idsSet = new Set();
                         refs.forEach(ref => {
                             issuedWeight += Number(ref.issueWeight || 0);
+                            rollsIssued += Number(ref.issueRolls || ref.baseRolls || 0);
 
                             // Trace back to piece: coning issue -> holo receive -> holo issue -> cutter receive -> pieceId
                             const holoRow = (db.receive_from_holo_machine_rows || []).find(r => r.id === ref.rowId);
                             if (holoRow) {
+                                if (holoRow.pieceId) {
+                                    idsSet.add(holoRow.pieceId);
+                                }
                                 const holoIssue = (db.issue_to_holo_machine || []).find(i => i.id === holoRow.issueId);
                                 if (holoIssue) {
                                     const holoRefs = typeof holoIssue.receivedRowRefs === 'string'
@@ -248,6 +346,7 @@ export function OnMachineTable({ db, process }) {
                 return {
                     ...issue,
                     issuedWeight,
+                    rollsIssued,
                     receivedWeight: totalReceived,
                     wastageWeight: totalWastage,
                     pendingWeight: Math.max(0, pendingWeight),
@@ -327,10 +426,11 @@ export function OnMachineTable({ db, process }) {
     const handleExport = () => {
         const exportData = onMachineEntries.map(entry => {
             const progressPercent = getProgressPercent(entry);
+            const resolvedNames = resolveEntryNames(entry);
             const baseData = {
                 date: formatDateDDMMYYYY(entry.date),
                 lotOrPiece: (process === 'cutter' || process === 'holo' || process === 'coning')
-                    ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || ''))
+                    ? resolvePieceDisplay(entry)
                     : (entry.lotNo || ''),
                 itemName: itemNameById.get(entry.itemId) || '—',
                 machineName: machineNameById.get(entry.machineId) || '—',
@@ -341,26 +441,28 @@ export function OnMachineTable({ db, process }) {
                 progress: `${progressPercent}%`,
                 barcode: entry.barcode || entry.id.substring(0, 8),
             };
-            if (process === 'cutter') {
-                return { ...baseData, cut: cutNameById.get(entry.cutId) || '—' };
-            }
-            if (process === 'holo') {
-                const resolved = entry ? resolveHoloTrace(entry, holoTraceContext) : { cutName: '—' };
+            if (process === 'coning') {
                 return {
                     ...baseData,
-                    cut: resolved.cutName,
-                    yarn: yarnNameById.get(entry.yarnId) || '—',
+                    cut: resolvedNames.cutName,
+                    yarn: resolvedNames.yarnName,
+                    twist: resolvedNames.twistName,
+                    rollsIssued: entry.rollsIssued || 0,
+                    coneType: resolveConingConeTypeName(entry),
+                    perConeNetG: Number.isFinite(Number(entry.requiredPerConeNetWeight)) ? Number(entry.requiredPerConeNetWeight) : '',
                 };
             }
-            // Coning - resolve cut/yarn from referenced source rows
-            const resolved = entry ? resolveConingTrace(entry, traceContext) : { cutName: '—', yarnName: '—' };
-            return {
-                ...baseData,
-                cut: resolved.cutName,
-                yarn: resolved.yarnName,
-                coneType: resolveConingConeTypeName(entry),
-                perConeNetG: Number.isFinite(Number(entry.requiredPerConeNetWeight)) ? Number(entry.requiredPerConeNetWeight) : '',
-            };
+
+            if (process === 'cutter' || process === 'holo') {
+                return {
+                    ...baseData,
+                    cut: resolvedNames.cutName,
+                    yarn: resolvedNames.yarnName,
+                    twist: resolvedNames.twistName,
+                };
+            }
+
+            return baseData;
         });
 
         let columns = [
@@ -368,14 +470,13 @@ export function OnMachineTable({ db, process }) {
             { key: 'lotOrPiece', header: (process === 'cutter' || process === 'holo' || process === 'coning') ? 'Piece' : 'Lot' },
             { key: 'itemName', header: 'Item' },
         ];
-        if (process === 'cutter') {
-            columns.push({ key: 'cut', header: 'Cut' });
-        }
-        if (process === 'holo' || process === 'coning') {
+        if (process === 'cutter' || process === 'holo' || process === 'coning') {
             columns.push({ key: 'cut', header: 'Cut' });
             columns.push({ key: 'yarn', header: 'Yarn' });
+            columns.push({ key: 'twist', header: 'Twist' });
         }
         if (process === 'coning') {
+            columns.push({ key: 'rollsIssued', header: 'Rolls Issued' });
             columns.push({ key: 'coneType', header: 'Cone Type' });
             columns.push({ key: 'perConeNetG', header: 'Per Cone (g)' });
         }
@@ -393,7 +494,7 @@ export function OnMachineTable({ db, process }) {
         exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 11 : 13;
+    const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 14 : 17;
 
     return (
         <div className="space-y-4">
@@ -457,6 +558,8 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>Item</TableHead>
                                     <TableHead>Piece</TableHead>
                                     <TableHead>Cut</TableHead>
+                                    <TableHead>Yarn</TableHead>
+                                    <TableHead>Twist</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -472,6 +575,9 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
                                     <TableHead>Piece</TableHead>
+                                    <TableHead>Cut</TableHead>
+                                    <TableHead>Yarn</TableHead>
+                                    <TableHead>Twist</TableHead>
                                     <TableHead>Machine</TableHead>
                                     <TableHead>Operator</TableHead>
                                     <TableHead>Issued (kg)</TableHead>
@@ -487,6 +593,10 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>Date</TableHead>
                                     <TableHead>Item</TableHead>
                                     <TableHead>Piece</TableHead>
+                                    <TableHead>Cut</TableHead>
+                                    <TableHead>Yarn</TableHead>
+                                    <TableHead>Twist</TableHead>
+                                    <TableHead>Rolls Issued</TableHead>
                                     <TableHead>Cone Type</TableHead>
                                     <TableHead>Per Cone (g)</TableHead>
                                     <TableHead>Machine</TableHead>
@@ -511,16 +621,34 @@ export function OnMachineTable({ db, process }) {
                         ) : (
                             onMachineEntries.map((entry) => {
                                 const progressPercent = getProgressPercent(entry);
+                                const resolvedNames = resolveEntryNames(entry);
                                 return (
                                     <TableRow key={entry.id}>
                                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(entry.date)}</TableCell>
                                         <TableCell>{itemNameById.get(entry.itemId)}</TableCell>
-                                        <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : entry.pieceIdsList) : (entry.lotNo || '')}>
-                                            {(process === 'cutter' || process === 'holo' || process === 'coning') ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || '—')) : (entry.lotNo || '—')}
+                                        <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
+                                            {(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')}
                                         </TableCell>
-                                        {process === 'cutter' && <TableCell>{cutNameById.get(entry.cutId) || '—'}</TableCell>}
+                                        {process === 'cutter' && (
+                                            <>
+                                                <TableCell>{resolvedNames.cutName}</TableCell>
+                                                <TableCell>{resolvedNames.yarnName}</TableCell>
+                                                <TableCell>{resolvedNames.twistName}</TableCell>
+                                            </>
+                                        )}
+                                        {process === 'holo' && (
+                                            <>
+                                                <TableCell>{resolvedNames.cutName}</TableCell>
+                                                <TableCell>{resolvedNames.yarnName}</TableCell>
+                                                <TableCell>{resolvedNames.twistName}</TableCell>
+                                            </>
+                                        )}
                                         {process === 'coning' && (
                                             <>
+                                                <TableCell>{resolvedNames.cutName}</TableCell>
+                                                <TableCell>{resolvedNames.yarnName}</TableCell>
+                                                <TableCell>{resolvedNames.twistName}</TableCell>
+                                                <TableCell>{entry.rollsIssued || 0}</TableCell>
                                                 <TableCell>{resolveConingConeTypeName(entry)}</TableCell>
                                                 <TableCell>{formatPerConeNet(entry.requiredPerConeNetWeight)}</TableCell>
                                             </>
@@ -562,8 +690,9 @@ export function OnMachineTable({ db, process }) {
                 ) : (
                     onMachineEntries.map((entry) => {
                         const progressPercent = getProgressPercent(entry);
+                        const resolvedNames = resolveEntryNames(entry);
                         const identifier = (process === 'cutter' || process === 'holo' || process === 'coning')
-                            ? (Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList.join(', ') : (entry.pieceIdsList || '—'))
+                            ? resolvePieceDisplay(entry)
                             : (entry.lotNo || '—');
                         return (
                             <div key={entry.id} className="border rounded-lg p-4 bg-card shadow-sm">
@@ -575,6 +704,10 @@ export function OnMachineTable({ db, process }) {
                                         </p>
                                         <p className="text-xs text-muted-foreground mt-1">
                                             {formatDateDDMMYYYY(entry.date)} • {itemNameById.get(entry.itemId)}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            Cut: {resolvedNames.cutName} • Yarn: {resolvedNames.yarnName} • Twist: {resolvedNames.twistName}
+                                            {process === 'coning' ? ` • Rolls: ${entry.rollsIssued || 0}` : ''}
                                         </p>
                                     </div>
                                     <Badge variant="outline" className="text-blue-600 border-blue-600 whitespace-nowrap">

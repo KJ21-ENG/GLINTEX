@@ -292,33 +292,66 @@ export function Dispatch() {
 
     function handleScanSubmit(e) {
         e.preventDefault();
-        const normalized = scanInput.trim().toUpperCase();
-        if (!normalized) return;
+        const rawInput = scanInput.trim().toUpperCase();
+        if (!rawInput) return;
         setScanInput('');
 
-        setScanQueue(prev => {
-            if (prev.some(entry => entry.barcode === normalized)) {
-                return prev;
-            }
+        // Split input by spaces, commas, newlines, or tabs to support bulk paste
+        const barcodes = rawInput
+            .split(/[\s,\t\n]+/)
+            .map(b => b.trim())
+            .filter(Boolean);
+
+        if (barcodes.length === 0) return;
+
+        // Process each barcode
+        const newEntries = [];
+        const foundItemIds = new Set();
+
+        for (const barcode of barcodes) {
+            // Check if already in queue
+            const alreadyInQueue = scanQueue.some(entry => entry.barcode === barcode) ||
+                newEntries.some(entry => entry.barcode === barcode);
+            if (alreadyInQueue) continue;
+
             const match = availableItems.find(item =>
-                (item.barcode || '').toUpperCase() === normalized ||
-                (item.legacyBarcode || '').toUpperCase() === normalized ||
-                (item.lotNo || '').toUpperCase() === normalized ||
-                (item.pieceId || '').toUpperCase() === normalized
+                (item.barcode || '').toUpperCase() === barcode ||
+                (item.legacyBarcode || '').toUpperCase() === barcode ||
+                (item.lotNo || '').toUpperCase() === barcode ||
+                (item.pieceId || '').toUpperCase() === barcode
             );
+
             if (!match) {
-                return [{ barcode: normalized, status: 'not_found', error: `Not found in ${selectedStage}` }, ...prev];
+                newEntries.push({ barcode, status: 'not_found', error: `Not found in ${selectedStage}` });
+            } else {
+                // Check if this item is already selected (by ID)
+                const alreadySelected = scanQueue.some(entry => entry.itemId === match.id) ||
+                    foundItemIds.has(match.id);
+                if (!alreadySelected) {
+                    newEntries.push({
+                        barcode,
+                        status: 'found',
+                        itemId: match.id,
+                        label: match.lotLabel || match.lotNo || match.pieceId || '—'
+                    });
+                    foundItemIds.add(match.id);
+                }
             }
-            if (prev.some(entry => entry.itemId === match.id)) {
-                return prev;
-            }
+        }
+
+        // Update selectedIds with all found items
+        if (foundItemIds.size > 0) {
             setSelectedIds(ids => {
                 const next = new Set(ids);
-                next.add(match.id);
+                foundItemIds.forEach(id => next.add(id));
                 return next;
             });
-            return [{ barcode: normalized, status: 'found', itemId: match.id, label: match.lotLabel || match.lotNo || match.pieceId || '—' }, ...prev];
-        });
+        }
+
+        // Add new entries to the queue (newest first)
+        if (newEntries.length > 0) {
+            setScanQueue(prev => [...newEntries.reverse(), ...prev]);
+        }
     }
 
     function clearScanQueue() {

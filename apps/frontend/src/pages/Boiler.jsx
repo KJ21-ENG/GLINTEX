@@ -13,6 +13,8 @@ import {
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBoilerView } from '../components/boiler/MobileBoilerView';
+import { usePermission } from '../hooks/usePermission';
+import AccessDenied from '../components/common/AccessDenied';
 
 /**
  * Boiler (Steaming) Module
@@ -20,6 +22,8 @@ import { MobileBoilerView } from '../components/boiler/MobileBoilerView';
  */
 export function Boiler() {
     const { process } = useInventory();
+    const { canRead, canWrite } = usePermission('boiler');
+    const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [useMobileMode, setUseMobileMode] = useState(false);
     const [activeTab, setActiveTab] = useState('steam'); // 'steam' | 'history'
@@ -81,6 +85,7 @@ export function Boiler() {
 
     // Add barcode to list
     const handleAddBarcode = async () => {
+        if (readOnly) return;
         const normalized = barcodeInput.trim().toUpperCase();
         if (!normalized) return;
 
@@ -149,6 +154,7 @@ export function Boiler() {
 
     // Mark all as steamed
     const handleMarkSteamed = async () => {
+        if (readOnly) return;
         if (steamableItems.length === 0) return;
 
         setSubmitting(true);
@@ -174,6 +180,15 @@ export function Boiler() {
     const handleMobileSteamComplete = (count) => {
         // Refresh history if on history tab
     };
+
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Boiler (Steaming)</h1>
+                <AccessDenied message="You do not have access to the boiler module. Contact an administrator to request access." />
+            </div>
+        );
+    }
 
     // Show warning if not Holo process
     if (process !== 'holo') {
@@ -296,11 +311,16 @@ export function Boiler() {
                                     <div className="text-xs text-muted-foreground">Use scanner gun and press Enter, or type manually</div>
                                 </div>
                                 {scannedItems.length > 0 && (
-                                    <Button size="sm" variant="ghost" onClick={() => setScannedItems([])}>
+                                    <Button size="sm" variant="ghost" onClick={() => setScannedItems([])} disabled={readOnly}>
                                         Clear All
                                     </Button>
                                 )}
                             </div>
+                            {readOnly && (
+                                <div className="text-xs text-muted-foreground">
+                                    Read-only access: scanning and steaming actions are disabled.
+                                </div>
+                            )}
                             <div className="flex gap-2">
                                 <Input
                                     ref={inputRef}
@@ -310,11 +330,12 @@ export function Boiler() {
                                     onKeyDown={handleKeyDown}
                                     className="font-mono"
                                     autoFocus
+                                    disabled={readOnly}
                                 />
                                 <Button
                                     variant="outline"
                                     onClick={handleAddBarcode}
-                                    disabled={!barcodeInput.trim() || lookingUp}
+                                    disabled={!barcodeInput.trim() || lookingUp || readOnly}
                                 >
                                     {lookingUp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                                 </Button>
@@ -334,7 +355,7 @@ export function Boiler() {
                                                 item.status === 'not_found' && 'border-red-600 text-red-600',
                                                 item.status === 'loading' && 'border-blue-500 text-blue-500'
                                             )}
-                                            onClick={() => removeItem(item.scannedBarcode)}
+                                            onClick={() => { if (!readOnly) removeItem(item.scannedBarcode); }}
                                         >
                                             {item.status === 'loading' && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
                                             {item.scannedBarcode}
@@ -360,7 +381,7 @@ export function Boiler() {
                                     {steamableItems.length > 0 && (
                                         <Button
                                             onClick={handleMarkSteamed}
-                                            disabled={submitting}
+                                            disabled={submitting || readOnly}
                                             className="bg-orange-500 hover:bg-orange-600"
                                         >
                                             <Flame className="w-4 h-4 mr-2" />
@@ -419,7 +440,8 @@ export function Boiler() {
                                                             size="sm"
                                                             variant="ghost"
                                                             className="text-destructive hover:text-destructive"
-                                                            onClick={() => removeItem(item.scannedBarcode)}
+                                                            onClick={() => { if (!readOnly) removeItem(item.scannedBarcode); }}
+                                                            disabled={readOnly}
                                                         >
                                                             <Trash2 className="w-4 h-4" />
                                                         </Button>

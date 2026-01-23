@@ -8,6 +8,8 @@ import { IssueHistory } from './IssueHistory';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/ui';
 import { sendSummaryWhatsApp } from '../api/client';
 import { Send, Calendar } from 'lucide-react';
+import { useStagePermission } from '../hooks/usePermission';
+import AccessDenied from '../components/common/AccessDenied';
 
 function getTodayISO() {
   return new Date().toISOString().split('T')[0];
@@ -22,7 +24,10 @@ function formatDateDisplay(dateStr) {
 }
 
 export function IssueToMachine() {
-  const { process, db, refreshDb } = useInventory();
+  const { process, db, refreshDb, ensureModuleData } = useInventory();
+  const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
+  const { canRead, canWrite, canEdit, canDelete } = useStagePermission('issue', stage);
+  const readOnly = canRead && !canWrite;
   const [activeTab, setActiveTab] = useState('on-machine');
   const [sendingSum, setSendingSum] = useState(false);
   const [sumMessage, setSumMessage] = useState(null);
@@ -30,6 +35,12 @@ export function IssueToMachine() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
   const pickerRef = useRef(null);
+
+  useEffect(() => {
+    if (canRead) {
+      ensureModuleData('process', { process: stage });
+    }
+  }, [canRead, ensureModuleData, stage]);
 
   // Close date picker on outside click
   useEffect(() => {
@@ -75,6 +86,15 @@ export function IssueToMachine() {
     setShowDatePicker(false);
   };
 
+  if (!canRead) {
+    return (
+      <div className="space-y-6 fade-in">
+        <h1 className="text-2xl font-bold tracking-tight">Issue to Machine</h1>
+        <AccessDenied message="You do not have access to this stage. Select another stage or contact an administrator." />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 fade-in">
       <div className="flex items-center justify-between">
@@ -96,7 +116,7 @@ export function IssueToMachine() {
             size="sm"
             onClick={handleSendSummary}
             onContextMenu={handleRightClick}
-            disabled={sendingSum}
+            disabled={sendingSum || readOnly}
             className="flex items-center gap-2"
             title="Left-click to send, Right-click to change date"
           >
@@ -132,12 +152,25 @@ export function IssueToMachine() {
       )}
 
       {/* Process Specific Form */}
-      {process === 'holo' ? (
-        <IssueToHolo />
-      ) : process === 'coning' ? (
-        <IssueToConing />
+      {readOnly ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Read-only access</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            You can view issue data, but you cannot create or edit issues for this stage.
+          </CardContent>
+        </Card>
       ) : (
-        <IssueToCutter />
+        <>
+          {process === 'holo' ? (
+            <IssueToHolo />
+          ) : process === 'coning' ? (
+            <IssueToConing />
+          ) : (
+            <IssueToCutter />
+          )}
+        </>
       )}
 
       {/* Issue History / On Machine Section */}
@@ -171,7 +204,7 @@ export function IssueToMachine() {
           {activeTab === 'on-machine' ? (
             <OnMachineTable db={db} process={process} />
           ) : (
-            <IssueHistory db={db} refreshDb={refreshDb} />
+            <IssueHistory db={db} refreshDb={refreshDb} canEdit={canEdit} canDelete={canDelete} />
           )}
         </CardContent>
       </Card>

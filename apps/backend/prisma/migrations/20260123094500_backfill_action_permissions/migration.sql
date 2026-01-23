@@ -1,0 +1,35 @@
+-- Backfill edit/delete action permissions for existing roles based on base WRITE access.
+
+UPDATE "Role"
+SET "permissions" = "permissions" || jsonb_build_object(
+  'inbound.edit', CASE WHEN "permissions" ? 'inbound.edit' THEN ("permissions"->>'inbound.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'inbound')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'inbound.delete', CASE WHEN "permissions" ? 'inbound.delete' THEN ("permissions"->>'inbound.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'inbound')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.cutter.edit', CASE WHEN "permissions" ? 'issue.cutter.edit' THEN ("permissions"->>'issue.cutter.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.cutter')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.cutter.delete', CASE WHEN "permissions" ? 'issue.cutter.delete' THEN ("permissions"->>'issue.cutter.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.cutter')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.holo.edit', CASE WHEN "permissions" ? 'issue.holo.edit' THEN ("permissions"->>'issue.holo.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.holo')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.holo.delete', CASE WHEN "permissions" ? 'issue.holo.delete' THEN ("permissions"->>'issue.holo.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.holo')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.coning.edit', CASE WHEN "permissions" ? 'issue.coning.edit' THEN ("permissions"->>'issue.coning.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.coning')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'issue.coning.delete', CASE WHEN "permissions" ? 'issue.coning.delete' THEN ("permissions"->>'issue.coning.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'issue.coning')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.cutter.edit', CASE WHEN "permissions" ? 'receive.cutter.edit' THEN ("permissions"->>'receive.cutter.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.cutter')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.cutter.delete', CASE WHEN "permissions" ? 'receive.cutter.delete' THEN ("permissions"->>'receive.cutter.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.cutter')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.holo.edit', CASE WHEN "permissions" ? 'receive.holo.edit' THEN ("permissions"->>'receive.holo.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.holo')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.holo.delete', CASE WHEN "permissions" ? 'receive.holo.delete' THEN ("permissions"->>'receive.holo.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.holo')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.coning.edit', CASE WHEN "permissions" ? 'receive.coning.edit' THEN ("permissions"->>'receive.coning.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.coning')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'receive.coning.delete', CASE WHEN "permissions" ? 'receive.coning.delete' THEN ("permissions"->>'receive.coning.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'receive.coning')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'boiler.edit', CASE WHEN "permissions" ? 'boiler.edit' THEN ("permissions"->>'boiler.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'boiler')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'boiler.delete', CASE WHEN "permissions" ? 'boiler.delete' THEN ("permissions"->>'boiler.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'boiler')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'dispatch.edit', CASE WHEN "permissions" ? 'dispatch.edit' THEN ("permissions"->>'dispatch.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'dispatch')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'dispatch.delete', CASE WHEN "permissions" ? 'dispatch.delete' THEN ("permissions"->>'dispatch.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'dispatch')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'stock.edit', CASE WHEN "permissions" ? 'stock.edit' THEN ("permissions"->>'stock.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'stock')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'stock.delete', CASE WHEN "permissions" ? 'stock.delete' THEN ("permissions"->>'stock.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'stock')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'reports.edit', CASE WHEN "permissions" ? 'reports.edit' THEN ("permissions"->>'reports.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'reports')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'reports.delete', CASE WHEN "permissions" ? 'reports.delete' THEN ("permissions"->>'reports.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'reports')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'masters.edit', CASE WHEN "permissions" ? 'masters.edit' THEN ("permissions"->>'masters.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'masters')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'masters.delete', CASE WHEN "permissions" ? 'masters.delete' THEN ("permissions"->>'masters.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'masters')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'settings.edit', CASE WHEN "permissions" ? 'settings.edit' THEN ("permissions"->>'settings.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'settings')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'settings.delete', CASE WHEN "permissions" ? 'settings.delete' THEN ("permissions"->>'settings.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'settings')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'opening_stock.edit', CASE WHEN "permissions" ? 'opening_stock.edit' THEN ("permissions"->>'opening_stock.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'opening_stock')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'opening_stock.delete', CASE WHEN "permissions" ? 'opening_stock.delete' THEN ("permissions"->>'opening_stock.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'opening_stock')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'box_transfer.edit', CASE WHEN "permissions" ? 'box_transfer.edit' THEN ("permissions"->>'box_transfer.edit')::int ELSE CASE WHEN COALESCE(("permissions"->>'box_transfer')::int, 0) >= 2 THEN 2 ELSE 0 END END,
+  'box_transfer.delete', CASE WHEN "permissions" ? 'box_transfer.delete' THEN ("permissions"->>'box_transfer.delete')::int ELSE CASE WHEN COALESCE(("permissions"->>'box_transfer')::int, 0) >= 2 THEN 2 ELSE 0 END END
+);

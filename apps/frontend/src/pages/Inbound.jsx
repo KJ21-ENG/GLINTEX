@@ -6,10 +6,20 @@ import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search, Printer, Download } from 'lucide-react';
 import { exportHistoryToExcel } from '../services';
+import { usePermission } from '../hooks/usePermission';
+import AccessDenied from '../components/common/AccessDenied';
 
 
 export function Inbound() {
-    const { db, createLot, refreshing } = useInventory();
+    const { db, createLot, refreshing, ensureModuleData } = useInventory();
+    const { canRead, canWrite } = usePermission('inbound');
+    const readOnly = canRead && !canWrite;
+
+    useEffect(() => {
+        if (canRead) {
+            ensureModuleData('inbound');
+        }
+    }, [canRead, ensureModuleData]);
 
     // Form State
     const [date, setDate] = useState(todayISO());
@@ -34,8 +44,10 @@ export function Inbound() {
     };
 
     useEffect(() => {
-        fetchSequence();
-    }, []);
+        if (canRead) {
+            fetchSequence();
+        }
+    }, [canRead]);
 
     // Validation
     const canAdd = date && itemId && firmId && supplierId && Number(weight) > 0;
@@ -43,6 +55,7 @@ export function Inbound() {
 
     // Handlers
     function addPiece() {
+        if (readOnly) return;
         if (!canAdd) return;
         const nextSeq = cart.length + 1;
         setCart([...cart, { seq: nextSeq, tempId: uid("piece"), weight: Number(weight) }]);
@@ -55,6 +68,7 @@ export function Inbound() {
     }
 
     async function handleSaveLot() {
+        if (readOnly) return;
         if (!canSave) return;
         setSaving(true);
         try {
@@ -118,6 +132,15 @@ export function Inbound() {
         }
     }
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Inbound Receiving</h1>
+                <AccessDenied message="You do not have access to inbound receiving. Contact an administrator to request access." />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 fade-in">
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
@@ -129,28 +152,33 @@ export function Inbound() {
                     <CardTitle>New Lot Entry</CardTitle>
                 </CardHeader>
                 <CardContent>
+                    {readOnly && (
+                        <div className="mb-3 text-xs text-muted-foreground">
+                            Read-only access: you can view inbound data but cannot create or edit lots.
+                        </div>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
                         <div className="space-y-2">
                             <Label>Date</Label>
-                            <Input type="date" value={date} onChange={e => { setDate(e.target.value); setCart([]); }} />
+                            <Input type="date" value={date} onChange={e => { setDate(e.target.value); setCart([]); }} disabled={readOnly} />
                         </div>
                         <div className="space-y-2">
                             <Label>Item</Label>
-                            <Select value={itemId} onChange={e => setItemId(e.target.value)}>
+                            <Select value={itemId} onChange={e => setItemId(e.target.value)} disabled={readOnly}>
                                 <option value="">Select Item</option>
                                 {db?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                             </Select>
                         </div>
                         <div className="space-y-2">
                             <Label>Firm</Label>
-                            <Select value={firmId} onChange={e => setFirmId(e.target.value)}>
+                            <Select value={firmId} onChange={e => setFirmId(e.target.value)} disabled={readOnly}>
                                 <option value="">Select Firm</option>
                                 {db?.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                             </Select>
                         </div>
                         <div className="space-y-2">
                             <Label>Supplier</Label>
-                            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+                            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)} disabled={readOnly}>
                                 <option value="">Select Supplier</option>
                                 {db?.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </Select>
@@ -169,6 +197,7 @@ export function Inbound() {
                                 placeholder="e.g. 1.250"
                                 value={weight}
                                 onChange={e => setWeight(e.target.value)}
+                                disabled={readOnly}
                                 onKeyDown={e => {
                                     if (e.key === 'Enter') {
                                         e.preventDefault();
@@ -181,14 +210,14 @@ export function Inbound() {
 
                     <div className="mt-6 flex flex-col sm:flex-row justify-between items-end gap-4 sm:gap-0">
                         <div className="flex w-full sm:w-auto gap-2">
-                            <Button onClick={addPiece} disabled={!canAdd} className="flex-1 sm:flex-none gap-2">
+                            <Button onClick={addPiece} disabled={!canAdd || readOnly} className="flex-1 sm:flex-none gap-2">
                                 <Plus className="w-4 h-4" /> Add Piece
                             </Button>
-                            <Button variant="outline" onClick={() => setCart([])} disabled={cart.length === 0} className="flex-1 sm:flex-none text-destructive hover:text-destructive">
+                            <Button variant="outline" onClick={() => setCart([])} disabled={cart.length === 0 || readOnly} className="flex-1 sm:flex-none text-destructive hover:text-destructive">
                                 Clear
                             </Button>
                         </div>
-                        <Button onClick={handleSaveLot} disabled={!canSave || refreshing} className="w-full sm:w-auto gap-2 min-w-[120px]">
+                        <Button onClick={handleSaveLot} disabled={!canSave || refreshing || readOnly} className="w-full sm:w-auto gap-2 min-w-[120px]">
                             {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Lot</>}
                         </Button>
                     </div>
@@ -218,7 +247,7 @@ export function Inbound() {
                                             <TableCell>{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Pending...'}</TableCell>
                                             <TableCell>{formatKg(r.weight)}</TableCell>
                                             <TableCell className="">
-                                                <Button variant="ghost" size="icon" onClick={() => removeFromCart(r.tempId)} className="h-8 w-8 text-destructive">
+                                                <Button variant="ghost" size="icon" onClick={() => removeFromCart(r.tempId)} disabled={readOnly} className="h-8 w-8 text-destructive">
                                                     <Trash2 className="w-4 h-4" />
                                                 </Button>
                                             </TableCell>

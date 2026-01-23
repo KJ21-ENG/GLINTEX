@@ -50,6 +50,10 @@ async function request(path, { method = 'GET', body, headers } = {}) {
 
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
+export async function getBootstrap() { return await request('/api/bootstrap'); }
+export async function getModuleInbound() { return await request('/api/module/inbound'); }
+export async function getModuleProcess(process) { return await request(`/api/module/process/${process}`); }
+export async function getModuleOpeningStock() { return await request('/api/module/opening_stock'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
 export async function reserveOpeningIssueSeries(stage) {
@@ -67,18 +71,18 @@ export async function authLogout() { return await request('/api/auth/logout', { 
 
 // Admin (roles/users)
 export async function listAdminRoles() { return await request('/api/admin/roles'); }
-export async function createAdminRole({ key, name, description }) {
-  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description } });
+export async function createAdminRole({ key, name, description, permissions }) {
+  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description, permissions } });
 }
-export async function updateAdminRole(id, { name, description }) {
-  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description } });
+export async function updateAdminRole(id, { name, description, permissions }) {
+  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description, permissions } });
 }
 export async function listAdminUsers() { return await request('/api/admin/users'); }
-export async function createAdminUser({ username, displayName, password, roleId, isActive }) {
-  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleId, isActive } });
+export async function createAdminUser({ username, displayName, password, roleIds, isActive }) {
+  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleIds, isActive } });
 }
-export async function updateAdminUser(id, { displayName, roleId, isActive }) {
-  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleId, isActive } });
+export async function updateAdminUser(id, { displayName, roleIds, isActive }) {
+  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleIds, isActive } });
 }
 export async function resetAdminUserPassword(id, password) {
   return await request(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });

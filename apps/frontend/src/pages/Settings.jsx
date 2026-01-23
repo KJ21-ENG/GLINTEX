@@ -6,6 +6,8 @@ import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, 
 import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText, Search } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
+import { usePermission } from '../hooks/usePermission';
+import AccessDenied from '../components/common/AccessDenied';
 
 const WHATSAPP_EVENTS_CONFIG = {
     inbound_created: {
@@ -278,7 +280,9 @@ export function Settings() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('whatsapp');
-    const isAdmin = user?.roleKey === 'admin';
+    const isAdmin = user?.isAdmin || (user?.roleKeys || []).includes('admin');
+    const { canRead, canEdit } = usePermission('settings');
+    const isReadOnly = canRead && !canEdit;
     const [groups, setGroups] = useState([]);
     const [whatsappStatus, setWhatsappStatus] = useState({ status: 'disconnected' });
     const [whatsappQr, setWhatsappQr] = useState(null);
@@ -315,6 +319,15 @@ export function Settings() {
         };
     }, [groups.length]);
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+                <AccessDenied message="You do not have access to Settings. Contact an administrator." />
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col md:flex-row gap-6 fade-in items-start">
             <Card className="w-full md:w-64 shrink-0">
@@ -342,8 +355,9 @@ export function Settings() {
                             <FileText className="w-4 h-4" /> Challan Settings
                         </button>
                         <button
-                            onClick={() => navigate('/app/settings/label-designer')}
-                            className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
+                            onClick={() => { if (!isReadOnly) navigate('/app/settings/label-designer'); }}
+                            disabled={isReadOnly}
+                            className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
                             <Printer className="w-4 h-4" /> Label Designer
                         </button>
@@ -360,6 +374,11 @@ export function Settings() {
             </Card>
 
             <div className="flex-1 w-full space-y-6">
+                {isReadOnly && (
+                    <div className="text-sm text-muted-foreground">
+                        Read-only access: you can view settings but cannot save changes.
+                    </div>
+                )}
                 <Card>
                     <CardContent className="pt-6 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
                         <div className="text-sm">
@@ -383,6 +402,7 @@ export function Settings() {
                         setWhatsappStatus={setWhatsappStatus}
                         whatsappQr={whatsappQr}
                         setWhatsappQr={setWhatsappQr}
+                        readOnly={isReadOnly}
                     />
                 )}
                 {activeTab === 'templates' && (
@@ -391,19 +411,21 @@ export function Settings() {
                         groups={groups}
                         setGroups={setGroups}
                         whatsappStatus={whatsappStatus}
+                        readOnly={isReadOnly}
                     />
                 )}
-                {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} />}
+                {activeTab === 'branding' && <BrandingSettings brand={brand} updateSettings={updateSettings} refreshDb={refreshDb} readOnly={isReadOnly} />}
                 {activeTab === 'data' && <RawDataView db={db} />}
-                {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} db={db} updateSettings={updateSettings} />}
-                {activeTab === 'challan' && <ChallanSettings db={db} updateSettings={updateSettings} refreshDb={refreshDb} />}
+                {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} db={db} updateSettings={updateSettings} readOnly={isReadOnly} />}
+                {activeTab === 'challan' && <ChallanSettings db={db} updateSettings={updateSettings} refreshDb={refreshDb} readOnly={isReadOnly} />}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
     );
 }
 
-function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
+function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
+    const isReadOnly = !!readOnly;
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editing, setEditing] = useState(null); // { event, template, enabled, sendToPrimary, groupIds }
@@ -448,6 +470,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     }
 
     async function handleSave() {
+        if (isReadOnly) return;
         if (!editing) return;
         try {
             // Only keep group IDs that are currently valid/accessible
@@ -470,7 +493,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     }
 
     const toggleGroup = (groupId) => {
-        if (!editing) return;
+        if (!editing || isReadOnly) return;
         const current = editing.groupIds || [];
         if (current.includes(groupId)) {
             setEditing({ ...editing, groupIds: current.filter(id => id !== groupId) });
@@ -485,6 +508,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     };
 
     const handleValueChange = (nextValue, caretPos) => {
+        if (isReadOnly) return;
         setEditing({ ...editing, template: nextValue });
         const beforeCaret = nextValue.slice(0, caretPos);
         const lastAt = beforeCaret.lastIndexOf('@');
@@ -507,6 +531,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     };
 
     const applyMention = (key) => {
+        if (isReadOnly) return;
         if (!editing) return;
         const value = editing.template || '';
         const start = mention.start ?? -1;
@@ -580,7 +605,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                                 <h4 className="font-medium capitalize">{t.event.replace(/_/g, ' ')}</h4>
                                                 {!t.enabled && <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase font-bold">Disabled</span>}
                                             </div>
-                                            <Button variant="outline" size="sm" onClick={() => setEditing(t)}>Edit</Button>
+                                            <Button variant="outline" size="sm" onClick={() => setEditing(t)} disabled={isReadOnly}>Edit</Button>
                                         </div>
                                         {WHATSAPP_EVENTS_CONFIG[t.event]?.note && (
                                             <p className="text-[11px] text-primary/80 font-medium italic bg-primary/5 p-2 rounded border-l-2 border-primary">
@@ -631,6 +656,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                             checked={editing.enabled}
                                             onChange={e => setEditing({ ...editing, enabled: e.target.checked })}
                                             className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            disabled={isReadOnly}
                                         />
                                         <span className="text-sm font-medium">Enabled</span>
                                     </label>
@@ -640,6 +666,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                             checked={editing.sendToPrimary}
                                             onChange={e => setEditing({ ...editing, sendToPrimary: e.target.checked })}
                                             className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            disabled={isReadOnly}
                                         />
                                         <span className="text-sm font-medium">Send to Primary No.</span>
                                     </label>
@@ -660,6 +687,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                             value={editing.template}
                                             onChange={e => handleValueChange(e.target.value, e.target.selectionStart)}
                                             onSelect={e => handleValueChange(e.target.value, e.target.selectionStart)}
+                                            disabled={isReadOnly}
                                             onKeyDown={e => {
                                                 if (!mention.open) return;
                                                 const filtered = eventVariables.filter(v =>
@@ -724,6 +752,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
                                                         checked={(editing.groupIds || []).includes(g.id)}
                                                         onChange={() => toggleGroup(g.id)}
                                                         className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                                        disabled={isReadOnly}
                                                     />
                                                     <span className="text-sm truncate">{g.name}</span>
                                                 </label>
@@ -734,7 +763,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
 
                                 <div className="flex justify-end gap-2 pt-2 border-t mt-4">
                                     <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-                                    <Button onClick={handleSave}>Save Changes</Button>
+                                    <Button onClick={handleSave} disabled={isReadOnly}>Save Changes</Button>
                                 </div>
                             </CardContent>
                         </Card>
@@ -745,7 +774,8 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus }) {
     );
 }
 
-function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr }) {
+function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr, readOnly }) {
+    const isReadOnly = !!readOnly;
     const [working, setWorking] = useState(false);
     const [primaryMobile, setPrimaryMobile] = useState('');
     const [allowedGroupIds, setAllowedGroupIds] = useState([]);
@@ -760,6 +790,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     const isConnected = whatsappStatus.status === 'connected';
 
     const handleConnect = async () => {
+        if (isReadOnly) return;
         setWorking(true);
         try {
             await api.whatsappStart();
@@ -769,6 +800,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     };
 
     const handleLogout = async () => {
+        if (isReadOnly) return;
         setWorking(true);
         try {
             await api.whatsappLogout();
@@ -779,6 +811,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     };
 
     const handleSaveSettings = async () => {
+        if (isReadOnly) return;
         setWorking(true);
         try {
             // Only keep group IDs that are currently valid/accessible
@@ -796,6 +829,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     };
 
     const toggleAllowedGroup = (id) => {
+        if (isReadOnly) return;
         if (allowedGroupIds.includes(id)) {
             setAllowedGroupIds(allowedGroupIds.filter(x => x !== id));
         } else {
@@ -822,11 +856,11 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                             <Button size="sm" variant="outline" onClick={() => { setGroups([]); }} disabled={!isConnected || working} title="Refresh Groups" className="flex-1 sm:flex-none">
                                 <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
                             </Button>
-                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected} className="flex-1 sm:flex-none">
+                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected || isReadOnly} className="flex-1 sm:flex-none">
                                 {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
                             </Button>
                             {isConnected && (
-                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working} className="flex-1 sm:flex-none">
+                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working || isReadOnly} className="flex-1 sm:flex-none">
                                     <LogOut className="w-4 h-4 mr-2" /> Logout
                                 </Button>
                             )}
@@ -856,6 +890,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                                     onChange={e => setPrimaryMobile(e.target.value.replace(/\D/g, ''))}
                                     placeholder="9876543210"
                                     maxLength={10}
+                                    disabled={isReadOnly}
                                 />
                             </div>
                         </div>
@@ -871,13 +906,14 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                         ) : (
                             <div className="border rounded-md divide-y max-h-[200px] overflow-y-auto">
                                 {groups.map(g => (
-                                    <label key={g.id} className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={allowedGroupIds.includes(g.id)}
-                                            onChange={() => toggleAllowedGroup(g.id)}
-                                            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                        />
+                                            <label key={g.id} className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={allowedGroupIds.includes(g.id)}
+                                                    onChange={() => toggleAllowedGroup(g.id)}
+                                                    className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                                    disabled={isReadOnly}
+                                                />
                                         <div className="flex flex-col">
                                             <span className="text-sm font-medium truncate">{g.name}</span>
                                             <span className="text-[10px] text-muted-foreground truncate opacity-70">{g.id}</span>
@@ -889,7 +925,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                         <p className="text-[10px] text-muted-foreground">Select which groups are allowed to receive system notifications.</p>
                     </div>
 
-                    <Button className="w-full" onClick={handleSaveSettings} disabled={working}>
+                    <Button className="w-full" onClick={handleSaveSettings} disabled={working || isReadOnly}>
                         <Save className="w-4 h-4 mr-2" /> Save Notification Settings
                     </Button>
                 </CardContent>
@@ -898,7 +934,8 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     );
 }
 
-function BrandingSettings({ brand, updateSettings, refreshDb }) {
+function BrandingSettings({ brand, updateSettings, refreshDb, readOnly }) {
+    const isReadOnly = !!readOnly;
     const [localBrand, setLocalBrand] = useState(brand);
     const [saving, setSaving] = useState(false);
     const [accessUrl, setAccessUrl] = useState('');
@@ -914,6 +951,7 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
     }, []);
 
     const handleSave = async () => {
+        if (isReadOnly) return;
         setSaving(true);
         try {
             await updateSettings(localBrand);
@@ -922,6 +960,7 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
     };
 
     const handleLogo = (e) => {
+        if (isReadOnly) return;
         const file = e.target.files?.[0];
         if (!file) return;
         const reader = new FileReader();
@@ -930,6 +969,7 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
     };
 
     const handleFavicon = (e) => {
+        if (isReadOnly) return;
         const file = e.target.files?.[0];
         if (!file) return;
         const reader = new FileReader();
@@ -961,11 +1001,11 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <Label>Primary Color (Hex)</Label>
-                            <Input value={localBrand.primary} onChange={e => setLocalBrand({ ...localBrand, primary: e.target.value })} />
+                            <Input value={localBrand.primary} onChange={e => setLocalBrand({ ...localBrand, primary: e.target.value })} disabled={isReadOnly} />
                         </div>
                         <div>
                             <Label>Accent Color (Hex)</Label>
-                            <Input value={localBrand.gold} onChange={e => setLocalBrand({ ...localBrand, gold: e.target.value })} />
+                            <Input value={localBrand.gold} onChange={e => setLocalBrand({ ...localBrand, gold: e.target.value })} disabled={isReadOnly} />
                         </div>
                     </div>
                     <div>
@@ -975,7 +1015,7 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
                                 {localBrand.logoDataUrl ? <img src={localBrand.logoDataUrl} className="h-full w-full object-contain" /> : <span className="text-xs text-muted-foreground">No Logo</span>}
                             </div>
                             <div>
-                                <Button variant="outline" onClick={() => logoInputRef.current?.click()}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
+                                <Button variant="outline" onClick={() => logoInputRef.current?.click()} disabled={isReadOnly}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
                                 <input ref={logoInputRef} type="file" className="hidden" accept="image/*" onChange={handleLogo} />
                             </div>
                         </div>
@@ -987,19 +1027,20 @@ function BrandingSettings({ brand, updateSettings, refreshDb }) {
                                 {localBrand.faviconDataUrl ? <img src={localBrand.faviconDataUrl} className="h-full w-full object-contain" /> : <span className="text-xs text-muted-foreground">No Favicon</span>}
                             </div>
                             <div>
-                                <Button variant="outline" onClick={() => faviconInputRef.current?.click()}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
+                                <Button variant="outline" onClick={() => faviconInputRef.current?.click()} disabled={isReadOnly}><Upload className="w-4 h-4 mr-2" /> Upload</Button>
                                 <input ref={faviconInputRef} type="file" className="hidden" accept="image/*" onChange={handleFavicon} />
                             </div>
                         </div>
                     </div>
-                    <Button onClick={handleSave} disabled={saving}><Save className="w-4 h-4 mr-2" /> Save Branding</Button>
+                    <Button onClick={handleSave} disabled={saving || isReadOnly}><Save className="w-4 h-4 mr-2" /> Save Branding</Button>
                 </CardContent>
             </Card>
         </div>
     );
 }
 
-function BackupSettings({ isAdmin, db, updateSettings }) {
+function BackupSettings({ isAdmin, db, updateSettings, readOnly }) {
+    const isReadOnly = !!readOnly;
     const [backups, setBackups] = useState([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -1088,6 +1129,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     }
 
     async function handleCreateBackup() {
+        if (isReadOnly) return;
         if (creating) return;
         setCreating(true);
         try {
@@ -1102,6 +1144,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     }
 
     async function handleConnectDrive() {
+        if (isReadOnly) return;
         if (connectingDrive) return;
         setConnectingDrive(true);
         try {
@@ -1119,6 +1162,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     }
 
     async function handleDisconnectDrive() {
+        if (isReadOnly) return;
         if (disconnectingDrive) return;
         setDisconnectingDrive(true);
         try {
@@ -1145,7 +1189,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
     const driveTabClass = `${tabBaseClass} ${activeTab === 'drive' ? tabActiveClass : tabInactiveClass}`;
 
     async function handleSaveSchedule() {
-        if (!isAdmin || savingSchedule) return;
+        if (!isAdmin || savingSchedule || isReadOnly) return;
         setSavingSchedule(true);
         try {
             await updateSettings({ backupTime });
@@ -1223,7 +1267,7 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                 <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <CardTitle>Database Backups</CardTitle>
                     {isAdmin && (
-                        <Button onClick={handleCreateBackup} disabled={creating} size="sm" className="w-full sm:w-auto">
+                        <Button onClick={handleCreateBackup} disabled={creating || isReadOnly} size="sm" className="w-full sm:w-auto">
                             <Plus className="w-4 h-4 mr-2" />
                             {creating ? 'Creating...' : 'Create Backup'}
                         </Button>
@@ -1246,11 +1290,12 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                                     value={backupTime}
                                     onChange={(e) => setBackupTime(e.target.value)}
                                     className="w-[140px]"
+                                    disabled={isReadOnly}
                                 />
                                 <Button
                                     size="sm"
                                     onClick={handleSaveSchedule}
-                                    disabled={savingSchedule || backupTime === currentBackupTime}
+                                    disabled={savingSchedule || backupTime === currentBackupTime || isReadOnly}
                                 >
                                     <Save className="w-4 h-4 mr-2" />
                                     {savingSchedule ? 'Saving...' : 'Save Time'}
@@ -1382,11 +1427,11 @@ function BackupSettings({ isAdmin, db, updateSettings }) {
                                                 Refresh Status
                                             </Button>
                                             {driveStatus.connected ? (
-                                                <Button size="sm" variant="destructive" onClick={handleDisconnectDrive} disabled={disconnectingDrive}>
+                                                <Button size="sm" variant="destructive" onClick={handleDisconnectDrive} disabled={disconnectingDrive || isReadOnly}>
                                                     {disconnectingDrive ? 'Disconnecting...' : 'Disconnect'}
                                                 </Button>
                                             ) : (
-                                                <Button size="sm" onClick={handleConnectDrive} disabled={connectingDrive || !driveStatus.configured}>
+                                                <Button size="sm" onClick={handleConnectDrive} disabled={connectingDrive || !driveStatus.configured || isReadOnly}>
                                                     {connectingDrive ? 'Connecting...' : 'Connect Google Drive'}
                                                 </Button>
                                             )}
@@ -1503,7 +1548,8 @@ function RawTable({ title, data }) {
     );
 }
 
-function ChallanSettings({ db, updateSettings, refreshDb }) {
+function ChallanSettings({ db, updateSettings, refreshDb, readOnly }) {
+    const isReadOnly = !!readOnly;
     const [working, setWorking] = useState(false);
     const [fromDetails, setFromDetails] = useState({
         name: '',
@@ -1540,6 +1586,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
     }, [db]);
 
     const handleSave = async () => {
+        if (isReadOnly) return;
         setWorking(true);
         try {
             await updateSettings({
@@ -1558,6 +1605,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
     };
 
     const toggleField = (key) => {
+        if (isReadOnly) return;
         setFieldsConfig(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
@@ -1589,6 +1637,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
                             value={fromDetails.name}
                             onChange={e => setFromDetails({ ...fromDetails, name: e.target.value })}
                             placeholder="e.g. GLINTEX INDUSTRIES"
+                            disabled={isReadOnly}
                         />
                     </div>
                     <div className="space-y-2">
@@ -1598,6 +1647,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
                             value={fromDetails.address}
                             onChange={e => setFromDetails({ ...fromDetails, address: e.target.value })}
                             placeholder="Enter full address..."
+                            disabled={isReadOnly}
                         />
                     </div>
                     <div className="space-y-2">
@@ -1606,6 +1656,7 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
                             value={fromDetails.mobile}
                             onChange={e => setFromDetails({ ...fromDetails, mobile: e.target.value })}
                             placeholder="e.g. +91 98765 43210"
+                            disabled={isReadOnly}
                         />
                     </div>
                 </CardContent>
@@ -1624,12 +1675,13 @@ function ChallanSettings({ db, updateSettings, refreshDb }) {
                                     checked={fieldsConfig[key]}
                                     onChange={() => toggleField(key)}
                                     className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                    disabled={isReadOnly}
                                 />
                                 <span className="text-sm font-medium">{label}</span>
                             </label>
                         ))}
                     </div>
-                    <Button className="w-full mt-6" onClick={handleSave} disabled={working}>
+                    <Button className="w-full mt-6" onClick={handleSave} disabled={working || isReadOnly}>
                         <Save className="w-4 h-4 mr-2" /> Save Challan Settings
                     </Button>
                 </CardContent>

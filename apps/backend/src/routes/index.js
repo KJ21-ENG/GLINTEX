@@ -3,12 +3,13 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
 import { sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
+import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
 import { ensureDefaultAdminUser } from '../utils/defaultAdmin.js';
 import bwipjs from 'bwip-js';
 import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeReceiveBarcode, parseReceiveCrateIndex, makeHoloIssueBarcode, makeHoloReceiveBarcode, makeConingIssueBarcode, makeConingReceiveBarcode, parseHoloSeries, parseConingSeries, parseLegacyReceiveBarcode } from '../utils/barcodeHelpers.js';
@@ -20,6 +21,8 @@ import { generateSummaryPDF } from '../utils/pdf/index.js';
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+const PERM_READ = ACCESS_LEVELS.READ;
+const PERM_WRITE = ACCESS_LEVELS.WRITE;
 
 let bootstrapToken = null;
 
@@ -553,12 +556,38 @@ function normalizeWorkerRole(role) {
   return val === 'helper' ? 'helper' : 'operator';
 }
 
+function buildUserPayload(user) {
+  const roleLinks = Array.isArray(user?.roles) ? user.roles : [];
+  const roles = roleLinks.map(link => link.role).filter(Boolean);
+  const normalizedRoles = roles.map(role => ({
+    id: role.id,
+    key: role.key,
+    name: role.name,
+    description: role.description || null,
+    permissions: normalizePermissions(role.permissions),
+  }));
+  const roleKeys = normalizedRoles.map(role => role.key);
+  const roleNames = normalizedRoles.map(role => role.name);
+  const isAdmin = roleKeys.includes('admin');
+  const permissions = buildEffectivePermissions(roles);
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    roles: normalizedRoles,
+    roleKeys,
+    roleNames,
+    permissions,
+    isAdmin,
+  };
+}
+
 function getActor(req) {
   if (!req || !req.user) return null;
   return {
     userId: req.user.id,
     username: req.user.username,
-    roleKey: req.user.roleKey,
+    roleKey: req.user.primaryRoleKey || null,
   };
 }
 
@@ -885,9 +914,15 @@ router.post('/api/auth/login', async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { username },
-      include: { role: true },
+      include: {
+        roles: {
+          include: { role: true },
+        },
+      },
     });
-    if (!user || !user.role) return res.status(401).json({ error: 'invalid_credentials' });
+    if (!user || !Array.isArray(user.roles) || user.roles.length === 0) {
+      return res.status(401).json({ error: 'invalid_credentials' });
+    }
     if (user.isActive === false) return res.status(403).json({ error: 'user_disabled' });
 
     const ok = await verifyPassword(password, user.passwordHash);
@@ -911,17 +946,7 @@ router.post('/api/auth/login', async (req, res) => {
     });
 
     res.cookie(SESSION_COOKIE_NAME, token, { ...getSessionCookieOptions(), expires: expiresAt });
-    res.json({
-      ok: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        roleId: user.role.id,
-        roleKey: user.role.key,
-        roleName: user.role.name,
-      },
-    });
+    res.json({ ok: true, user: buildUserPayload(user) });
   } catch (err) {
     console.error('Login failed', err);
     res.status(500).json({ error: 'Login failed' });
@@ -959,10 +984,16 @@ router.post('/api/auth/bootstrap', async (req, res) => {
         username,
         displayName,
         passwordHash,
-        roleId: adminRole.id,
         isActive: true,
+        roles: {
+          create: [{ roleId: adminRole.id }],
+        },
       },
-      include: { role: true },
+      include: {
+        roles: {
+          include: { role: true },
+        },
+      },
     });
 
     const expiresAt = getSessionExpiryDate();
@@ -979,17 +1010,7 @@ router.post('/api/auth/bootstrap', async (req, res) => {
 
     bootstrapToken = null;
     res.cookie(SESSION_COOKIE_NAME, token, { ...getSessionCookieOptions(), expires: expiresAt });
-    res.json({
-      ok: true,
-      user: {
-        id: createdUser.id,
-        username: createdUser.username,
-        displayName: createdUser.displayName,
-        roleId: createdUser.role.id,
-        roleKey: createdUser.role.key,
-        roleName: createdUser.role.name,
-      },
-    });
+    res.json({ ok: true, user: buildUserPayload(createdUser) });
   } catch (err) {
     console.error('Bootstrap failed', err);
     res.status(500).json({ error: 'Bootstrap failed' });
@@ -1079,6 +1100,7 @@ router.post('/api/admin/roles', requireRole('admin'), async (req, res) => {
     const key = String(req.body?.key || '').trim().toLowerCase();
     const name = String(req.body?.name || '').trim();
     const description = req.body?.description != null ? String(req.body.description).trim() : null;
+    const permissions = normalizePermissions(req.body?.permissions);
     if (!key || !/^[a-z0-9_\\-]+$/.test(key)) return res.status(400).json({ error: 'role key must be alphanumeric/underscore/dash' });
     if (!name) return res.status(400).json({ error: 'role name is required' });
 
@@ -1087,6 +1109,7 @@ router.post('/api/admin/roles', requireRole('admin'), async (req, res) => {
         key,
         name,
         description,
+        permissions,
         ...actorCreateFields(actor?.userId),
       },
     });
@@ -1095,7 +1118,7 @@ router.post('/api/admin/roles', requireRole('admin'), async (req, res) => {
       entityType: 'role',
       entityId: created.id,
       action: 'create',
-      payload: { key, name, description },
+      payload: { key, name, description, permissions },
       actorUserId: actor?.userId,
       actorUsername: actor?.username,
       actorRoleKey: actor?.roleKey,
@@ -1118,11 +1141,13 @@ router.put('/api/admin/roles/:id', requireRole('admin'), async (req, res) => {
 
     const name = req.body?.name != null ? String(req.body.name).trim() : undefined;
     const description = req.body?.description != null ? String(req.body.description).trim() : undefined;
+    const permissions = req.body?.permissions !== undefined ? normalizePermissions(req.body.permissions) : undefined;
     const updated = await prisma.role.update({
       where: { id },
       data: {
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
+        ...(permissions !== undefined ? { permissions } : {}),
         ...actorUpdateFields(actor?.userId),
       },
     });
@@ -1148,7 +1173,11 @@ router.put('/api/admin/roles/:id', requireRole('admin'), async (req, res) => {
 router.get('/api/admin/users', requireRole('admin'), async (req, res) => {
   const users = await prisma.user.findMany({
     orderBy: { username: 'asc' },
-    include: { role: true },
+    include: {
+      roles: {
+        include: { role: true },
+      },
+    },
   });
   res.json({
     users: users.map(u => ({
@@ -1156,7 +1185,13 @@ router.get('/api/admin/users', requireRole('admin'), async (req, res) => {
       username: u.username,
       displayName: u.displayName,
       isActive: u.isActive,
-      role: u.role ? { id: u.role.id, key: u.role.key, name: u.role.name } : null,
+      roles: Array.isArray(u.roles)
+        ? u.roles.map(link => link.role).filter(Boolean).map(role => ({
+          id: role.id,
+          key: role.key,
+          name: role.name,
+        }))
+        : [],
       lastLoginAt: u.lastLoginAt,
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
@@ -1172,13 +1207,16 @@ router.post('/api/admin/users', requireRole('admin'), async (req, res) => {
     const username = normalizeUsername(req.body?.username);
     const displayName = req.body?.displayName != null ? String(req.body.displayName).trim() : null;
     const password = String(req.body?.password || '');
-    const roleId = req.body?.roleId ? String(req.body.roleId) : '';
+    const roleIdsInput = Array.isArray(req.body?.roleIds)
+      ? req.body.roleIds
+      : (req.body?.roleId ? [req.body.roleId] : []);
+    const roleIds = roleIdsInput.map(id => String(id)).filter(Boolean);
     const isActive = req.body?.isActive !== false;
-    if (!username || !password || !roleId) return res.status(400).json({ error: 'username, password, roleId are required' });
+    if (!username || !password || roleIds.length === 0) return res.status(400).json({ error: 'username, password, roleIds are required' });
     if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
 
-    const role = await prisma.role.findUnique({ where: { id: roleId } });
-    if (!role) return res.status(400).json({ error: 'role not found' });
+    const roles = await prisma.role.findMany({ where: { id: { in: roleIds } } });
+    if (roles.length !== roleIds.length) return res.status(400).json({ error: 'role not found' });
 
     const passwordHash = await hashPassword(password);
     const created = await prisma.user.create({
@@ -1186,18 +1224,27 @@ router.post('/api/admin/users', requireRole('admin'), async (req, res) => {
         username,
         displayName,
         passwordHash,
-        roleId,
         isActive,
+        roles: {
+          createMany: {
+            data: roleIds.map(roleId => ({ roleId })),
+            skipDuplicates: true,
+          },
+        },
         ...actorCreateFields(actor?.userId),
       },
-      include: { role: true },
+      include: {
+        roles: {
+          include: { role: true },
+        },
+      },
     });
 
     await logCrud({
       entityType: 'user',
       entityId: created.id,
       action: 'create',
-      payload: { username, displayName, roleId, isActive },
+      payload: { username, displayName, roleIds, isActive },
       actorUserId: actor?.userId,
       actorUsername: actor?.username,
       actorRoleKey: actor?.roleKey,
@@ -1209,7 +1256,13 @@ router.post('/api/admin/users', requireRole('admin'), async (req, res) => {
         username: created.username,
         displayName: created.displayName,
         isActive: created.isActive,
-        role: created.role ? { id: created.role.id, key: created.role.key, name: created.role.name } : null,
+        roles: Array.isArray(created.roles)
+          ? created.roles.map(link => link.role).filter(Boolean).map(role => ({
+            id: role.id,
+            key: role.key,
+            name: role.name,
+          }))
+          : [],
         createdAt: created.createdAt,
       },
     });
@@ -1224,27 +1277,59 @@ router.put('/api/admin/users/:id', requireRole('admin'), async (req, res) => {
   try {
     const actor = getActor(req);
     const { id } = req.params;
-    const existing = await prisma.user.findUnique({ where: { id }, include: { role: true } });
+    const existing = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        roles: {
+          include: { role: true },
+        },
+      },
+    });
     if (!existing) return res.status(404).json({ error: 'User not found' });
 
     const displayName = req.body?.displayName !== undefined ? (req.body.displayName ? String(req.body.displayName).trim() : null) : undefined;
-    const roleId = req.body?.roleId !== undefined ? String(req.body.roleId || '') : undefined;
+    const roleIdsInput = req.body?.roleIds !== undefined
+      ? (Array.isArray(req.body.roleIds) ? req.body.roleIds : (req.body.roleId ? [req.body.roleId] : []))
+      : undefined;
+    const roleIds = roleIdsInput !== undefined ? roleIdsInput.map(id => String(id)).filter(Boolean) : undefined;
     const isActive = req.body?.isActive !== undefined ? !!req.body.isActive : undefined;
-    if (roleId !== undefined && !roleId) return res.status(400).json({ error: 'roleId is required when provided' });
-    if (roleId !== undefined) {
-      const role = await prisma.role.findUnique({ where: { id: roleId } });
-      if (!role) return res.status(400).json({ error: 'role not found' });
+    if (roleIds !== undefined && roleIds.length === 0) return res.status(400).json({ error: 'roleIds are required when provided' });
+    if (roleIds !== undefined) {
+      const roles = await prisma.role.findMany({ where: { id: { in: roleIds } } });
+      if (roles.length !== roleIds.length) return res.status(400).json({ error: 'role not found' });
     }
 
-    const updated = await prisma.user.update({
-      where: { id },
-      data: {
-        ...(displayName !== undefined ? { displayName } : {}),
-        ...(roleId !== undefined ? { roleId } : {}),
-        ...(isActive !== undefined ? { isActive } : {}),
-        ...actorUpdateFields(actor?.userId),
-      },
-      include: { role: true },
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: {
+          ...(displayName !== undefined ? { displayName } : {}),
+          ...(isActive !== undefined ? { isActive } : {}),
+          ...actorUpdateFields(actor?.userId),
+        },
+      });
+
+      if (roleIds !== undefined) {
+        await tx.userRole.deleteMany({
+          where: {
+            userId: id,
+            roleId: { notIn: roleIds },
+          },
+        });
+        await tx.userRole.createMany({
+          data: roleIds.map(roleId => ({ userId: id, roleId })),
+          skipDuplicates: true,
+        });
+      }
+
+      return await tx.user.findUnique({
+        where: { id },
+        include: {
+          roles: {
+            include: { role: true },
+          },
+        },
+      });
     });
 
     await logCrud({
@@ -1264,7 +1349,13 @@ router.put('/api/admin/users/:id', requireRole('admin'), async (req, res) => {
         username: updated.username,
         displayName: updated.displayName,
         isActive: updated.isActive,
-        role: updated.role ? { id: updated.role.id, key: updated.role.key, name: updated.role.name } : null,
+        roles: Array.isArray(updated.roles)
+          ? updated.roles.map(link => link.role).filter(Boolean).map(role => ({
+            id: role.id,
+            key: role.key,
+            name: role.name,
+          }))
+          : [],
       },
     });
   } catch (err) {
@@ -1305,81 +1396,67 @@ router.put('/api/admin/users/:id/password', requireRole('admin'), async (req, re
   }
 });
 
-router.get('/api/db', async (req, res) => {
-  const items = await prisma.item.findMany();
-  const yarns = await prisma.yarn.findMany();
-  const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
-  const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
-  const firms = await prisma.firm.findMany();
-  const suppliers = await prisma.supplier.findMany();
-  const machines = await prisma.machine.findMany();
-  const workers = await prisma.operator.findMany();
-  const operators = workers.filter(w => (w.role || 'operator') === 'operator');
-  const helpers = workers.filter(w => (w.role || 'operator') === 'helper');
-  const bobbins = await prisma.bobbin.findMany();
-  const boxes = await prisma.box.findMany();
-  const lots = await prisma.lot.findMany();
-  const inbound_items = await prisma.inboundItem.findMany();
-  const issue_to_cutter_machine = await prisma.issueToCutterMachine.findMany({
-    where: { isDeleted: false },
+function hasReadPermission(req, key) {
+  if (req.user?.isAdmin) return true;
+  return Number(req.user?.permissions?.[key] || 0) >= PERM_READ;
+}
+
+function hasAnyReadPermission(req, keys = []) {
+  if (req.user?.isAdmin) return true;
+  return keys.some(key => Number(req.user?.permissions?.[key] || 0) >= PERM_READ);
+}
+
+function buildBrandPayload(settingsRow) {
+  return {
+    primary: settingsRow?.brandPrimary || null,
+    gold: settingsRow?.brandGold || null,
+    logoDataUrl: settingsRow?.logoDataUrl || '',
+    faviconDataUrl: settingsRow?.faviconDataUrl || '',
+  };
+}
+
+async function fetchInboundBasics() {
+  const [lots, inbound_items] = await Promise.all([
+    prisma.lot.findMany(),
+    prisma.inboundItem.findMany(),
+  ]);
+  return { lots, inbound_items };
+}
+
+async function fetchCutterReceiveData() {
+  const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({
+    orderBy: { uploadedAt: 'desc' },
+    take: RECEIVE_UPLOADS_FETCH_LIMIT,
   });
-  const issue_to_holo_machine_raw = await prisma.issueToHoloMachine.findMany({
-    where: { isDeleted: false },
-    orderBy: { createdAt: 'desc' },
-  });
-  const issue_to_coning_machine = await prisma.issueToConingMachine.findMany({
-    where: { isDeleted: false },
-    orderBy: { createdAt: 'desc' },
-  });
-  const settings = await prisma.settings.findMany();
-  const customers = await prisma.customer.findMany({ orderBy: { name: 'asc' } });
-  const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({ orderBy: { uploadedAt: 'desc' }, take: RECEIVE_UPLOADS_FETCH_LIMIT });
   const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
+    where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
     include: {
-      bobbin: {
-        select: {
-          id: true,
-          name: true,
-          weight: true,
-        },
-      },
-      box: {
-        select: {
-          id: true,
-          name: true,
-          weight: true,
-        },
-      },
-      operator: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
-      helper: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
-      cutMaster: {
-        select: {
-          id: true,
-          name: true,
-        },
-      },
+      bobbin: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+      operator: { select: { id: true, name: true } },
+      helper: { select: { id: true, name: true } },
+      cutMaster: { select: { id: true, name: true } },
     },
   });
   const receive_from_cutter_machine_challans = await prisma.receiveFromCutterMachineChallan.findMany({
+    where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
     take: RECEIVE_ROWS_FETCH_LIMIT,
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
-  const cutterRowPieceMap = new Map(receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
+  return {
+    receive_from_cutter_machine_uploads,
+    receive_from_cutter_machine_rows,
+    receive_from_cutter_machine_challans,
+    receive_from_cutter_machine_piece_totals,
+  };
+}
+
+function buildIssueToHoloMachine(issueRaw = [], cutterRowPieceMap, inbound_items) {
   const pieceMetaMap = new Map(inbound_items.map(p => [p.id, { lotNo: p.lotNo, itemId: p.itemId }]));
-  const issue_to_holo_machine = issue_to_holo_machine_raw.map((issue) => {
+  const issue_to_holo_machine = issueRaw.map((issue) => {
     let refs = [];
     try {
       refs = Array.isArray(issue.receivedRowRefs)
@@ -1410,6 +1487,10 @@ router.get('/api/db', async (req, res) => {
   });
   const issueLotLabelMap = new Map(issue_to_holo_machine.map(i => [i.id, i.lotLabel]));
   const issueLotNosMap = new Map(issue_to_holo_machine.map(i => [i.id, i.lotNos]));
+  return { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap };
+}
+
+async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap }) {
   const receive_from_holo_machine_rows_raw = await prisma.receiveFromHoloMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
@@ -1423,7 +1504,6 @@ router.get('/api/db', async (req, res) => {
     },
   });
 
-  // Compute pieceIds for each holo receive row by tracing through issue.receivedRowRefs to cutter rows
   const holoRowRefs = receive_from_holo_machine_rows_raw
     .flatMap(r => {
       const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
@@ -1438,7 +1518,6 @@ router.get('/api/db', async (req, res) => {
     : [];
   const holoCutterRowPieceMap = new Map(cutterRowsForHolo.map(r => [r.id, r.pieceId]));
 
-  // Fetch steam logs for steamed status display on Stock page - Filtered by fetched rows
   const holoRowIds = receive_from_holo_machine_rows_raw.map(r => r.id);
   const holoBarcodes = receive_from_holo_machine_rows_raw.map(r => r.barcode).filter(Boolean);
 
@@ -1451,7 +1530,6 @@ router.get('/api/db', async (req, res) => {
     },
     select: { barcode: true, steamedAt: true, holoReceiveRowId: true }
   });
-  // Create lookup maps (both by barcode and by holo row ID for faster matching)
   const steamedByBarcode = new Map(steamLogs.map(s => [s.barcode?.toUpperCase(), s]));
   const steamedByRowId = new Map(steamLogs.filter(s => s.holoReceiveRowId).map(s => [s.holoReceiveRowId, s]));
 
@@ -1469,12 +1547,10 @@ router.get('/api/db', async (req, res) => {
       });
     }
 
-    // Fallback for opening stock: if no refs but we have a lotNo, derive pieceId as ${lotNo}-1
     if (pieceIds.size === 0 && r.issue?.lotNo) {
       pieceIds.add(`${r.issue.lotNo}-1`);
     }
 
-    // Remove receivedRowRefs from issue before sending (not needed on frontend)
     const issueCopy = r.issue ? { ...r.issue } : null;
     if (issueCopy && issueLotLabelMap.has(issueCopy.id)) {
       issueCopy.lotLabel = issueLotLabelMap.get(issueCopy.id);
@@ -1485,8 +1561,6 @@ router.get('/api/db', async (req, res) => {
     if (issueCopy) delete issueCopy.receivedRowRefs;
     const crateIndex = parseReceiveCrateIndex(r.barcode);
     const legacyBarcode = buildLegacyReceiveBarcode('RHO', r.issue?.lotNo, crateIndex);
-
-    // Check steamed status from BoilerSteamLog
     const steamLog = steamedByRowId.get(r.id) || steamedByBarcode.get(r.barcode?.toUpperCase());
 
     return {
@@ -1500,6 +1574,10 @@ router.get('/api/db', async (req, res) => {
   });
 
   const receive_from_holo_machine_piece_totals = await prisma.receiveFromHoloMachinePieceTotal.findMany();
+  return { receive_from_holo_machine_rows, receive_from_holo_machine_piece_totals, receive_from_holo_machine_rows_raw };
+}
+
+async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw }) {
   const receive_from_coning_machine_rows_raw = await prisma.receiveFromConingMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
@@ -1512,8 +1590,6 @@ router.get('/api/db', async (req, res) => {
     },
   });
 
-  // Compute pieceIds for coning receive rows by tracing:
-  // coning_issue.receivedRowRefs → holo_receive → holo_issue.receivedRowRefs → cutter_receive.pieceId
   const coningHoloRowRefs = receive_from_coning_machine_rows_raw
     .flatMap(r => {
       const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
@@ -1536,7 +1612,6 @@ router.get('/api/db', async (req, res) => {
   const holoIssueMap = new Map(holoIssuesForConing.map(i => [i.id, i]));
   const holoRowIssueMap = new Map(holoRowsForConing.map(r => [r.id, r.issueId]));
 
-  // Collect all cutter row refs from holo issues
   const coningCutterRowRefs = holoIssuesForConing.flatMap(issue => {
     const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
     return refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
@@ -1571,12 +1646,10 @@ router.get('/api/db', async (req, res) => {
       }
     });
 
-    // Fallback for opening stock: if no refs found but we have a lotNo, derive pieceId as ${lotNo}-1
     if (pieceIds.size === 0 && r.issue?.lotNo) {
       pieceIds.add(`${r.issue.lotNo}-1`);
     }
 
-    // Remove receivedRowRefs from issue before sending (not needed on frontend)
     const issueCopy = r.issue ? { ...r.issue } : null;
     if (issueCopy) delete issueCopy.receivedRowRefs;
     const crateIndex = parseReceiveCrateIndex(r.barcode);
@@ -1585,44 +1658,164 @@ router.get('/api/db', async (req, res) => {
   });
 
   const receive_from_coning_machine_piece_totals = await prisma.receiveFromConingMachinePieceTotal.findMany();
-  const roll_types = await prisma.rollType.findMany();
-  const cone_types = await prisma.coneType.findMany();
-  const wrappers = await prisma.wrapper.findMany();
-  res.json({
-    items,
-    yarns,
-    cuts,
-    twists,
-    firms,
-    suppliers,
-    machines,
-    workers,
-    operators,
-    helpers,
-    bobbins,
-    boxes,
+  return { receive_from_coning_machine_rows, receive_from_coning_machine_piece_totals };
+}
+
+async function buildProcessData(process) {
+  const { lots, inbound_items } = await fetchInboundBasics();
+  const issue_to_cutter_machine = process === 'cutter'
+    ? await prisma.issueToCutterMachine.findMany({ where: { isDeleted: false } })
+    : [];
+  const issue_to_holo_machine_raw = (process === 'holo' || process === 'coning')
+    ? await prisma.issueToHoloMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
+    : [];
+  const issue_to_coning_machine = process === 'coning'
+    ? await prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
+    : [];
+
+  const cutterData = await fetchCutterReceiveData();
+  const cutterRowPieceMap = new Map(cutterData.receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
+
+  if (process === 'cutter') {
+    return {
+      lots,
+      inbound_items,
+      issue_to_cutter_machine,
+      ...cutterData,
+    };
+  }
+
+  const { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap } = buildIssueToHoloMachine(issue_to_holo_machine_raw, cutterRowPieceMap, inbound_items);
+  const holoData = await fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap });
+
+  if (process === 'holo') {
+    return {
+      lots,
+      inbound_items,
+      issue_to_holo_machine,
+      receive_from_holo_machine_rows: holoData.receive_from_holo_machine_rows,
+      receive_from_holo_machine_piece_totals: holoData.receive_from_holo_machine_piece_totals,
+      receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
+    };
+  }
+
+  const coningData = await fetchConingReceiveData({ receive_from_holo_machine_rows_raw: holoData.receive_from_holo_machine_rows_raw });
+  return {
     lots,
     inbound_items,
-    issue_to_cutter_machine,
     issue_to_holo_machine,
     issue_to_coning_machine,
-    settings,
-    customers,
-    receive_from_cutter_machine_uploads,
-    receive_from_cutter_machine_rows,
-    receive_from_cutter_machine_challans,
-    receive_from_cutter_machine_piece_totals,
-    receive_from_holo_machine_rows,
-    receive_from_holo_machine_piece_totals,
-    receive_from_coning_machine_rows,
-    receive_from_coning_machine_piece_totals,
-    roll_types,
-    cone_types,
-    wrappers,
-  });
+    receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
+    receive_from_holo_machine_rows: holoData.receive_from_holo_machine_rows,
+    receive_from_coning_machine_rows: coningData.receive_from_coning_machine_rows,
+    receive_from_coning_machine_piece_totals: coningData.receive_from_coning_machine_piece_totals,
+  };
+}
+
+async function buildOpeningStockData() {
+  const processData = await buildProcessData('coning');
+  return {
+    inbound_items: processData.inbound_items,
+    issue_to_holo_machine: processData.issue_to_holo_machine,
+    issue_to_coning_machine: processData.issue_to_coning_machine,
+    receive_from_cutter_machine_rows: processData.receive_from_cutter_machine_rows,
+    receive_from_holo_machine_rows: processData.receive_from_holo_machine_rows,
+    receive_from_coning_machine_rows: processData.receive_from_coning_machine_rows,
+  };
+}
+
+router.get('/api/bootstrap', async (req, res) => {
+  try {
+    const settingsRow = await prisma.settings.findFirst();
+    const brand = buildBrandPayload(settingsRow);
+
+    const allowed = {
+      items: hasAnyReadPermission(req, ['inbound', 'issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'stock', 'dispatch', 'opening_stock', 'reports', 'masters']),
+      yarns: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
+      cuts: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
+      twists: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
+      firms: hasAnyReadPermission(req, ['inbound', 'dispatch', 'opening_stock', 'reports', 'masters']),
+      suppliers: hasAnyReadPermission(req, ['inbound', 'stock', 'opening_stock', 'reports', 'masters']),
+      customers: hasAnyReadPermission(req, ['dispatch', 'reports', 'masters']),
+      machines: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'boiler', 'opening_stock', 'masters']),
+      workers: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'boiler', 'opening_stock', 'masters']),
+      bobbins: hasAnyReadPermission(req, ['receive.cutter', 'stock', 'opening_stock', 'masters']),
+      boxes: hasAnyReadPermission(req, ['receive.cutter', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'box_transfer', 'masters']),
+      roll_types: hasAnyReadPermission(req, ['receive.holo', 'stock', 'opening_stock', 'masters']),
+      cone_types: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
+      wrappers: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
+      settings: hasReadPermission(req, 'settings'),
+    };
+
+    const slices = {};
+    slices.items = allowed.items ? await prisma.item.findMany() : [];
+    slices.yarns = allowed.yarns ? await prisma.yarn.findMany() : [];
+    slices.cuts = allowed.cuts ? await prisma.cut.findMany({ orderBy: { name: 'asc' } }) : [];
+    slices.twists = allowed.twists ? await prisma.twist.findMany({ orderBy: { name: 'asc' } }) : [];
+    slices.firms = allowed.firms ? await prisma.firm.findMany() : [];
+    slices.suppliers = allowed.suppliers ? await prisma.supplier.findMany() : [];
+    slices.customers = allowed.customers ? await prisma.customer.findMany({ orderBy: { name: 'asc' } }) : [];
+    slices.machines = allowed.machines ? await prisma.machine.findMany() : [];
+    slices.workers = allowed.workers ? await prisma.operator.findMany() : [];
+    slices.bobbins = allowed.bobbins ? await prisma.bobbin.findMany() : [];
+    slices.boxes = allowed.boxes ? await prisma.box.findMany() : [];
+    slices.roll_types = allowed.roll_types ? await prisma.rollType.findMany() : [];
+    slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
+    slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
+    slices.settings = allowed.settings ? await prisma.settings.findMany() : [];
+
+    res.json({ brand, allowed, slices });
+  } catch (err) {
+    console.error('Failed to load bootstrap', err);
+    res.status(500).json({ error: err.message || 'Failed to load bootstrap data' });
+  }
 });
 
-router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', async (req, res) => {
+router.get('/api/module/inbound', requirePermission('inbound', PERM_READ), async (req, res) => {
+  try {
+    const data = await fetchInboundBasics();
+    res.json(data);
+  } catch (err) {
+    console.error('Failed to load inbound module data', err);
+    res.status(500).json({ error: err.message || 'Failed to load inbound data' });
+  }
+});
+
+router.get('/api/module/process/:process', async (req, res) => {
+  try {
+    const process = String(req.params.process || '').toLowerCase();
+    if (!['cutter', 'holo', 'coning'].includes(process)) {
+      return res.status(400).json({ error: 'Invalid process' });
+    }
+    const allowed = hasReadPermission(req, 'stock')
+      || hasReadPermission(req, `issue.${process}`)
+      || hasReadPermission(req, `receive.${process}`);
+    if (!allowed) return res.status(403).json({ error: 'Insufficient permissions' });
+
+    const data = await buildProcessData(process);
+    res.json(data);
+  } catch (err) {
+    console.error('Failed to load process module data', err);
+    res.status(500).json({ error: err.message || 'Failed to load process data' });
+  }
+});
+
+router.get('/api/module/opening_stock', requirePermission('opening_stock', PERM_READ), async (req, res) => {
+  try {
+    const data = await buildOpeningStockData();
+    res.json(data);
+  } catch (err) {
+    console.error('Failed to load opening stock module data', err);
+    res.status(500).json({ error: err.message || 'Failed to load opening stock data' });
+  }
+});
+
+router.get('/api/db', async (req, res) => {
+  return res.status(410).json({ error: 'Deprecated. Use /api/bootstrap and /api/module/* endpoints.' });
+});
+
+
+router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', requirePermission('receive.cutter', PERM_READ), async (req, res) => {
   try {
     const rawPieceId = req.params.pieceId;
     const pieceId = normalizePieceId(rawPieceId);
@@ -1660,7 +1853,7 @@ router.get('/api/receive_from_cutter_machine/piece/:pieceId/crate_stats', async 
   }
 });
 
-router.get('/api/issue_to_cutter_machine', async (req, res) => {
+router.get('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode query param' });
@@ -1674,7 +1867,7 @@ router.get('/api/issue_to_cutter_machine', async (req, res) => {
   }
 });
 
-router.get('/api/inbound_items/barcode/:code', async (req, res) => {
+router.get('/api/inbound_items/barcode/:code', requirePermission('inbound', PERM_READ), async (req, res) => {
   try {
     const code = normalizeBarcodeInput(req.params.code);
     if (!code) return res.status(400).json({ error: 'Missing barcode' });
@@ -1687,7 +1880,7 @@ router.get('/api/inbound_items/barcode/:code', async (req, res) => {
   }
 });
 
-router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
+router.get('/api/issue_to_cutter_machine/lookup', requirePermission('issue.cutter', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
@@ -1701,7 +1894,7 @@ router.get('/api/issue_to_cutter_machine/lookup', async (req, res) => {
   }
 });
 
-router.get('/api/issue_to_holo_machine/lookup', async (req, res) => {
+router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
@@ -1787,7 +1980,7 @@ router.get('/api/barcodes/render', async (req, res) => {
 });
 
 // Return the next lot number preview (value that will be used on save)
-router.get('/api/sequence/next', async (req, res) => {
+router.get('/api/sequence/next', requirePermission('inbound', PERM_READ), async (req, res) => {
   try {
     const seq = await prisma.sequence.findUnique({ where: { id: 'lot_sequence' } });
     const nextVal = (seq ? seq.nextValue : 0) + 1;
@@ -1819,7 +2012,7 @@ router.post('/api/sequence/set', async (req, res) => {
 
 // ===== Opening Stock =====
 
-router.get('/api/opening_stock/sequence/next', async (req, res) => {
+router.get('/api/opening_stock/sequence/next', requirePermission('opening_stock', PERM_READ), async (req, res) => {
   try {
     const preview = await getOpeningLotPreview();
     res.json({ next: preview.lotNo, raw: preview.nextValue });
@@ -1830,7 +2023,7 @@ router.get('/api/opening_stock/sequence/next', async (req, res) => {
 });
 
 // Reserve a holo/coning issue series number for opening stock label printing
-router.post('/api/opening_stock/issue_series/reserve', async (req, res) => {
+router.post('/api/opening_stock/issue_series/reserve', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const stage = String(req.body?.stage || '').trim().toLowerCase();
@@ -1865,7 +2058,7 @@ router.post('/api/opening_stock/issue_series/reserve', async (req, res) => {
   }
 });
 
-router.post('/api/opening_stock/inbound', async (req, res) => {
+router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, pieces } = req.body || {};
@@ -1948,7 +2141,7 @@ router.post('/api/opening_stock/inbound', async (req, res) => {
   }
 });
 
-router.post('/api/opening_stock/cutter_receive', async (req, res) => {
+router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, crates } = req.body || {};
@@ -2163,7 +2356,7 @@ router.post('/api/opening_stock/cutter_receive', async (req, res) => {
   }
 });
 
-router.post('/api/opening_stock/holo_receive', async (req, res) => {
+router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, twistId, yarnId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
@@ -2412,7 +2605,7 @@ router.post('/api/opening_stock/holo_receive', async (req, res) => {
   }
 });
 
-router.post('/api/opening_stock/coning_receive', async (req, res) => {
+router.post('/api/opening_stock/coning_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, yarnId, twistId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
@@ -2666,7 +2859,7 @@ router.post('/api/opening_stock/coning_receive', async (req, res) => {
 });
 
 // Delete a single opening stock cutter receive row
-router.delete('/api/opening_stock/cutter_receive_rows/:id', async (req, res) => {
+router.delete('/api/opening_stock/cutter_receive_rows/:id', requireDeletePermission('opening_stock'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -2754,7 +2947,7 @@ router.delete('/api/opening_stock/cutter_receive_rows/:id', async (req, res) => 
 });
 
 // Delete a single opening stock holo receive row
-router.delete('/api/opening_stock/holo_receive_rows/:id', async (req, res) => {
+router.delete('/api/opening_stock/holo_receive_rows/:id', requireDeletePermission('opening_stock'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -2864,7 +3057,7 @@ router.delete('/api/opening_stock/holo_receive_rows/:id', async (req, res) => {
 });
 
 // Delete a single opening stock coning receive row
-router.delete('/api/opening_stock/coning_receive_rows/:id', async (req, res) => {
+router.delete('/api/opening_stock/coning_receive_rows/:id', requireDeletePermission('opening_stock'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -2979,7 +3172,7 @@ function parseUploadBuffer(buffer, type) {
 }
 
 // Download Template Endpoint - accepts optional ?stage= query param
-router.get('/api/opening_stock/template', async (req, res) => {
+router.get('/api/opening_stock/template', requirePermission('opening_stock', PERM_READ), async (req, res) => {
   try {
     const { stage } = req.query;
     const wb = XLSX.utils.book_new();
@@ -3021,7 +3214,7 @@ router.get('/api/opening_stock/template', async (req, res) => {
 // ===== Opening Stock Bulk Upload =====
 
 // Preview endpoint - shows what lots will be created without actually creating them
-router.post('/api/opening_stock/preview/:stage', async (req, res) => {
+router.post('/api/opening_stock/preview/:stage', requirePermission('opening_stock', PERM_READ), async (req, res) => {
   try {
     const { stage } = req.params;
     const { fileContent, fileType, date: uiDate, itemId: uiItemId, firmId: uiFirmId, supplierId: uiSupplierId, ...extraParams } = req.body;
@@ -3223,7 +3416,7 @@ router.post('/api/opening_stock/preview/:stage', async (req, res) => {
   }
 });
 
-router.post('/api/opening_stock/upload/:stage', async (req, res) => {
+router.post('/api/opening_stock/upload/:stage', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { stage } = req.params;
@@ -3815,7 +4008,7 @@ async function processOpeningConingUpload(rows, { date, itemId, firmId, supplier
 }
 
 // Whatsapp control endpoints
-router.get('/api/whatsapp/status', async (req, res) => {
+router.get('/api/whatsapp/status', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const status = whatsapp.getStatus();
     res.json(status);
@@ -3824,7 +4017,7 @@ router.get('/api/whatsapp/status', async (req, res) => {
   }
 });
 
-router.post('/api/whatsapp/start', async (req, res) => {
+router.post('/api/whatsapp/start', requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const force = req.body && (req.body.force === true || req.body.force === 'true');
     await whatsapp.init({ force });
@@ -3836,7 +4029,7 @@ router.post('/api/whatsapp/start', async (req, res) => {
 });
 
 // List Whatsapp groups
-router.get('/api/whatsapp/groups', async (req, res) => {
+router.get('/api/whatsapp/groups', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const st = whatsapp.getStatus();
     if (st.status !== 'connected' || !whatsapp.client) return res.status(409).json({ error: 'not_connected' });
@@ -3853,7 +4046,7 @@ router.get('/api/whatsapp/groups', async (req, res) => {
 });
 
 // Templates endpoints
-router.get('/api/whatsapp/templates', async (req, res) => {
+router.get('/api/whatsapp/templates', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const t = await listTemplates();
     res.json(t);
@@ -3861,7 +4054,7 @@ router.get('/api/whatsapp/templates', async (req, res) => {
 });
 
 // Sticker template endpoints (shared across all users)
-router.get('/api/sticker_templates', async (req, res) => {
+router.get('/api/sticker_templates', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const templates = await prisma.stickerTemplate.findMany({ orderBy: { stageKey: 'asc' } });
     res.json({ templates });
@@ -3870,7 +4063,7 @@ router.get('/api/sticker_templates', async (req, res) => {
   }
 });
 
-router.get('/api/sticker_templates/:stageKey', async (req, res) => {
+router.get('/api/sticker_templates/:stageKey', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const stageKey = String(req.params.stageKey || '').trim();
     if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });
@@ -3882,7 +4075,7 @@ router.get('/api/sticker_templates/:stageKey', async (req, res) => {
   }
 });
 
-router.put('/api/sticker_templates/:stageKey', async (req, res) => {
+router.put('/api/sticker_templates/:stageKey', requireEditPermission('settings'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const stageKey = String(req.params.stageKey || '').trim();
@@ -3905,7 +4098,7 @@ router.put('/api/sticker_templates/:stageKey', async (req, res) => {
   }
 });
 
-router.put('/api/whatsapp/templates/:event', async (req, res) => {
+router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { event } = req.params;
@@ -3917,7 +4110,7 @@ router.put('/api/whatsapp/templates/:event', async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.post('/api/whatsapp/send-event', async (req, res) => {
+router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const { event, payload } = req.body;
     const tpl = await getTemplateByEvent(event);
@@ -3938,7 +4131,7 @@ router.post('/api/whatsapp/send-event', async (req, res) => {
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.get('/api/whatsapp/qrcode', async (req, res) => {
+router.get('/api/whatsapp/qrcode', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const qr = whatsapp.getQrDataUrl();
     res.json({ qr });
@@ -3948,7 +4141,7 @@ router.get('/api/whatsapp/qrcode', async (req, res) => {
 });
 
 // SSE endpoint for real-time whatsapp events (qr/status)
-router.get('/api/whatsapp/events', (req, res) => {
+router.get('/api/whatsapp/events', requirePermission('settings', PERM_READ), (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -3963,7 +4156,7 @@ router.get('/api/whatsapp/events', (req, res) => {
   });
 });
 
-router.post('/api/whatsapp/logout', async (req, res) => {
+router.post('/api/whatsapp/logout', requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     await whatsapp.logout();
     res.json({ ok: true });
@@ -3972,7 +4165,7 @@ router.post('/api/whatsapp/logout', async (req, res) => {
   }
 });
 
-router.post('/api/whatsapp/send-test', async (req, res) => {
+router.post('/api/whatsapp/send-test', requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const number = req.body.number || '916353131826';
     await whatsapp.sendText(number, 'Hii');
@@ -3983,7 +4176,7 @@ router.post('/api/whatsapp/send-test', async (req, res) => {
   }
 });
 
-router.post('/api/lots', async (req, res) => {
+router.post('/api/lots', requirePermission('inbound', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const actorUserId = actor?.userId;
@@ -4094,7 +4287,7 @@ router.post('/api/lots', async (req, res) => {
   }
 });
 
-router.post('/api/issue_to_cutter_machine', async (req, res) => {
+router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, lotNo, pieceIds, note, machineId, operatorId, cutId } = req.body;
@@ -4217,7 +4410,7 @@ router.post('/api/issue_to_cutter_machine', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/import', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { filename, content } = req.body || {};
@@ -4364,7 +4557,7 @@ router.post('/api/receive_from_cutter_machine/import', async (req, res) => {
 });
 
 // Mark remaining pending weight for a piece as wastage (only if piece was issued to machine)
-router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { pieceId } = req.body || {};
@@ -4427,7 +4620,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', async (req, res) =>
 });
 
 // Bulk manual receive for cutter with challan generation
-router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const entriesRaw = Array.isArray(req.body?.entries) ? req.body.entries : [];
@@ -4751,7 +4944,7 @@ router.post('/api/receive_from_cutter_machine/bulk', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/manual', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -4992,7 +5185,7 @@ router.post('/api/receive_from_cutter_machine/manual', async (req, res) => {
   }
 });
 
-router.get('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+router.get('/api/receive_from_cutter_machine/challans/:id', requirePermission('receive.cutter', PERM_READ), async (req, res) => {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ error: 'Missing challan id' });
@@ -5018,7 +5211,7 @@ router.get('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
   }
 });
 
-router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermission('receive.cutter'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const challanId = req.params.id;
@@ -5301,7 +5494,7 @@ router.put('/api/receive_from_cutter_machine/challans/:id', async (req, res) => 
   }
 });
 
-router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) => {
+router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePermission('receive.cutter'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const challanId = req.params.id;
@@ -5462,7 +5655,7 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', async (req, res) 
   }
 });
 
-router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
+router.post('/api/receive_from_cutter_machine/preview', requirePermission('receive.cutter', PERM_READ), async (req, res) => {
   try {
     const { filename, content } = req.body || {};
     if (!filename || typeof filename !== 'string') {
@@ -5503,7 +5696,7 @@ router.post('/api/receive_from_cutter_machine/preview', async (req, res) => {
   }
 });
 
-router.post('/api/issue_to_holo_machine', async (req, res) => {
+router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, machineId, operatorId, yarnId, yarnKg, note, crates, rollsProducedEstimate, twistId, shift } = req.body || {};
@@ -5747,7 +5940,7 @@ router.post('/api/issue_to_holo_machine', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
+router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.holo', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -5904,7 +6097,7 @@ router.post('/api/receive_from_holo_machine/manual', async (req, res) => {
   }
 });
 
-router.put('/api/receive_from_holo_machine/rows/:id', async (req, res) => {
+router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('receive.holo'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -6075,7 +6268,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/receive_from_holo_machine/rows/:id', async (req, res) => {
+router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission('receive.holo'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -6192,7 +6385,7 @@ router.delete('/api/receive_from_holo_machine/rows/:id', async (req, res) => {
   }
 });
 
-router.post('/api/issue_to_coning_machine', async (req, res) => {
+router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt, shift } = req.body || {};
@@ -6573,7 +6766,7 @@ router.post('/api/issue_to_coning_machine', async (req, res) => {
   }
 });
 
-router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
+router.post('/api/receive_from_coning_machine/manual', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -6698,7 +6891,7 @@ router.post('/api/receive_from_coning_machine/manual', async (req, res) => {
   }
 });
 
-router.put('/api/receive_from_coning_machine/rows/:id', async (req, res) => {
+router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('receive.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -6846,7 +7039,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/receive_from_coning_machine/rows/:id', async (req, res) => {
+router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermission('receive.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7115,8 +7308,8 @@ router.post('/api/import', requireRole('admin'), async (req, res) => {
 });
 
 // Basic CRUD endpoints (items example)
-router.get('/api/items', async (req, res) => { res.json(await prisma.item.findMany()); });
-router.post('/api/items', async (req, res) => {
+router.get('/api/items', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.item.findMany()); });
+router.post('/api/items', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name } = req.body;
   const item = await prisma.item.create({ data: { name, ...actorCreateFields(actorUserId) } });
@@ -7128,7 +7321,7 @@ router.post('/api/items', async (req, res) => {
   });
   res.json(item);
 });
-router.delete('/api/items/:id', async (req, res) => {
+router.delete('/api/items/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingItem = await prisma.item.findUnique({ where: { id } });
   if (!existingItem) {
@@ -7150,7 +7343,7 @@ router.delete('/api/items/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update item name
-router.put('/api/items/:id', async (req, res) => {
+router.put('/api/items/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const { name } = req.body;
@@ -7176,12 +7369,12 @@ router.put('/api/items/:id', async (req, res) => {
   }
 });
 
-router.get('/api/yarns', async (req, res) => {
+router.get('/api/yarns', requirePermission('masters', PERM_READ), async (req, res) => {
   const yarns = await prisma.yarn.findMany({ orderBy: { name: 'asc' } });
   res.json(yarns);
 });
 
-router.post('/api/yarns', async (req, res) => {
+router.post('/api/yarns', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name } = req.body || {};
@@ -7197,7 +7390,7 @@ router.post('/api/yarns', async (req, res) => {
   }
 });
 
-router.put('/api/yarns/:id', async (req, res) => {
+router.put('/api/yarns/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7225,7 +7418,7 @@ router.put('/api/yarns/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/yarns/:id', async (req, res) => {
+router.delete('/api/yarns/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.yarn.findUnique({ where: { id } });
@@ -7245,12 +7438,12 @@ router.delete('/api/yarns/:id', async (req, res) => {
   }
 });
 
-router.get('/api/cuts', async (req, res) => {
+router.get('/api/cuts', requirePermission('masters', PERM_READ), async (req, res) => {
   const cuts = await prisma.cut.findMany({ orderBy: { name: 'asc' } });
   res.json(cuts);
 });
 
-router.post('/api/cuts', async (req, res) => {
+router.post('/api/cuts', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name } = req.body || {};
@@ -7267,7 +7460,7 @@ router.post('/api/cuts', async (req, res) => {
   }
 });
 
-router.put('/api/cuts/:id', async (req, res) => {
+router.put('/api/cuts/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7296,7 +7489,7 @@ router.put('/api/cuts/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/cuts/:id', async (req, res) => {
+router.delete('/api/cuts/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.cut.findUnique({ where: { id } });
@@ -7316,12 +7509,12 @@ router.delete('/api/cuts/:id', async (req, res) => {
   }
 });
 
-router.get('/api/twists', async (req, res) => {
+router.get('/api/twists', requirePermission('masters', PERM_READ), async (req, res) => {
   const twists = await prisma.twist.findMany({ orderBy: { name: 'asc' } });
   res.json(twists);
 });
 
-router.post('/api/twists', async (req, res) => {
+router.post('/api/twists', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name } = req.body || {};
@@ -7338,7 +7531,7 @@ router.post('/api/twists', async (req, res) => {
   }
 });
 
-router.put('/api/twists/:id', async (req, res) => {
+router.put('/api/twists/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7367,7 +7560,7 @@ router.put('/api/twists/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/twists/:id', async (req, res) => {
+router.delete('/api/twists/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.twist.findUnique({ where: { id } });
@@ -7387,15 +7580,15 @@ router.delete('/api/twists/:id', async (req, res) => {
   }
 });
 
-router.get('/api/firms', async (req, res) => { res.json(await prisma.firm.findMany()); });
-router.post('/api/firms', async (req, res) => {
+router.get('/api/firms', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.firm.findMany()); });
+router.post('/api/firms', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, address, mobile } = req.body;
   const firm = await prisma.firm.create({ data: { name, address, mobile, ...actorCreateFields(actorUserId) } });
   await logCrudWithActor(req, { entityType: 'firm', entityId: firm.id, action: 'create', payload: firm });
   res.json(firm);
 });
-router.delete('/api/firms/:id', async (req, res) => {
+router.delete('/api/firms/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingFirm = await prisma.firm.findUnique({ where: { id } });
   if (!existingFirm) return res.status(404).json({ error: 'Firm not found' });
@@ -7408,7 +7601,7 @@ router.delete('/api/firms/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update firm name
-router.put('/api/firms/:id', async (req, res) => {
+router.put('/api/firms/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7438,15 +7631,15 @@ router.put('/api/firms/:id', async (req, res) => {
   }
 });
 
-router.get('/api/suppliers', async (req, res) => { res.json(await prisma.supplier.findMany()); });
-router.post('/api/suppliers', async (req, res) => {
+router.get('/api/suppliers', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.supplier.findMany()); });
+router.post('/api/suppliers', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name } = req.body;
   const seller = await prisma.supplier.create({ data: { name, ...actorCreateFields(actorUserId) } });
   await logCrudWithActor(req, { entityType: 'supplier', entityId: seller.id, action: 'create', payload: seller });
   res.json(seller);
 });
-router.delete('/api/suppliers/:id', async (req, res) => {
+router.delete('/api/suppliers/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingSupplier = await prisma.supplier.findUnique({ where: { id } });
   if (!existingSupplier) return res.status(404).json({ error: 'Supplier not found' });
@@ -7459,7 +7652,7 @@ router.delete('/api/suppliers/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update supplier name
-router.put('/api/suppliers/:id', async (req, res) => {
+router.put('/api/suppliers/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7486,15 +7679,15 @@ router.put('/api/suppliers/:id', async (req, res) => {
   }
 });
 
-router.get('/api/machines', async (req, res) => { res.json(await prisma.machine.findMany()); });
-router.post('/api/machines', async (req, res) => {
+router.get('/api/machines', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.machine.findMany()); });
+router.post('/api/machines', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, processType = 'all' } = req.body;
   const machine = await prisma.machine.create({ data: { name, processType, ...actorCreateFields(actorUserId) } });
   await logCrudWithActor(req, { entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
   res.json(machine);
 });
-router.delete('/api/machines/:id', async (req, res) => {
+router.delete('/api/machines/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingMachine = await prisma.machine.findUnique({ where: { id } });
   if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
@@ -7507,7 +7700,7 @@ router.delete('/api/machines/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update machine name and processType
-router.put('/api/machines/:id', async (req, res) => {
+router.put('/api/machines/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7538,8 +7731,8 @@ router.put('/api/machines/:id', async (req, res) => {
   }
 });
 
-router.get('/api/operators', async (req, res) => { res.json(await prisma.operator.findMany()); });
-router.post('/api/operators', async (req, res) => {
+router.get('/api/operators', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.operator.findMany()); });
+router.post('/api/operators', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, role, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -7548,7 +7741,7 @@ router.post('/api/operators', async (req, res) => {
   await logCrudWithActor(req, { entityType: 'operator', entityId: worker.id, action: 'create', payload: worker });
   res.json(worker);
 });
-router.delete('/api/operators/:id', async (req, res) => {
+router.delete('/api/operators/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingOperator = await prisma.operator.findUnique({ where: { id } });
   if (!existingOperator) return res.status(404).json({ error: 'Operator not found' });
@@ -7571,7 +7764,7 @@ router.delete('/api/operators/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update operator name, role, and processType
-router.put('/api/operators/:id', async (req, res) => {
+router.put('/api/operators/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7605,8 +7798,8 @@ router.put('/api/operators/:id', async (req, res) => {
   }
 });
 
-router.get('/api/bobbins', async (req, res) => { res.json(await prisma.bobbin.findMany()); });
-router.post('/api/bobbins', async (req, res) => {
+router.get('/api/bobbins', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.bobbin.findMany()); });
+router.post('/api/bobbins', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, weight } = req.body;
   const weightNum = weight !== undefined && weight !== null ? Number(weight) : null;
@@ -7620,7 +7813,7 @@ router.post('/api/bobbins', async (req, res) => {
   await logCrudWithActor(req, { entityType: 'bobbin', entityId: bobbin.id, action: 'create', payload: bobbin });
   res.json(bobbin);
 });
-router.delete('/api/bobbins/:id', async (req, res) => {
+router.delete('/api/bobbins/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingBobbin = await prisma.bobbin.findUnique({ where: { id } });
   if (!existingBobbin) return res.status(404).json({ error: 'Bobbin not found' });
@@ -7633,7 +7826,7 @@ router.delete('/api/bobbins/:id', async (req, res) => {
   res.json({ ok: true });
 });
 // Update bobbin name and weight
-router.put('/api/bobbins/:id', async (req, res) => {
+router.put('/api/bobbins/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7671,8 +7864,8 @@ router.put('/api/bobbins/:id', async (req, res) => {
 });
 
 // Roll types (Holo) master
-router.get('/api/roll_types', async (req, res) => { res.json(await prisma.rollType.findMany()); });
-router.post('/api/roll_types', async (req, res) => {
+router.get('/api/roll_types', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.rollType.findMany()); });
+router.post('/api/roll_types', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name, weight } = req.body || {};
@@ -7692,7 +7885,7 @@ router.post('/api/roll_types', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to create roll type' });
   }
 });
-router.put('/api/roll_types/:id', async (req, res) => {
+router.put('/api/roll_types/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7721,7 +7914,7 @@ router.put('/api/roll_types/:id', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to update roll type' });
   }
 });
-router.delete('/api/roll_types/:id', async (req, res) => {
+router.delete('/api/roll_types/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.rollType.findUnique({ where: { id } });
@@ -7739,8 +7932,8 @@ router.delete('/api/roll_types/:id', async (req, res) => {
   }
 });
 
-router.get('/api/boxes', async (req, res) => { res.json(await prisma.box.findMany()); });
-router.post('/api/boxes', async (req, res) => {
+router.get('/api/boxes', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.box.findMany()); });
+router.post('/api/boxes', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, weight, processType = 'all' } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -7757,7 +7950,7 @@ router.post('/api/boxes', async (req, res) => {
   await logCrudWithActor(req, { entityType: 'box', entityId: box.id, action: 'create', payload: box });
   res.json(box);
 });
-router.delete('/api/boxes/:id', async (req, res) => {
+router.delete('/api/boxes/:id', requireDeletePermission('masters'), async (req, res) => {
   const { id } = req.params;
   const existingBox = await prisma.box.findUnique({ where: { id } });
   if (!existingBox) return res.status(404).json({ error: 'Box not found' });
@@ -7772,8 +7965,8 @@ router.delete('/api/boxes/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/api/cone_types', async (req, res) => { res.json(await prisma.coneType.findMany()); });
-router.post('/api/cone_types', async (req, res) => {
+router.get('/api/cone_types', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.coneType.findMany()); });
+router.post('/api/cone_types', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name, weight } = req.body || {};
@@ -7793,7 +7986,7 @@ router.post('/api/cone_types', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to create cone type' });
   }
 });
-router.put('/api/cone_types/:id', async (req, res) => {
+router.put('/api/cone_types/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7823,7 +8016,7 @@ router.put('/api/cone_types/:id', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to update cone type' });
   }
 });
-router.delete('/api/cone_types/:id', async (req, res) => {
+router.delete('/api/cone_types/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.coneType.findUnique({ where: { id } });
@@ -7837,8 +8030,8 @@ router.delete('/api/cone_types/:id', async (req, res) => {
   }
 });
 
-router.get('/api/wrappers', async (req, res) => { res.json(await prisma.wrapper.findMany()); });
-router.post('/api/wrappers', async (req, res) => {
+router.get('/api/wrappers', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.wrapper.findMany()); });
+router.post('/api/wrappers', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { name } = req.body || {};
@@ -7856,7 +8049,7 @@ router.post('/api/wrappers', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to create wrapper' });
   }
 });
-router.put('/api/wrappers/:id', async (req, res) => {
+router.put('/api/wrappers/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7884,7 +8077,7 @@ router.put('/api/wrappers/:id', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to update wrapper' });
   }
 });
-router.delete('/api/wrappers/:id', async (req, res) => {
+router.delete('/api/wrappers/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.wrapper.findUnique({ where: { id } });
@@ -7897,7 +8090,7 @@ router.delete('/api/wrappers/:id', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to delete wrapper' });
   }
 });
-router.put('/api/boxes/:id', async (req, res) => {
+router.put('/api/boxes/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -7935,7 +8128,7 @@ router.put('/api/boxes/:id', async (req, res) => {
   }
 });
 
-router.put('/api/issue_to_cutter_machine/:id', async (req, res) => {
+router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutter'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8095,7 +8288,7 @@ router.put('/api/issue_to_cutter_machine/:id', async (req, res) => {
   }
 });
 
-router.put('/api/issue_to_holo_machine/:id', async (req, res) => {
+router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8334,7 +8527,7 @@ router.put('/api/issue_to_holo_machine/:id', async (req, res) => {
   }
 });
 
-router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
+router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8697,7 +8890,7 @@ router.put('/api/issue_to_coning_machine/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
+router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue.cutter'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8772,7 +8965,7 @@ router.delete('/api/issue_to_cutter_machine/:id', async (req, res) => {
 });
 
 // Delete an issue_to_holo_machine record (safe delete)
-router.delete('/api/issue_to_holo_machine/:id', async (req, res) => {
+router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.holo'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8867,7 +9060,7 @@ router.delete('/api/issue_to_holo_machine/:id', async (req, res) => {
 });
 
 // Delete an issue_to_coning_machine record (safe delete)
-router.delete('/api/issue_to_coning_machine/:id', async (req, res) => {
+router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -8932,7 +9125,7 @@ router.delete('/api/issue_to_coning_machine/:id', async (req, res) => {
 });
 
 // Delete a single inbound item (piece)
-router.delete('/api/inbound_items/:id', async (req, res) => {
+router.delete('/api/inbound_items/:id', requireDeletePermission('inbound'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -9009,7 +9202,7 @@ router.delete('/api/inbound_items/:id', async (req, res) => {
   }
 });
 
-router.put('/api/settings', async (req, res) => {
+router.put('/api/settings', requireEditPermission('settings'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const body = req.body || {};
@@ -9028,7 +9221,7 @@ router.put('/api/settings', async (req, res) => {
     const hasChallanFromMobile = Object.prototype.hasOwnProperty.call(body, 'challanFromMobile');
     const hasChallanFieldsConfig = Object.prototype.hasOwnProperty.call(body, 'challanFieldsConfig');
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (hasBackupTime && req.user?.roleKey !== 'admin') {
+    if (hasBackupTime && !req.user?.isAdmin) {
       return res.status(403).json({ error: 'forbidden' });
     }
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
@@ -9149,7 +9342,7 @@ router.put('/api/settings', async (req, res) => {
 });
 
 // Update a single inbound piece (seq, weight)
-router.put('/api/inbound_items/:id', async (req, res) => {
+router.put('/api/inbound_items/:id', requireEditPermission('inbound'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
@@ -9202,7 +9395,7 @@ router.put('/api/inbound_items/:id', async (req, res) => {
 });
 
 // Delete a lot and its inbound items and issue-to-machine records
-router.delete('/api/lots/:lotNo', async (req, res) => {
+router.delete('/api/lots/:lotNo', requireDeletePermission('inbound'), async (req, res) => {
   try {
     const { lotNo } = req.params;
     // Do not allow delete if any issue_to_cutter_machine record exists for this lot
@@ -9305,7 +9498,7 @@ router.get('/api/google-drive/files', requireRole('admin'), async (req, res) => 
 // ===== Backup Management =====
 
 // List all available backups (all authenticated users can view)
-router.get('/api/backups', async (req, res) => {
+router.get('/api/backups', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const backups = listBackups();
     res.json({ backups });
@@ -9359,7 +9552,7 @@ router.get('/api/backups/:filename/download', requireRole('admin'), async (req, 
 });
 
 // Get disk usage status
-router.get('/api/disk-usage', async (req, res) => {
+router.get('/api/disk-usage', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const usage = await getDiskUsage();
     res.json(usage);
@@ -9371,7 +9564,7 @@ router.get('/api/disk-usage', async (req, res) => {
 
 // ========== CUSTOMER ENDPOINTS ==========
 
-router.get('/api/customers', async (req, res) => {
+router.get('/api/customers', requirePermission('masters', PERM_READ), async (req, res) => {
   try {
     const customers = await prisma.customer.findMany({
       orderBy: { name: 'asc' },
@@ -9383,7 +9576,7 @@ router.get('/api/customers', async (req, res) => {
   }
 });
 
-router.post('/api/customers', async (req, res) => {
+router.post('/api/customers', requirePermission('masters', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const name = String(req.body?.name || '').trim();
@@ -9423,7 +9616,7 @@ router.post('/api/customers', async (req, res) => {
   }
 });
 
-router.put('/api/customers/:id', async (req, res) => {
+router.put('/api/customers/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const actor = getActor(req);
     const { id } = req.params;
@@ -9459,7 +9652,7 @@ router.put('/api/customers/:id', async (req, res) => {
   }
 });
 
-router.delete('/api/customers/:id', async (req, res) => {
+router.delete('/api/customers/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
     const actor = getActor(req);
     const { id } = req.params;
@@ -9506,7 +9699,7 @@ async function allocateDispatchChallanNumber(tx, dateInput) {
 }
 
 // Get available items for dispatch at a specific stage
-router.get('/api/dispatch/available/:stage', async (req, res) => {
+router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_READ), async (req, res) => {
   try {
     const { stage } = req.params;
     const EPSILON = 1e-9;
@@ -9714,7 +9907,7 @@ router.get('/api/dispatch/available/:stage', async (req, res) => {
 });
 
 // List all dispatches
-router.get('/api/dispatch', async (req, res) => {
+router.get('/api/dispatch', requirePermission('dispatch', PERM_READ), async (req, res) => {
   try {
     const { stage, customerId, from, to } = req.query;
     const where = {};
@@ -9741,7 +9934,7 @@ router.get('/api/dispatch', async (req, res) => {
 });
 
 // Get single dispatch
-router.get('/api/dispatch/:id', async (req, res) => {
+router.get('/api/dispatch/:id', requirePermission('dispatch', PERM_READ), async (req, res) => {
   try {
     const { id } = req.params;
     const dispatch = await prisma.dispatch.findUnique({
@@ -9758,7 +9951,7 @@ router.get('/api/dispatch/:id', async (req, res) => {
 });
 
 // Create dispatch
-router.post('/api/dispatch', async (req, res) => {
+router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const { customerId, stage, stageItemId, weight, count, date, notes } = req.body;
@@ -9922,7 +10115,7 @@ router.post('/api/dispatch', async (req, res) => {
 });
 
 // Create dispatch for multiple items (single challan)
-router.post('/api/dispatch/bulk', async (req, res) => {
+router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const { customerId, stage, date, notes, items } = req.body;
@@ -10098,7 +10291,7 @@ router.post('/api/dispatch/bulk', async (req, res) => {
 });
 
 // Delete/cancel dispatch (restores weight)
-router.delete('/api/dispatch/:id', async (req, res) => {
+router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (req, res) => {
   try {
     const actor = getActor(req);
     const { id } = req.params;
@@ -10159,7 +10352,7 @@ router.delete('/api/dispatch/:id', async (req, res) => {
 });
 
 // Delete/cancel all dispatch rows for a challan (restores weight)
-router.delete('/api/dispatch/challan/:challanNo', async (req, res) => {
+router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispatch'), async (req, res) => {
   try {
     const actor = getActor(req);
     const { challanNo } = req.params;
@@ -10224,7 +10417,7 @@ router.delete('/api/dispatch/challan/:challanNo', async (req, res) => {
 // Barcode History - FULL BIRTH CHART / LINEAGE TRACING
 // When any barcode is scanned, trace the complete production chain:
 // Inbound → Cutter Issue → Cutter Receive → Holo Issue → Holo Receive → Coning Issue → Coning Receive → Dispatch
-router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
+router.get('/api/reports/barcode-history/:barcode', requirePermission('reports', PERM_READ), async (req, res) => {
   try {
     const { barcode } = req.params;
     const normalizedBarcode = normalizeBarcodeInput(barcode);
@@ -10960,7 +11153,7 @@ router.get('/api/reports/barcode-history/:barcode', async (req, res) => {
 });
 
 // Production Report
-router.get('/api/reports/production', async (req, res) => {
+router.get('/api/reports/production', requirePermission('reports', PERM_READ), async (req, res) => {
   try {
     const { process, view, from, to } = req.query;
 
@@ -11458,7 +11651,7 @@ router.get('/api/reports/production', async (req, res) => {
   }
 });
 
-router.get('/api/reports/production/details', async (req, res) => {
+router.get('/api/reports/production/details', requirePermission('reports', PERM_READ), async (req, res) => {
   try {
     const { process, view, from, to, key } = req.query;
     if (!process || !from || !to) {
@@ -11805,7 +11998,7 @@ router.get('/api/reports/production/details', async (req, res) => {
 // ========== BOX TRANSFER FEATURE ==========
 
 // Lookup barcode for box transfer
-router.post('/api/box-transfer/lookup', async (req, res) => {
+router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.body?.barcode);
     if (!barcode) return res.status(400).json({ error: 'Barcode is required' });
@@ -12014,7 +12207,7 @@ router.post('/api/box-transfer/lookup', async (req, res) => {
 });
 
 // Execute box transfer
-router.post('/api/box-transfer', async (req, res) => {
+router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const fromBarcode = normalizeBarcodeInput(req.body?.fromBarcode);
@@ -12205,7 +12398,7 @@ router.post('/api/box-transfer', async (req, res) => {
 });
 
 // Get box transfer history
-router.get('/api/box-transfer/history', async (req, res) => {
+router.get('/api/box-transfer/history', requirePermission('box_transfer', PERM_READ), async (req, res) => {
   try {
     const { dateFrom, dateTo, search, stage } = req.query;
     const where = {};
@@ -12243,7 +12436,7 @@ router.get('/api/box-transfer/history', async (req, res) => {
 });
 
 // Reverse a box transfer
-router.post('/api/box-transfer/:id/reverse', async (req, res) => {
+router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const { id } = req.params;
@@ -13007,6 +13200,14 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
       return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
     }
 
+    const permissionKey = type === 'issue' ? `issue.${stage}` : `receive.${stage}`;
+    if (!req.user?.isAdmin) {
+      const level = Number(req.user?.permissions?.[permissionKey] || 0);
+      if (level < PERM_READ) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+    }
+
     const summary = await generateSummaryData(stage, type, date);
     res.json(summary);
   } catch (err) {
@@ -13029,6 +13230,14 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     }
     if (!validTypes.includes(type)) {
       return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+    }
+
+    const permissionKey = type === 'issue' ? `issue.${stage}` : `receive.${stage}`;
+    if (!req.user?.isAdmin) {
+      const level = Number(req.user?.permissions?.[permissionKey] || 0);
+      if (level < PERM_WRITE) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
     }
 
     // Check if template is enabled
@@ -13118,7 +13327,7 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
 // ========== BOILER (STEAMING) FEATURE ==========
 
 // Lookup barcode for boiler steaming
-router.get('/api/boiler/lookup', async (req, res) => {
+router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query?.barcode);
     if (!barcode) return res.status(400).json({ error: 'Barcode is required' });
@@ -13209,7 +13418,7 @@ router.get('/api/boiler/lookup', async (req, res) => {
 });
 
 // Mark barcodes as steamed
-router.post('/api/boiler/steam', async (req, res) => {
+router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const barcodes = req.body?.barcodes;
@@ -13289,7 +13498,7 @@ router.post('/api/boiler/steam', async (req, res) => {
 });
 
 // List steamed items
-router.get('/api/boiler/steamed', async (req, res) => {
+router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async (req, res) => {
   try {
     const date = req.query?.date; // Optional date filter (YYYY-MM-DD)
 

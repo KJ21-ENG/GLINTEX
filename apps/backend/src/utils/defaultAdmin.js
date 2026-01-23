@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { hashPassword, normalizeUsername } from './auth.js';
+import { ACCESS_LEVELS, normalizePermissions } from './permissions.js';
 
 function envFlag(name, defaultValue = false) {
   const raw = process.env[name];
@@ -40,6 +41,7 @@ export async function ensureDefaultAdminUser() {
           key: 'admin',
           name: 'Administrator',
           description: 'System Administrator with full access',
+          permissions: normalizePermissions({}, { baseDefault: ACCESS_LEVELS.WRITE, actionDefault: ACCESS_LEVELS.WRITE }),
         },
       });
     } catch (err) {
@@ -60,8 +62,10 @@ export async function ensureDefaultAdminUser() {
         username,
         displayName,
         passwordHash,
-        roleId: adminRole.id,
         isActive: true,
+        roles: {
+          create: [{ roleId: adminRole.id }],
+        },
       },
     });
     return { created: true, username, password, passwordSource: passwordProvided ? 'env' : 'default' };

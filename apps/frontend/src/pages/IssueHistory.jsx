@@ -10,7 +10,7 @@ import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 
-export function IssueHistory({ db, refreshDb }) {
+export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false }) {
   const { process } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -56,6 +56,7 @@ export function IssueHistory({ db, refreshDb }) {
   };
 
   const handleDelete = async (issueId) => {
+    if (!canDelete) return;
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
       return;
     }
@@ -888,6 +889,8 @@ export function IssueHistory({ db, refreshDb }) {
         label: 'Edit',
         icon: <Edit2 className="w-4 h-4" />,
         onClick: () => openIssueEditor(row),
+        disabled: !canEdit,
+        disabledReason: 'You do not have permission to edit issue records.',
       },
       {
         label: 'Reprint',
@@ -910,7 +913,10 @@ export function IssueHistory({ db, refreshDb }) {
       icon: <Trash2 className="w-4 h-4" />,
       onClick: () => handleDelete(row.id),
       variant: 'destructive',
-      disabled: deletingId === row.id,
+      disabled: deletingId === row.id || !canDelete,
+      disabledReason: !canDelete
+        ? 'You do not have permission to delete issue records.'
+        : 'Deleting in progress.',
     });
 
     return actions;

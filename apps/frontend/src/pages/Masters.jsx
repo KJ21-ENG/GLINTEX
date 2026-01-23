@@ -3,6 +3,9 @@ import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label } from '../components/ui';
 import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
 
 // Process type options for dropdowns
 const PROCESS_OPTIONS = [
@@ -33,25 +36,36 @@ export function Masters() {
         createBox, updateBox, deleteBox,
         refreshing
     } = useInventory();
+    const { canRead, canWrite, canEdit, canDelete } = usePermission('masters');
+    const canCreate = canWrite;
 
     const [activeTab, setActiveTab] = useState('items');
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Masters</h1>
+                <AccessDenied message="You do not have access to master data. Contact an administrator to request access." />
+            </div>
+        );
+    }
+
     const renderContent = () => {
         switch (activeTab) {
-            case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} />;
-            case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} />;
-            case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} />;
-            case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} />;
-            case 'firms': return <FirmsMasterCrud data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} />;
-            case 'customers': return <CustomersMasterCrud data={db.customers} onCreate={createCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} loading={refreshing} />;
-            case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} />;
-            case 'machines': return <MachinesMasterCrud data={db.machines || []} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} />;
-            case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} />;
-            case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} />;
-            case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} />;
-            case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} />;
-            case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} />;
-            case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} />;
+            case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'firms': return <FirmsMasterCrud data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'customers': return <CustomersMasterCrud data={db.customers} onCreate={createCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'machines': return <MachinesMasterCrud data={db.machines || []} onCreate={createMachine} onUpdate={updateMachine} onDelete={deleteMachine} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             default: return null;
         }
     }
@@ -119,21 +133,26 @@ export function Masters() {
 
 // --- Sub Components ---
 
-function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }) {
+function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName);
         setNewName('');
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName);
         setEditingId(null);
@@ -150,8 +169,8 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder={`New ${title} name`} value={newName} onChange={e => setNewName(e.target.value)} />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Input placeholder={`New ${title} name`} value={newName} onChange={e => setNewName(e.target.value)} disabled={!allowCreate} />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -169,19 +188,25 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                                 <TableRow key={item.id}>
                                     <TableCell>
                                         {editingId === item.id ? (
-                                            <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" />
+                                            <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} />
                                         ) : item.name}
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -199,7 +224,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                         <div key={item.id} className="border rounded-lg bg-card p-3 flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                                 {editingId === item.id ? (
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} />
                                 ) : (
                                     <span className="font-medium">{item.name}</span>
                                 )}
@@ -207,13 +232,19 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                             <div className="flex gap-1">
                                 {editingId === item.id ? (
                                     <>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                         <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                     </>
                                 ) : (
                                     <>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </>
                                 )}
                             </div>
@@ -225,17 +256,21 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
     )
 }
 
-function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }) {
+function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newWeight, setNewWeight] = useState('');
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
     const [editWeight, setEditWeight] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, Number(newWeight));
         setNewName('');
@@ -243,6 +278,7 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, Number(editWeight));
         setEditingId(null);
@@ -259,9 +295,9 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" />
-                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-32" />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" disabled={!allowCreate} />
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-32" disabled={!allowCreate} />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -279,21 +315,27 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} /> : item.name}
                                     </TableCell>
                                     <TableCell className="">
-                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" /> : formatKg(item.weight)}
+                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" disabled={!allowEdit} /> : formatKg(item.weight)}
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -311,10 +353,12 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" />
-                                    <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" disabled={!allowEdit} />
+                                    <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -325,8 +369,12 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
                                         <span className="text-xs text-muted-foreground ml-2">({formatKg(item.weight)})</span>
                                     </div>
                                     <div className="flex gap-1">
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight) }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}
@@ -339,17 +387,21 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading }
 }
 
 // New component for Machines with processType support
-function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newProcessType, setNewProcessType] = useState('all');
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
     const [editProcessType, setEditProcessType] = useState('all');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, newProcessType);
         setNewName('');
@@ -357,6 +409,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, editProcessType);
         setEditingId(null);
@@ -375,15 +428,16 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2">
-                    <Input placeholder="Machine Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" />
+                    <Input placeholder="Machine Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" disabled={!allowCreate} />
                     <Select
                         value={newProcessType}
                         onChange={e => setNewProcessType(e.target.value)}
                         className="w-40"
                         options={PROCESS_OPTIONS}
                         searchable={false}
+                        disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -401,7 +455,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} /> : item.name}
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
@@ -411,6 +465,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                                 className="h-8"
                                                 options={PROCESS_OPTIONS}
                                                 searchable={false}
+                                                disabled={!allowEdit}
                                             />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
@@ -421,13 +476,19 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -445,10 +506,12 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Machine Name" />
-                                    <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Machine Name" disabled={!allowEdit} />
+                                    <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -459,8 +522,12 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                         <span className="text-xs text-muted-foreground ml-2">({PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'})</span>
                                     </div>
                                     <div className="flex gap-1">
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}
@@ -473,7 +540,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
 }
 
 // Updated Workers component with processType support
-function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
+function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newRole, setNewRole] = useState('operator');
     const [newProcessType, setNewProcessType] = useState('all');
@@ -482,10 +549,14 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
     const [editName, setEditName] = useState('');
     const [editRole, setEditRole] = useState('operator');
     const [editProcessType, setEditProcessType] = useState('all');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, newRole, newProcessType);
         setNewName('');
@@ -493,6 +564,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, editRole, editProcessType);
         setEditingId(null);
@@ -511,13 +583,14 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2 flex-wrap">
-                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[150px]" />
+                    <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[150px]" disabled={!allowCreate} />
                     <Select
                         value={newRole}
                         onChange={e => setNewRole(e.target.value)}
                         className="w-32"
                         options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
                         searchable={false}
+                        disabled={!allowCreate}
                     />
                     <Select
                         value={newProcessType}
@@ -525,8 +598,9 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                         className="w-40"
                         options={PROCESS_OPTIONS}
                         searchable={false}
+                        disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -545,7 +619,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} /> : item.name}
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
@@ -555,6 +629,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                                 className="h-8"
                                                 options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]}
                                                 searchable={false}
+                                                disabled={!allowEdit}
                                             />
                                         ) : <span className="text-sm text-muted-foreground capitalize">{item.role || 'operator'}</span>}
                                     </TableCell>
@@ -566,6 +641,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                                 className="h-8"
                                                 options={PROCESS_OPTIONS}
                                                 searchable={false}
+                                                disabled={!allowEdit}
                                             />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
@@ -576,13 +652,19 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -600,13 +682,15 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" disabled={!allowEdit} />
                                     <div className="grid grid-cols-2 gap-2">
-                                        <Select value={editRole} onChange={e => setEditRole(e.target.value)} options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]} searchable={false} />
-                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                        <Select value={editRole} onChange={e => setEditRole(e.target.value)} options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]} searchable={false} disabled={!allowEdit} />
+                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     </div>
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -619,8 +703,12 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
                                         </div>
                                     </div>
                                     <div className="flex gap-1">
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditRole(item.role || 'operator'); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}
@@ -633,7 +721,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading }) {
 }
 
 // Boxes component with weight and processType support
-function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newWeight, setNewWeight] = useState('');
     const [newProcessType, setNewProcessType] = useState('all');
@@ -642,10 +730,14 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     const [editName, setEditName] = useState('');
     const [editWeight, setEditWeight] = useState('');
     const [editProcessType, setEditProcessType] = useState('all');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, Number(newWeight), newProcessType);
         setNewName('');
@@ -654,6 +746,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, Number(editWeight), editProcessType);
         setEditingId(null);
@@ -670,16 +763,17 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="flex gap-2 flex-wrap">
-                    <Input placeholder="Box Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[120px]" />
-                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-28" />
+                    <Input placeholder="Box Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1 min-w-[120px]" disabled={!allowCreate} />
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-28" disabled={!allowCreate} />
                     <Select
                         value={newProcessType}
                         onChange={e => setNewProcessType(e.target.value)}
                         className="w-36"
                         options={PROCESS_OPTIONS}
                         searchable={false}
+                        disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -698,10 +792,10 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
-                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" /> : item.name}
+                                        {editingId === item.id ? <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} /> : item.name}
                                     </TableCell>
                                     <TableCell>
-                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24" /> : formatKg(item.weight)}
+                                        {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24" disabled={!allowEdit} /> : formatKg(item.weight)}
                                     </TableCell>
                                     <TableCell>
                                         {editingId === item.id ? (
@@ -711,6 +805,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                                 className="h-8"
                                                 options={PROCESS_OPTIONS}
                                                 searchable={false}
+                                                disabled={!allowEdit}
                                             />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
@@ -721,13 +816,19 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -745,13 +846,15 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Box Name" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Box Name" disabled={!allowEdit} />
                                     <div className="grid grid-cols-2 gap-2">
-                                        <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" />
-                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} />
+                                        <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" disabled={!allowEdit} />
+                                        <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     </div>
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -764,8 +867,12 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                         </div>
                                     </div>
                                     <div className="flex gap-1">
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditWeight(item.weight); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}
@@ -777,7 +884,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     )
 }
 
-function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newAddress, setNewAddress] = useState('');
     const [newMobile, setNewMobile] = useState('');
@@ -786,6 +893,9 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     const [editName, setEditName] = useState('');
     const [editAddress, setEditAddress] = useState('');
     const [editMobile, setEditMobile] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i =>
         i.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -794,6 +904,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     );
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, newAddress, newMobile);
         setNewName('');
@@ -802,6 +913,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, editAddress, editMobile);
         setEditingId(null);
@@ -818,12 +930,14 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <Input placeholder="Firm Name" value={newName} onChange={e => setNewName(e.target.value)} />
-                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} />
-                    <Input placeholder="Mobile/Contact" value={newMobile} onChange={e => setNewMobile(e.target.value)} />
+                    <Input placeholder="Firm Name" value={newName} onChange={e => setNewName(e.target.value)} disabled={!allowCreate} />
+                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} disabled={!allowCreate} />
+                    <Input placeholder="Mobile/Contact" value={newMobile} onChange={e => setNewMobile(e.target.value)} disabled={!allowCreate} />
                 </div>
                 <div className="flex justify-end">
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Firm</Button>
+                    <DisabledWithTooltip disabled={!allowCreate} tooltip="You do not have permission to create firms.">
+                        <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add Firm</Button>
+                    </DisabledWithTooltip>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -844,15 +958,15 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                             <div className="space-y-2 py-1">
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Name</Label>
-                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Address</Label>
-                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Mobile</Label>
-                                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                             </div>
                                         ) : (
@@ -866,18 +980,24 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit firms.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)} disabled={!allowEdit || !editName.trim()}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
-                                                    setEditingId(item.id);
-                                                    setEditName(item.name);
-                                                    setEditAddress(item.address || '');
-                                                    setEditMobile(item.mobile || '');
-                                                }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit firms.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                        setEditingId(item.id);
+                                                        setEditName(item.name);
+                                                        setEditAddress(item.address || '');
+                                                        setEditMobile(item.mobile || '');
+                                                    }} disabled={!allowEdit}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete firms.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }} disabled={!allowDelete}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -895,11 +1015,13 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Firm Name" />
-                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" />
-                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} placeholder="Mobile/Contact" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Firm Name" disabled={!allowEdit} />
+                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" disabled={!allowEdit} />
+                                    <Input value={editMobile} onChange={e => setEditMobile(e.target.value)} placeholder="Mobile/Contact" disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit firms.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)} disabled={!allowEdit || !editName.trim()}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -911,13 +1033,17 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                         <div className="text-xs font-mono mt-0.5">{item.mobile || 'No contact'}</div>
                                     </div>
                                     <div className="flex gap-1 shrink-0">
-                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
-                                            setEditingId(item.id);
-                                            setEditName(item.name);
-                                            setEditAddress(item.address || '');
-                                            setEditMobile(item.mobile || '');
-                                        }}><Edit2 className="w-4 h-4" /></Button>
-                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit firms.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                setEditingId(item.id);
+                                                setEditName(item.name);
+                                                setEditAddress(item.address || '');
+                                                setEditMobile(item.mobile || '');
+                                            }} disabled={!allowEdit}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete firms.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }} disabled={!allowDelete}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}
@@ -929,7 +1055,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     )
 }
 
-function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
+function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newPhone, setNewPhone] = useState('');
     const [newAddress, setNewAddress] = useState('');
@@ -938,6 +1064,9 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     const [editName, setEditName] = useState('');
     const [editPhone, setEditPhone] = useState('');
     const [editAddress, setEditAddress] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
 
     const filtered = (data || []).filter(i =>
         i.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -946,6 +1075,7 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     );
 
     const handleCreate = async () => {
+        if (!allowCreate) return;
         if (!newName.trim()) return;
         await onCreate(newName, newPhone, newAddress);
         setNewName('');
@@ -954,6 +1084,7 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
     }
 
     const handleUpdate = async (id) => {
+        if (!allowEdit) return;
         if (!editName.trim()) return;
         await onUpdate(id, editName, editPhone, editAddress);
         setEditingId(null);
@@ -970,12 +1101,14 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <Input placeholder="Customer Name" value={newName} onChange={e => setNewName(e.target.value)} />
-                    <Input placeholder="Phone" value={newPhone} onChange={e => setNewPhone(e.target.value)} />
-                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} />
+                    <Input placeholder="Customer Name" value={newName} onChange={e => setNewName(e.target.value)} disabled={!allowCreate} />
+                    <Input placeholder="Phone" value={newPhone} onChange={e => setNewPhone(e.target.value)} disabled={!allowCreate} />
+                    <Input placeholder="Address" value={newAddress} onChange={e => setNewAddress(e.target.value)} disabled={!allowCreate} />
                 </div>
                 <div className="flex justify-end">
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim()}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+                    <DisabledWithTooltip disabled={!allowCreate} tooltip="You do not have permission to create customers.">
+                        <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+                    </DisabledWithTooltip>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -996,15 +1129,15 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                             <div className="space-y-2 py-1">
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Name</Label>
-                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Phone</Label>
-                                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <Label className="w-16 text-[10px] uppercase">Address</Label>
-                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" />
+                                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} className="h-8 flex-1" disabled={!allowEdit} />
                                                 </div>
                                             </div>
                                         ) : (
@@ -1018,18 +1151,24 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <TableCell className="">
                                         {editingId === item.id ? (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit customers.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)} disabled={!allowEdit || !editName.trim()}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
                                             </div>
                                         ) : (
                                             <div className="flex justify-end gap-1">
-                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
-                                                    setEditingId(item.id);
-                                                    setEditName(item.name);
-                                                    setEditPhone(item.phone || '');
-                                                    setEditAddress(item.address || '');
-                                                }}><Edit2 className="w-4 h-4" /></Button>
-                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit customers.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                        setEditingId(item.id);
+                                                        setEditName(item.name);
+                                                        setEditPhone(item.phone || '');
+                                                        setEditAddress(item.address || '');
+                                                    }} disabled={!allowEdit}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete customers.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }} disabled={!allowDelete}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
                                             </div>
                                         )}
                                     </TableCell>
@@ -1047,11 +1186,13 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                         <div key={item.id} className="border rounded-lg bg-card p-3">
                             {editingId === item.id ? (
                                 <div className="space-y-2">
-                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Customer Name" />
-                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="Phone" />
-                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" />
+                                    <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Customer Name" disabled={!allowEdit} />
+                                    <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="Phone" disabled={!allowEdit} />
+                                    <Input value={editAddress} onChange={e => setEditAddress(e.target.value)} placeholder="Address" disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
-                                        <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit customers.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)} disabled={!allowEdit || !editName.trim()}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
                                         <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
                                     </div>
                                 </div>
@@ -1061,13 +1202,17 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading }) {
                                     <div className="text-xs text-muted-foreground">{item.address || 'No address added'}</div>
                                     <div className="text-xs font-mono">{item.phone || 'No phone added'}</div>
                                     <div className="flex justify-end gap-1 pt-2">
-                                        <Button size="sm" variant="ghost" onClick={() => {
-                                            setEditingId(item.id);
-                                            setEditName(item.name);
-                                            setEditPhone(item.phone || '');
-                                            setEditAddress(item.address || '');
-                                        }}><Edit2 className="w-4 h-4 mr-1" /> Edit</Button>
-                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit customers.">
+                                            <Button size="sm" variant="ghost" onClick={() => {
+                                                setEditingId(item.id);
+                                                setEditName(item.name);
+                                                setEditPhone(item.phone || '');
+                                                setEditAddress(item.address || '');
+                                            }} disabled={!allowEdit}><Edit2 className="w-4 h-4 mr-1" /> Edit</Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete customers.">
+                                            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }} disabled={!allowDelete}><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>
+                                        </DisabledWithTooltip>
                                     </div>
                                 </div>
                             )}

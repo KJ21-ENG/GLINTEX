@@ -582,11 +582,12 @@ model Role {
   key         String   @unique
   name        String
   description String?
+  permissions Json     @default("{}")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
-  users       User[]
+  users       UserRole[]
 }
 
 model User {
@@ -594,15 +595,24 @@ model User {
   username     String   @unique
   displayName  String?
   passwordHash String
-  roleId       String
   isActive     Boolean  @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
-  role         Role     @relation(fields: [roleId], references: [id])
+  roles        UserRole[]
   sessions     UserSession[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
 }
 
 model UserSession {

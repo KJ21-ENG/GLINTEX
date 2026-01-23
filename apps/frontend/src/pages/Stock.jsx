@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
 import { PieceRow } from '../components/stock/PieceRow';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
@@ -17,6 +18,7 @@ import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
+import { usePermission, useStagePermission } from '../hooks/usePermission';
 
 const EPSILON = 1e-9;
 
@@ -39,7 +41,7 @@ function buildStockGroupKey(lot) {
 }
 
 export function Stock() {
-  const { db, createIssueToMachine, refreshing, refreshDb, process } = useInventory();
+  const { db, createIssueToMachine, refreshing, refreshDb, process, ensureModuleData } = useInventory();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -48,6 +50,13 @@ export function Stock() {
   const isCutter = processId === 'cutter';
   const isHolo = processId === 'holo';
   const isConing = processId === 'coning';
+  const { canEdit: canInboundEdit, canDelete: canInboundDelete } = usePermission('inbound');
+  const issueStage = isHolo ? 'holo' : isConing ? 'coning' : 'cutter';
+  const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
+
+  useEffect(() => {
+    ensureModuleData('process', { process: processId });
+  }, [ensureModuleData, processId]);
 
   // --- UI State ---
   const [searchParams, setSearchParams] = useSearchParams();
@@ -410,6 +419,7 @@ export function Stock() {
   }, [isCutter]);
 
   async function handleDeletePiece(pieceId) {
+    if (!canInboundDelete) return;
     if (!pieceId) return;
     const ok = window.confirm(`Delete piece ${pieceId}? This action cannot be undone.`);
     if (!ok) return;
@@ -450,6 +460,7 @@ export function Stock() {
   }
 
   async function handleDeleteLot(lotNo, e) {
+    if (!canInboundDelete) return;
     e.stopPropagation();
     if (!confirm('Delete lot ' + lotNo + '? This will remove all pieces and history for this lot.')) return;
     try {
@@ -461,6 +472,7 @@ export function Stock() {
   }
 
   function openIssueModal(lotNo) {
+    if (!canIssueWrite) return;
     const pieceIds = (selectedByLot[lotNo] || []).slice();
     if (!pieceIds.length) { alert('Select pieces to issue'); return; }
     setIssueModalData({ lotNo, pieceIds, date: todayISO(), machineId: '', operatorId: '', cutId: '', note: '' });
@@ -468,6 +480,7 @@ export function Stock() {
   }
 
   async function doIssue() {
+    if (!canIssueWrite) return;
     setIssuing(true);
     try {
       const { lotNo, pieceIds, date, machineId, operatorId, cutId, note } = issueModalData;
@@ -744,19 +757,25 @@ export function Stock() {
                                       <Button
                                         size="sm"
                                         onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
+                                        disabled={!canIssueWrite}
                                       >
                                         Issue Selected
                                       </Button>
                                     )}
                                   </div>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                    onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                                  <DisabledWithTooltip
+                                    disabled={!canInboundDelete}
+                                    tooltip="You do not have permission to delete inbound records."
                                   >
-                                    <Trash2 className="w-4 h-4 mr-2" /> Delete Lot
-                                  </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                                    >
+                                      <Trash2 className="w-4 h-4 mr-2" /> Delete Lot
+                                    </Button>
+                                  </DisabledWithTooltip>
                                 </div>
 
                                 <Table>
@@ -775,7 +794,7 @@ export function Stock() {
                                               ref={el => { if (el) el.indeterminate = someSelected; }}
                                               onChange={(e) => { e.stopPropagation(); toggleAllPieces(l.lotNo); }}
                                               className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                              disabled={availablePieces.length === 0}
+                                              disabled={!canIssueWrite || availablePieces.length === 0}
                                             />
                                           );
                                         })()}
@@ -803,6 +822,9 @@ export function Stock() {
                                         onDelete={handleDeletePiece}
                                         isDeleting={deletingPieces.has(p.id)}
                                         hidePending={filters.status === 'available_to_issue'}
+                                        canEdit={canInboundEdit}
+                                        canDelete={canInboundDelete}
+                                        selectDisabled={!canIssueWrite}
                                       />
                                     ))}
                                   </TableBody>
@@ -885,14 +907,19 @@ export function Stock() {
                       <div className="border-t bg-muted/30 p-3 space-y-3">
                         <div className="flex justify-between items-center text-xs">
                           <span className="text-muted-foreground">Firm: <HighlightMatch text={l.firmName} query={search} /></span>
-                          <Button
-                            variant="ghost"
-                            className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 px-2"
-                            style={{ width: 'auto', padding: '0 8px', fontSize: '11px' }}
-                            onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                          <DisabledWithTooltip
+                            disabled={!canInboundDelete}
+                            tooltip="You do not have permission to delete inbound records."
                           >
-                            <Trash2 className="w-3 h-3 mr-1" /> Delete Lot
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 px-2"
+                              style={{ width: 'auto', padding: '0 8px', fontSize: '11px' }}
+                              onClick={(e) => handleDeleteLot(l.lotNo, e)}
+                            >
+                              <Trash2 className="w-3 h-3 mr-1" /> Delete Lot
+                            </Button>
+                          </DisabledWithTooltip>
                         </div>
 
                         <div className="space-y-2">
@@ -910,7 +937,7 @@ export function Stock() {
                                     checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                     onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
                                     className="h-4 w-4 rounded border-gray-300 text-primary"
-                                    disabled={p.status !== 'available' || Number(p.pendingWeight || 0) <= EPSILON}
+                                    disabled={!canIssueWrite || p.status !== 'available' || Number(p.pendingWeight || 0) <= EPSILON}
                                   />
                                 </div>
                               </div>
@@ -923,6 +950,7 @@ export function Stock() {
                             className="w-full mt-2"
                             size="sm"
                             onClick={(e) => { e.stopPropagation(); openIssueModal(l.lotNo); }}
+                            disabled={!canIssueWrite}
                           >
                             Issue Selected ({(selectedByLot[l.lotNo] || []).length})
                           </Button>
@@ -959,18 +987,18 @@ export function Stock() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <Label>Date</Label>
-                <Input type="date" value={issueModalData.date} onChange={e => setIssueModalData({ ...issueModalData, date: e.target.value })} />
+                <Input type="date" value={issueModalData.date} onChange={e => setIssueModalData({ ...issueModalData, date: e.target.value })} disabled={!canIssueWrite} />
               </div>
               <div>
                 <Label>Machine</Label>
-                <Select value={issueModalData.machineId} onChange={e => setIssueModalData({ ...issueModalData, machineId: e.target.value })}>
+                <Select value={issueModalData.machineId} onChange={e => setIssueModalData({ ...issueModalData, machineId: e.target.value })} disabled={!canIssueWrite}>
                   <option value="">Select Machine</option>
                   {(db?.machines || []).filter(m => m.processType === 'all' || m.processType === 'cutter').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </Select>
               </div>
               <div>
                 <Label>Cut</Label>
-                <Select value={issueModalData.cutId} onChange={e => setIssueModalData({ ...issueModalData, cutId: e.target.value })}>
+                <Select value={issueModalData.cutId} onChange={e => setIssueModalData({ ...issueModalData, cutId: e.target.value })} disabled={!canIssueWrite}>
                   <option value="">Select Cut</option>
                   {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
@@ -978,18 +1006,18 @@ export function Stock() {
             </div>
             <div>
               <Label>Operator</Label>
-              <Select value={issueModalData.operatorId} onChange={e => setIssueModalData({ ...issueModalData, operatorId: e.target.value })}>
+              <Select value={issueModalData.operatorId} onChange={e => setIssueModalData({ ...issueModalData, operatorId: e.target.value })} disabled={!canIssueWrite}>
                 <option value="">Select Operator</option>
                 {(db?.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </Select>
             </div>
             <div>
               <Label>Note (Optional)</Label>
-              <Input value={issueModalData.note} onChange={e => setIssueModalData({ ...issueModalData, note: e.target.value })} />
+              <Input value={issueModalData.note} onChange={e => setIssueModalData({ ...issueModalData, note: e.target.value })} disabled={!canIssueWrite} />
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setIssueModalOpen(false)}>Cancel</Button>
-              <Button onClick={doIssue} disabled={issuing || !issueModalData.machineId || !issueModalData.operatorId || !issueModalData.cutId}>
+              <Button onClick={doIssue} disabled={!canIssueWrite || issuing || !issueModalData.machineId || !issueModalData.operatorId || !issueModalData.cutId}>
                 {issuing ? 'Issuing...' : 'Confirm Issue'}
               </Button>
             </div>

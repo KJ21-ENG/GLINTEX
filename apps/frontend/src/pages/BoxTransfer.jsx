@@ -3,8 +3,13 @@ import { boxTransferLookup, boxTransferExecute, boxTransferHistory, boxTransferR
 import { Button, Input, Card } from '../components/ui';
 import { ArrowRightLeft, Search, RotateCcw, Package, ArrowDown, Loader2, CheckCircle2, XCircle, History } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
 
 export function BoxTransfer() {
+    const { canRead, canWrite, canDelete } = usePermission('box_transfer');
+    const isReadOnly = canRead && !canWrite;
 
     // Transfer form state
     const [fromBarcode, setFromBarcode] = useState('');
@@ -94,6 +99,7 @@ export function BoxTransfer() {
     };
 
     const handleTransfer = async () => {
+        if (isReadOnly) return;
         setError('');
         setSuccess('');
 
@@ -157,6 +163,7 @@ export function BoxTransfer() {
     };
 
     const handleReverse = async (transferId) => {
+        if (!canDelete) return;
         if (!confirm('Are you sure you want to reverse this transfer?')) return;
 
         try {
@@ -205,6 +212,15 @@ export function BoxTransfer() {
         }
     };
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Box Transfer</h1>
+                <AccessDenied message="You do not have access to Box Transfer. Contact an administrator." />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -219,6 +235,11 @@ export function BoxTransfer() {
                     </p>
                 </div>
             </div>
+            {isReadOnly && (
+                <div className="text-sm text-muted-foreground">
+                    Read-only access: you can view transfer history, but you cannot create transfers. Reversals require delete permission.
+                </div>
+            )}
 
             {/* Alerts */}
             {error && (
@@ -395,6 +416,7 @@ export function BoxTransfer() {
                                     min="1"
                                     max={fromItem.currentCount}
                                     placeholder={`Max: ${fromItem.currentCount}`}
+                                    disabled={isReadOnly}
                                 />
                             </div>
                             <div className="space-y-2">
@@ -409,6 +431,7 @@ export function BoxTransfer() {
                                     value={notes}
                                     onChange={(e) => setNotes(e.target.value)}
                                     placeholder="Add notes..."
+                                    disabled={isReadOnly}
                                 />
                             </div>
                         </div>
@@ -416,7 +439,7 @@ export function BoxTransfer() {
 
                     <Button
                         onClick={handleTransfer}
-                        disabled={loading || !fromItem || !toItem || fromItem.stage !== toItem.stage || !pieceCount}
+                        disabled={loading || isReadOnly || !fromItem || !toItem || fromItem.stage !== toItem.stage || !pieceCount}
                         className="w-full sm:w-auto"
                     >
                         {loading ? (
@@ -508,14 +531,19 @@ export function BoxTransfer() {
                                         </td>
                                         <td className="py-2 px-2 text-center">
                                             {!transfer.isReversed && !transfer.reversedById && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={() => handleReverse(transfer.id)}
-                                                    title="Reverse transfer"
+                                                <DisabledWithTooltip
+                                                    disabled={!canDelete}
+                                                    tooltip="You do not have permission to reverse transfers."
                                                 >
-                                                    <RotateCcw className="h-3 w-3" />
-                                                </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => handleReverse(transfer.id)}
+                                                        title="Reverse transfer"
+                                                    >
+                                                        <RotateCcw className="h-3 w-3" />
+                                                    </Button>
+                                                </DisabledWithTooltip>
                                             )}
                                         </td>
                                     </tr>

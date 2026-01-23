@@ -11,7 +11,7 @@ import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 
-export function ReceiveHistoryTable() {
+export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const { db, process, refreshDb } = useInventory();
     const [activeTab, setActiveTab] = useState('history');
     const [editingChallan, setEditingChallan] = useState(null);
@@ -643,6 +643,7 @@ export function ReceiveHistoryTable() {
     };
 
     const openReceiveEditor = (row) => {
+        if (!canEdit) return;
         if (!row) return;
         setPieceOptionsOverride(null);
         setEditingReceiveRow(row);
@@ -820,6 +821,7 @@ export function ReceiveHistoryTable() {
     };
 
     const handleDeleteReceiveRow = async (row) => {
+        if (!canDelete) return;
         if (!row || (process !== 'holo' && process !== 'coning')) return;
 
         if (process === 'holo') {
@@ -891,6 +893,7 @@ export function ReceiveHistoryTable() {
     };
 
     const handleEditChallan = async (challan) => {
+        if (!canEdit) return;
         const rows = await resolveChallanRows(challan.id);
         const mappedRows = rows.map((row) => {
             const bobbinQty = row.bobbinQuantity != null ? String(row.bobbinQuantity) : '';
@@ -1045,6 +1048,7 @@ export function ReceiveHistoryTable() {
     };
 
     const handleDeleteChallan = async (challan) => {
+        if (!canDelete) return;
         const ok = window.confirm(`Delete challan ${challan.challanNo}? This will revert its receive entries.`);
         if (!ok) return;
         try {
@@ -1436,12 +1440,16 @@ export function ReceiveHistoryTable() {
                 label: 'Edit',
                 icon: <Edit2 className="w-4 h-4" />,
                 onClick: () => openReceiveEditor(row),
+                disabled: !canEdit,
+                disabledReason: 'You do not have permission to edit receive records.',
             },
             {
                 label: 'Delete',
                 icon: <Trash2 className="w-4 h-4" />,
                 onClick: () => handleDeleteReceiveRow(row),
                 variant: 'destructive',
+                disabled: !canDelete,
+                disabledReason: 'You do not have permission to delete receive records.',
             },
         ] : []),
     ];
@@ -1461,6 +1469,8 @@ export function ReceiveHistoryTable() {
             label: 'Edit',
             icon: <Edit2 className="w-4 h-4" />,
             onClick: () => handleEditChallan(challan),
+            disabled: !canEdit,
+            disabledReason: 'You do not have permission to edit receive challans.',
         },
         {
             label: 'View Log',
@@ -1472,6 +1482,8 @@ export function ReceiveHistoryTable() {
             icon: <Trash2 className="w-4 h-4" />,
             onClick: () => handleDeleteChallan(challan),
             variant: 'destructive',
+            disabled: !canDelete,
+            disabledReason: 'You do not have permission to delete receive challans.',
         },
     ]);
 

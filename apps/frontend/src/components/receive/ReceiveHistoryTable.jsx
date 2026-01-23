@@ -545,17 +545,26 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 const cut = resolved.cutName === '—' ? '' : resolved.cutName;
 
                 // Calculate tare weight
-                const boxWeight = box?.weight || 0;
-                const rollTypeWeight = rollType?.weight || 0;
-                const tareWeight = boxWeight + rollTypeWeight;
+                const boxWeight = Number(box?.weight || 0);
+                const rollTypeWeight = Number(rollType?.weight || 0);
+                const rollCount = Number(row.rollCount || 1);
+                const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
+                const tareWeight = Number.isFinite(row.tareWeight) ? Number(row.tareWeight) : calculatedTare;
 
                 const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
+                const netWeight = Number.isFinite(row.rollWeight)
+                    ? Number(row.rollWeight)
+                    : Number.isFinite(row.netWeight)
+                        ? Number(row.netWeight)
+                        : Number.isFinite(row.grossWeight)
+                            ? Math.max(0, Number(row.grossWeight) - tareWeight)
+                            : 0;
                 data = {
                     lotNo: lotLabel,
                     itemName: item?.name || '',
-                    rollCount: row.rollCount || 1,
+                    rollCount,
                     rollType: rollType?.name || '',
-                    netWeight: row.rollWeight ?? row.netWeight ?? row.grossWeight,
+                    netWeight,
                     grossWeight: row.grossWeight,
                     tareWeight: tareWeight,
                     boxName: box?.name || row.box?.name || '',
@@ -596,13 +605,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
                 const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
+                const netWeight = Number.isFinite(row.netWeight)
+                    ? Number(row.netWeight)
+                    : Number.isFinite(row.grossWeight) && Number.isFinite(row.tareWeight)
+                        ? Math.max(0, Number(row.grossWeight) - Number(row.tareWeight))
+                        : Number(row.grossWeight || 0);
+
                 data = {
                     lotNo: lotLabel,
                     itemName: item?.name || '',
                     coneCount: row.coneCount,
                     grossWeight: row.grossWeight,
                     tareWeight: row.tareWeight || 0,
-                    netWeight: row.netWeight ?? row.grossWeight,
+                    netWeight,
                     boxName: box?.name || row.box?.name || '',
                     cut: cut,
                     yarnName: yarnName,

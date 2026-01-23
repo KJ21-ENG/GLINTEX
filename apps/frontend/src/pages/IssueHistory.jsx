@@ -549,9 +549,9 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
         let bobbinType = '';
         let bobbinQty = 0;
         let cut = '';
-        let netWeight = 0;
         let totalRolls = row.metallicBobbins || 0;
         let totalWeight = row.metallicBobbinsWeight || 0;
+        let issuedWeight = 0;
 
         try {
           const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
@@ -559,6 +559,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
             // Sum up bobbins from all refs
             refs.forEach(ref => {
               bobbinQty += Number(ref.issuedBobbins || 0);
+              issuedWeight += Number(ref.issuedBobbinWeight || 0);
             });
 
             // Get cut - first check direct cutId (Opening Stock), then cutter source row
@@ -570,10 +571,12 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-              netWeight += Number(cutterRow.netWt || 0);
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+
+        const resolvedBobbinQty = bobbinQty || row.metallicBobbins || 0;
+        const resolvedNetWeight = issuedWeight || totalWeight || 0;
 
         data = {
           lotNo: lotLabel,
@@ -583,10 +586,10 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
           yarnName,
           twistName,
           bobbinType,
-          bobbinQty,
+          bobbinQty: resolvedBobbinQty,
           totalRolls,
           totalWeight,
-          netWeight: netWeight || totalWeight,
+          netWeight: resolvedNetWeight,
           metallicBobbins: row.metallicBobbins,
           metallicBobbinsWeight: row.metallicBobbinsWeight,
           yarnKg: row.yarnKg,
@@ -632,6 +635,8 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
               totalWeight += Number(ref.issueWeight || 0);
             });
             netWeight = totalWeight;
+            grossWeight = totalWeight;
+            tareWeight = 0;
 
             const resolved = resolveConingTrace(row, traceContext);
             cut = resolved.cutName === '—' ? '' : resolved.cutName;
@@ -642,6 +647,8 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
             twist = twistName;
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+        if (!grossWeight && totalWeight) grossWeight = totalWeight;
+        if (!tareWeight) tareWeight = 0;
 
         data = {
           lotNo: lotLabel,

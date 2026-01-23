@@ -14,6 +14,9 @@ import { cn } from '../lib/utils';
 import { printDispatchChallan } from '../utils/printDispatchChallan';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileDispatchView } from '../components/dispatch/MobileDispatchView';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -24,6 +27,8 @@ const STAGES = [
 
 export function Dispatch() {
     const { refreshDb, db } = useInventory();
+    const { canRead, canWrite, canDelete } = usePermission('dispatch');
+    const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [activeTab, setActiveTab] = useState('dispatch'); // 'dispatch' | 'history'
     const [useMobileMode, setUseMobileMode] = useState(false); // Manual toggle for mobile scanner mode
@@ -76,6 +81,7 @@ export function Dispatch() {
 
     // Load customers
     useEffect(() => {
+        if (!canRead) return;
         async function loadCustomers() {
             try {
                 const res = await api.listCustomers();
@@ -85,10 +91,11 @@ export function Dispatch() {
             }
         }
         loadCustomers();
-    }, []);
+    }, [canRead]);
 
     // Load available items when stage changes
     useEffect(() => {
+        if (!canRead) return;
         async function loadAvailableItems() {
             setLoadingItems(true);
             try {
@@ -104,7 +111,7 @@ export function Dispatch() {
         if (activeTab === 'dispatch') {
             loadAvailableItems();
         }
-    }, [selectedStage, activeTab]);
+    }, [canRead, selectedStage, activeTab]);
 
     useEffect(() => {
         setSelectedIds(new Set());
@@ -113,6 +120,7 @@ export function Dispatch() {
 
     // Load dispatch history
     useEffect(() => {
+        if (!canRead) return;
         async function loadDispatches() {
             setLoadingDispatches(true);
             try {
@@ -128,7 +136,7 @@ export function Dispatch() {
         if (activeTab === 'history') {
             loadDispatches();
         }
-    }, [activeTab]);
+    }, [canRead, activeTab]);
 
     // Filter items based on search
     const filteredItems = useMemo(() => {
@@ -232,6 +240,7 @@ export function Dispatch() {
     }
 
     function openDispatchModal(item) {
+        if (readOnly) return;
         setSelectedItem(item);
         // Default to count mode if item has piece count, otherwise weight
         const hasCount = item.availableCount > 0;
@@ -268,6 +277,7 @@ export function Dispatch() {
     }
 
     function openBulkDispatchModal() {
+        if (readOnly) return;
         if (selectedItems.length === 0) {
             alert('Select at least one item to dispatch');
             return;
@@ -291,6 +301,7 @@ export function Dispatch() {
     }
 
     function handleScanSubmit(e) {
+        if (readOnly) return;
         e.preventDefault();
         const rawInput = scanInput.trim().toUpperCase();
         if (!rawInput) return;
@@ -359,6 +370,7 @@ export function Dispatch() {
     }
 
     async function handleCreateDispatch() {
+        if (readOnly) return;
         if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
             return;
@@ -434,6 +446,7 @@ export function Dispatch() {
     }
 
     async function handleCreateBulkDispatch() {
+        if (readOnly) return;
         if (!bulkForm.customerId) {
             alert('Please select a customer');
             return;
@@ -504,6 +517,7 @@ export function Dispatch() {
     }
 
     async function handleDeleteDispatch(challanNo) {
+        if (!canDelete) return;
         if (!confirm('Are you sure you want to cancel this challan? All items will be restored.')) return;
 
         try {
@@ -517,6 +531,7 @@ export function Dispatch() {
     }
 
     async function handleCreateCustomer() {
+        if (readOnly) return;
         if (!newCustomerForm.name.trim()) {
             alert('Customer name is required');
             return;
@@ -554,6 +569,7 @@ export function Dispatch() {
 
     // Handler for mobile dispatch view to create dispatch
     async function handleMobileDispatchCreate(dispatchData) {
+        if (readOnly) return null;
         const res = await api.createDispatch(dispatchData);
 
         const shouldPrint = confirm('Dispatch created successfully! Do you want to print the challan?');
@@ -573,6 +589,7 @@ export function Dispatch() {
     }
 
     async function handleMobileDispatchBulk(dispatchData) {
+        if (readOnly) return null;
         const res = await api.createDispatchBulk(dispatchData);
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
@@ -582,6 +599,7 @@ export function Dispatch() {
 
     // Handler for mobile dispatch view to add customer
     async function handleMobileAddCustomer(customerData) {
+        if (readOnly) return null;
         const res = await api.createCustomer(customerData);
         setCustomers(prev => [...prev, res.customer].sort((a, b) => a.name.localeCompare(b.name)));
         await refreshDb();
@@ -595,6 +613,15 @@ export function Dispatch() {
         return 'Pieces';
     };
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Dispatch</h1>
+                <AccessDenied message="You do not have access to dispatch. Contact an administrator to request access." />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 fade-in">
             {/* Header */}
@@ -605,6 +632,11 @@ export function Dispatch() {
                         Dispatch
                     </h1>
                     <p className="text-muted-foreground text-sm">Dispatch goods from any production stage</p>
+                    {readOnly && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Read-only access: dispatch creation is disabled. Deletions require delete permission.
+                        </p>
+                    )}
                 </div>
 
                 {/* Tab Toggle */}
@@ -710,8 +742,9 @@ export function Dispatch() {
                                         placeholder="Scan barcode..."
                                         value={scanInput}
                                         onChange={e => setScanInput(e.target.value)}
+                                        disabled={readOnly}
                                     />
-                                    <Button type="submit" variant="outline">Add</Button>
+                                    <Button type="submit" variant="outline" disabled={readOnly}>Add</Button>
                                 </form>
                                 {scanQueue.length > 0 && (
                                     <div className="flex flex-wrap gap-2">
@@ -759,7 +792,7 @@ export function Dispatch() {
                                             <Button
                                                 size="sm"
                                                 onClick={openBulkDispatchModal}
-                                                disabled={selectedIds.size === 0}
+                                                disabled={selectedIds.size === 0 || readOnly}
                                             >
                                                 Dispatch Selected
                                             </Button>
@@ -777,6 +810,7 @@ export function Dispatch() {
                                                         type="checkbox"
                                                         checked={filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.id))}
                                                         onChange={toggleSelectAllItems}
+                                                        disabled={readOnly}
                                                         className="h-4 w-4 rounded border-gray-300"
                                                     />
                                                 </TableHead>
@@ -812,6 +846,7 @@ export function Dispatch() {
                                                                 type="checkbox"
                                                                 checked={selectedIds.has(item.id)}
                                                                 onChange={() => toggleSelectItem(item.id)}
+                                                                disabled={readOnly}
                                                                 className="h-4 w-4 rounded border-gray-300"
                                                             />
                                                         </TableCell>
@@ -832,6 +867,7 @@ export function Dispatch() {
                                                             <Button
                                                                 size="sm"
                                                                 onClick={() => openDispatchModal(item)}
+                                                                disabled={readOnly}
                                                             >
                                                                 <ChevronRight className="w-4 h-4 mr-1" />
                                                                 Dispatch
@@ -872,6 +908,7 @@ export function Dispatch() {
                                                     size="sm"
                                                     className="mt-3 w-full"
                                                     onClick={() => openDispatchModal(item)}
+                                                    disabled={readOnly}
                                                 >
                                                     <ChevronRight className="w-4 h-4 mr-1" /> Dispatch
                                                 </Button>
@@ -1017,15 +1054,20 @@ export function Dispatch() {
                                                             >
                                                                 <Printer className="w-4 h-4" />
                                                             </Button>
-                                                            <Button
-                                                                size="sm"
-                                                                variant="ghost"
-                                                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                                                onClick={(e) => { e.stopPropagation(); handleDeleteDispatch(d.challanNo); }}
-                                                                title="Delete Challan"
+                                                            <DisabledWithTooltip
+                                                                disabled={!canDelete}
+                                                                tooltip="You do not have permission to delete dispatches."
                                                             >
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                                    onClick={(e) => { e.stopPropagation(); handleDeleteDispatch(d.challanNo); }}
+                                                                    title="Delete Challan"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </Button>
+                                                            </DisabledWithTooltip>
                                                         </TableCell>
                                                     </TableRow>
                                                     {isExpanded && (
@@ -1090,9 +1132,14 @@ export function Dispatch() {
                                                     <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
                                                         <Printer className="w-4 h-4" />
                                                     </Button>
-                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.challanNo)}>
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </Button>
+                                                    <DisabledWithTooltip
+                                                        disabled={!canDelete}
+                                                        tooltip="You do not have permission to delete dispatches."
+                                                    >
+                                                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.challanNo)}>
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </DisabledWithTooltip>
                                                 </div>
                                             </div>
                                             <Button
@@ -1155,6 +1202,7 @@ export function Dispatch() {
                                     size="icon"
                                     onClick={() => setNewCustomerModalOpen(true)}
                                     title="Add New Customer"
+                                    disabled={readOnly}
                                 >
                                     <Plus className="w-4 h-4" />
                                 </Button>
@@ -1253,7 +1301,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateDispatch}
-                                disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight}
+                                disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight || readOnly}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>
@@ -1284,6 +1332,7 @@ export function Dispatch() {
                                     size="icon"
                                     onClick={() => setNewCustomerModalOpen(true)}
                                     title="Add New Customer"
+                                    disabled={readOnly}
                                 >
                                     <Plus className="w-4 h-4" />
                                 </Button>
@@ -1380,7 +1429,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateBulkDispatch}
-                                disabled={submitting || !bulkForm.customerId}
+                                disabled={submitting || !bulkForm.customerId || readOnly}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>
@@ -1423,7 +1472,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateCustomer}
-                                disabled={savingCustomer || !newCustomerForm.name.trim()}
+                                disabled={savingCustomer || !newCustomerForm.name.trim() || readOnly}
                             >
                                 {savingCustomer ? 'Saving...' : 'Add Customer'}
                             </Button>

@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
+import { normalizePermissions } from '../utils/permissions';
 
 const AuthContext = createContext(null);
 
@@ -18,6 +19,14 @@ export function AuthProvider({ children }) {
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const [error, setError] = useState(null);
 
+  const hydrateUser = useCallback((nextUser) => {
+    if (!nextUser) return null;
+    return {
+      ...nextUser,
+      permissions: normalizePermissions(nextUser.permissions || {}),
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -30,7 +39,7 @@ export function AuthProvider({ children }) {
       if (nextHasUsers) {
         try {
           const me = await api.authMe();
-          setUser(me?.user || null);
+          setUser(hydrateUser(me?.user || null));
         } catch (err) {
           if (err?.status === 401) {
             setUser(null);
@@ -48,7 +57,7 @@ export function AuthProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hydrateUser]);
 
   useEffect(() => {
     refresh();
@@ -65,35 +74,35 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async ({ username, password }) => {
     const res = await api.authLogin(username, password);
-    const nextUser = res?.user || null;
+    const nextUser = hydrateUser(res?.user || null);
     setUser(nextUser);
     setHasUsers(true);
     setNeedsBootstrap(false);
     setError(null);
     try {
       const me = await api.authMe();
-      if (me?.user) setUser(me.user);
+      if (me?.user) setUser(hydrateUser(me.user));
     } catch (_) {
       // ignore; login response is good enough
     }
     return nextUser;
-  }, []);
+  }, [hydrateUser]);
 
   const bootstrap = useCallback(async ({ bootstrapToken, username, password, displayName }) => {
     const res = await api.authBootstrap({ bootstrapToken, username, password, displayName });
-    const nextUser = res?.user || null;
+    const nextUser = hydrateUser(res?.user || null);
     setUser(nextUser);
     setHasUsers(true);
     setNeedsBootstrap(false);
     setError(null);
     try {
       const me = await api.authMe();
-      if (me?.user) setUser(me.user);
+      if (me?.user) setUser(hydrateUser(me.user));
     } catch (_) {
       // ignore; bootstrap response is good enough
     }
     return nextUser;
-  }, []);
+  }, [hydrateUser]);
 
   const logout = useCallback(async () => {
     try {

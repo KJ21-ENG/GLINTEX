@@ -92,3 +92,10 @@ desktop.ini
 .gemini-clipboard/
 
 
+# AI Agents and Tools
+.agent/
+.agents/
+.claude/
+.gemini/
+.github/
+.opencode/

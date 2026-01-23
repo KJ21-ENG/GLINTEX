@@ -23,6 +23,9 @@ import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -46,7 +49,9 @@ const round3 = (val) => {
 };
 
 export function OpeningStock() {
-  const { db, refreshDb } = useInventory();
+  const { db, refreshDb, ensureModuleData } = useInventory();
+  const { canRead, canWrite, canDelete } = usePermission('opening_stock');
+  const isReadOnly = canRead && !canWrite;
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
   const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const [stage, setStage] = useState('inbound');
@@ -64,6 +69,12 @@ export function OpeningStock() {
   const fileInputRef = useRef(null);
   const holoCrateSeqRef = useRef(0);
   const coningCrateSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (canRead) {
+      ensureModuleData('opening_stock');
+    }
+  }, [canRead, ensureModuleData]);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -95,6 +106,7 @@ export function OpeningStock() {
   };
 
   const handleBulkUpload = async (e) => {
+    if (isReadOnly) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -451,6 +463,7 @@ export function OpeningStock() {
   const canSaveCommon = date && itemId && supplierId;
 
   const addInboundPiece = () => {
+    if (isReadOnly) return;
     const w = Number(inboundEntry.weight || 0);
     if (w <= 0) return;
     setInboundCart(prev => [
@@ -468,6 +481,7 @@ export function OpeningStock() {
   };
 
   const addCutterCrate = async () => {
+    if (isReadOnly) return;
     if (!cutterEntry.cutId) {
       alert('Cut is required.');
       return;
@@ -553,6 +567,7 @@ export function OpeningStock() {
   };
 
   const addHoloCrate = async () => {
+    if (isReadOnly) return;
     if (!holoEntry.rollTypeId) return;
     const rollType = getRollType(holoEntry.rollTypeId);
     if (!Number(rollType?.weight)) {
@@ -643,6 +658,7 @@ export function OpeningStock() {
   };
 
   const addConingCrate = async () => {
+    if (isReadOnly) return;
     if (!coningIssue.coneTypeId) {
       alert('Select cone type first.');
       return;
@@ -732,6 +748,7 @@ export function OpeningStock() {
   };
 
   const handleSaveInbound = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || inboundCart.length === 0) return;
     setSaving(true);
     try {
@@ -758,10 +775,12 @@ export function OpeningStock() {
   };
 
   const handleRemove = (setter, id) => {
+    if (isReadOnly) return;
     setter(prev => prev.filter(row => row.id !== id));
   };
 
   const handleDeleteOpeningInbound = async (pieceId) => {
+    if (!canDelete) return;
     if (!pieceId) return;
     const ok = window.confirm(`Remove opening piece ${pieceId}? This will only work if it is not used further.`);
     if (!ok) return;
@@ -778,6 +797,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningCutterRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening cutter receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -794,6 +814,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningHoloRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening holo receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -810,6 +831,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningConingRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening coning receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -826,6 +848,7 @@ export function OpeningStock() {
   };
 
   const handleSaveCutter = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || cutterCart.length === 0) return;
     if (cutterCart.some(row => !row.cutId)) {
       alert('Cut is required for every crate.');
@@ -862,6 +885,7 @@ export function OpeningStock() {
   };
 
   const handleSaveHolo = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || !holoIssue.twistId || holoCart.length === 0) return;
     setSaving(true);
     try {
@@ -902,6 +926,7 @@ export function OpeningStock() {
   };
 
   const handleSaveConing = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0) return;
     setSaving(true);
     try {
@@ -944,6 +969,7 @@ export function OpeningStock() {
   const currentStageName = STAGE_OPTIONS.find(s => s.id === stage)?.label || stage;
 
   const handleFileSelect = (e) => {
+    if (isReadOnly) return;
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
@@ -953,6 +979,7 @@ export function OpeningStock() {
   };
 
   const handleModalUpload = async () => {
+    if (isReadOnly) return;
     if (!selectedFile) return;
     // Create a synthetic event to match existing handleBulkUpload signature
     const syntheticEvent = { target: { files: [selectedFile], value: selectedFile.name } };
@@ -960,6 +987,15 @@ export function OpeningStock() {
     setSelectedFile(null);
     setShowBulkModal(false);
   };
+
+  if (!canRead) {
+    return (
+      <div className="space-y-6 fade-in">
+        <h1 className="text-2xl font-bold tracking-tight">Opening Stock</h1>
+        <AccessDenied message="You do not have access to Opening Stock. Contact an administrator." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 fade-in">
@@ -975,10 +1011,15 @@ export function OpeningStock() {
           <h1 className="text-2xl font-bold tracking-tight">Opening Stock</h1>
           <p className="text-sm text-muted-foreground">Create OP lots and print stickers to continue normal flow.</p>
         </div>
-        <Button variant="outline" onClick={() => setShowBulkModal(true)} className="gap-2">
+        <Button variant="outline" onClick={() => setShowBulkModal(true)} className="gap-2" disabled={isReadOnly}>
           <Upload className="w-4 h-4" /> Bulk Upload
         </Button>
       </div>
+      {isReadOnly && (
+        <div className="text-sm text-muted-foreground">
+          Read-only access: you can view opening entries but cannot add or upload records. Deletions require delete permission.
+        </div>
+      )}
 
       {/* Bulk Upload Modal */}
       {showBulkModal && (
@@ -1017,8 +1058,8 @@ export function OpeningStock() {
                   Upload your filled template to create entries in bulk.
                 </p>
                 <div
-                  className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${isReadOnly ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-primary/50'}`}
+                  onClick={() => { if (!isReadOnly) fileInputRef.current?.click(); }}
                 >
                   {selectedFile ? (
                     <div className="space-y-1">
@@ -1042,7 +1083,7 @@ export function OpeningStock() {
                 </div>
                 <Button
                   onClick={handleModalUpload}
-                  disabled={!selectedFile || saving}
+                  disabled={!selectedFile || saving || isReadOnly}
                   className="w-full gap-2"
                 >
                   {saving ? 'Uploading...' : <><Upload className="w-4 h-4" /> Upload</>}
@@ -1071,25 +1112,25 @@ export function OpeningStock() {
           </div>
           <div className="space-y-2">
             <Label>Date</Label>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={isReadOnly} />
           </div>
           <div className="space-y-2">
             <Label>Item</Label>
-            <Select value={itemId} onChange={e => setItemId(e.target.value)}>
+            <Select value={itemId} onChange={e => setItemId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Item</option>
               {db.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Firm (Optional)</Label>
-            <Select value={firmId} onChange={e => setFirmId(e.target.value)}>
+            <Select value={firmId} onChange={e => setFirmId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Firm</option>
               {db.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Supplier</Label>
-            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Supplier</option>
               {db.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
@@ -1107,6 +1148,7 @@ export function OpeningStock() {
             <CardTitle>Opening Inbound Stock</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <fieldset disabled={isReadOnly} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
               <div className="space-y-2">
                 <Label>Piece Weight (kg)</Label>
@@ -1223,6 +1265,7 @@ export function OpeningStock() {
                 <div>Total Weight: {formatKg(inboundTotals.totalWeight)} kg</div>
               </div>
             )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1233,6 +1276,7 @@ export function OpeningStock() {
             <CardTitle>Opening Cutter Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <fieldset disabled={isReadOnly} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="space-y-2">
                 <Label>Bobbin</Label>
@@ -1381,6 +1425,7 @@ export function OpeningStock() {
                 Total: {cutterTotals.totalBobbins} bobbins, {formatKg(cutterTotals.totalNet)} kg
               </div>
             )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1391,6 +1436,7 @@ export function OpeningStock() {
             <CardTitle>Opening Holo Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <fieldset disabled={isReadOnly} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="space-y-2">
                 <Label>Twist</Label>
@@ -1543,6 +1589,7 @@ export function OpeningStock() {
                 Total: {holoTotals.totalRolls} rolls, {formatKg(holoTotals.totalNet)} kg
               </div>
             )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1553,6 +1600,7 @@ export function OpeningStock() {
             <CardTitle>Opening Coning Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <fieldset disabled={isReadOnly} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4">
               <div className="space-y-2">
                 <Label>Cone Type</Label>
@@ -1710,6 +1758,7 @@ export function OpeningStock() {
                 Total: {coningTotals.totalCones} cones, {formatKg(coningTotals.totalNet)} kg
               </div>
             )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1806,14 +1855,18 @@ export function OpeningStock() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={deletingKey === `inbound:${row.id}`}
-                          onClick={() => handleDeleteOpeningInbound(row.id)}
+                        <DisabledWithTooltip
+                          disabled={!canDelete || deletingKey === `inbound:${row.id}`}
+                          tooltip="You do not have permission to delete opening stock records."
                         >
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteOpeningInbound(row.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </DisabledWithTooltip>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1858,14 +1911,18 @@ export function OpeningStock() {
                         <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
                         <TableCell>{formatKg(row.netWt)}</TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={deletingKey === `cutter:${row.id}`}
-                            onClick={() => handleDeleteOpeningCutterRow(row.id)}
+                          <DisabledWithTooltip
+                            disabled={!canDelete || deletingKey === `cutter:${row.id}`}
+                            tooltip="You do not have permission to delete opening stock records."
                           >
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteOpeningCutterRow(row.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </DisabledWithTooltip>
                         </TableCell>
                       </TableRow>
                     );
@@ -1912,14 +1969,18 @@ export function OpeningStock() {
                         <TableCell>{cutName || '—'}</TableCell>
                         <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={deletingKey === `holo:${row.id}`}
-                            onClick={() => handleDeleteOpeningHoloRow(row.id)}
+                          <DisabledWithTooltip
+                            disabled={!canDelete || deletingKey === `holo:${row.id}`}
+                            tooltip="You do not have permission to delete opening stock records."
                           >
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteOpeningHoloRow(row.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </DisabledWithTooltip>
                         </TableCell>
                       </TableRow>
                     );
@@ -1964,14 +2025,18 @@ export function OpeningStock() {
                         <TableCell>{cutName}</TableCell>
                         <TableCell>{formatKg(row.netWeight)}</TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={deletingKey === `coning:${row.id}`}
-                            onClick={() => handleDeleteOpeningConingRow(row.id)}
+                          <DisabledWithTooltip
+                            disabled={!canDelete || deletingKey === `coning:${row.id}`}
+                            tooltip="You do not have permission to delete opening stock records."
                           >
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteOpeningConingRow(row.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </DisabledWithTooltip>
                         </TableCell>
                       </TableRow>
                     );

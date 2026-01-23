@@ -16,29 +16,33 @@ import {
   Sun,
   Factory,
   ClipboardPlus,
-  Flame
+  Flame,
+  Lock
 } from "lucide-react";
 import { useInventory } from "../../context/InventoryContext";
 import { Button, Select } from "../ui";
 import { cn } from "../../lib/utils";
 import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
+import { useAuth } from "../../context/AuthContext";
+import { ACCESS_LEVELS, getPermissionLevel } from "../../utils/permissions";
 
 const NAV_ITEMS = [
-  { key: "inbound", label: "Inbound", icon: PackagePlus },
-  { key: "stock", label: "Stock", icon: Package },
-  { key: "issue", label: "Issue to Machine", icon: ArrowRightFromLine },
-  { key: "receive", label: "Receive from Machine", icon: ArrowLeftToLine },
-  { key: "dispatch", label: "Dispatch", icon: Truck },
-  { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus },
-  { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft },
-  { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo" },
-  { key: "masters", label: "Masters", icon: Database },
-  { key: "reports", label: "Reports", icon: BarChart3 },
-  { key: "settings", label: "Settings", icon: Settings },
+  { key: "inbound", label: "Inbound", icon: PackagePlus, permissions: ["inbound"] },
+  { key: "stock", label: "Stock", icon: Package, permissions: ["stock"] },
+  { key: "issue", label: "Issue to Machine", icon: ArrowRightFromLine, permissions: ["issue.cutter", "issue.holo", "issue.coning"] },
+  { key: "receive", label: "Receive from Machine", icon: ArrowLeftToLine, permissions: ["receive.cutter", "receive.holo", "receive.coning"] },
+  { key: "dispatch", label: "Dispatch", icon: Truck, permissions: ["dispatch"] },
+  { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus, permissions: ["opening_stock"] },
+  { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft, permissions: ["box_transfer"] },
+  { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo", permissions: ["boiler"] },
+  { key: "masters", label: "Masters", icon: Database, permissions: ["masters"] },
+  { key: "reports", label: "Reports", icon: BarChart3, permissions: ["reports"] },
+  { key: "settings", label: "Settings", icon: Settings, permissions: ["settings"] },
 ];
 
 export default function DashboardLayout() {
   const { brand, theme, setTheme, process, setProcess } = useInventory();
+  const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
 
@@ -83,6 +87,11 @@ export default function DashboardLayout() {
         {NAV_ITEMS
           .filter(item => !item.process || item.process === process)
           .map((item) => {
+            const isAdmin = !!user?.isAdmin;
+            const permissionList = Array.isArray(item.permissions) ? item.permissions : [];
+            const levels = permissionList.map(key => getPermissionLevel(user?.permissions || {}, key));
+            const maxLevel = isAdmin ? ACCESS_LEVELS.WRITE : (levels.length ? Math.max(...levels) : ACCESS_LEVELS.READ);
+            if (!isAdmin && maxLevel <= ACCESS_LEVELS.NONE) return null;
             const Icon = item.icon;
             return (
               <NavLink
@@ -97,7 +106,12 @@ export default function DashboardLayout() {
                 )}
               >
                 <Icon className="h-4 w-4" />
-                {item.label}
+                <span className="flex items-center gap-2">
+                  {item.label}
+                  {maxLevel === ACCESS_LEVELS.READ && (
+                    <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                  )}
+                </span>
               </NavLink>
             );
           })}

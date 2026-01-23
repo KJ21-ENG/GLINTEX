@@ -10,7 +10,7 @@ import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 
-export function IssueHistory({ db, refreshDb }) {
+export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false }) {
   const { process } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -56,6 +56,7 @@ export function IssueHistory({ db, refreshDb }) {
   };
 
   const handleDelete = async (issueId) => {
+    if (!canDelete) return;
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
       return;
     }
@@ -548,9 +549,9 @@ export function IssueHistory({ db, refreshDb }) {
         let bobbinType = '';
         let bobbinQty = 0;
         let cut = '';
-        let netWeight = 0;
         let totalRolls = row.metallicBobbins || 0;
         let totalWeight = row.metallicBobbinsWeight || 0;
+        let issuedWeight = 0;
 
         try {
           const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
@@ -558,6 +559,7 @@ export function IssueHistory({ db, refreshDb }) {
             // Sum up bobbins from all refs
             refs.forEach(ref => {
               bobbinQty += Number(ref.issuedBobbins || 0);
+              issuedWeight += Number(ref.issuedBobbinWeight || 0);
             });
 
             // Get cut - first check direct cutId (Opening Stock), then cutter source row
@@ -569,10 +571,12 @@ export function IssueHistory({ db, refreshDb }) {
             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-              netWeight += Number(cutterRow.netWt || 0);
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+
+        const resolvedBobbinQty = bobbinQty || row.metallicBobbins || 0;
+        const resolvedNetWeight = issuedWeight || totalWeight || 0;
 
         data = {
           lotNo: lotLabel,
@@ -582,10 +586,10 @@ export function IssueHistory({ db, refreshDb }) {
           yarnName,
           twistName,
           bobbinType,
-          bobbinQty,
+          bobbinQty: resolvedBobbinQty,
           totalRolls,
           totalWeight,
-          netWeight: netWeight || totalWeight,
+          netWeight: resolvedNetWeight,
           metallicBobbins: row.metallicBobbins,
           metallicBobbinsWeight: row.metallicBobbinsWeight,
           yarnKg: row.yarnKg,
@@ -631,6 +635,8 @@ export function IssueHistory({ db, refreshDb }) {
               totalWeight += Number(ref.issueWeight || 0);
             });
             netWeight = totalWeight;
+            grossWeight = totalWeight;
+            tareWeight = 0;
 
             const resolved = resolveConingTrace(row, traceContext);
             cut = resolved.cutName === '—' ? '' : resolved.cutName;
@@ -641,6 +647,8 @@ export function IssueHistory({ db, refreshDb }) {
             twist = twistName;
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+        if (!grossWeight && totalWeight) grossWeight = totalWeight;
+        if (!tareWeight) tareWeight = 0;
 
         data = {
           lotNo: lotLabel,
@@ -888,6 +896,8 @@ export function IssueHistory({ db, refreshDb }) {
         label: 'Edit',
         icon: <Edit2 className="w-4 h-4" />,
         onClick: () => openIssueEditor(row),
+        disabled: !canEdit,
+        disabledReason: 'You do not have permission to edit issue records.',
       },
       {
         label: 'Reprint',
@@ -910,7 +920,10 @@ export function IssueHistory({ db, refreshDb }) {
       icon: <Trash2 className="w-4 h-4" />,
       onClick: () => handleDelete(row.id),
       variant: 'destructive',
-      disabled: deletingId === row.id,
+      disabled: deletingId === row.id || !canDelete,
+      disabledReason: !canDelete
+        ? 'You do not have permission to delete issue records.'
+        : 'Deleting in progress.',
     });
 
     return actions;

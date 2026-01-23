@@ -22,6 +22,8 @@ import {
   ScaleTestPage
 } from "../pages";
 import LabelDesigner from "../pages/Settings/LabelDesigner";
+import PermissionGate from "../components/common/PermissionGate";
+import { ACCESS_LEVELS } from "../utils/permissions";
 
 export const router = createBrowserRouter([
   {
@@ -38,51 +40,99 @@ export const router = createBrowserRouter([
       },
       {
         path: "inbound",
-        element: <Inbound />,
+        element: (
+          <PermissionGate permission="inbound">
+            <Inbound />
+          </PermissionGate>
+        ),
       },
       {
         path: "stock",
-        element: <Stock />,
+        element: (
+          <PermissionGate permission="stock">
+            <Stock />
+          </PermissionGate>
+        ),
       },
       {
         path: "issue",
-        element: <IssueToMachine />,
+        element: (
+          <PermissionGate permissions={['issue.cutter', 'issue.holo', 'issue.coning']}>
+            <IssueToMachine />
+          </PermissionGate>
+        ),
       },
       {
         path: "receive",
-        element: <ReceiveFromMachine />,
+        element: (
+          <PermissionGate permissions={['receive.cutter', 'receive.holo', 'receive.coning']}>
+            <ReceiveFromMachine />
+          </PermissionGate>
+        ),
       },
       {
         path: "dispatch",
-        element: <Dispatch />,
+        element: (
+          <PermissionGate permission="dispatch">
+            <Dispatch />
+          </PermissionGate>
+        ),
       },
       {
         path: "opening-stock",
-        element: <OpeningStock />,
+        element: (
+          <PermissionGate permission="opening_stock">
+            <OpeningStock />
+          </PermissionGate>
+        ),
       },
       {
         path: "box-transfer",
-        element: <BoxTransfer />,
+        element: (
+          <PermissionGate permission="box_transfer">
+            <BoxTransfer />
+          </PermissionGate>
+        ),
       },
       {
         path: "boiler",
-        element: <Boiler />,
+        element: (
+          <PermissionGate permission="boiler">
+            <Boiler />
+          </PermissionGate>
+        ),
       },
       {
         path: "masters",
-        element: <Masters />,
+        element: (
+          <PermissionGate permission="masters">
+            <Masters />
+          </PermissionGate>
+        ),
       },
       {
         path: "reports",
-        element: <Reports />,
+        element: (
+          <PermissionGate permission="reports">
+            <Reports />
+          </PermissionGate>
+        ),
       },
       {
         path: "settings",
-        element: <Settings />,
+        element: (
+          <PermissionGate permission="settings">
+            <Settings />
+          </PermissionGate>
+        ),
       },
       {
         path: "settings/label-designer",
-        element: <LabelDesigner />,
+        element: (
+          <PermissionGate permission="settings.edit" minLevel={ACCESS_LEVELS.READ}>
+            <LabelDesigner />
+          </PermissionGate>
+        ),
       },
     ],
   },

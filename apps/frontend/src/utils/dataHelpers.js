@@ -129,6 +129,40 @@ export function calcAvailableCountFromWeight({
   return Math.max(0, Math.min(countBased, weightBased));
 }
 
+export function estimateWeightFromCount({
+  count,
+  availableCount,
+  availableWeight,
+  avgWeightPerPiece,
+  totalWeight,
+  totalCount,
+}) {
+  const pieces = Number(count || 0);
+  if (!Number.isFinite(pieces) || pieces <= 0) return '';
+
+  const availCount = Number(availableCount || 0);
+  const availWeight = Number(availableWeight || 0);
+  if (Number.isFinite(availCount) && Number.isFinite(availWeight) && pieces === availCount && availWeight > 0) {
+    return availWeight.toFixed(3);
+  }
+
+  let avgWeight = Number(avgWeightPerPiece || 0);
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) {
+    if (Number.isFinite(availCount) && availCount > 0 && Number.isFinite(availWeight) && availWeight > 0) {
+      avgWeight = availWeight / availCount;
+    }
+  }
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) {
+    const totalCnt = Number(totalCount || 0);
+    const totalWt = Number(totalWeight || 0);
+    if (Number.isFinite(totalCnt) && totalCnt > 0 && Number.isFinite(totalWt) && totalWt > 0) {
+      avgWeight = totalWt / totalCnt;
+    }
+  }
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) return '';
+  return (pieces * avgWeight).toFixed(3);
+}
+
 /**
  * Aggregate lots by name, cullah and supplier and sum numeric fields.
  * Keeps first-seen values for non-numeric fields.

@@ -7,7 +7,7 @@ import {
     Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge
 } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
+import { formatKg, todayISO, formatDateDDMMYYYY, estimateWeightFromCount } from '../utils';
 import { exportHistoryToExcel, exportHistoryToCsv } from '../services';
 import { Truck, Plus, Search, History, Package, X, ChevronRight, ChevronDown, Trash2, Printer, ScanLine, Download } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -1249,11 +1249,14 @@ export function Dispatch() {
                                         onChange={e => {
                                             const val = e.target.value;
                                             const intVal = parseInt(val) || 0;
-                                            const avgWeight = selectedItem.avgWeightPerPiece || 0;
-                                            const fullMatch = intVal === (selectedItem?.availableCount || 0) && selectedItem?.availableWeight;
-                                            const estimatedWeight = fullMatch
-                                                ? Number(selectedItem.availableWeight).toFixed(3)
-                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '');
+                                            const estimatedWeight = estimateWeightFromCount({
+                                                count: intVal,
+                                                availableCount: selectedItem?.availableCount,
+                                                availableWeight: selectedItem?.availableWeight,
+                                                avgWeightPerPiece: selectedItem?.avgWeightPerPiece,
+                                                totalWeight: selectedItem?.weight,
+                                                totalCount: selectedItem?.totalCount,
+                                            });
                                             setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
                                         }}
                                         max={selectedItem?.availableCount}
@@ -1385,11 +1388,14 @@ export function Dispatch() {
                                                         onChange={e => {
                                                             const nextCount = e.target.value;
                                                             const intVal = parseInt(nextCount) || 0;
-                                                            const avgWeight = item.avgWeightPerPiece || 0;
-                                                            const fullMatch = intVal === (item.availableCount || 0) && item.availableWeight;
-                                                            const nextWeight = fullMatch
-                                                                ? Number(item.availableWeight).toFixed(3)
-                                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : item.weight);
+                                                            const nextWeight = estimateWeightFromCount({
+                                                                count: intVal,
+                                                                availableCount: item.availableCount,
+                                                                availableWeight: item.availableWeight,
+                                                                avgWeightPerPiece: item.avgWeightPerPiece,
+                                                                totalWeight: item.totalWeight,
+                                                                totalCount: item.totalCount,
+                                                            }) || item.weight;
                                                             setBulkItems(prev => prev.map(i => (
                                                                 i.stageItemId === item.stageItemId
                                                                     ? { ...i, count: nextCount, weight: nextWeight }

@@ -3,6 +3,7 @@ import { boxTransferLookup, boxTransferExecute, boxTransferHistory, boxTransferR
 import { Button, Input, Card } from '../components/ui';
 import { ArrowRightLeft, Search, RotateCcw, Package, ArrowDown, Loader2, CheckCircle2, XCircle, History } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { estimateWeightFromCount } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
@@ -179,10 +180,14 @@ export function BoxTransfer() {
 
     const calculateWeight = () => {
         if (!fromItem || !pieceCount) return '0.000';
-        const count = parseInt(pieceCount, 10) || 0;
-        if (count <= 0 || fromItem.currentCount <= 0) return '0.000';
-        const weightPerPiece = fromItem.currentWeight / fromItem.currentCount;
-        return (count * weightPerPiece).toFixed(3);
+        const estimated = estimateWeightFromCount({
+            count: pieceCount,
+            availableCount: fromItem.currentCount,
+            availableWeight: fromItem.currentWeight,
+            totalWeight: fromItem.totalWeight,
+            totalCount: fromItem.totalCount,
+        });
+        return estimated || '0.000';
     };
 
     const getStageBadgeColor = (stage) => {

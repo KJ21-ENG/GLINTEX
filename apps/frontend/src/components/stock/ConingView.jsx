@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
@@ -60,7 +60,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
       const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
-      const availableCones = Math.max(0, coneCount - dispatchedCones);
+      const availableCones = calcAvailableCountFromWeight({
+        totalCount: coneCount,
+        issuedCount: 0,
+        dispatchedCount: dispatchedCones,
+        totalWeight: baseNetWeight,
+        availableWeight,
+      }) || 0;
       const grossWeight = Number(row.grossWeight ?? 0);
 
       // Trace Cut & Yarn from source holo crates used in coning issue

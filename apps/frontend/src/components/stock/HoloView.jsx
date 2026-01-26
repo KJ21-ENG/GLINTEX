@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
@@ -78,9 +78,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
       const dispatchedRolls = Number(row.dispatchedCount || 0);
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
-      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
+      const issuedToConingRolls = Number(row.issuedToConingRolls || 0);
+      const issuedToConingWeight = Number(row.issuedToConingWeight || 0);
+      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight - issuedToConingWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
-      const availableRolls = Math.max(0, Number(row.rollCount || 0) - dispatchedRolls);
+      const availableRolls = calcAvailableCountFromWeight({
+        totalCount: Number(row.rollCount || 0),
+        issuedCount: issuedToConingRolls,
+        dispatchedCount: dispatchedRolls,
+        totalWeight: baseNetWeight,
+        availableWeight,
+      }) || 0;
 
       return {
         ...row,
@@ -103,6 +111,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         rollWeight: Number(row.rollWeight || 0),
         netWeight: baseNetWeight,
         availableWeight,
+        issuedToConingRolls,
+        issuedToConingWeight,
         isSteamed: !!row.isSteamed,
         steamedAt: row.steamedAt || null,
       };

@@ -65,7 +65,9 @@ const buildRawFromDb = (db) => ({
 
 const getModuleKey = (module, options = {}) => {
   if (module === 'process') {
-    return `process:${options.process || 'cutter'}`;
+    const process = options.process || 'cutter';
+    const scope = options.full ? 'full' : 'default';
+    return `process:${process}:${scope}`;
   }
   return module;
 };
@@ -140,7 +142,7 @@ export const InventoryProvider = ({ children }) => {
         raw = await api.getModuleInbound();
       } else if (module === 'process') {
         const process = options.process || 'cutter';
-        raw = await api.getModuleProcess(process);
+        raw = await api.getModuleProcess(process, { full: options.full });
       } else if (module === 'opening_stock') {
         raw = await api.getModuleOpeningStock();
       } else {
@@ -160,8 +162,11 @@ export const InventoryProvider = ({ children }) => {
 
   const loadModuleDataByKey = useCallback(async (moduleKey, { force = false } = {}) => {
     if (moduleKey.startsWith('process:')) {
-      const process = moduleKey.split(':')[1] || 'cutter';
-      return await loadModuleData('process', { process }, { force });
+      const parts = moduleKey.split(':');
+      const process = parts[1] || 'cutter';
+      const scope = parts[2] || 'default';
+      const full = scope === 'full';
+      return await loadModuleData('process', { process, full }, { force });
     }
     return await loadModuleData(moduleKey, {}, { force });
   }, [loadModuleData]);

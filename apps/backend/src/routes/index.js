@@ -1423,7 +1423,8 @@ async function fetchInboundBasics() {
   return { lots, inbound_items };
 }
 
-async function fetchCutterReceiveData() {
+async function fetchCutterReceiveData(options = {}) {
+  const includeAll = Boolean(options.includeAll);
   const receive_from_cutter_machine_uploads = await prisma.receiveFromCutterMachineUpload.findMany({
     orderBy: { uploadedAt: 'desc' },
     take: RECEIVE_UPLOADS_FETCH_LIMIT,
@@ -1431,7 +1432,7 @@ async function fetchCutterReceiveData() {
   const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
-    take: RECEIVE_ROWS_FETCH_LIMIT,
+    ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
     include: {
       bobbin: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
@@ -1443,7 +1444,7 @@ async function fetchCutterReceiveData() {
   const receive_from_cutter_machine_challans = await prisma.receiveFromCutterMachineChallan.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
-    take: RECEIVE_ROWS_FETCH_LIMIT,
+    ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
   return {
@@ -1490,11 +1491,39 @@ function buildIssueToHoloMachine(issueRaw = [], cutterRowPieceMap, inbound_items
   return { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap };
 }
 
-async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap }) {
+async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
+  const uniqueIds = Array.from(new Set((holoRowIds || []).filter(Boolean)));
+  if (uniqueIds.length === 0) return new Map();
+  const rows = await client.$queryRaw`
+    SELECT
+      elem->>'rowId' AS row_id,
+      SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
+      SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
+    FROM "IssueToConingMachine" i,
+      jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem
+    WHERE i."isDeleted" = false
+      AND elem->>'rowId' = ANY (${uniqueIds}::text[])
+    GROUP BY row_id
+  `;
+  const map = new Map();
+  (rows || []).forEach((row) => {
+    const rowId = row.row_id || row.rowId;
+    if (!rowId) return;
+    const issuedRolls = Number(row.issue_rolls || row.issueRolls || 0);
+    const issuedWeight = Number(row.issue_weight || row.issueWeight || 0);
+    map.set(rowId, {
+      issuedRolls: Number.isFinite(issuedRolls) ? issuedRolls : 0,
+      issuedWeight: Number.isFinite(issuedWeight) ? issuedWeight : 0,
+    });
+  });
+  return map;
+}
+
+async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap, includeAll = false }) {
   const receive_from_holo_machine_rows_raw = await prisma.receiveFromHoloMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
-    take: RECEIVE_ROWS_FETCH_LIMIT,
+    ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
@@ -1533,6 +1562,8 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
   const steamedByBarcode = new Map(steamLogs.map(s => [s.barcode?.toUpperCase(), s]));
   const steamedByRowId = new Map(steamLogs.filter(s => s.holoReceiveRowId).map(s => [s.holoReceiveRowId, s]));
 
+  const holoIssuedToConingMap = await buildHoloIssuedToConingMap(prisma, receive_from_holo_machine_rows_raw.map(r => r.id));
+
   const receive_from_holo_machine_rows = receive_from_holo_machine_rows_raw.map(r => {
     const refs = Array.isArray(r.issue?.receivedRowRefs) ? r.issue.receivedRowRefs : [];
     const pieceIds = new Set();
@@ -1562,6 +1593,7 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
     const crateIndex = parseReceiveCrateIndex(r.barcode);
     const legacyBarcode = buildLegacyReceiveBarcode('RHO', r.issue?.lotNo, crateIndex);
     const steamLog = steamedByRowId.get(r.id) || steamedByBarcode.get(r.barcode?.toUpperCase());
+    const issuedToConing = holoIssuedToConingMap.get(r.id) || { issuedRolls: 0, issuedWeight: 0 };
 
     return {
       ...r,
@@ -1569,7 +1601,9 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
       computedPieceIds: Array.from(pieceIds),
       legacyBarcode,
       isSteamed: !!steamLog,
-      steamedAt: steamLog?.steamedAt || null
+      steamedAt: steamLog?.steamedAt || null,
+      issuedToConingRolls: issuedToConing.issuedRolls || 0,
+      issuedToConingWeight: issuedToConing.issuedWeight || 0,
     };
   });
 
@@ -1577,11 +1611,11 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
   return { receive_from_holo_machine_rows, receive_from_holo_machine_piece_totals, receive_from_holo_machine_rows_raw };
 }
 
-async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw }) {
+async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw, includeAll = false }) {
   const receive_from_coning_machine_rows_raw = await prisma.receiveFromConingMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
-    take: RECEIVE_ROWS_FETCH_LIMIT,
+    ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
@@ -1661,7 +1695,8 @@ async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw }) {
   return { receive_from_coning_machine_rows, receive_from_coning_machine_piece_totals };
 }
 
-async function buildProcessData(process) {
+async function buildProcessData(process, options = {}) {
+  const includeAll = Boolean(options.includeAll);
   const { lots, inbound_items } = await fetchInboundBasics();
   const issue_to_cutter_machine = process === 'cutter'
     ? await prisma.issueToCutterMachine.findMany({ where: { isDeleted: false } })
@@ -1673,7 +1708,7 @@ async function buildProcessData(process) {
     ? await prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
     : [];
 
-  const cutterData = await fetchCutterReceiveData();
+  const cutterData = await fetchCutterReceiveData({ includeAll });
   const cutterRowPieceMap = new Map(cutterData.receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
 
   if (process === 'cutter') {
@@ -1686,7 +1721,7 @@ async function buildProcessData(process) {
   }
 
   const { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap } = buildIssueToHoloMachine(issue_to_holo_machine_raw, cutterRowPieceMap, inbound_items);
-  const holoData = await fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap });
+  const holoData = await fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap, includeAll });
 
   if (process === 'holo') {
     return {
@@ -1699,7 +1734,7 @@ async function buildProcessData(process) {
     };
   }
 
-  const coningData = await fetchConingReceiveData({ receive_from_holo_machine_rows_raw: holoData.receive_from_holo_machine_rows_raw });
+  const coningData = await fetchConingReceiveData({ receive_from_holo_machine_rows_raw: holoData.receive_from_holo_machine_rows_raw, includeAll });
   return {
     lots,
     inbound_items,
@@ -1792,7 +1827,9 @@ router.get('/api/module/process/:process', async (req, res) => {
       || hasReadPermission(req, `receive.${process}`);
     if (!allowed) return res.status(403).json({ error: 'Insufficient permissions' });
 
-    const data = await buildProcessData(process);
+    const fullFlag = String(req.query?.full || '').toLowerCase();
+    const includeAll = fullFlag === '1' || fullFlag === 'true' || fullFlag === 'yes';
+    const data = await buildProcessData(process, { includeAll });
     res.json(data);
   } catch (err) {
     console.error('Failed to load process module data', err);
@@ -9740,9 +9777,13 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
           const dispatchedCount = row.dispatchedCount || 0;
           const issuedCount = row.issuedBobbins || 0;
           const availableWeight = Math.max(0, netWt - dispatched - issuedToHolo);
-          const availableCount = availableWeight > EPSILON
-            ? Math.max(0, totalCount - dispatchedCount - issuedCount)
-            : 0;
+          const availableCount = calcAvailableCountFromWeight({
+            totalCount,
+            issuedCount,
+            dispatchedCount,
+            totalWeight: netWt,
+            availableWeight,
+          }) || 0;
           const avgWeightPerPiece = availableCount > 0
             ? (availableWeight / availableCount)
             : 0;
@@ -9771,6 +9812,7 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
         include: { issue: true },
         orderBy: { createdAt: 'desc' },
       });
+      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, holoRows.map(row => row.id));
       const issueById = new Map();
       holoRows.forEach((row) => {
         if (row.issue?.id) issueById.set(row.issue.id, row.issue);
@@ -9830,10 +9872,15 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
           const netWeight = row.rollWeight ? row.rollWeight : (row.grossWeight || 0) - (row.tareWeight || 0);
           const totalCount = row.rollCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
-          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
-          const availableCount = availableWeight > EPSILON
-            ? Math.max(0, totalCount - dispatchedCount)
-            : 0;
+          const issuedToConing = issuedToConingMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
+          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0));
+          const availableCount = calcAvailableCountFromWeight({
+            totalCount,
+            issuedCount: issuedToConing.issuedRolls || 0,
+            dispatchedCount,
+            totalWeight: netWeight,
+            availableWeight,
+          }) || 0;
           const avgWeightPerPiece = availableCount > 0
             ? (availableWeight / availableCount)
             : 0;
@@ -9845,6 +9892,7 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
             lotLabel: row.issue?.id ? issueLotLabelMap.get(row.issue.id) : null,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
+            issuedToConingWeight: issuedToConing.issuedWeight || 0,
             availableWeight: availableWeight,
             stage: 'holo',
             rollCount: totalCount,
@@ -9871,9 +9919,13 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
           const totalCount = row.coneCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
           const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
-          const availableCount = availableWeight > EPSILON
-            ? Math.max(0, totalCount - dispatchedCount)
-            : 0;
+          const availableCount = calcAvailableCountFromWeight({
+            totalCount,
+            issuedCount: 0,
+            dispatchedCount,
+            totalWeight: netWeight,
+            availableWeight,
+          }) || 0;
           const avgWeightPerPiece = availableCount > 0
             ? (availableWeight / availableCount)
             : 0;
@@ -9994,33 +10046,55 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
         stageBarcode = sourceItem.barcode || sourceItem.vchNo;
         // Subtract both dispatchedWeight AND issuedBobbinWeight (weight already issued to Holo)
         const issuedToHolo = sourceItem.issuedBobbinWeight || 0;
-        availableWeight = (sourceItem.netWt || 0) - (sourceItem.dispatchedWeight || 0) - issuedToHolo;
+        const totalWeight = sourceItem.netWt || 0;
+        availableWeight = Math.max(0, (totalWeight || 0) - (sourceItem.dispatchedWeight || 0) - issuedToHolo);
 
         const totalCount = sourceItem.bobbinQuantity || 0;
         const dispatchedCount = sourceItem.dispatchedCount || 0;
         const issuedCount = sourceItem.issuedBobbins || 0;
-        availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
+        availableCount = calcAvailableCountFromWeight({
+          totalCount,
+          issuedCount,
+          dispatchedCount,
+          totalWeight,
+          availableWeight,
+        }) || 0;
         avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
       } else if (stage === 'holo') {
         sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
         if (!sourceItem || sourceItem.isDeleted) throw new Error('Holo receive row not found');
         stageBarcode = sourceItem.barcode || '';
         const netWeight = sourceItem.rollWeight ? sourceItem.rollWeight : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
-        availableWeight = netWeight - (sourceItem.dispatchedWeight || 0);
+        const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
+        const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
+        availableWeight = Math.max(0, netWeight - (sourceItem.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0));
 
         const totalCount = sourceItem.rollCount || 0;
         const dispatchedCount = sourceItem.dispatchedCount || 0;
-        availableCount = Math.max(0, totalCount - dispatchedCount);
+        availableCount = calcAvailableCountFromWeight({
+          totalCount,
+          issuedCount: issuedToConing.issuedRolls || 0,
+          dispatchedCount,
+          totalWeight: netWeight,
+          availableWeight,
+        }) || 0;
         avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
       } else if (stage === 'coning') {
         sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
         if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
         stageBarcode = sourceItem.barcode || '';
-        availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
+        const totalWeight = sourceItem.netWeight || 0;
+        availableWeight = Math.max(0, (totalWeight || 0) - (sourceItem.dispatchedWeight || 0));
 
         const totalCount = sourceItem.coneCount || 0;
         const dispatchedCount = sourceItem.dispatchedCount || 0;
-        availableCount = Math.max(0, totalCount - dispatchedCount);
+        availableCount = calcAvailableCountFromWeight({
+          totalCount,
+          issuedCount: 0,
+          dispatchedCount,
+          totalWeight,
+          availableWeight,
+        }) || 0;
         avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
       }
 
@@ -12022,10 +12096,16 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
         if (holoRow && !holoRow.isDeleted) {
           const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
           const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
-          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-          const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
-            ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
-            : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+          const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [holoRow.id]);
+          const issuedToConing = issuedToConingMap.get(holoRow.id) || { issuedRolls: 0, issuedWeight: 0 };
+          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - (issuedToConing.issuedWeight || 0));
+          const availableRolls = calcAvailableCountFromWeight({
+            totalCount: holoRow.rollCount,
+            issuedCount: issuedToConing.issuedRolls || 0,
+            dispatchedCount: holoRow.dispatchedCount || 0,
+            totalWeight: totalNetWeight,
+            availableWeight,
+          }) || 0;
           return res.json({
             found: true,
             stage: 'holo',
@@ -12056,9 +12136,13 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
           const totalNetWeight = Number(coningRow.netWeight || 0);
           const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
           const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-          const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
-            ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
-            : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+          const availableCones = calcAvailableCountFromWeight({
+            totalCount: coningRow.coneCount || 0,
+            issuedCount: 0,
+            dispatchedCount: coningRow.dispatchedCount || 0,
+            totalWeight: totalNetWeight,
+            availableWeight,
+          }) || 0;
           return res.json({
             found: true,
             stage: 'coning',
@@ -12097,11 +12181,16 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
     if (holoRow) {
       const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
       const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
-      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-      // Calculate available rolls proportionally based on weight
-      const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
-        ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
-        : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [holoRow.id]);
+      const issuedToConing = issuedToConingMap.get(holoRow.id) || { issuedRolls: 0, issuedWeight: 0 };
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - (issuedToConing.issuedWeight || 0));
+      const availableRolls = calcAvailableCountFromWeight({
+        totalCount: holoRow.rollCount,
+        issuedCount: issuedToConing.issuedRolls || 0,
+        dispatchedCount: holoRow.dispatchedCount || 0,
+        totalWeight: totalNetWeight,
+        availableWeight,
+      }) || 0;
       return res.json({
         found: true,
         stage: 'holo',
@@ -12133,10 +12222,13 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
       const totalNetWeight = Number(coningRow.netWeight || 0);
       const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-      // Calculate available cones proportionally based on weight
-      const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
-        ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
-        : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+      const availableCones = calcAvailableCountFromWeight({
+        totalCount: coningRow.coneCount || 0,
+        issuedCount: 0,
+        dispatchedCount: coningRow.dispatchedCount || 0,
+        totalWeight: totalNetWeight,
+        availableWeight,
+      }) || 0;
       return res.json({
         found: true,
         stage: 'coning',
@@ -12177,8 +12269,13 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
       const issuedWeight = Number(cutterRow.issuedBobbinWeight || 0);
       const dispatchedWeight = Number(cutterRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
-      // Available bobbins = total - issued (but only if there's available weight)
-      const availableBobbins = availableWeight > EPSILON ? Math.max(0, bobbinQty - issuedBobbins) : 0;
+      const availableBobbins = calcAvailableCountFromWeight({
+        totalCount: bobbinQty,
+        issuedCount: issuedBobbins,
+        dispatchedCount: cutterRow.dispatchedCount || 0,
+        totalWeight: netWeight,
+        availableWeight,
+      }) || 0;
       return res.json({
         found: true,
         stage: 'cutter',
@@ -12255,10 +12352,16 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         // Re-validate availability inside transaction to prevent race condition
         const srcTotalNetWeight = sourceRow.rollWeight ? sourceRow.rollWeight : ((sourceRow.grossWeight || 0) - (sourceRow.tareWeight || 0));
         const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
-        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
-        const srcAvailableRolls = srcAvailableWeight > EPSILON && srcTotalNetWeight > EPSILON
-          ? Math.round((srcAvailableWeight / srcTotalNetWeight) * sourceRow.rollCount)
-          : (srcAvailableWeight > EPSILON ? sourceRow.rollCount : 0);
+        const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceRow.id]);
+        const issuedToConing = issuedToConingMap.get(sourceRow.id) || { issuedRolls: 0, issuedWeight: 0 };
+        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight - (issuedToConing.issuedWeight || 0));
+        const srcAvailableRolls = calcAvailableCountFromWeight({
+          totalCount: sourceRow.rollCount || 0,
+          issuedCount: issuedToConing.issuedRolls || 0,
+          dispatchedCount: sourceRow.dispatchedCount || 0,
+          totalWeight: srcTotalNetWeight,
+          availableWeight: srcAvailableWeight,
+        }) || 0;
 
         if (pieceCount > srcAvailableRolls) {
           throw new Error(`Insufficient rolls available. Only ${srcAvailableRolls} available (may have been dispatched).`);
@@ -12286,6 +12389,35 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
           where: { id: lookupTo.itemId },
           data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
         });
+        const srcPieceId = sourceRow.pieceId || null;
+        const destPieceId = destRow.pieceId || null;
+        if (srcPieceId && destPieceId && srcPieceId !== destPieceId) {
+          const srcTotals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId: srcPieceId } });
+          if (!srcTotals) throw new Error('Receive totals not found for source piece');
+          await tx.receiveFromHoloMachinePieceTotal.update({
+            where: { pieceId: srcPieceId },
+            data: {
+              totalRolls: { decrement: pieceCount },
+              totalNetWeight: { decrement: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+          });
+          await tx.receiveFromHoloMachinePieceTotal.upsert({
+            where: { pieceId: destPieceId },
+            update: {
+              totalRolls: { increment: pieceCount },
+              totalNetWeight: { increment: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+            create: {
+              pieceId: destPieceId,
+              totalRolls: pieceCount,
+              totalNetWeight: weightTransferred,
+              wastageNetWeight: 0,
+              ...actorCreateFields(actor?.userId),
+            },
+          });
+        }
       } else if (stage === 'coning') {
         const sourceRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: lookupFrom.itemId } });
         if (!sourceRow || sourceRow.isDeleted) throw new Error('Source item not found');
@@ -12294,9 +12426,13 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         const srcTotalNetWeight = Number(sourceRow.netWeight || 0);
         const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
         const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
-        const srcAvailableCones = srcAvailableWeight > EPSILON && srcTotalNetWeight > EPSILON
-          ? Math.round((srcAvailableWeight / srcTotalNetWeight) * sourceRow.coneCount)
-          : (srcAvailableWeight > EPSILON ? sourceRow.coneCount : 0);
+        const srcAvailableCones = calcAvailableCountFromWeight({
+          totalCount: sourceRow.coneCount || 0,
+          issuedCount: 0,
+          dispatchedCount: sourceRow.dispatchedCount || 0,
+          totalWeight: srcTotalNetWeight,
+          availableWeight: srcAvailableWeight,
+        }) || 0;
 
         if (pieceCount > srcAvailableCones) {
           throw new Error(`Insufficient cones available. Only ${srcAvailableCones} available (may have been dispatched).`);
@@ -12331,7 +12467,13 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         const srcIssuedWeight = Number(sourceRow.issuedBobbinWeight || 0);
         const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
         const srcAvailableWeight = Math.max(0, srcNetWeight - srcIssuedWeight - srcDispatchedWeight);
-        const srcAvailableBobbins = srcAvailableWeight > EPSILON ? Math.max(0, srcBobbinQty - srcIssuedBobbins) : 0;
+        const srcAvailableBobbins = calcAvailableCountFromWeight({
+          totalCount: srcBobbinQty,
+          issuedCount: srcIssuedBobbins,
+          dispatchedCount: sourceRow.dispatchedCount || 0,
+          totalWeight: srcNetWeight,
+          availableWeight: srcAvailableWeight,
+        }) || 0;
 
         if (pieceCount > srcAvailableBobbins) {
           throw new Error(`Insufficient bobbins available. Only ${srcAvailableBobbins} available (may have been issued or dispatched).`);
@@ -12355,6 +12497,35 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
           where: { id: lookupTo.itemId },
           data: { bobbinQuantity: destNewBobbinQty, netWt: roundTo3Decimals(destNewNetWt), ...actorUpdateFields(actor?.userId) },
         });
+        const srcPieceId = sourceRow.pieceId || null;
+        const destPieceId = destRow.pieceId || null;
+        if (srcPieceId && destPieceId && srcPieceId !== destPieceId) {
+          const srcTotals = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: srcPieceId } });
+          if (!srcTotals) throw new Error('Receive totals not found for source piece');
+          await tx.receiveFromCutterMachinePieceTotal.update({
+            where: { pieceId: srcPieceId },
+            data: {
+              totalBob: { decrement: pieceCount },
+              totalNetWeight: { decrement: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+          });
+          await tx.receiveFromCutterMachinePieceTotal.upsert({
+            where: { pieceId: destPieceId },
+            update: {
+              totalBob: { increment: pieceCount },
+              totalNetWeight: { increment: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+            create: {
+              pieceId: destPieceId,
+              totalBob: pieceCount,
+              totalNetWeight: weightTransferred,
+              wastageNetWeight: 0,
+              ...actorCreateFields(actor?.userId),
+            },
+          });
+        }
       }
 
       // Create transfer record
@@ -12481,6 +12652,35 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
           where: { id: original.toItemId },
           data: { rollCount: destNewRollCount, rollWeight: destNewRollWeight, ...actorUpdateFields(actor?.userId) },
         });
+        const srcPieceId = sourceRow.pieceId || null;
+        const destPieceId = destRow.pieceId || null;
+        if (srcPieceId && destPieceId && srcPieceId !== destPieceId) {
+          const destTotals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId: destPieceId } });
+          if (!destTotals) throw new Error('Receive totals not found for destination piece');
+          await tx.receiveFromHoloMachinePieceTotal.update({
+            where: { pieceId: destPieceId },
+            data: {
+              totalRolls: { decrement: pieceCount },
+              totalNetWeight: { decrement: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+          });
+          await tx.receiveFromHoloMachinePieceTotal.upsert({
+            where: { pieceId: srcPieceId },
+            update: {
+              totalRolls: { increment: pieceCount },
+              totalNetWeight: { increment: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+            create: {
+              pieceId: srcPieceId,
+              totalRolls: pieceCount,
+              totalNetWeight: weightTransferred,
+              wastageNetWeight: 0,
+              ...actorCreateFields(actor?.userId),
+            },
+          });
+        }
       } else if (stage === 'coning') {
         const sourceRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: original.fromItemId } });
         const destRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id: original.toItemId } });
@@ -12538,6 +12738,35 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
             ...actorUpdateFields(actor?.userId)
           },
         });
+        const srcPieceId = sourceRow.pieceId || null;
+        const destPieceId = destRow.pieceId || null;
+        if (srcPieceId && destPieceId && srcPieceId !== destPieceId) {
+          const destTotals = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: destPieceId } });
+          if (!destTotals) throw new Error('Receive totals not found for destination piece');
+          await tx.receiveFromCutterMachinePieceTotal.update({
+            where: { pieceId: destPieceId },
+            data: {
+              totalBob: { decrement: pieceCount },
+              totalNetWeight: { decrement: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+          });
+          await tx.receiveFromCutterMachinePieceTotal.upsert({
+            where: { pieceId: srcPieceId },
+            update: {
+              totalBob: { increment: pieceCount },
+              totalNetWeight: { increment: weightTransferred },
+              ...actorUpdateFields(actor?.userId),
+            },
+            create: {
+              pieceId: srcPieceId,
+              totalBob: pieceCount,
+              totalNetWeight: weightTransferred,
+              wastageNetWeight: 0,
+              ...actorCreateFields(actor?.userId),
+            },
+          });
+        }
       }
 
       // Create reverse transfer record
@@ -12593,10 +12822,16 @@ async function lookupBarcodeForTransfer(barcode) {
       const holoRow = legacyResolved.row;
       const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
       const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
-      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-      const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
-        ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
-        : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [holoRow.id]);
+      const issuedToConing = issuedToConingMap.get(holoRow.id) || { issuedRolls: 0, issuedWeight: 0 };
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - (issuedToConing.issuedWeight || 0));
+      const availableRolls = calcAvailableCountFromWeight({
+        totalCount: holoRow.rollCount || 0,
+        issuedCount: issuedToConing.issuedRolls || 0,
+        dispatchedCount: holoRow.dispatchedCount || 0,
+        totalWeight: totalNetWeight,
+        availableWeight,
+      }) || 0;
       return { found: true, stage: 'holo', itemId: holoRow.id, currentCount: availableRolls, currentWeight: roundTo3Decimals(availableWeight) };
     }
     if (legacyResolved.stage === 'coning') {
@@ -12604,9 +12839,13 @@ async function lookupBarcodeForTransfer(barcode) {
       const totalNetWeight = Number(coningRow.netWeight || 0);
       const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-      const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
-        ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
-        : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+      const availableCones = calcAvailableCountFromWeight({
+        totalCount: coningRow.coneCount || 0,
+        issuedCount: 0,
+        dispatchedCount: coningRow.dispatchedCount || 0,
+        totalWeight: totalNetWeight,
+        availableWeight,
+      }) || 0;
       return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
     }
   }
@@ -12624,10 +12863,16 @@ async function lookupBarcodeForTransfer(barcode) {
   if (holoRow) {
     const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
     const dispatchedWeight = Number(holoRow.dispatchedWeight || 0);
-    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-    const availableRolls = availableWeight > EPSILON && totalNetWeight > EPSILON
-      ? Math.round((availableWeight / totalNetWeight) * holoRow.rollCount)
-      : (availableWeight > EPSILON ? holoRow.rollCount : 0);
+    const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [holoRow.id]);
+    const issuedToConing = issuedToConingMap.get(holoRow.id) || { issuedRolls: 0, issuedWeight: 0 };
+    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - (issuedToConing.issuedWeight || 0));
+    const availableRolls = calcAvailableCountFromWeight({
+      totalCount: holoRow.rollCount || 0,
+      issuedCount: issuedToConing.issuedRolls || 0,
+      dispatchedCount: holoRow.dispatchedCount || 0,
+      totalWeight: totalNetWeight,
+      availableWeight,
+    }) || 0;
     return { found: true, stage: 'holo', itemId: holoRow.id, currentCount: availableRolls, currentWeight: roundTo3Decimals(availableWeight) };
   }
 
@@ -12640,9 +12885,13 @@ async function lookupBarcodeForTransfer(barcode) {
     const totalNetWeight = Number(coningRow.netWeight || 0);
     const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
     const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-    const availableCones = availableWeight > EPSILON && totalNetWeight > EPSILON
-      ? Math.round((availableWeight / totalNetWeight) * coningRow.coneCount)
-      : (availableWeight > EPSILON ? coningRow.coneCount : 0);
+    const availableCones = calcAvailableCountFromWeight({
+      totalCount: coningRow.coneCount || 0,
+      issuedCount: 0,
+      dispatchedCount: coningRow.dispatchedCount || 0,
+      totalWeight: totalNetWeight,
+      availableWeight,
+    }) || 0;
     return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
   }
 
@@ -12657,7 +12906,13 @@ async function lookupBarcodeForTransfer(barcode) {
     const issuedWeight = Number(cutterRow.issuedBobbinWeight || 0);
     const dispatchedWeight = Number(cutterRow.dispatchedWeight || 0);
     const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
-    const availableBobbins = availableWeight > EPSILON ? Math.max(0, bobbinQty - issuedBobbins) : 0;
+    const availableBobbins = calcAvailableCountFromWeight({
+      totalCount: bobbinQty,
+      issuedCount: issuedBobbins,
+      dispatchedCount: cutterRow.dispatchedCount || 0,
+      totalWeight: netWeight,
+      availableWeight,
+    }) || 0;
     return { found: true, stage: 'cutter', itemId: cutterRow.id, currentCount: availableBobbins, currentWeight: roundTo3Decimals(availableWeight) };
   }
 

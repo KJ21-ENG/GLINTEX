@@ -22,6 +22,14 @@ import { usePermission, useStagePermission } from '../hooks/usePermission';
 
 const EPSILON = 1e-9;
 
+const isPieceAvailableForIssue = (piece) => (
+  piece?.status === 'available'
+  && Number(piece.pendingWeight || 0) > EPSILON
+  && Number(piece.dispatchedWeight || 0) <= EPSILON
+);
+
+const countAvailablePieces = (pieces = []) => pieces.filter(isPieceAvailableForIssue).length;
+
 function lotStatus(lot) {
   const pending = Number(lot.pendingWeight || 0);
   const initial = Number(lot.totalWeight || 0);
@@ -55,7 +63,7 @@ export function Stock() {
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
 
   useEffect(() => {
-    ensureModuleData('process', { process: processId });
+    ensureModuleData('process', { process: processId, full: true });
   }, [ensureModuleData, processId]);
 
   // --- UI State ---
@@ -196,7 +204,8 @@ export function Stock() {
         m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
         m[piece.lotNo].wastageCount = (m[piece.lotNo].wastageCount || 0) + 1;
       }
-      if (piece.status === 'available' && pendingForPiece > EPSILON) {
+      const availableForIssue = isPieceAvailableForIssue(pieceEntry);
+      if (availableForIssue) {
         m[piece.lotNo].availableCount = (m[piece.lotNo].availableCount || 0) + 1;
       }
       m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
@@ -298,7 +307,7 @@ export function Stock() {
       };
       existing.totalWeight += Number(lot.totalWeight || 0);
       existing.pendingWeight += Number(lot.pendingWeight || 0);
-      const available = lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length;
+      const available = lot.availableCount ?? countAvailablePieces(lot.pieces || []);
       existing.availableCount += available;
       existing.totalPieces += lot.totalPieces ?? (lot.pieces || []).length;
       existing.statusType = existing.pendingWeight > EPSILON ? 'active' : 'inactive';
@@ -311,7 +320,7 @@ export function Stock() {
   // Grand Totals for Jumbo Rolls view
   const grandTotals = useMemo(() => {
     return displayedLots.reduce((acc, lot) => ({
-      availableCount: acc.availableCount + (lot.availableCount ?? (lot.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length),
+      availableCount: acc.availableCount + (lot.availableCount ?? countAvailablePieces(lot.pieces || [])),
       totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
       totalWeight: acc.totalWeight + Number(lot.totalWeight || 0),
       pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
@@ -446,7 +455,7 @@ export function Stock() {
 
   function toggleAllPieces(lotNo) {
     const availablePieces = (lotsMap[lotNo]?.pieces || [])
-      .filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON)
+      .filter(isPieceAvailableForIssue)
       .map(p => p.id);
     const currentSelected = selectedByLot[lotNo] || [];
     const allSelected = availablePieces.length > 0 && availablePieces.every(id => currentSelected.includes(id));
@@ -738,7 +747,7 @@ export function Stock() {
                             <HighlightMatch text={l.supplierName} query={search} />
                           </TableCell>
                           <TableCell className="">
-                            {`${l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length} / ${l.totalPieces ?? (l.pieces || []).length}`}
+                            {`${l.availableCount ?? countAvailablePieces(l.pieces || [])} / ${l.totalPieces ?? (l.pieces || []).length}`}
                           </TableCell>
                           <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                           {filters.status !== 'available_to_issue' && (
@@ -783,7 +792,7 @@ export function Stock() {
                                     <TableRow className="bg-muted/50">
                                       <TableHead className="w-[30px]">
                                         {(() => {
-                                          const availablePieces = (l.pieces || []).filter(p => p.status === 'available');
+                                          const availablePieces = (l.pieces || []).filter(isPieceAvailableForIssue);
                                           const currentSelected = selectedByLot[l.lotNo] || [];
                                           const allSelected = availablePieces.length > 0 && availablePieces.every(p => currentSelected.includes(p.id));
                                           const someSelected = currentSelected.length > 0 && !allSelected;
@@ -824,7 +833,7 @@ export function Stock() {
                                         hidePending={filters.status === 'available_to_issue'}
                                         canEdit={canInboundEdit}
                                         canDelete={canInboundDelete}
-                                        selectDisabled={!canIssueWrite}
+                                        selectDisabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
                                       />
                                     ))}
                                   </TableBody>
@@ -864,7 +873,7 @@ export function Stock() {
             ) : (
               displayedLots.map((l, idx) => {
                 const isExpanded = !groupByItem && expandedLot === l.lotNo;
-                const available = l.availableCount ?? (l.pieces || []).filter(p => p.status === 'available' && Number(p.pendingWeight || 0) > EPSILON).length;
+                const available = l.availableCount ?? countAvailablePieces(l.pieces || []);
                 const total = l.totalPieces ?? (l.pieces || []).length;
                 const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
 
@@ -937,7 +946,7 @@ export function Stock() {
                                     checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                     onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
                                     className="h-4 w-4 rounded border-gray-300 text-primary"
-                                    disabled={!canIssueWrite || p.status !== 'available' || Number(p.pendingWeight || 0) <= EPSILON}
+                                    disabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
                                   />
                                 </div>
                               </div>

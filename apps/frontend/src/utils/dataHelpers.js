@@ -106,6 +106,29 @@ export function groupBy(arr, keyFn) {
   return m;
 }
 
+// Mirror backend availability logic so weight-only dispatches reduce counts accurately.
+export function calcAvailableCountFromWeight({
+  totalCount,
+  issuedCount,
+  dispatchedCount,
+  totalWeight,
+  availableWeight,
+}) {
+  const total = Number(totalCount || 0);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const issued = Number(issuedCount || 0);
+  const dispatched = Number(dispatchedCount || 0);
+  const countBased = Math.max(0, total - issued - dispatched);
+  const totalWt = Number(totalWeight || 0);
+  if (!Number.isFinite(totalWt) || totalWt <= 0) return countBased;
+  const availWt = Number(availableWeight || 0);
+  if (!Number.isFinite(availWt) || availWt <= 0) return 0;
+  const ratio = availWt / totalWt;
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  const weightBased = Math.floor((ratio * total) + 1e-6);
+  return Math.max(0, Math.min(countBased, weightBased));
+}
+
 /**
  * Aggregate lots by name, cullah and supplier and sum numeric fields.
  * Keeps first-seen values for non-numeric fields.

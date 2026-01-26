@@ -52,7 +52,12 @@ export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getBootstrap() { return await request('/api/bootstrap'); }
 export async function getModuleInbound() { return await request('/api/module/inbound'); }
-export async function getModuleProcess(process) { return await request(`/api/module/process/${process}`); }
+export async function getModuleProcess(process, options = {}) {
+  const params = new URLSearchParams();
+  if (options.full) params.set('full', 'true');
+  const qs = params.toString();
+  return await request(`/api/module/process/${process}${qs ? `?${qs}` : ''}`);
+}
 export async function getModuleOpeningStock() { return await request('/api/module/opening_stock'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }

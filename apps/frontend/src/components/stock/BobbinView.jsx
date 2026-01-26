@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
@@ -64,8 +64,14 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           ? (netWeight - issuedWeight - dispatchedWeight)
           : 0;
         const availableWeight = availableWeightRaw > EPSILON ? Math.max(0, availableWeightRaw) : 0;
-        const availableBobbinsRaw = Math.max(0, bobbinQty - issuedBobbins - dispatchedBobbins);
-        const availableBobbins = availableWeight > EPSILON ? availableBobbinsRaw : 0;
+        const availableBobbinsCalc = calcAvailableCountFromWeight({
+          totalCount: bobbinQty,
+          issuedCount: issuedBobbins,
+          dispatchedCount: dispatchedBobbins,
+          totalWeight: netWeight,
+          availableWeight,
+        });
+        const availableBobbins = availableBobbinsCalc == null ? 0 : availableBobbinsCalc;
 
         const cutName = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
 

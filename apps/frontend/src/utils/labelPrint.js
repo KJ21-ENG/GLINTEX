@@ -413,6 +413,7 @@ export const parseReceiveCrateIndex = (barcode) => {
 export const buildTspl = (dimensions, content, data = {}, options = {}) => {
   const stageKey = options.stageKey || '';
   const copiesOverride = options.copies || null;
+  const splitCopies = options.splitCopies !== false;
   const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
   const baseDensity = clampInt(dims.density ?? 8, 0, 15);
   const {
@@ -738,7 +739,17 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
     });
   }
 
-  const finalCopies = copiesOverride || mergedContent.copies || 1;
+  const normalizeCopies = (val) => {
+    const num = Number(val);
+    if (!Number.isFinite(num) || num <= 0) return 1;
+    return Math.max(1, Math.round(num));
+  };
+  const finalCopies = normalizeCopies(copiesOverride || mergedContent.copies || 1);
+  if (splitCopies && finalCopies > 1) {
+    lines.push('PRINT 1');
+    const single = `${lines.join('\r\n')}\r\n`;
+    return single.repeat(finalCopies);
+  }
   lines.push(`PRINT ${finalCopies}`);
   return `${lines.join('\r\n')}\r\n`;
 };

@@ -6,6 +6,7 @@ import { formatKg } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 // Process type options for dropdowns
 const PROCESS_OPTIONS = [
@@ -178,18 +179,22 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Name</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
                                         {editingId === item.id ? (
                                             <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} />
                                         ) : item.name}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -306,12 +311,13 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead className="">Weight (kg)</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -319,6 +325,9 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="h-8 w-24 ml-auto" disabled={!allowEdit} /> : formatKg(item.weight)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -446,12 +455,13 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Process</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -472,6 +482,9 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
                                             </span>
                                         )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -610,12 +623,13 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
                                 <TableHead>Name</TableHead>
                                 <TableHead>Role</TableHead>
                                 <TableHead>Process</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -648,6 +662,9 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
                                             </span>
                                         )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -783,12 +800,13 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                                 <TableHead>Name</TableHead>
                                 <TableHead>Weight (kg)</TableHead>
                                 <TableHead>Process</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -812,6 +830,9 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                                                 {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
                                             </span>
                                         )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -945,12 +966,13 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Firm Details</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -976,6 +998,9 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                                                 <div className="text-xs font-mono mt-0.5">{item.mobile || 'No contact added'}</div>
                                             </div>
                                         )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (
@@ -1116,12 +1141,13 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canC
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Customer Details</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -1147,6 +1173,9 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canC
                                                 <div className="text-xs font-mono mt-0.5">{item.phone || 'No phone added'}</div>
                                             </div>
                                         )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
                                     <TableCell className="">
                                         {editingId === item.id ? (

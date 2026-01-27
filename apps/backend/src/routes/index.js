@@ -1825,6 +1825,14 @@ router.get('/api/bootstrap', async (req, res) => {
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
     slices.settings = allowed.settings ? await prisma.settings.findMany() : [];
 
+    // Resolve user fields for master data (for User columns in Masters page)
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'cone_types', 'wrappers'];
+    for (const key of masterSliceKeys) {
+      if (slices[key] && slices[key].length > 0) {
+        slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
+      }
+    }
+
     res.json({ brand, allowed, slices });
   } catch (err) {
     console.error('Failed to load bootstrap', err);

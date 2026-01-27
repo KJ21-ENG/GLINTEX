@@ -17,6 +17,7 @@ import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBa
 import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
 import { generateSummaryPDF } from '../utils/pdf/index.js';
+import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 
 const router = Router();
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
@@ -1416,9 +1417,14 @@ function buildBrandPayload(settingsRow) {
 }
 
 async function fetchInboundBasics() {
-  const [lots, inbound_items] = await Promise.all([
+  const [lotsRaw, inbound_itemsRaw] = await Promise.all([
     prisma.lot.findMany(),
     prisma.inboundItem.findMany(),
+  ]);
+  // Resolve user fields for display
+  const [lots, inbound_items] = await Promise.all([
+    resolveUserFields(lotsRaw),
+    resolveUserFields(inbound_itemsRaw),
   ]);
   return { lots, inbound_items };
 }
@@ -1429,7 +1435,7 @@ async function fetchCutterReceiveData(options = {}) {
     orderBy: { uploadedAt: 'desc' },
     take: RECEIVE_UPLOADS_FETCH_LIMIT,
   });
-  const receive_from_cutter_machine_rows = await prisma.receiveFromCutterMachineRow.findMany({
+  const receive_from_cutter_machine_rows_raw = await prisma.receiveFromCutterMachineRow.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
     ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
@@ -1441,12 +1447,19 @@ async function fetchCutterReceiveData(options = {}) {
       cutMaster: { select: { id: true, name: true } },
     },
   });
-  const receive_from_cutter_machine_challans = await prisma.receiveFromCutterMachineChallan.findMany({
+  const receive_from_cutter_machine_challans_raw = await prisma.receiveFromCutterMachineChallan.findMany({
     where: { isDeleted: false },
     orderBy: { createdAt: 'desc' },
     ...(includeAll ? {} : { take: RECEIVE_ROWS_FETCH_LIMIT }),
   });
   const receive_from_cutter_machine_piece_totals = await prisma.receiveFromCutterMachinePieceTotal.findMany();
+
+  // Resolve user fields for display
+  const [receive_from_cutter_machine_rows, receive_from_cutter_machine_challans] = await Promise.all([
+    resolveUserFields(receive_from_cutter_machine_rows_raw),
+    resolveUserFields(receive_from_cutter_machine_challans_raw),
+  ]);
+
   return {
     receive_from_cutter_machine_uploads,
     receive_from_cutter_machine_rows,
@@ -1698,13 +1711,13 @@ async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw, incl
 async function buildProcessData(process, options = {}) {
   const includeAll = Boolean(options.includeAll);
   const { lots, inbound_items } = await fetchInboundBasics();
-  const issue_to_cutter_machine = process === 'cutter'
+  const issue_to_cutter_machine_raw = process === 'cutter'
     ? await prisma.issueToCutterMachine.findMany({ where: { isDeleted: false } })
     : [];
   const issue_to_holo_machine_raw = (process === 'holo' || process === 'coning')
     ? await prisma.issueToHoloMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
     : [];
-  const issue_to_coning_machine = process === 'coning'
+  const issue_to_coning_machine_raw = process === 'coning'
     ? await prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
     : [];
 
@@ -1712,6 +1725,8 @@ async function buildProcessData(process, options = {}) {
   const cutterRowPieceMap = new Map(cutterData.receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
 
   if (process === 'cutter') {
+    // Resolve user fields on cutter issues
+    const issue_to_cutter_machine = await resolveUserFields(issue_to_cutter_machine_raw);
     return {
       lots,
       inbound_items,
@@ -1720,29 +1735,40 @@ async function buildProcessData(process, options = {}) {
     };
   }
 
-  const { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap } = buildIssueToHoloMachine(issue_to_holo_machine_raw, cutterRowPieceMap, inbound_items);
+  // Resolve user fields on holo issues
+  const issue_to_holo_machine_resolved = await resolveUserFields(issue_to_holo_machine_raw);
+  const { issue_to_holo_machine, issueLotLabelMap, issueLotNosMap } = buildIssueToHoloMachine(issue_to_holo_machine_resolved, cutterRowPieceMap, inbound_items);
   const holoData = await fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap, includeAll });
+
+  // Resolve user fields on holo receive rows
+  const receive_from_holo_machine_rows = await resolveUserFields(holoData.receive_from_holo_machine_rows);
 
   if (process === 'holo') {
     return {
       lots,
       inbound_items,
       issue_to_holo_machine,
-      receive_from_holo_machine_rows: holoData.receive_from_holo_machine_rows,
+      receive_from_holo_machine_rows,
       receive_from_holo_machine_piece_totals: holoData.receive_from_holo_machine_piece_totals,
       receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
     };
   }
 
+  // Resolve user fields on coning issues
+  const issue_to_coning_machine = await resolveUserFields(issue_to_coning_machine_raw);
   const coningData = await fetchConingReceiveData({ receive_from_holo_machine_rows_raw: holoData.receive_from_holo_machine_rows_raw, includeAll });
+
+  // Resolve user fields on coning receive rows
+  const receive_from_coning_machine_rows = await resolveUserFields(coningData.receive_from_coning_machine_rows);
+
   return {
     lots,
     inbound_items,
     issue_to_holo_machine,
     issue_to_coning_machine,
     receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
-    receive_from_holo_machine_rows: holoData.receive_from_holo_machine_rows,
-    receive_from_coning_machine_rows: coningData.receive_from_coning_machine_rows,
+    receive_from_holo_machine_rows,
+    receive_from_coning_machine_rows,
     receive_from_coning_machine_piece_totals: coningData.receive_from_coning_machine_piece_totals,
   };
 }
@@ -9972,11 +9998,14 @@ router.get('/api/dispatch', requirePermission('dispatch', PERM_READ), async (req
       if (to) where.date.lte = to;
     }
 
-    const dispatches = await prisma.dispatch.findMany({
+    const dispatchesRaw = await prisma.dispatch.findMany({
       where,
       include: { customer: true },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Resolve user fields for display
+    const dispatches = await resolveUserFields(dispatchesRaw);
 
     res.json({ dispatches });
   } catch (err) {
@@ -12593,11 +12622,14 @@ router.get('/api/box-transfer/history', requirePermission('box_transfer', PERM_R
       ];
     }
 
-    const transfers = await prisma.boxTransfer.findMany({
+    const transfersRaw = await prisma.boxTransfer.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: 500,
     });
+
+    // Resolve user fields for display
+    const transfers = await resolveUserFields(transfersRaw);
 
     res.json({ transfers });
   } catch (err) {
@@ -13805,10 +13837,15 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
         boxName: holoRow?.box?.name || null,
         rollTypeName: holoRow?.rollType?.name || null,
         machineName: holoRow?.issue?.machine?.name || holoRow?.machineNo || null,
+        createdByUserId: log.createdByUserId || null,
+        createdAt: log.createdAt || null,
       };
     });
 
-    res.json({ items, count: items.length });
+    // Resolve user fields for display
+    const itemsWithUsers = await resolveUserFields(items);
+
+    res.json({ items: itemsWithUsers, count: itemsWithUsers.length });
   } catch (err) {
     console.error('Failed to list steamed items', err);
     res.status(500).json({ error: err.message || 'Failed to list steamed items' });

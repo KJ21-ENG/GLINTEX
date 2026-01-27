@@ -7,6 +7,7 @@ import { estimateWeightFromCount } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 export function BoxTransfer() {
     const { canRead, canWrite, canDelete } = usePermission('box_transfer');
@@ -509,6 +510,7 @@ export function BoxTransfer() {
                                     <th className="text-right py-2 px-2 font-medium">Pieces</th>
                                     <th className="text-right py-2 px-2 font-medium">Weight</th>
                                     <th className="text-left py-2 px-2 font-medium">Status</th>
+                                    <th className="text-left py-2 px-2 font-medium">Added By</th>
                                     <th className="text-center py-2 px-2 font-medium">Actions</th>
                                 </tr>
                             </thead>
@@ -533,6 +535,9 @@ export function BoxTransfer() {
                                             ) : (
                                                 <span className="text-xs text-green-600 dark:text-green-400">Active</span>
                                             )}
+                                        </td>
+                                        <td className="py-2 px-2">
+                                            <UserBadge user={transfer.createdByUser} timestamp={transfer.createdAt} />
                                         </td>
                                         <td className="py-2 px-2 text-center">
                                             {!transfer.isReversed && !transfer.reversedById && (

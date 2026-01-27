@@ -10,6 +10,7 @@ import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { UserBadge } from '../common/UserBadge';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const { db, process, refreshDb } = useInventory();
@@ -1781,6 +1782,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead className="text-right">Net Wt (kg)</TableHead>
                                                 <TableHead className="text-right">Bobbin Qty</TableHead>
                                                 <TableHead>Bobbin</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1799,6 +1801,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead>Operator</TableHead>
                                                 <TableHead>Helper</TableHead>
                                                 <TableHead>Notes</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1820,6 +1823,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead>Machine</TableHead>
                                                 <TableHead>Operator</TableHead>
                                                 <TableHead>Notes</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1868,6 +1872,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         </TableCell>
                                                         <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
                                                         <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );
@@ -1893,6 +1900,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         <TableCell>{r.operator?.name || '—'}</TableCell>
                                                         <TableCell>{r.helper?.name || '—'}</TableCell>
                                                         <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );
@@ -1924,6 +1934,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         <TableCell>{getConingMachineName(r)}</TableCell>
                                                         <TableCell>{r.operator?.name || '—'}</TableCell>
                                                         <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );

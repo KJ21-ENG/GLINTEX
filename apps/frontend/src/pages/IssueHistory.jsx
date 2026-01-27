@@ -9,6 +9,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
+import { UserBadge } from '../components/common/UserBadge';
 
 export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false }) {
   const { process } = useInventory();
@@ -1037,7 +1038,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
 
-  const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 15 : 14;
+  const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 16 : 15;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1156,6 +1157,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
                   <TableHead>Weight (kg)</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1175,6 +1177,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
                   <TableHead>Rolls Prod. Est.</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1193,6 +1196,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
                   <TableHead>Rolls Issued</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1206,62 +1210,71 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
                 const resolved = resolveIssueTraceNames(r);
                 return (
                   <TableRow key={r.id}>
-                  {process === 'cutter' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
-                      <TableCell>{resolved.cutName || '—'}</TableCell>
-                      <TableCell>{resolved.yarnName || '—'}</TableCell>
-                      <TableCell>{resolved.twistName || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{r.count}</TableCell>
-                      <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  {process === 'holo' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                      <TableCell>{resolved.cutName || '—'}</TableCell>
-                      <TableCell>{resolved.yarnName || '—'}</TableCell>
-                      <TableCell>{resolved.twistName || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{r.metallicBobbins || 0}</TableCell>
-                      <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
-                      <TableCell>{formatKg(r.yarnKg)}</TableCell>
-                      <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  {process === 'coning' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                      <TableCell>{resolved.cutName || '—'}</TableCell>
-                      <TableCell>{resolved.yarnName || '—'}</TableCell>
-                      <TableCell>{resolved.twistName || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
-                      <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
-                      <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  <TableCell>
-                    <ActionMenu actions={getActions(r)} />
-                  </TableCell>
-                </TableRow>
-              );
+                    {process === 'cutter' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{r.count}</TableCell>
+                        <TableCell>{formatKg(r.totalWeight)}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    {process === 'holo' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{r.metallicBobbins || 0}</TableCell>
+                        <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
+                        <TableCell>{formatKg(r.yarnKg)}</TableCell>
+                        <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    {process === 'coning' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
+                        <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
+                        <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    <TableCell>
+                      <ActionMenu actions={getActions(r)} />
+                    </TableCell>
+                  </TableRow>
+                );
               })
             )}
           </TableBody>

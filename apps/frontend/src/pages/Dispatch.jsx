@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
@@ -17,6 +16,7 @@ import { MobileDispatchView } from '../components/dispatch/MobileDispatchView';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -1006,19 +1006,20 @@ export function Dispatch() {
                                         <TableHead>Stage</TableHead>
                                         <TableHead>Items</TableHead>
                                         <TableHead className="text-right">Total Weight</TableHead>
+                                        <TableHead>Added By</TableHead>
                                         <TableHead className="w-[120px] text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {loadingDispatches ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center">
+                                            <TableCell colSpan={9} className="h-24 text-center">
                                                 Loading...
                                             </TableCell>
                                         </TableRow>
                                     ) : filteredDispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                                 No dispatches found
                                             </TableCell>
                                         </TableRow>
@@ -1044,6 +1045,9 @@ export function Dispatch() {
                                                         </TableCell>
                                                         <TableCell className="text-sm">{d.items.length} items</TableCell>
                                                         <TableCell className="text-right font-medium">{formatKg(d.totalWeight)}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={d.createdByUser} timestamp={d.createdAt} />
+                                                        </TableCell>
                                                         <TableCell className="text-right whitespace-nowrap">
                                                             <Button
                                                                 size="sm"
@@ -1072,7 +1076,7 @@ export function Dispatch() {
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={8} className="p-4">
+                                                            <TableCell colSpan={9} className="p-4">
                                                                 <div className="border rounded-md bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>

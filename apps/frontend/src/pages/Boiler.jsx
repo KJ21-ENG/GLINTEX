@@ -15,6 +15,7 @@ import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBoilerView } from '../components/boiler/MobileBoilerView';
 import { usePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 /**
  * Boiler (Steaming) Module
@@ -499,18 +500,19 @@ export function Boiler() {
                                         <TableHead>Box</TableHead>
                                         <TableHead>Machine</TableHead>
                                         <TableHead>Steamed At</TableHead>
+                                        <TableHead>Added By</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {loadingHistory ? (
                                         <TableRow>
-                                            <TableCell colSpan={7} className="h-24 text-center">
+                                            <TableCell colSpan={8} className="h-24 text-center">
                                                 <Loader2 className="w-6 h-6 mx-auto animate-spin text-muted-foreground" />
                                             </TableCell>
                                         </TableRow>
                                     ) : filteredHistory.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                                                 <div className="flex flex-col items-center gap-2">
                                                     <History className="w-8 h-8 opacity-50" />
                                                     <span>No items steamed on this date</span>
@@ -530,6 +532,9 @@ export function Boiler() {
                                                 <TableCell>{item.machineName || '—'}</TableCell>
                                                 <TableCell>
                                                     {new Date(item.steamedAt).toLocaleTimeString()}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                                 </TableCell>
                                             </TableRow>
                                         ))

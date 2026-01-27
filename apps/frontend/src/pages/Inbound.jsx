@@ -8,6 +8,7 @@ import { Trash2, Plus, Save, ArrowUpDown, Search, Printer, Download } from 'luci
 import { exportHistoryToExcel } from '../services';
 import { usePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 
 export function Inbound() {
@@ -478,13 +479,14 @@ function RecentLotsTable({ db }) {
                                 <TableHead>Supplier</TableHead>
                                 <TableHead className="">Pieces</TableHead>
                                 <TableHead className="">Weight</TableHead>
+                                <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {paged.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                                    <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                                         No lots found.
                                     </TableCell>
                                 </TableRow>
@@ -510,6 +512,9 @@ function RecentLotsTable({ db }) {
                                             <TableCell className="">{l.totalPieces}</TableCell>
                                             <TableCell className="font-mono">{formatKg(l.totalWeight)}</TableCell>
                                             <TableCell>
+                                                <UserBadge user={l.createdByUser} timestamp={l.createdAt} />
+                                            </TableCell>
+                                            <TableCell>
                                                 <ActionMenu actions={[
                                                     {
                                                         label: 'Reprint All',
@@ -521,7 +526,7 @@ function RecentLotsTable({ db }) {
                                         </TableRow>
                                         {expandedLot === l.lotNo && (
                                             <TableRow>
-                                                <TableCell colSpan={9} className="bg-muted/30 p-0">
+                                                <TableCell colSpan={10} className="bg-muted/30 p-0">
                                                     <div className="p-4">
                                                         <h4 className="font-medium text-sm mb-2">Pieces in Lot {l.lotNo}</h4>
                                                         <div className="rounded-md border bg-background overflow-x-auto">

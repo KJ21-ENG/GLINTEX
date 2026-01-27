@@ -5,7 +5,9 @@ use std::fs;
 use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::Duration;
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -36,6 +38,16 @@ struct PrintJobRecord {
 struct AppState {
     queue: Mutex<Vec<PrintJobRecord>>,
     server_handle: Mutex<Option<actix_web::dev::ServerHandle>>,
+    print_lock: Mutex<()>,
+    last_job_at: Mutex<i64>,
+}
+
+static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_job_id() -> String {
+    let millis = chrono::Utc::now().timestamp_millis();
+    let seq = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}_{}", millis, seq)
 }
 
 async fn health() -> impl Responder {
@@ -96,7 +108,7 @@ async fn get_queue(data: web::Data<AppState>) -> impl Responder {
 }
 
 async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Responder {
-    let job_id = format!("{}", chrono::Utc::now().timestamp_millis());
+    let job_id = next_job_id();
     let mut record = PrintJobRecord {
         id: job_id.clone(),
         printer: job.printer.clone(),
@@ -115,10 +127,30 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
         }
     }
 
+    // Ensure only one print job hits the printer at a time (prevents overlap).
+    let _print_guard = data.print_lock.lock().unwrap();
+    let min_interval_ms = std::env::var("PRINT_JOB_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(800);
+    {
+        let mut last = data.last_job_at.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let elapsed = now - *last;
+        if elapsed < min_interval_ms {
+            thread::sleep(Duration::from_millis((min_interval_ms - elapsed) as u64));
+        }
+    }
+
     let temp_dir = std::env::temp_dir();
     let file_path = temp_dir.join(format!("print_job_{}.txt", job_id));
 
     if let Err(e) = fs::write(&file_path, &job.content) {
+        let mut queue = data.queue.lock().unwrap();
+        if let Some(r) = queue.iter_mut().find(|r| r.id == job_id) {
+            r.status = "Failed".to_string();
+            r.error = Some(e.to_string());
+        }
         return HttpResponse::InternalServerError().body(format!("Failed to write temp file: {}", e));
     }
 
@@ -128,8 +160,7 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
     if platform == "windows" {
         // Windows: Use PowerShell to send raw bytes to the printer via Win32 API.
         // This allows targeting a specific printer and avoids the "text-only" printing of notepad.
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let ps_script_path = temp_dir.join(format!("print_raw_{}.ps1", timestamp));
+        let ps_script_path = temp_dir.join(format!("print_raw_{}.ps1", job_id));
         
         let printer = &job.printer;
         // Escape backslashes for PowerShell file path
@@ -262,6 +293,11 @@ Add-Type -TypeDefinition $definition
         }
     }
 
+    {
+        let mut last = data.last_job_at.lock().unwrap();
+        *last = chrono::Utc::now().timestamp_millis();
+    }
+
     match status {
         Ok(s) if s.success() => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
         Ok(_) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": "Print command failed" })),
@@ -278,6 +314,8 @@ fn get_app_state() -> web::Data<AppState> {
         web::Data::new(AppState {
             queue: Mutex::new(Vec::new()),
             server_handle: Mutex::new(None),
+            print_lock: Mutex::new(()),
+            last_job_at: Mutex::new(0),
         })
     }).clone()
 }

@@ -175,6 +175,17 @@ export const InventoryProvider = ({ children }) => {
     return await loadModuleData(module, options, { force: false });
   }, [loadModuleData]);
 
+  const refreshModuleData = useCallback(async (module, options = {}) => {
+    return await loadModuleData(module, options, { force: true });
+  }, [loadModuleData]);
+
+  const refreshProcessData = useCallback(async (process, options = {}) => {
+    if (!process) return null;
+    const fullKey = `process:${process}:full`;
+    const wantsFull = options.full === true || loadedModulesRef.current.has(fullKey);
+    return await loadModuleData('process', { process, full: wantsFull }, { force: true });
+  }, [loadModuleData]);
+
   const refreshDb = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -193,6 +204,21 @@ export const InventoryProvider = ({ children }) => {
       setRefreshing(false);
     }
   }, [loadBootstrap, loadModuleDataByKey]);
+
+  const patchIssueRecord = useCallback((process, updatedIssue) => {
+    if (!updatedIssue?.id) return;
+    const key = process === 'holo'
+      ? 'issue_to_holo_machine'
+      : process === 'coning'
+        ? 'issue_to_coning_machine'
+        : 'issue_to_cutter_machine';
+    const current = dbRef.current?.[key] || [];
+    const idx = current.findIndex(row => row.id === updatedIssue.id);
+    const next = idx >= 0
+      ? current.map(row => (row.id === updatedIssue.id ? { ...row, ...updatedIssue } : row))
+      : [updatedIssue, ...current];
+    applyDbUpdate({ [key]: next });
+  }, [applyDbUpdate]);
 
   // Initial Load
   useEffect(() => {
@@ -373,11 +399,14 @@ export const InventoryProvider = ({ children }) => {
     process,
     setProcess,
     refreshDb,
+    patchIssueRecord,
+    refreshModuleData,
+    refreshProcessData,
     ensureModuleData,
     moduleLoading,
     loadedModules,
     ...actions
-  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, ensureModuleData, moduleLoading, loadedModules, actions]);
+  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
 
   return (
     <InventoryContext.Provider value={value}>

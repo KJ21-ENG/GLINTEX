@@ -24,7 +24,7 @@ function formatDateDisplay(dateStr) {
 }
 
 export function IssueToMachine() {
-  const { process, db, refreshDb, ensureModuleData } = useInventory();
+  const { process, db, ensureModuleData } = useInventory();
   const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
   const { canRead, canWrite, canEdit, canDelete } = useStagePermission('issue', stage);
   const readOnly = canRead && !canWrite;
@@ -204,7 +204,7 @@ export function IssueToMachine() {
           {activeTab === 'on-machine' ? (
             <OnMachineTable db={db} process={process} />
           ) : (
-            <IssueHistory db={db} refreshDb={refreshDb} canEdit={canEdit} canDelete={canDelete} />
+            <IssueHistory db={db} canEdit={canEdit} canDelete={canDelete} />
           )}
         </CardContent>
       </Card>

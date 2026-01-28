@@ -13,7 +13,7 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
-    const { db, process, refreshDb } = useInventory();
+    const { db, process, refreshProcessData } = useInventory();
     const [activeTab, setActiveTab] = useState('history');
     const [editingChallan, setEditingChallan] = useState(null);
     const [editRows, setEditRows] = useState([]);
@@ -818,7 +818,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 await api.updateConingReceiveRow(editingReceiveRow.id, payload);
             }
 
-            await refreshDb();
+            await refreshProcessData(process);
             closeReceiveEditor();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -860,7 +860,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             } else {
                 await api.deleteConingReceiveRow(row.id);
             }
-            await refreshDb();
+            await refreshProcessData(process);
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
                 const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
@@ -883,7 +883,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         setDeletingReceive(true);
         try {
             await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
-            await refreshDb();
+            await refreshProcessData(process);
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');
@@ -1000,7 +1000,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         setSavingEdit(true);
         try {
             await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
-            await refreshDb();
+            await refreshProcessData(process);
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1052,7 +1052,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 );
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
-                    await refreshDb();
+                    await refreshProcessData(process);
                     closeEditDialog();
                 }
             } else {
@@ -1069,7 +1069,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         if (!ok) return;
         try {
             await api.deleteCutterReceiveChallan(challan.id);
-            await refreshDb();
+            await refreshProcessData(process);
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
@@ -1105,7 +1105,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 );
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
-                    await refreshDb();
+                    await refreshProcessData(process);
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');

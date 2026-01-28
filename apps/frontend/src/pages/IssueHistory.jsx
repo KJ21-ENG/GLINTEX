@@ -11,8 +11,8 @@ import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrac
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { UserBadge } from '../components/common/UserBadge';
 
-export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false }) {
-  const { process } = useInventory();
+export function IssueHistory({ db, canEdit = false, canDelete = false }) {
+  const { process, patchIssueRecord, refreshProcessData } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -64,7 +64,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
     setDeletingId(issueId);
     try {
       await api.deleteIssueToMachine(issueId, process);
-      await refreshDb();
+      await refreshProcessData(process);
       alert('Issue record deleted.');
     } catch (err) {
       alert(err.message || 'Failed to delete issue record');
@@ -182,6 +182,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
       boxId: firstRef.boxId || '',
       crates,
       cratesTouched: false,
+      metaTouched: false,
     });
   };
 
@@ -192,7 +193,14 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
   };
 
   const updateIssueDraftField = (field, value) => {
-    setIssueDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+    setIssueDraft((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [field]: value };
+      if (process === 'coning' && ['coneTypeId', 'wrapperId', 'boxId'].includes(field)) {
+        next.metaTouched = true;
+      }
+      return next;
+    });
   };
 
   const handleAddPiece = () => {
@@ -436,6 +444,7 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
     }
     setSavingIssue(true);
     try {
+      let updatedIssue = null;
       if (process === 'cutter') {
         const payload = {
           date: issueDraft.date,
@@ -447,7 +456,8 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
         if (!editingIssue.hasReceives && issueDraft.piecesTouched) {
           payload.pieceIds = issueDraft.pieceIds;
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToCutterMachine || res?.issueToMachine || null;
       } else if (process === 'holo') {
         const payload = {
           date: issueDraft.date,
@@ -469,7 +479,8 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToHoloMachine || null;
       } else {
         const payload = {
           date: issueDraft.date,
@@ -481,6 +492,11 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
         if (!editingIssue.hasReceives) {
           if (issueDraft.requiredPerConeNetWeight !== '') {
             payload.requiredPerConeNetWeight = Number(issueDraft.requiredPerConeNetWeight || 0);
+          }
+          if (issueDraft.metaTouched) {
+            payload.coneTypeId = issueDraft.coneTypeId || null;
+            payload.wrapperId = issueDraft.wrapperId || null;
+            payload.boxId = issueDraft.boxId || null;
           }
           if (issueDraft.cratesTouched) {
             payload.crates = issueDraft.crates.map(c => ({
@@ -494,9 +510,14 @@ export function IssueHistory({ db, refreshDb, canEdit = false, canDelete = false
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToConingMachine || null;
       }
-      await refreshDb();
+      if (process === 'coning' && updatedIssue) {
+        patchIssueRecord(process, updatedIssue);
+      } else {
+        await refreshProcessData(process);
+      }
       closeIssueEditor();
       alert('Issue record updated.');
     } catch (err) {

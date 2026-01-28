@@ -8611,6 +8611,9 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       receivedRowRefs,
       requiredPerConeNetWeight: reqPerConeWt,
       shift,
+      coneTypeId,
+      wrapperId,
+      boxId,
     } = req.body || {};
 
     const issueRecord = await prisma.issueToConingMachine.findFirst({
@@ -8629,6 +8632,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       ? crates
       : (Array.isArray(receivedRowRefs) ? receivedRowRefs : undefined);
     const wantsCrateUpdate = cratesInput !== undefined;
+    const wantsMetaUpdate = coneTypeId !== undefined || wrapperId !== undefined || boxId !== undefined;
 
     if (hasReceives && (wantsCrateUpdate || reqPerConeWt !== undefined)) {
       return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
@@ -8933,6 +8937,23 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
         data.rollsIssued = Number(totalRolls || 0);
         data.requiredPerConeNetWeight = requiredPerConeNetWeight;
         data.expectedCones = expectedCones;
+      }
+
+      if (!hasReceives && !wantsCrateUpdate && wantsMetaUpdate) {
+        const refsRaw = issueRecord.receivedRowRefs;
+        let refs = Array.isArray(refsRaw) ? refsRaw : [];
+        if (typeof refsRaw === 'string') {
+          try { refs = JSON.parse(refsRaw || '[]'); } catch (_) { refs = []; }
+        }
+        if (refs.length > 0) {
+          const nextRefs = refs.map((ref) => ({
+            ...ref,
+            ...(coneTypeId !== undefined ? { coneTypeId: coneTypeId || null } : {}),
+            ...(wrapperId !== undefined ? { wrapperId: wrapperId || null } : {}),
+            ...(boxId !== undefined ? { boxId: boxId || null } : {}),
+          }));
+          data.receivedRowRefs = nextRefs;
+        }
       }
 
       if (Object.keys(data).length > 0) {

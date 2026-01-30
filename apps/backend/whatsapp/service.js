@@ -357,7 +357,7 @@ class WhatsappService {
     const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
     const media = new MessageMedia(mimetype, base64Data, filename);
 
-    await this.client.sendMessage(chatId, media, { caption });
+    await this.client.sendMessage(chatId, media, { caption, sendSeen: false });
     return true;
   }
 
@@ -384,7 +384,7 @@ class WhatsappService {
     const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
     const media = new MessageMedia(mimetype, base64Data, filename);
 
-    await this.client.sendMessage(chatId, media, { caption });
+    await this.client.sendMessage(chatId, media, { caption, sendSeen: false });
     return true;
   }
 
@@ -459,7 +459,7 @@ class WhatsappService {
         }
         try {
           // perform send and await
-          await this.client.sendMessage(id, entry.text);
+          await this.client.sendMessage(id, entry.text, { sendSeen: false });
           entry.resolve(true);
         } catch (err) {
           console.error('Failed to send whatsapp message', err && err.message);

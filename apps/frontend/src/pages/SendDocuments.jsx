@@ -19,7 +19,6 @@ export function SendDocuments() {
     const [customers, setCustomers] = useState([]);
     const [history, setHistory] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
-    const [customerSearch, setCustomerSearch] = useState('');
     const [historySearch, setHistorySearch] = useState('');
 
     // Form state
@@ -68,16 +67,6 @@ export function SendDocuments() {
             setLoadingHistory(false);
         }
     }
-
-    // Filter customers by search
-    const filteredCustomers = useMemo(() => {
-        if (!customerSearch.trim()) return customers;
-        const term = customerSearch.toLowerCase();
-        return customers.filter(c =>
-            c.name.toLowerCase().includes(term) ||
-            (c.phone || '').includes(term)
-        );
-    }, [customers, customerSearch]);
 
     // Filter history by search
     const filteredHistory = useMemo(() => {
@@ -342,20 +331,6 @@ export function SendDocuments() {
                             <CardTitle className="text-lg">Recipient</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                            {/* Customer Search */}
-                            <div>
-                                <Label>Search Customer</Label>
-                                <div className="relative mt-1">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Search by name or phone..."
-                                        className="pl-10"
-                                        value={customerSearch}
-                                        onChange={e => setCustomerSearch(e.target.value)}
-                                    />
-                                </div>
-                            </div>
-
                             {/* Customer Select */}
                             <div>
                                 <Label>Customer *</Label>
@@ -364,14 +339,14 @@ export function SendDocuments() {
                                         className="flex-1"
                                         value={selectedCustomerId}
                                         onChange={e => setSelectedCustomerId(e.target.value)}
-                                    >
-                                        <option value="">Select Customer</option>
-                                        {filteredCustomers.map(c => (
-                                            <option key={c.id} value={c.id}>
-                                                {c.name} {c.phone ? `(${c.phone})` : ''}
-                                            </option>
-                                        ))}
-                                    </Select>
+                                        options={[
+                                            { value: "", label: "Select Customer" },
+                                            ...customers.map(c => ({
+                                                value: c.id,
+                                                label: `${c.name} ${c.phone ? `(${c.phone})` : ''}`
+                                            }))
+                                        ]}
+                                    />
                                     <Button
                                         variant="outline"
                                         size="icon"

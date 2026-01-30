@@ -146,6 +146,7 @@ export async function deleteConingReceiveRow(id, payload) {
   return await request(`/api/receive_from_coning_machine/rows/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload });
 }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
+export async function markConingWastage(issueId) { return await request('/api/receive_from_coning_machine/mark_wastage', { method: 'POST', body: { issueId } }); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
 export async function manualReceiveFromMachine(payload) { return await manualReceiveFromCutterMachine(payload); }
@@ -349,6 +350,7 @@ export default {
   deleteCutterReceiveChallan,
   getReceiveCrateStats,
   markPieceWastage,
+  markConingWastage,
   updateInboundItem,
   deleteLot,
   deleteIssueToMachine,

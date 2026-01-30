@@ -6962,6 +6962,107 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
   }
 });
 
+// Mark remaining pending weight for a coning issue as wastage
+router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { issueId } = req.body || {};
+    if (!issueId || typeof issueId !== 'string') {
+      return res.status(400).json({ error: 'Missing issueId' });
+    }
+
+    // 1. Fetch coning issue
+    const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
+    if (!issue) return res.status(404).json({ error: 'Coning issue not found' });
+    if (issue.isDeleted) return res.status(400).json({ error: 'Issue has been deleted' });
+
+    // 2. Calculate total issued weight from receivedRowRefs
+    let issuedWeight = 0;
+    try {
+      const refs = typeof issue.receivedRowRefs === 'string'
+        ? JSON.parse(issue.receivedRowRefs)
+        : issue.receivedRowRefs;
+      if (Array.isArray(refs)) {
+        issuedWeight = refs.reduce((sum, ref) => {
+          // Prefer stamped issueWeight, fallback to lookup
+          if (ref.issueWeight) return sum + Number(ref.issueWeight);
+          return sum;
+        }, 0);
+      }
+    } catch (e) {
+      console.error('Error parsing receivedRowRefs for coning wastage', e);
+    }
+
+    if (issuedWeight <= 0) {
+      return res.status(400).json({ error: 'Unable to determine issued weight for this issue' });
+    }
+
+    // 3. Fetch current received and wastage totals
+    const currentTotal = await prisma.receiveFromConingMachinePieceTotal.findUnique({
+      where: { pieceId: issueId }
+    });
+    const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
+    const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
+
+    // 4. Calculate remaining pending weight
+    const remaining = roundTo3Decimals(Math.max(0, issuedWeight - received - existingWastage));
+    if (remaining <= 0) {
+      return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
+    }
+
+    // 5. Upsert wastage inside transaction
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.receiveFromConingMachinePieceTotal.upsert({
+        where: { pieceId: issueId },
+        update: {
+          wastageNetWeight: { increment: remaining },
+          ...actorUpdateFields(actorUserId)
+        },
+        create: {
+          pieceId: issueId,
+          totalCones: 0,
+          totalNetWeight: 0,
+          wastageNetWeight: remaining,
+          ...actorCreateFields(actorUserId)
+        },
+      });
+      return tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
+    });
+
+    // 6. Send WhatsApp notification
+    try {
+      const itemRec = issue.itemId ? await prisma.item.findUnique({ where: { id: issue.itemId } }) : null;
+      const itemName = itemRec ? itemRec.name || '' : '';
+      const wastageFormatted = Number(remaining).toFixed(3);
+      const wastagePercent = issuedWeight > 0 ? ((remaining / issuedWeight) * 100).toFixed(2) : '0.00';
+      sendNotification('piece_wastage_marked_coning', {
+        pieceId: issueId,
+        lotNo: issue.lotNo || issue.lotLabel || '',
+        itemName,
+        wastage: wastageFormatted,
+        wastagePercent
+      });
+    } catch (e) {
+      console.error('notify coning wastage error', e);
+    }
+
+    // 7. Audit log
+    await logCrudWithActor(req, {
+      entityType: 'receive_coning_piece_total',
+      entityId: issueId,
+      action: 'update',
+      before: currentTotal,
+      after: updated,
+      payload: { action: 'mark_wastage', marked: remaining },
+    });
+
+    res.json({ ok: true, issueId, marked: remaining, updated });
+  } catch (err) {
+    console.error('Failed to mark coning wastage', err);
+    res.status(500).json({ error: err.message || 'Failed to mark coning wastage' });
+  }
+});
+
 router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('receive.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;

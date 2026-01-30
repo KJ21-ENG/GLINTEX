@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../../context/InventoryContext';
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
-import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
+import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
@@ -18,6 +18,7 @@ export function ConingReceiveForm() {
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [receiveDate, setReceiveDate] = useState(todayISO());
+    const [isWastage, setIsWastage] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
@@ -70,6 +71,30 @@ export function ConingReceiveForm() {
         return (db.receive_from_coning_machine_piece_totals || []).find((t) => t.pieceId === issue.id) || null;
     }, [db.receive_from_coning_machine_piece_totals, issue?.id]);
 
+    // Wastage status for closing the issue
+    const wastageStatus = useMemo(() => {
+        const existingWastage = Number(coningPieceTotals?.wastageNetWeight || 0);
+        const receivedWeight = Number(coningPieceTotals?.totalNetWeight || 0);
+        // Include cart items in pending calculation
+        const cartReceivedWeight = cart.filter(r => !r.isWastage).reduce((sum, r) => sum + (calcRowNet(r) || 0), 0);
+        const cartWastage = cart.filter(r => r.isWastage).reduce((sum, r) => sum + Number(r.netWeight || 0), 0);
+        const pendingWeight = Math.max(0, totalIssuedWeight - receivedWeight - existingWastage - cartReceivedWeight - cartWastage);
+        const hasWastageInDb = existingWastage > 0;
+        const hasWastageInCart = cartWastage > 0;
+        const isWastageClosed = pendingWeight <= 0 && hasWastageInDb;
+
+        return {
+            existingWastage,
+            pendingWeight,
+            hasWastageInDb,
+            hasWastageInCart,
+            isWastageClosed,
+        };
+    }, [totalIssuedWeight, coningPieceTotals, cart]);
+
+    // Receiving is blocked if wastage is in cart or already marked
+    const receivingBlocked = wastageStatus.hasWastageInCart || wastageStatus.isWastageClosed;
+
     // --- Handlers ---
     async function handleScan() {
         if (!scanInput.trim()) return;
@@ -107,6 +132,26 @@ export function ConingReceiveForm() {
             notes: '',
             operatorId: issue?.operatorId || ''
         }]);
+    }
+
+    function addWastageEntry() {
+        if (!issue || wastageStatus.pendingWeight <= 0) return;
+        if (wastageStatus.hasWastageInCart) {
+            alert('Wastage is already queued in the list.');
+            return;
+        }
+
+        setCart(prev => [...prev, {
+            id: uid(),
+            isWastage: true,
+            coneCount: 0,
+            grossWeight: 0,
+            netWeight: wastageStatus.pendingWeight,
+            boxId: '',
+            notes: 'Wastage - Issue Closed',
+            operatorId: issue?.operatorId || ''
+        }]);
+        setIsWastage(false);
     }
 
     function updateRow(id, field, val) {
@@ -172,15 +217,20 @@ export function ConingReceiveForm() {
         if (!issue || cart.length === 0) return;
         setSubmitting(true);
         try {
+            // Separate receive entries from wastage entries
+            const receiveEntries = cart.filter(r => !r.isWastage);
+            const wastageEntries = cart.filter(r => r.isWastage);
+
             const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
-            const confirmPrint = template ? window.confirm('Print stickers for these receives?') : false;
+            const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;
             const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
             const baseCount = existingRows.length;
             const baseCode = issue.barcode || issue.lotNo || issue.id;
             const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
-            for (const row of cart) {
+            // Process receive entries
+            for (const row of receiveEntries) {
                 await api.manualReceiveFromConingMachine({
                     issueId: issue.id,
                     pieceId: issue.id,
@@ -193,7 +243,7 @@ export function ConingReceiveForm() {
                 });
 
                 if (confirmPrint) {
-                    const index = cart.indexOf(row);
+                    const index = receiveEntries.indexOf(row);
                     const paddedIndex = String(baseCount + index + 1).padStart(3, '0');
                     const barcode = `RCN-${baseCode}-${paddedIndex}`;
                     const boxName = db.boxes.find((b) => b.id === row.boxId)?.name;
@@ -256,6 +306,16 @@ export function ConingReceiveForm() {
                 }
             }
 
+            // Process wastage entry if present
+            if (wastageEntries.length > 0) {
+                try {
+                    await api.markConingWastage(issue.id);
+                } catch (e) {
+                    console.error('Failed to mark coning wastage', e);
+                    alert('Warning: Failed to mark wastage. Please try again separately.');
+                }
+            }
+
             if (labelsToPrint.length > 0) {
                 await printStageTemplatesBatch(
                     LABEL_STAGE_KEYS.CONING_RECEIVE,
@@ -265,7 +325,10 @@ export function ConingReceiveForm() {
             }
             await refreshDb();
             setCart([]);
-            alert('Received successfully');
+            setIsWastage(false);
+            alert(wastageEntries.length > 0 && receiveEntries.length === 0
+                ? 'Wastage marked and issue closed successfully'
+                : 'Received successfully');
         } catch (e) {
             alert(e.message);
         } finally {
@@ -358,14 +421,77 @@ export function ConingReceiveForm() {
                                 </div>
                                 <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
                                 <div><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
-                                <div className="hidden md:block" />
+                                <div className="flex items-center gap-1">
+                                    <strong>Pending:</strong>{' '}
+                                    <span className={wastageStatus.pendingWeight > 0.001 ? "" : "text-muted-foreground"}>
+                                        {formatKg(wastageStatus.pendingWeight)}
+                                    </span>
+                                    {wastageStatus.isWastageClosed ? (
+                                        <span className="text-xs text-destructive ml-1">
+                                            ({formatKg(wastageStatus.existingWastage)} wastage)
+                                        </span>
+                                    ) : (
+                                        <InfoPopover
+                                            title="Issue Close"
+                                            items={[wastageStatus]}
+                                            renderContent={() => {
+                                                if (!issue) {
+                                                    return (
+                                                        <div className="text-muted-foreground">
+                                                            Scan an issue barcode to manage wastage.
+                                                        </div>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <div className="space-y-2 text-xs">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">Issue</span>
+                                                            <span className="font-mono">{issue.barcode || issue.id}</span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">Pending to close</span>
+                                                            <span className="font-medium">{formatKg(wastageStatus.pendingWeight)}</span>
+                                                        </div>
+                                                        {wastageStatus.hasWastageInCart && (
+                                                            <div className="text-muted-foreground">
+                                                                Wastage is queued in the list. Remove it to continue.
+                                                            </div>
+                                                        )}
+                                                        <label className="flex items-start gap-2 cursor-pointer pt-2">
+                                                            <Checkbox
+                                                                checked={isWastage}
+                                                                onCheckedChange={setIsWastage}
+                                                                disabled={!issue || wastageStatus.pendingWeight <= 0 || receivingBlocked}
+                                                            />
+                                                            <span className="leading-snug">Close issue (mark remaining as wastage)</span>
+                                                        </label>
+                                                    </div>
+                                                );
+                                            }}
+                                            widthClassName="w-64"
+                                            bodyClassName="text-xs"
+                                            buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
+                                            align="right"
+                                        />
+                                    )}
+                                </div>
                             </div>
                         </div>
 
+                        {/* Wastage closed alert */}
+                        {wastageStatus.isWastageClosed && (
+                            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                                Wastage already marked ({formatKg(wastageStatus.existingWastage)}). Issue is closed.
+                            </div>
+                        )}
+
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div><Label>Date</Label><Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} /></div>
-                            <div className="flex items-end">
-                                <Button onClick={addCartRow}>Add Crate</Button>
+                            <div><Label>Date</Label><Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} disabled={receivingBlocked} /></div>
+                            <div className="flex items-end gap-2">
+                                <Button onClick={isWastage ? addWastageEntry : addCartRow} disabled={receivingBlocked && !isWastage}>
+                                    {isWastage ? `Add Wastage (${formatKg(wastageStatus.pendingWeight)})` : 'Add Crate'}
+                                </Button>
                             </div>
                         </div>
 
@@ -384,54 +510,72 @@ export function ConingReceiveForm() {
                                 </TableHeader>
                                 <TableBody>
                                     {cart.map(row => (
-                                        <TableRow key={row.id}>
-                                            <TableCell>
-                                                <Select
-                                                    value={row.boxId}
-                                                    onChange={e => updateRow(row.id, 'boxId', e.target.value)}
-                                                    options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => ({ id: b.id, name: b.name }))}
-                                                    labelKey="name"
-                                                    valueKey="id"
-                                                    placeholder="Select Box"
-                                                />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Input type="number" value={row.coneCount} onChange={e => updateRow(row.id, 'coneCount', e.target.value)} className="h-8" />
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex gap-1">
-                                                    <Input type="number" value={row.grossWeight} onChange={e => updateRow(row.id, 'grossWeight', e.target.value)} className="h-8 flex-1" />
-                                                    <CatchWeightButton
-                                                        onWeightCaptured={(wt) => updateRow(row.id, 'grossWeight', wt.toFixed(3))}
-                                                        className="h-8 w-8"
-                                                    />
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="">
-                                                {formatKg(calcRowNet(row))}
-                                            </TableCell>
-                                            <TableCell className="text-sm">
-                                                {(function () {
-                                                    const net = calcRowNet(row);
-                                                    const c = Number(row.coneCount || 0);
-                                                    if (c <= 0) return '—';
-                                                    return `${((net * 1000) / c).toFixed(1)} g`;
-                                                })()}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Select
-                                                    value={row.operatorId}
-                                                    onChange={e => updateRow(row.id, 'operatorId', e.target.value)}
-                                                    className="h-8"
-                                                    options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
-                                                    labelKey="name"
-                                                    valueKey="id"
-                                                    placeholder="Select Operator"
-                                                />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCart(p => p.filter(x => x.id !== row.id))}>X</Button>
-                                            </TableCell>
+                                        <TableRow key={row.id} className={row.isWastage ? "bg-destructive/10" : ""}>
+                                            {row.isWastage ? (
+                                                <>
+                                                    <TableCell colSpan={3} className="text-destructive font-semibold">
+                                                        ⚠️ WASTAGE / CLOSE ISSUE
+                                                    </TableCell>
+                                                    <TableCell className="font-medium text-destructive">
+                                                        {formatKg(row.netWeight)}
+                                                    </TableCell>
+                                                    <TableCell>—</TableCell>
+                                                    <TableCell>—</TableCell>
+                                                    <TableCell>
+                                                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCart(p => p.filter(x => x.id !== row.id))}>X</Button>
+                                                    </TableCell>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <TableCell>
+                                                        <Select
+                                                            value={row.boxId}
+                                                            onChange={e => updateRow(row.id, 'boxId', e.target.value)}
+                                                            options={(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'coning').map(b => ({ id: b.id, name: b.name }))}
+                                                            labelKey="name"
+                                                            valueKey="id"
+                                                            placeholder="Select Box"
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Input type="number" value={row.coneCount} onChange={e => updateRow(row.id, 'coneCount', e.target.value)} className="h-8" />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex gap-1">
+                                                            <Input type="number" value={row.grossWeight} onChange={e => updateRow(row.id, 'grossWeight', e.target.value)} className="h-8 flex-1" />
+                                                            <CatchWeightButton
+                                                                onWeightCaptured={(wt) => updateRow(row.id, 'grossWeight', wt.toFixed(3))}
+                                                                className="h-8 w-8"
+                                                            />
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="">
+                                                        {formatKg(calcRowNet(row))}
+                                                    </TableCell>
+                                                    <TableCell className="text-sm">
+                                                        {(function () {
+                                                            const net = calcRowNet(row);
+                                                            const c = Number(row.coneCount || 0);
+                                                            if (c <= 0) return '—';
+                                                            return `${((net * 1000) / c).toFixed(1)} g`;
+                                                        })()}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Select
+                                                            value={row.operatorId}
+                                                            onChange={e => updateRow(row.id, 'operatorId', e.target.value)}
+                                                            className="h-8"
+                                                            options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
+                                                            labelKey="name"
+                                                            valueKey="id"
+                                                            placeholder="Select Operator"
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCart(p => p.filter(x => x.id !== row.id))}>X</Button>
+                                                    </TableCell>
+                                                </>
+                                            )}
                                         </TableRow>
                                     ))}
                                 </TableBody>

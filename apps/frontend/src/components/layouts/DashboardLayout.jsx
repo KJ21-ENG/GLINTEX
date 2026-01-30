@@ -17,7 +17,8 @@ import {
   Factory,
   ClipboardPlus,
   Flame,
-  Lock
+  Lock,
+  FileText
 } from "lucide-react";
 import { useInventory } from "../../context/InventoryContext";
 import { Button, Select } from "../ui";
@@ -35,6 +36,7 @@ const NAV_ITEMS = [
   { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus, permissions: ["opening_stock"] },
   { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft, permissions: ["box_transfer"] },
   { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo", permissions: ["boiler"] },
+  { key: "send-documents", label: "Send Documents", icon: FileText, permissions: ["send_documents"] },
   { key: "masters", label: "Masters", icon: Database, permissions: ["masters"] },
   { key: "reports", label: "Reports", icon: BarChart3, permissions: ["reports"] },
   { key: "settings", label: "Settings", icon: Settings, permissions: ["settings"] },

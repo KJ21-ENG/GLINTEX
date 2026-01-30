@@ -1,3 +1,4 @@
+import multer from 'multer';
 import XLSX from 'xlsx';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
@@ -13979,6 +13980,93 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
   } catch (err) {
     console.error('Failed to list steamed items', err);
     res.status(500).json({ error: err.message || 'Failed to list steamed items' });
+  }
+});
+
+// ========== DOCUMENT SEND VIA WHATSAPP ==========
+
+// Configure multer for memory storage (no disk persistence)
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 }, // 16MB max
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only images and PDFs are allowed.'));
+    }
+  }
+});
+
+// Send document via WhatsApp
+router.post('/api/documents/send', requireAuth, requirePermission('send_documents', PERM_WRITE), documentUpload.single('file'), async (req, res) => {
+  try {
+    const { customerId, phone, caption } = req.body;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    if (!customerId) {
+      return res.status(400).json({ error: 'Customer ID is required' });
+    }
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Verify customer exists
+    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    // Send via WhatsApp (file stays in memory, no disk storage)
+    await whatsapp.sendMediaSafe(
+      phone,
+      file.buffer,          // Buffer directly from memory
+      file.originalname,
+      file.mimetype,
+      caption || ''
+    );
+
+    // Save metadata only (no file content)
+    const docMessage = await prisma.documentMessage.create({
+      data: {
+        customerId,
+        phone,
+        filename: file.originalname,
+        mimetype: file.mimetype,
+        fileSize: file.size,
+        caption: caption || null,
+        createdByUserId: req.user?.id || null,
+      },
+      include: { customer: true }
+    });
+
+    res.json({ ok: true, message: docMessage });
+  } catch (err) {
+    console.error('Failed to send document', err);
+    res.status(500).json({ error: err.message || 'Failed to send document' });
+  }
+});
+
+// Get document send history
+router.get('/api/documents/history', requireAuth, requirePermission('send_documents', PERM_READ), async (req, res) => {
+  try {
+    const messages = await prisma.documentMessage.findMany({
+      orderBy: { sentAt: 'desc' },
+      take: 100,
+      include: { customer: true }
+    });
+
+    // Resolve user fields for display
+    const messagesWithUsers = await resolveUserFields(messages);
+
+    res.json({ messages: messagesWithUsers });
+  } catch (err) {
+    console.error('Failed to fetch document history', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch document history' });
   }
 });
 

@@ -19,7 +19,8 @@ import {
   Settings,
   Login,
   Setup,
-  ScaleTestPage
+  ScaleTestPage,
+  SendDocuments
 } from "../pages";
 import LabelDesigner from "../pages/Settings/LabelDesigner";
 import PermissionGate from "../components/common/PermissionGate";
@@ -99,6 +100,14 @@ export const router = createBrowserRouter([
         element: (
           <PermissionGate permission="boiler">
             <Boiler />
+          </PermissionGate>
+        ),
+      },
+      {
+        path: "send-documents",
+        element: (
+          <PermissionGate permission="send_documents">
+            <SendDocuments />
           </PermissionGate>
         ),
       },

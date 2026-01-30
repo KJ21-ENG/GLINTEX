@@ -18,4 +18,5 @@ export { Boiler } from './Boiler.jsx';
 export { Login } from './Login.jsx';
 export { Setup } from './Setup.jsx';
 export { ScaleTestPage } from './ScaleTestPage.jsx';
+export { SendDocuments } from './SendDocuments.jsx';
 

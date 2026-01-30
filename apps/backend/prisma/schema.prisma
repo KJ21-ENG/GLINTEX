@@ -640,6 +640,21 @@ model Customer {
   createdByUserId String?
   updatedByUserId String?
   dispatches  Dispatch[]
+  documentMessages DocumentMessage[]
+}
+
+// Document messages sent via WhatsApp - stores only metadata, no file content
+model DocumentMessage {
+  id              String   @id @default(cuid())
+  customerId      String
+  phone           String   // Recipient phone at send time
+  filename        String   // Original filename
+  mimetype        String   // e.g. 'image/jpeg', 'application/pdf'
+  fileSize        Int?     // File size in bytes (optional)
+  caption         String?  // Optional message caption
+  sentAt          DateTime @default(now())
+  createdByUserId String?
+  customer        Customer @relation(fields: [customerId], references: [id])
 }
 
 model DispatchSequence {

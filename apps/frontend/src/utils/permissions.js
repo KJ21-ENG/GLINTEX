@@ -22,6 +22,7 @@ export const BASE_PERMISSION_KEYS = [
   'settings',
   'opening_stock',
   'box_transfer',
+  'send_documents',
 ];
 
 export const PERMISSION_KEYS = [
@@ -81,6 +82,7 @@ export const MODULE_PERMISSIONS = [
   { key: 'settings', label: 'Settings', supportsEdit: true },
   { key: 'opening_stock', label: 'Opening Stock', supportsDelete: true },
   { key: 'box_transfer', label: 'Box Transfer', supportsDelete: true },
+  { key: 'send_documents', label: 'Send Documents' },
 ];
 
 export const ISSUE_STAGE_PERMISSIONS = [
@@ -105,6 +107,7 @@ export const PROCESS_PERMISSION_KEYS = {
   settings: 'settings',
   openingStock: 'opening_stock',
   boxTransfer: 'box_transfer',
+  sendDocuments: 'send_documents',
 };
 
 export const STAGE_PERMISSION_KEYS = {

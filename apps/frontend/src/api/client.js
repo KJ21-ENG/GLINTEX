@@ -48,6 +48,29 @@ async function request(path, { method = 'GET', body, headers } = {}) {
   return await res.json();
 }
 
+// Send FormData (for file uploads)
+async function requestFormData(path, formData) {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+  if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    }
+    const raw = await res.text();
+    let message = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      message = parsed.error || parsed.message || message;
+    } catch (_) { }
+    if (!message) message = `API POST ${path} failed with ${res.status}`;
+    throw new Error(message);
+  }
+  return await res.json();
+}
+
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getBootstrap() { return await request('/api/bootstrap'); }
@@ -147,6 +170,8 @@ export async function deleteConingReceiveRow(id, payload) {
 }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
 export async function markConingWastage(issueId) { return await request('/api/receive_from_coning_machine/mark_wastage', { method: 'POST', body: { issueId } }); }
+export async function sendDocument(formData) { return await requestFormData('/api/documents/send', formData); }
+export async function getDocumentHistory() { return await request('/api/documents/history'); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
 export async function manualReceiveFromMachine(payload) { return await manualReceiveFromCutterMachine(payload); }
@@ -351,6 +376,8 @@ export default {
   getReceiveCrateStats,
   markPieceWastage,
   markConingWastage,
+  sendDocument,
+  getDocumentHistory,
   updateInboundItem,
   deleteLot,
   deleteIssueToMachine,

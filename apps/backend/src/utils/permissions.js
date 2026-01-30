@@ -22,6 +22,7 @@ export const BASE_PERMISSION_KEYS = [
   'settings',
   'opening_stock',
   'box_transfer',
+  'send_documents',
 ];
 
 export const PERMISSION_KEYS = [

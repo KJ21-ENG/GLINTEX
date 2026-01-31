@@ -256,229 +256,339 @@ export function SendDocuments() {
             </div>
 
             {activeTab === 'send' ? (
-                <div className={cn("grid gap-6", useMobileLayout ? "grid-cols-1" : "lg:grid-cols-2")}>
-                    {/* File Selection Card */}
-                    <Card className={useMobileLayout ? "order-1" : ""}>
-                        <CardHeader>
-                            <CardTitle className="text-lg">Select Document</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {/* File Input Area */}
-                            <div
-                                className={cn(
-                                    "border-2 border-dashed rounded-lg p-6 text-center transition-colors",
-                                    selectedFile ? "border-green-500/50 bg-green-500/5" : "border-muted-foreground/25 hover:border-primary/50"
-                                )}
-                            >
-                                {selectedFile ? (
-                                    <div className="space-y-3">
-                                        {filePreview ? (
-                                            <img
-                                                src={filePreview}
-                                                alt="Preview"
-                                                className="max-h-48 mx-auto rounded-lg shadow-sm"
-                                            />
-                                        ) : (
-                                            <FileText className="w-16 h-16 mx-auto text-muted-foreground" />
-                                        )}
-                                        <div className="text-sm">
-                                            <p className="font-medium truncate">{selectedFile.name}</p>
-                                            <p className="text-muted-foreground">
-                                                {(selectedFile.size / 1024).toFixed(1)} KB
-                                            </p>
+                useMobileLayout ? (
+                    <div className="flex flex-col gap-4">
+                        {/* 1. File Selection - Compact Horizontal Bar */}
+                        <div className="bg-muted/30 p-3 rounded-lg border border-border/50">
+                            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                                Document source
+                            </Label>
+
+                            {selectedFile ? (
+                                <div className="flex items-center gap-3 bg-background p-2 rounded border shadow-sm">
+                                    {filePreview ? (
+                                        <img src={filePreview} alt="Preview" className="w-10 h-10 object-cover rounded" />
+                                    ) : (
+                                        <div className="w-10 h-10 bg-primary/10 grid place-items-center rounded text-primary">
+                                            <FileText className="w-5 h-5" />
                                         </div>
-                                        <Button variant="ghost" size="sm" onClick={clearFile}>
-                                            <X className="w-4 h-4 mr-1" /> Remove
-                                        </Button>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium truncate">{selectedFile.name}</p>
+                                        <p className="text-xs text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                                     </div>
-                                ) : (
-                                    <div className="space-y-3">
-                                        <div className="flex justify-center gap-4">
-                                            {/* Camera capture for mobile */}
-                                            {useMobileLayout && (
-                                                <label className="cursor-pointer">
-                                                    <input
-                                                        type="file"
-                                                        accept="image/*"
-                                                        capture="environment"
-                                                        className="hidden"
-                                                        onChange={handleFileSelect}
-                                                    />
-                                                    <div className="flex flex-col items-center gap-2 p-4 rounded-lg bg-muted hover:bg-muted/80 transition-colors">
-                                                        <Camera className="w-8 h-8 text-primary" />
-                                                        <span className="text-sm font-medium">Camera</span>
-                                                    </div>
-                                                </label>
-                                            )}
-
-                                            {/* File picker - Gallery */}
-                                            <label className="cursor-pointer">
-                                                <input
-                                                    ref={fileInputRef}
-                                                    type="file"
-                                                    accept="image/*,application/pdf"
-                                                    className="hidden"
-                                                    onChange={handleFileSelect}
-                                                />
-                                                <div className="flex flex-col items-center gap-2 p-4 rounded-lg bg-muted hover:bg-muted/80 transition-colors">
-                                                    <Image className="w-8 h-8 text-primary" />
-                                                    <span className="text-sm font-medium">Gallery</span>
-                                                </div>
-                                            </label>
-
-                                            {/* PDF picker */}
-                                            <label className="cursor-pointer">
-                                                <input
-                                                    type="file"
-                                                    accept="application/pdf"
-                                                    className="hidden"
-                                                    onChange={handleFileSelect}
-                                                />
-                                                <div className="flex flex-col items-center gap-2 p-4 rounded-lg bg-muted hover:bg-muted/80 transition-colors">
-                                                    <FileText className="w-8 h-8 text-primary" />
-                                                    <span className="text-sm font-medium">PDF</span>
-                                                </div>
-                                            </label>
-                                        </div>
-                                        <p className="text-sm text-muted-foreground">
-                                            Select an image or PDF to share
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Caption */}
-                            <div>
-                                <Label>Message (Optional)</Label>
-                                <Input
-                                    value={caption}
-                                    onChange={e => setCaption(e.target.value)}
-                                    placeholder="Add a caption or message..."
-                                    className="mt-1"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Customer & Send Card */}
-                    <Card className={useMobileLayout ? "order-2" : ""}>
-                        <CardHeader>
-                            <CardTitle className="text-lg">Recipient</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {/* Recipient Mode */}
-                            <div>
-                                <Label>Recipient *</Label>
-                                <div className="flex gap-2 mt-1">
-                                    <Button
-                                        type="button"
-                                        variant={recipientMode === 'contact' ? 'default' : 'outline'}
-                                        className="flex-1"
-                                        onClick={() => {
-                                            setRecipientMode('contact');
-                                            setSendSuccess(false);
-                                            setPhone('');
-                                        }}
-                                    >
-                                        WhatsApp Contact
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant={recipientMode === 'manual' ? 'default' : 'outline'}
-                                        className="flex-1"
-                                        onClick={() => {
-                                            setRecipientMode('manual');
-                                            setSelectedCustomerId('');
-                                            setSendSuccess(false);
-                                            setPhone('');
-                                        }}
-                                    >
-                                        Manual Number
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={clearFile}>
+                                        <X className="w-4 h-4" />
                                     </Button>
                                 </div>
-                            </div>
+                            ) : (
+                                <div className="grid grid-cols-3 gap-2">
+                                    <label className="cursor-pointer flex flex-col items-center justify-center gap-1 p-3 bg-background border rounded hover:bg-accent active:bg-accent/80 transition-colors h-20 text-center">
+                                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
+                                        <Camera className="w-6 h-6 text-primary mb-1" />
+                                        <span className="text-[10px] font-medium leading-none">Camera</span>
+                                    </label>
 
-                            {/* Customer Select */}
-                            {recipientMode === 'contact' && (
-                                <div>
-                                    <Label>WhatsApp Contact *</Label>
-                                    <div className="flex gap-2 mt-1">
-                                        <Select
-                                            className="flex-1"
-                                            value={selectedCustomerId}
-                                            onChange={e => setSelectedCustomerId(e.target.value)}
-                                            options={[
-                                                { value: "", label: "Select Contact" },
-                                                ...customers.map(c => ({
-                                                    value: c.id,
-                                                    label: `${c.name} (${c.phone})`
-                                                }))
-                                            ]}
-                                        />
-                                    </div>
+                                    <label className="cursor-pointer flex flex-col items-center justify-center gap-1 p-3 bg-background border rounded hover:bg-accent active:bg-accent/80 transition-colors h-20 text-center">
+                                        <input ref={fileInputRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFileSelect} />
+                                        <Image className="w-6 h-6 text-blue-500 mb-1" />
+                                        <span className="text-[10px] font-medium leading-none">Gallery</span>
+                                    </label>
+
+                                    <label className="cursor-pointer flex flex-col items-center justify-center gap-1 p-3 bg-background border rounded hover:bg-accent active:bg-accent/80 transition-colors h-20 text-center">
+                                        <input type="file" accept="application/pdf" className="hidden" onChange={handleFileSelect} />
+                                        <FileText className="w-6 h-6 text-red-500 mb-1" />
+                                        <span className="text-[10px] font-medium leading-none">PDF</span>
+                                    </label>
                                 </div>
                             )}
+                        </div>
 
-                            {/* Phone Number */}
-                            <div>
-                                <Label>WhatsApp Number *</Label>
+                        {/* 2. Recipient Selection - Compact */}
+                        <div className="bg-muted/30 p-3 rounded-lg border border-border/50 space-y-3">
+                            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
+                                Recipient Details
+                            </Label>
+
+                            {/* Toggle Mode */}
+                            <div className="grid grid-cols-2 p-1 bg-muted rounded-md mb-2">
+                                <button
+                                    className={cn("text-xs font-medium py-1.5 rounded-sm transition-all", recipientMode === 'contact' ? "bg-background shadow text-foreground" : "text-muted-foreground")}
+                                    onClick={() => { setRecipientMode('contact'); setPhone(''); }}
+                                >
+                                    Contact
+                                </button>
+                                <button
+                                    className={cn("text-xs font-medium py-1.5 rounded-sm transition-all", recipientMode === 'manual' ? "bg-background shadow text-foreground" : "text-muted-foreground")}
+                                    onClick={() => { setRecipientMode('manual'); setSelectedCustomerId(''); setPhone(''); }}
+                                >
+                                    Manual
+                                </button>
+                            </div>
+
+                            {recipientMode === 'contact' ? (
+                                <Select
+                                    value={selectedCustomerId}
+                                    onChange={e => setSelectedCustomerId(e.target.value)}
+                                    options={[
+                                        { value: "", label: "Select Contact..." },
+                                        ...customers.map(c => ({
+                                            value: c.id,
+                                            label: `${c.name} (${c.phone})`
+                                        }))
+                                    ]}
+                                    className="bg-background"
+                                />
+                            ) : (
                                 <Input
                                     value={phone}
                                     onChange={e => setPhone(e.target.value)}
-                                    placeholder="e.g. +91 9876543210"
-                                    className="mt-1"
-                                    disabled={recipientMode === 'contact'}
+                                    placeholder="Enter number (e.g. +91...)"
+                                    className="bg-background"
                                 />
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    {recipientMode === 'manual'
-                                        ? 'Add +91 or your country code before the number.'
-                                        : 'Use the full WhatsApp number.'}
-                                </p>
+                            )}
+                        </div>
+
+                        {/* 3. Message */}
+                        <div className="bg-muted/30 p-3 rounded-lg border border-border/50">
+                            <div className="relative">
+                                <Input
+                                    value={caption}
+                                    onChange={e => setCaption(e.target.value)}
+                                    placeholder="Add a message..."
+                                    className="bg-background pr-8"
+                                />
+                                {caption && (
+                                    <button onClick={() => setCaption('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                )}
                             </div>
+                        </div>
 
-                            {/* Selected Customer Info */}
-                            {recipientMode === 'contact' && selectedCustomer && (
-                                <div className="p-3 bg-muted rounded-lg">
-                                    <div className="font-medium">{selectedCustomer.name}</div>
-                                    {selectedCustomer.phone && (
-                                        <div className="text-sm text-muted-foreground">{selectedCustomer.phone}</div>
-                                    )}
-                                    {selectedCustomer.address && (
-                                        <div className="text-xs text-muted-foreground mt-1">{selectedCustomer.address}</div>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* Success Message */}
-                            {sendSuccess && (
-                                <div className="flex items-center gap-2 p-3 bg-green-500/10 text-green-600 rounded-lg">
-                                    <CheckCircle2 className="w-5 h-5" />
-                                    Document sent successfully!
-                                </div>
-                            )}
-
-                            {/* Send Button */}
+                        {/* 4. Send Action */}
+                        <div className="pt-2">
                             <Button
-                                className="w-full"
-                                size="lg"
+                                className="w-full h-12 text-base font-semibold shadow-md"
                                 onClick={handleSend}
                                 disabled={sending || !selectedFile || !phone || (recipientMode === 'contact' && !selectedCustomerId)}
                             >
                                 {sending ? (
                                     <>
-                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                                         Sending...
                                     </>
                                 ) : (
                                     <>
-                                        <Send className="w-4 h-4 mr-2" />
-                                        Send via WhatsApp
+                                        <Send className="w-5 h-5 mr-2" />
+                                        Send Now
                                     </>
                                 )}
                             </Button>
-                        </CardContent>
-                    </Card>
-                </div>
+                            {sendSuccess && (
+                                <p className="text-center text-green-600 font-medium text-sm mt-2 animate-in fade-in slide-in-from-bottom-1">
+                                    <CheckCircle2 className="w-4 h-4 inline mr-1" /> Sent successfully
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                ) : (
+                    // Desktop Layout (Original)
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* File Selection Card */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg">Select Document</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div
+                                    className={cn(
+                                        "border-2 border-dashed rounded-lg p-6 text-center transition-colors",
+                                        selectedFile ? "border-green-500/50 bg-green-500/5" : "border-muted-foreground/25 hover:border-primary/50"
+                                    )}
+                                >
+                                    {selectedFile ? (
+                                        <div className="space-y-3">
+                                            {filePreview ? (
+                                                <img
+                                                    src={filePreview}
+                                                    alt="Preview"
+                                                    className="max-h-48 mx-auto rounded-lg shadow-sm"
+                                                />
+                                            ) : (
+                                                <FileText className="w-16 h-16 mx-auto text-muted-foreground" />
+                                            )}
+                                            <div className="text-sm">
+                                                <p className="font-medium truncate">{selectedFile.name}</p>
+                                                <p className="text-muted-foreground">
+                                                    {(selectedFile.size / 1024).toFixed(1)} KB
+                                                </p>
+                                            </div>
+                                            <Button variant="ghost" size="sm" onClick={clearFile}>
+                                                <X className="w-4 h-4 mr-1" /> Remove
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div className="flex justify-center gap-4">
+
+                                                <label className="cursor-pointer">
+                                                    <input
+                                                        ref={fileInputRef}
+                                                        type="file"
+                                                        accept="image/*,application/pdf"
+                                                        className="hidden"
+                                                        onChange={handleFileSelect}
+                                                    />
+                                                    <div className="flex flex-col items-center gap-2 p-4 rounded-lg bg-muted hover:bg-muted/80 transition-colors">
+                                                        <Image className="w-8 h-8 text-primary" />
+                                                        <span className="text-sm font-medium">Gallery</span>
+                                                    </div>
+                                                </label>
+
+                                                <label className="cursor-pointer">
+                                                    <input
+                                                        type="file"
+                                                        accept="application/pdf"
+                                                        className="hidden"
+                                                        onChange={handleFileSelect}
+                                                    />
+                                                    <div className="flex flex-col items-center gap-2 p-4 rounded-lg bg-muted hover:bg-muted/80 transition-colors">
+                                                        <FileText className="w-8 h-8 text-primary" />
+                                                        <span className="text-sm font-medium">PDF</span>
+                                                    </div>
+                                                </label>
+                                            </div>
+                                            <p className="text-sm text-muted-foreground">
+                                                Select an image or PDF to share
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <Label>Message (Optional)</Label>
+                                    <Input
+                                        value={caption}
+                                        onChange={e => setCaption(e.target.value)}
+                                        placeholder="Add a caption or message..."
+                                        className="mt-1"
+                                    />
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        {/* Customer & Send Card */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg">Recipient</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div>
+                                    <Label>Recipient *</Label>
+                                    <div className="flex gap-2 mt-1">
+                                        <Button
+                                            type="button"
+                                            variant={recipientMode === 'contact' ? 'default' : 'outline'}
+                                            className="flex-1"
+                                            onClick={() => {
+                                                setRecipientMode('contact');
+                                                setSendSuccess(false);
+                                                setPhone('');
+                                            }}
+                                        >
+                                            WhatsApp Contact
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant={recipientMode === 'manual' ? 'default' : 'outline'}
+                                            className="flex-1"
+                                            onClick={() => {
+                                                setRecipientMode('manual');
+                                                setSelectedCustomerId('');
+                                                setSendSuccess(false);
+                                                setPhone('');
+                                            }}
+                                        >
+                                            Manual Number
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                {recipientMode === 'contact' && (
+                                    <div>
+                                        <Label>WhatsApp Contact *</Label>
+                                        <div className="flex gap-2 mt-1">
+                                            <Select
+                                                className="flex-1"
+                                                value={selectedCustomerId}
+                                                onChange={e => setSelectedCustomerId(e.target.value)}
+                                                options={[
+                                                    { value: "", label: "Select Contact" },
+                                                    ...customers.map(c => ({
+                                                        value: c.id,
+                                                        label: `${c.name} (${c.phone})`
+                                                    }))
+                                                ]}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div>
+                                    <Label>WhatsApp Number *</Label>
+                                    <Input
+                                        value={phone}
+                                        onChange={e => setPhone(e.target.value)}
+                                        placeholder="e.g. +91 9876543210"
+                                        className="mt-1"
+                                        disabled={recipientMode === 'contact'}
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        {recipientMode === 'manual'
+                                            ? 'Add +91 or your country code before the number.'
+                                            : 'Use the full WhatsApp number.'}
+                                    </p>
+                                </div>
+
+                                {recipientMode === 'contact' && selectedCustomer && (
+                                    <div className="p-3 bg-muted rounded-lg">
+                                        <div className="font-medium">{selectedCustomer.name}</div>
+                                        {selectedCustomer.phone && (
+                                            <div className="text-sm text-muted-foreground">{selectedCustomer.phone}</div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {sendSuccess && (
+                                    <div className="flex items-center gap-2 p-3 bg-green-500/10 text-green-600 rounded-lg">
+                                        <CheckCircle2 className="w-5 h-5" />
+                                        Document sent successfully!
+                                    </div>
+                                )}
+
+                                <Button
+                                    className="w-full"
+                                    size="lg"
+                                    onClick={handleSend}
+                                    disabled={sending || !selectedFile || !phone || (recipientMode === 'contact' && !selectedCustomerId)}
+                                >
+                                    {sending ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            Sending...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Send className="w-4 h-4 mr-2" />
+                                            Send via WhatsApp
+                                        </>
+                                    )}
+                                </Button>
+                            </CardContent>
+                        </Card>
+                    </div>
+                )
             ) : (
                 /* History Tab */
                 <Card>

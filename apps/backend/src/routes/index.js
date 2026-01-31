@@ -4183,7 +4183,7 @@ router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), 
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.get('/api/whatsapp/contacts', requirePermission('wa_docs', PERM_READ), async (req, res) => {
+router.get('/api/whatsapp/contacts', requirePermission('send_documents', PERM_READ), async (req, res) => {
   try {
     const contacts = await whatsapp.getContacts();
     // Filter out groups if needed, but for now user said "all numbers"
@@ -4217,7 +4217,7 @@ router.get('/api/whatsapp/contacts', requirePermission('wa_docs', PERM_READ), as
   }
 });
 
-router.post('/api/whatsapp/send-document', requirePermission('wa_docs', PERM_WRITE), upload.single('file'), async (req, res) => {
+router.post('/api/whatsapp/send-document', requirePermission('send_documents', PERM_WRITE), upload.single('file'), async (req, res) => {
   try {
     const { event, payload } = req.body;
     const tpl = await getTemplateByEvent(event);

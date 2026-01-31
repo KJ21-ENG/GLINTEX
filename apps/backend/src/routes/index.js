@@ -21,7 +21,7 @@ import { generateSummaryPDF } from '../utils/pdf/index.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 
 const router = Router();
-const upload = multer({ dest: 'tmp/' });
+const upload = multer({ storage: multer.memoryStorage() });
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
 const PERM_READ = ACCESS_LEVELS.READ;

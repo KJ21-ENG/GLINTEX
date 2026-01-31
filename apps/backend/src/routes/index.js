@@ -21,6 +21,7 @@ import { generateSummaryPDF } from '../utils/pdf/index.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 
 const router = Router();
+const upload = multer({ dest: 'tmp/' });
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
 const PERM_READ = ACCESS_LEVELS.READ;
@@ -4179,6 +4180,61 @@ router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), 
     const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '', sendToPrimary: sendToPrimary !== false, groupIds: cleanGroups }, { actorUserId });
     await logCrudWithActor(req, { entityType: 'whatsapp_template', entityId: String(t.id), action: 'upsert', payload: { event } });
     res.json(t);
+  } catch (err) { res.status(500).json({ error: String(err) }); }
+});
+
+router.get('/api/whatsapp/contacts', requirePermission('wa_docs', PERM_READ), async (req, res) => {
+  try {
+    const contacts = await whatsapp.getContacts();
+    // Filter out groups if needed, but for now user said "all numbers"
+    // We typically want only individual contacts for "Send Documents", but maybe user wants groups too? 
+    // The previous implementation used "Customer" which implies individuals. 
+    // Let's filter out groups by default to be safe, or include them if distinguishable.
+    // Spec said "numbers of logged in whatsapp account", usually implies contacts.
+    const individualContacts = contacts.filter(c => !c.isGroup && c.hasSavedName && /[A-Za-z]/.test(c.name || '') && !c.id.endsWith('@lid'));
+
+    // Deduplicate by normalized number (handles duplicates with country code or formatting)
+    const normalizeNumber = (value) => {
+      const digits = String(value || '').replace(/\D/g, '');
+      if (digits.length > 10 && digits.startsWith('91')) return digits.slice(-10);
+      return digits;
+    };
+    const uniqueByNumber = new Map();
+    individualContacts.forEach(c => {
+      const key = normalizeNumber(c.number);
+      if (!key) return;
+      if (!uniqueByNumber.has(key)) uniqueByNumber.set(key, c);
+    });
+    const uniqueContacts = Array.from(uniqueByNumber.values());
+
+    // Sort by name
+    uniqueContacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    res.json({ contacts: uniqueContacts });
+  } catch (err) {
+    console.error('Failed to get whatsapp contacts', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch contacts' });
+  }
+});
+
+router.post('/api/whatsapp/send-document', requirePermission('wa_docs', PERM_WRITE), upload.single('file'), async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+    const tpl = await getTemplateByEvent(event);
+    if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
+    const msg = interpolateTemplate(tpl.template, payload || {});
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const recipients = [];
+    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
+    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
+    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
+    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
+    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
+    if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
+    const seen = new Set();
+    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(() => { }); else whatsapp.sendToChatIdSafe(r.value, msg).catch(() => { }); });
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
@@ -14002,23 +14058,31 @@ const documentUpload = multer({
 // Send document via WhatsApp
 router.post('/api/documents/send', requireAuth, requirePermission('send_documents', PERM_WRITE), documentUpload.single('file'), async (req, res) => {
   try {
-    const { customerId, phone, caption } = req.body;
+    const { customerId, phone, caption, customerName } = req.body;
     const file = req.file;
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    if (!customerId) {
-      return res.status(400).json({ error: 'Customer ID is required' });
-    }
     if (!phone) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
 
-    // Verify customer exists
-    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    // Resolve or create customer if not provided
+    let customer = null;
+    if (customerId) {
+      customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    }
     if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
+      customer = await prisma.customer.findFirst({ where: { phone } });
+    }
+    if (!customer) {
+      customer = await prisma.customer.create({
+        data: {
+          name: (customerName || phone || '').trim() || 'Unknown',
+          phone
+        }
+      });
     }
 
     // Send via WhatsApp (file stays in memory, no disk storage)
@@ -14033,7 +14097,7 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
     // Save metadata only (no file content)
     const docMessage = await prisma.documentMessage.create({
       data: {
-        customerId,
+        customerId: customer.id,
         phone,
         filename: file.originalname,
         mimetype: file.mimetype,

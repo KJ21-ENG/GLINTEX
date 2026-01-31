@@ -182,12 +182,12 @@ class WhatsappService {
         const client = new Client({
           authStrategy: new LocalAuth({ clientId: 'glintex' }),
           puppeteer: puppeteerOpts,
-          webVersion: DEFAULT_WWEB_VERSION,
-          webVersionCache: {
-            type: 'local',
-            path: WWEB_CACHE_PATH,
-            strict: WWEB_CACHE_STRICT,
-          },
+          // webVersion: DEFAULT_WWEB_VERSION,
+          // webVersionCache: {
+          //   type: 'local',
+          //   path: WWEB_CACHE_PATH,
+          //   strict: WWEB_CACHE_STRICT,
+          // },
         });
 
         client.on('qr', async (qr) => {
@@ -627,6 +627,24 @@ class WhatsappService {
   async _handleFatalDisconnect(reason) {
     await this._destroyClient();
     this._setDisconnectedState({ reason, scheduleReconnect: !this._shuttingDown });
+  }
+  async getContacts() {
+    try {
+      if (this.status !== 'connected' || !this.client) {
+        throw new Error('WhatsApp client not connected');
+      }
+      const contacts = await this.client.getContacts();
+      return contacts.map(c => ({
+        id: c.id._serialized,
+        name: c.name || c.pushname || c.number,
+        number: c.number,
+        isGroup: c.isGroup,
+        hasSavedName: !!c.name
+      }));
+    } catch (err) {
+      console.error('Failed to fetch contacts', err);
+      throw err;
+    }
   }
 }
 

@@ -16,7 +16,7 @@ export function SendDocuments() {
     const { db } = useInventory();
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [activeTab, setActiveTab] = useState('send'); // 'send' | 'history'
-    const [customers, setCustomers] = useState([]);
+    const [customers, setCustomers] = useState([]); // This now holds WhatsApp contacts
     const [history, setHistory] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [historySearch, setHistorySearch] = useState('');
@@ -27,6 +27,7 @@ export function SendDocuments() {
     const [filePreview, setFilePreview] = useState(null);
     const [caption, setCaption] = useState('');
     const [phone, setPhone] = useState('');
+    const [recipientMode, setRecipientMode] = useState('contact'); // 'contact' | 'manual'
     const [sending, setSending] = useState(false);
     const [sendSuccess, setSendSuccess] = useState(false);
     const fileInputRef = useRef(null);
@@ -36,17 +37,42 @@ export function SendDocuments() {
     const [newCustomerForm, setNewCustomerForm] = useState({ name: '', phone: '', address: '' });
     const [savingCustomer, setSavingCustomer] = useState(false);
 
-    // Load customers
+    // Load contacts
     useEffect(() => {
-        async function loadCustomers() {
+        async function loadContacts() {
             try {
-                const res = await api.listCustomers();
-                setCustomers(res.customers || []);
+                const res = await api.getWhatsappContacts();
+                const contacts = res.contacts || [];
+                // Map to format expected by Select: { id: number, name: name, phone: number }
+                // Since we don't have IDs for whatsapp contacts like we do for database customers, 
+                // we'll use the number as the ID.
+                const normalizeNumber = (value) => {
+                    const digits = String(value || '').replace(/\D/g, '');
+                    if (digits.length > 10 && digits.startsWith('91')) return digits.slice(-10);
+                    return digits;
+                };
+                const deduped = new Map();
+                contacts
+                    .filter(c => c.name && /[A-Za-z]/.test(c.name))
+                    .forEach(c => {
+                        const key = normalizeNumber(c.number);
+                        if (!key) return;
+                        if (!deduped.has(key)) deduped.set(key, c);
+                    });
+                const mapped = Array.from(deduped.values()).map(c => ({
+                    id: c.number, // Use number as ID
+                    name: c.name || c.number,
+                    phone: c.number,
+                    address: null
+                }));
+                // Sort by name
+                mapped.sort((a, b) => a.name.localeCompare(b.name));
+                setCustomers(mapped);
             } catch (err) {
-                console.error('Failed to load customers', err);
+                console.error('Failed to load whatsapp contacts', err);
             }
         }
-        loadCustomers();
+        loadContacts();
     }, []);
 
     // Load history when tab changes
@@ -82,6 +108,7 @@ export function SendDocuments() {
 
     // Update phone when customer changes
     useEffect(() => {
+        if (recipientMode !== 'contact') return;
         if (selectedCustomerId) {
             const customer = customers.find(c => c.id === selectedCustomerId);
             if (customer?.phone) {
@@ -92,7 +119,7 @@ export function SendDocuments() {
         } else {
             setPhone('');
         }
-    }, [selectedCustomerId, customers]);
+    }, [selectedCustomerId, customers, recipientMode]);
 
     function handleFileSelect(e) {
         const file = e.target.files?.[0];
@@ -119,8 +146,8 @@ export function SendDocuments() {
     }
 
     async function handleSend() {
-        if (!selectedFile || !selectedCustomerId || !phone) {
-            alert('Please select a customer, file, and enter phone number');
+        if (!selectedFile || !phone || (recipientMode === 'contact' && !selectedCustomerId)) {
+            alert('Please select a file and recipient, then enter a phone number');
             return;
         }
 
@@ -129,7 +156,12 @@ export function SendDocuments() {
         try {
             const formData = new FormData();
             formData.append('file', selectedFile);
-            formData.append('customerId', selectedCustomerId);
+            if (selectedCustomerId) {
+                formData.append('customerId', selectedCustomerId);
+            }
+            if (selectedCustomer?.name) {
+                formData.append('customerName', selectedCustomer.name);
+            }
             formData.append('phone', phone);
             if (caption.trim()) {
                 formData.append('caption', caption.trim());
@@ -137,8 +169,11 @@ export function SendDocuments() {
 
             await api.sendDocument(formData);
             setSendSuccess(true);
+            setTimeout(() => setSendSuccess(false), 3000);
             clearFile();
             setCaption('');
+            setSelectedCustomerId('');
+            setPhone('');
             // Refresh history if on history tab
             if (activeTab === 'history') {
                 loadHistory();
@@ -331,31 +366,58 @@ export function SendDocuments() {
                             <CardTitle className="text-lg">Recipient</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                            {/* Customer Select */}
+                            {/* Recipient Mode */}
                             <div>
-                                <Label>Customer *</Label>
+                                <Label>Recipient *</Label>
                                 <div className="flex gap-2 mt-1">
-                                    <Select
-                                        className="flex-1"
-                                        value={selectedCustomerId}
-                                        onChange={e => setSelectedCustomerId(e.target.value)}
-                                        options={[
-                                            { value: "", label: "Select Customer" },
-                                            ...customers.map(c => ({
-                                                value: c.id,
-                                                label: `${c.name} ${c.phone ? `(${c.phone})` : ''}`
-                                            }))
-                                        ]}
-                                    />
                                     <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => setNewCustomerModalOpen(true)}
+                                        type="button"
+                                        variant={recipientMode === 'contact' ? 'default' : 'outline'}
+                                        className="flex-1"
+                                        onClick={() => {
+                                            setRecipientMode('contact');
+                                            setSendSuccess(false);
+                                            setPhone('');
+                                        }}
                                     >
-                                        <Plus className="w-4 h-4" />
+                                        WhatsApp Contact
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant={recipientMode === 'manual' ? 'default' : 'outline'}
+                                        className="flex-1"
+                                        onClick={() => {
+                                            setRecipientMode('manual');
+                                            setSelectedCustomerId('');
+                                            setSendSuccess(false);
+                                            setPhone('');
+                                        }}
+                                    >
+                                        Manual Number
                                     </Button>
                                 </div>
                             </div>
+
+                            {/* Customer Select */}
+                            {recipientMode === 'contact' && (
+                                <div>
+                                    <Label>WhatsApp Contact *</Label>
+                                    <div className="flex gap-2 mt-1">
+                                        <Select
+                                            className="flex-1"
+                                            value={selectedCustomerId}
+                                            onChange={e => setSelectedCustomerId(e.target.value)}
+                                            options={[
+                                                { value: "", label: "Select Contact" },
+                                                ...customers.map(c => ({
+                                                    value: c.id,
+                                                    label: `${c.name} (${c.phone})`
+                                                }))
+                                            ]}
+                                        />
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Phone Number */}
                             <div>
@@ -363,16 +425,19 @@ export function SendDocuments() {
                                 <Input
                                     value={phone}
                                     onChange={e => setPhone(e.target.value)}
-                                    placeholder="e.g. 9876543210"
+                                    placeholder="e.g. +91 9876543210"
                                     className="mt-1"
+                                    disabled={recipientMode === 'contact'}
                                 />
                                 <p className="text-xs text-muted-foreground mt-1">
-                                    Indian mobile number (10 digits)
+                                    {recipientMode === 'manual'
+                                        ? 'Add +91 or your country code before the number.'
+                                        : 'Use the full WhatsApp number.'}
                                 </p>
                             </div>
 
                             {/* Selected Customer Info */}
-                            {selectedCustomer && (
+                            {recipientMode === 'contact' && selectedCustomer && (
                                 <div className="p-3 bg-muted rounded-lg">
                                     <div className="font-medium">{selectedCustomer.name}</div>
                                     {selectedCustomer.phone && (
@@ -397,7 +462,7 @@ export function SendDocuments() {
                                 className="w-full"
                                 size="lg"
                                 onClick={handleSend}
-                                disabled={sending || !selectedFile || !selectedCustomerId || !phone}
+                                disabled={sending || !selectedFile || !phone || (recipientMode === 'contact' && !selectedCustomerId)}
                             >
                                 {sending ? (
                                     <>

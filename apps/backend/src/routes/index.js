@@ -4090,7 +4090,7 @@ router.get('/api/whatsapp/status', requirePermission('settings', PERM_READ), asy
   }
 });
 
-router.post('/api/whatsapp/start', requirePermission('settings', PERM_WRITE), async (req, res) => {
+router.post('/api/whatsapp/start', requireRole('admin'), requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const force = req.body && (req.body.force === true || req.body.force === 'true');
     await whatsapp.init({ force });
@@ -4102,7 +4102,7 @@ router.post('/api/whatsapp/start', requirePermission('settings', PERM_WRITE), as
 });
 
 // List Whatsapp groups
-router.get('/api/whatsapp/groups', requirePermission('settings', PERM_READ), async (req, res) => {
+router.get('/api/whatsapp/groups', requireRole('admin'), requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const st = whatsapp.getStatus();
     if (st.status !== 'connected' || !whatsapp.client) return res.status(409).json({ error: 'not_connected' });
@@ -4259,7 +4259,7 @@ router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.get('/api/whatsapp/qrcode', requirePermission('settings', PERM_READ), async (req, res) => {
+router.get('/api/whatsapp/qrcode', requireRole('admin'), requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const qr = whatsapp.getQrDataUrl();
     res.json({ qr });
@@ -4284,7 +4284,7 @@ router.get('/api/whatsapp/events', requirePermission('settings', PERM_READ), (re
   });
 });
 
-router.post('/api/whatsapp/logout', requirePermission('settings', PERM_WRITE), async (req, res) => {
+router.post('/api/whatsapp/logout', requireRole('admin'), requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     await whatsapp.logout();
     res.json({ ok: true });

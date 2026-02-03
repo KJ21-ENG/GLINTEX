@@ -403,6 +403,7 @@ export function Settings() {
                         whatsappQr={whatsappQr}
                         setWhatsappQr={setWhatsappQr}
                         readOnly={isReadOnly}
+                        isAdmin={isAdmin}
                     />
                 )}
                 {activeTab === 'templates' && (
@@ -774,8 +775,10 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
     );
 }
 
-function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr, readOnly }) {
+function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr, readOnly, isAdmin }) {
     const isReadOnly = !!readOnly;
+    const isAdminUser = !!isAdmin;
+    const canManageConnection = isAdminUser && !isReadOnly;
     const [working, setWorking] = useState(false);
     const [primaryMobile, setPrimaryMobile] = useState('');
     const [allowedGroupIds, setAllowedGroupIds] = useState([]);
@@ -790,7 +793,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     const isConnected = whatsappStatus.status === 'connected';
 
     const handleConnect = async () => {
-        if (isReadOnly) return;
+        if (!canManageConnection) return;
         setWorking(true);
         try {
             await api.whatsappStart();
@@ -800,7 +803,7 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
     };
 
     const handleLogout = async () => {
-        if (isReadOnly) return;
+        if (!canManageConnection) return;
         setWorking(true);
         try {
             await api.whatsappLogout();
@@ -808,6 +811,11 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
             setWhatsappStatus({ status: 'disconnected' });
             setGroups([]);
         } finally { setWorking(false); }
+    };
+
+    const handleRefreshGroups = () => {
+        if (!canManageConnection) return;
+        setGroups([]);
     };
 
     const handleSaveSettings = async () => {
@@ -852,19 +860,32 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                                 {whatsappStatus.mobile && <span className="text-xs text-muted-foreground">+{whatsappStatus.mobile}</span>}
                             </div>
                         </div>
-                        <div className="flex gap-2 w-full sm:w-auto">
-                            <Button size="sm" variant="outline" onClick={() => { setGroups([]); }} disabled={!isConnected || working} title="Refresh Groups" className="flex-1 sm:flex-none">
-                                <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
-                            </Button>
-                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected || isReadOnly} className="flex-1 sm:flex-none">
-                                {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
-                            </Button>
-                            {isConnected && (
-                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working || isReadOnly} className="flex-1 sm:flex-none">
-                                    <LogOut className="w-4 h-4 mr-2" /> Logout
+                        {isAdminUser ? (
+                            <div className="flex gap-2 w-full sm:w-auto">
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleRefreshGroups}
+                                    disabled={!isConnected || working || !canManageConnection}
+                                    title="Refresh Groups"
+                                    className="flex-1 sm:flex-none"
+                                >
+                                    <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
                                 </Button>
-                            )}
-                        </div>
+                                <Button size="sm" onClick={handleConnect} disabled={working || isConnected || !canManageConnection} className="flex-1 sm:flex-none">
+                                    {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
+                                </Button>
+                                {isConnected && (
+                                    <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working || !canManageConnection} className="flex-1 sm:flex-none">
+                                        <LogOut className="w-4 h-4 mr-2" /> Logout
+                                    </Button>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-[10px] text-muted-foreground italic">
+                                Only administrators can manage WhatsApp connection.
+                            </p>
+                        )}
                     </div>
                     {whatsappQr && (
                         <div className="mt-4 flex justify-center p-4 bg-white rounded-lg border">

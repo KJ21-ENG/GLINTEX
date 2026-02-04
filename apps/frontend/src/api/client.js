@@ -84,6 +84,19 @@ export async function getModuleProcess(process, options = {}) {
 export async function getModuleOpeningStock() { return await request('/api/module/opening_stock'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
+export async function getCutterPurchaseSequenceNext() { return await request('/api/inbound/cutter_purchase/sequence/next'); }
+export async function getCutterPurchaseLot(lotNo) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`);
+}
+export async function updateCutterPurchaseLot(lotNo, payload) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`, { method: 'PUT', body: payload });
+}
+export async function deleteCutterPurchaseLot(lotNo) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`, { method: 'DELETE' });
+}
 export async function reserveOpeningIssueSeries(stage) {
   return await request('/api/opening_stock/issue_series/reserve', { method: 'POST', body: { stage } });
 }
@@ -116,6 +129,9 @@ export async function resetAdminUserPassword(id, password) {
   return await request(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });
 }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
+export async function createCutterPurchaseInbound(payload) {
+  return await request('/api/inbound/cutter_purchase', { method: 'POST', body: payload });
+}
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
 export async function updateIssueToCutterMachine(id, payload) {

@@ -19,7 +19,12 @@ const DialogContent = React.forwardRef(({ className, title, children, onOpenChan
   <Card
     ref={ref}
     className={cn(
-      "z-50 grid w-full max-w-lg gap-4 bg-background p-0 shadow-lg duration-200 animate-in zoom-in-95 slide-in-from-bottom-10 sm:rounded-lg relative",
+      // NOTE: we explicitly set `grid-cols-1` so the grid track uses `minmax(0, 1fr)`.
+      // Without this, the implicit `auto` column can grow to the max-content width of children
+      // (wide tables), pushing dialog actions off-screen.
+      "z-50 grid grid-cols-1 w-full max-w-lg gap-4 bg-background p-0 shadow-lg duration-200 animate-in zoom-in-95 slide-in-from-bottom-10 sm:rounded-lg relative",
+      // Important: allow the dialog to shrink within the flex overlay even when children have large min-content width (e.g. wide tables)
+      "min-w-0",
       className
     )}
     {...props}
@@ -38,5 +43,3 @@ const DialogContent = React.forwardRef(({ className, title, children, onOpenChan
 DialogContent.displayName = "DialogContent"
 
 export { Dialog, DialogContent }
-
-

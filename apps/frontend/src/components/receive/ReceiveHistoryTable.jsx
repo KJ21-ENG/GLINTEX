@@ -11,9 +11,12 @@ import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
+import { usePermission } from '../../hooks/usePermission';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
-    const { db, process, refreshProcessData } = useInventory();
+    const { db, process, refreshProcessData, refreshModuleData } = useInventory();
+    const { canDelete: canDeleteInbound } = usePermission('inbound');
+    const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
     const [editingChallan, setEditingChallan] = useState(null);
     const [editRows, setEditRows] = useState([]);
@@ -1445,6 +1448,24 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         URL.revokeObjectURL(url);
     };
 
+    const isCutterPurchaseLot = (lotNo) => String(lotNo || '').toUpperCase().startsWith('CP-');
+
+    const handleDeleteCutterPurchase = async (challan) => {
+        if (!challan?.lotNo) return;
+        const lotNo = challan.lotNo;
+        const confirmed = window.confirm(
+            `Delete cutter purchase ${lotNo}?\n\nThis will delete the challan, all crates, piece totals, and the inbound lot.`
+        );
+        if (!confirmed) return;
+        try {
+            await api.deleteCutterPurchaseLot(lotNo);
+            await refreshProcessData(process || 'cutter');
+            await refreshModuleData('inbound');
+        } catch (err) {
+            alert(err.message || 'Failed to delete cutter purchase');
+        }
+    };
+
     const getActions = (row) => [
         {
             label: 'Reprint',
@@ -1470,38 +1491,58 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         ] : []),
     ];
 
-    const getChallanActions = (challan) => ([
-        {
-            label: 'Print',
-            icon: <Printer className="w-4 h-4" />,
-            onClick: () => handleChallanPrint(challan),
-        },
-        {
-            label: 'Export CSV',
-            icon: <Download className="w-4 h-4" />,
-            onClick: () => handleChallanExport(challan),
-        },
-        {
-            label: 'Edit',
-            icon: <Edit2 className="w-4 h-4" />,
-            onClick: () => handleEditChallan(challan),
-            disabled: !canEdit,
-            disabledReason: 'You do not have permission to edit receive challans.',
-        },
-        {
-            label: 'View Log',
-            icon: <History className="w-4 h-4" />,
-            onClick: () => setLogChallan(challan),
-        },
-        {
-            label: 'Delete',
-            icon: <Trash2 className="w-4 h-4" />,
-            onClick: () => handleDeleteChallan(challan),
-            variant: 'destructive',
-            disabled: !canDelete,
-            disabledReason: 'You do not have permission to delete receive challans.',
-        },
-    ]);
+    const getChallanActions = (challan) => {
+        const base = [
+            {
+                label: 'Print',
+                icon: <Printer className="w-4 h-4" />,
+                onClick: () => handleChallanPrint(challan),
+            },
+            {
+                label: 'Export CSV',
+                icon: <Download className="w-4 h-4" />,
+                onClick: () => handleChallanExport(challan),
+            },
+            {
+                label: 'View Log',
+                icon: <History className="w-4 h-4" />,
+                onClick: () => setLogChallan(challan),
+            },
+        ];
+
+        if (process === 'cutter' && isCutterPurchaseLot(challan?.lotNo)) {
+            return [
+                ...base,
+                {
+                    label: 'Delete Cutter Purchase',
+                    icon: <Trash2 className="w-4 h-4" />,
+                    onClick: () => handleDeleteCutterPurchase(challan),
+                    variant: 'destructive',
+                    disabled: !canDeleteCutterPurchase,
+                    disabledReason: 'You need delete access for both Receive (Cutter) and Inbound.',
+                },
+            ];
+        }
+
+        return [
+            ...base,
+            {
+                label: 'Edit',
+                icon: <Edit2 className="w-4 h-4" />,
+                onClick: () => handleEditChallan(challan),
+                disabled: !canEdit,
+                disabledReason: 'You do not have permission to edit receive challans.',
+            },
+            {
+                label: 'Delete',
+                icon: <Trash2 className="w-4 h-4" />,
+                onClick: () => handleDeleteChallan(challan),
+                variant: 'destructive',
+                disabled: !canDelete,
+                disabledReason: 'You do not have permission to delete receive challans.',
+            },
+        ];
+    };
 
     const holoEditTotals = useMemo(() => {
         if (process !== 'holo' || !receiveDraft) return null;

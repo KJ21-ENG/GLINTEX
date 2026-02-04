@@ -7,7 +7,7 @@ import prisma from '../lib/prisma.js';
 import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
-import { sendNotification } from '../utils/notifications.js';
+import { appendCreatorToCaption, buildWhatsappMessage, sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
@@ -454,6 +454,7 @@ function extractWastageFromNote(note) {
 }
 
 const OPENING_LOT_SEQUENCE_ID = 'opening_lot_sequence';
+const CUTTER_PURCHASE_LOT_SEQUENCE_ID = 'cutter_purchase_lot_sequence';
 
 function formatOpeningLotNo(nextVal) {
   const num = Number(nextVal);
@@ -461,6 +462,79 @@ function formatOpeningLotNo(nextVal) {
     ? String(num).padStart(3, '0')
     : String(nextVal || '').padStart(3, '0');
   return `OP-${padded}`;
+}
+
+function formatCutterPurchaseLotNo(nextVal) {
+  const num = Number(nextVal);
+  const padded = Number.isFinite(num)
+    ? String(num).padStart(3, '0')
+    : String(nextVal || '').padStart(3, '0');
+  return `CP-${padded}`;
+}
+
+function isCutterPurchaseLotNo(lotNo) {
+  if (!lotNo || typeof lotNo !== 'string') return false;
+  return lotNo.trim().toUpperCase().startsWith('CP-');
+}
+
+function cutterPurchasePieceIdFromLotNo(lotNo) {
+  if (!lotNo) return null;
+  const trimmed = String(lotNo).trim();
+  if (!trimmed) return null;
+  return `${trimmed}-1`;
+}
+
+async function resolveLotNoFromPieceId(pieceId) {
+  if (!pieceId) return null;
+  const normalized = normalizePieceId(pieceId);
+  if (!normalized) return null;
+  const inbound = await prisma.inboundItem.findUnique({
+    where: { id: normalized },
+    select: { lotNo: true },
+  });
+  if (inbound?.lotNo) return inbound.lotNo;
+  const parts = normalized.split('-').map(p => p.trim()).filter(Boolean);
+  if (parts.length >= 3 && /^[A-Za-z]+$/.test(parts[0])) {
+    return `${parts[0]}-${parts[1]}`;
+  }
+  return parts[0] || null;
+}
+
+async function findHoloIssuesReferencingCutterRows({ rowIds = [], barcodes = [] }) {
+  const uniqueRowIds = Array.from(new Set((rowIds || []).filter(Boolean)));
+  const uniqueBarcodes = Array.from(new Set((barcodes || []).filter(Boolean)));
+  const rowIdArray = uniqueRowIds.length > 0 ? uniqueRowIds : ['__none__'];
+  const barcodeArray = uniqueBarcodes.length > 0 ? uniqueBarcodes : ['__none__'];
+  const holoUsage = await prisma.$queryRaw`
+    SELECT id, barcode, date
+    FROM "IssueToHoloMachine"
+    WHERE "isDeleted" = false
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE("receivedRowRefs", '[]'::jsonb)) AS elem
+        WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+           OR elem->>'barcode' = ANY (${barcodeArray}::text[])
+      )
+    LIMIT 10
+  `;
+  return Array.isArray(holoUsage) ? holoUsage : [];
+}
+
+async function findCutterBoxTransfersForRows({ rowIds = [], barcodes = [] }) {
+  const uniqueRowIds = Array.from(new Set((rowIds || []).filter(Boolean)));
+  const uniqueBarcodes = Array.from(new Set((barcodes || []).filter(Boolean)));
+  if (uniqueRowIds.length === 0 && uniqueBarcodes.length === 0) return [];
+  return await prisma.boxTransfer.findMany({
+    where: {
+      stage: 'cutter',
+      isReversed: false,
+      OR: [
+        ...(uniqueRowIds.length > 0 ? [{ fromItemId: { in: uniqueRowIds } }, { toItemId: { in: uniqueRowIds } }] : []),
+        ...(uniqueBarcodes.length > 0 ? [{ fromBarcode: { in: uniqueBarcodes } }, { toBarcode: { in: uniqueBarcodes } }] : []),
+      ],
+    },
+    select: { id: true, date: true, fromItemId: true, toItemId: true },
+    take: 10,
+  });
 }
 
 function buildOpeningGroupKey(stage, {
@@ -492,6 +566,21 @@ async function allocateOpeningLot(tx, actorUserId) {
     create: { id: OPENING_LOT_SEQUENCE_ID, nextValue: 1, ...actorCreateFields(actorUserId) },
   });
   return formatOpeningLotNo(seq.nextValue);
+}
+
+async function getCutterPurchaseLotPreview() {
+  const seq = await prisma.sequence.findUnique({ where: { id: CUTTER_PURCHASE_LOT_SEQUENCE_ID } });
+  const nextValue = (seq ? seq.nextValue : 0) + 1;
+  return { nextValue, lotNo: formatCutterPurchaseLotNo(nextValue) };
+}
+
+async function allocateCutterPurchaseLot(tx, actorUserId) {
+  const seq = await tx.sequence.upsert({
+    where: { id: CUTTER_PURCHASE_LOT_SEQUENCE_ID },
+    update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+    create: { id: CUTTER_PURCHASE_LOT_SEQUENCE_ID, nextValue: 1, ...actorCreateFields(actorUserId) },
+  });
+  return formatCutterPurchaseLotNo(seq.nextValue);
 }
 
 async function ensureHoloIssueSequence(tx, actorUserId) {
@@ -2063,6 +2152,22 @@ router.get('/api/sequence/next', requirePermission('inbound', PERM_READ), async 
     res.status(500).json({ error: 'Failed to read sequence' });
   }
 });
+
+// Return the next cutter purchase lot number preview (value that will be used on save)
+router.get(
+  '/api/inbound/cutter_purchase/sequence/next',
+  requirePermission('inbound', PERM_READ),
+  requirePermission('receive.cutter', PERM_READ),
+  async (req, res) => {
+    try {
+      const preview = await getCutterPurchaseLotPreview();
+      res.json({ next: preview.lotNo, raw: preview.nextValue });
+    } catch (err) {
+      console.error('Failed to read cutter purchase sequence', err);
+      res.status(500).json({ error: 'Failed to read sequence' });
+    }
+  },
+);
 
 // Set the lot sequence to a specific integer value (so the next created lot becomes value+1)
 router.post('/api/sequence/set', async (req, res) => {
@@ -4222,7 +4327,11 @@ router.post('/api/whatsapp/send-document', requirePermission('send_documents', P
     const { event, payload } = req.body;
     const tpl = await getTemplateByEvent(event);
     if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
-    const msg = interpolateTemplate(tpl.template, payload || {});
+    const payloadWithActor = { ...(payload || {}) };
+    if (!Object.prototype.hasOwnProperty.call(payloadWithActor, 'createdByUserId') && req.user?.id) {
+      payloadWithActor.createdByUserId = req.user.id;
+    }
+    const msg = await buildWhatsappMessage(tpl.template, payloadWithActor);
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
     const recipients = [];
     if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
@@ -4243,7 +4352,11 @@ router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE
     const { event, payload } = req.body;
     const tpl = await getTemplateByEvent(event);
     if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
-    const msg = interpolateTemplate(tpl.template, payload || {});
+    const payloadWithActor = { ...(payload || {}) };
+    if (!Object.prototype.hasOwnProperty.call(payloadWithActor, 'createdByUserId') && req.user?.id) {
+      payloadWithActor.createdByUserId = req.user.id;
+    }
+    const msg = await buildWhatsappMessage(tpl.template, payloadWithActor);
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
     const recipients = [];
     if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
@@ -4403,7 +4516,7 @@ router.post('/api/lots', requirePermission('inbound', PERM_WRITE), async (req, r
     // Notify inbound created (non-blocking)
     try {
       const itemName = (await prisma.item.findUnique({ where: { id: itemId } })).name || '';
-      sendNotification('inbound_created', { itemName, lotNo: result.lotNo, date, totalPieces, totalWeight });
+      sendNotification('inbound_created', { itemName, lotNo: result.lotNo, date, totalPieces, totalWeight, createdByUserId: result.createdByUserId || actorUserId || null });
     } catch (e) { console.error('notify inbound error', e); }
   } catch (err) {
     console.error('Failed to create lot', err);
@@ -4414,6 +4527,866 @@ router.post('/api/lots', requirePermission('inbound', PERM_WRITE), async (req, r
     }
   }
 });
+
+router.post(
+  '/api/inbound/cutter_purchase',
+  requirePermission('inbound', PERM_WRITE),
+  requirePermission('receive.cutter', PERM_WRITE),
+  async (req, res) => {
+    try {
+      const actorUserId = req.user?.id;
+      const { date, itemId, firmId, supplierId, crates } = req.body || {};
+      if (!date || !itemId || !supplierId) {
+        return res.status(400).json({ error: 'Missing required cutter purchase fields' });
+      }
+      if (!Array.isArray(crates) || crates.length === 0) {
+        return res.status(400).json({ error: 'Add at least one crate' });
+      }
+
+      const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
+        prisma.item.findUnique({ where: { id: itemId } }),
+        firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
+        prisma.supplier.findUnique({ where: { id: supplierId } }),
+      ]);
+      if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+      if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
+      if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+
+      const bobbinIds = Array.from(new Set(crates.map(c => c?.bobbinId).filter(Boolean)));
+      const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
+      const operatorIds = Array.from(new Set(crates.map(c => c?.operatorId).filter(Boolean)));
+      const helperIds = Array.from(new Set(crates.map(c => c?.helperId).filter(Boolean)));
+      const cutIds = Array.from(new Set(crates.map(c => c?.cutId).filter(Boolean)));
+
+      const [bobbins, boxes, operators, helpers, cuts] = await Promise.all([
+        bobbinIds.length ? prisma.bobbin.findMany({ where: { id: { in: bobbinIds } } }) : Promise.resolve([]),
+        boxIds.length ? prisma.box.findMany({ where: { id: { in: boxIds } } }) : Promise.resolve([]),
+        operatorIds.length ? prisma.operator.findMany({ where: { id: { in: operatorIds } } }) : Promise.resolve([]),
+        helperIds.length ? prisma.operator.findMany({ where: { id: { in: helperIds } } }) : Promise.resolve([]),
+        cutIds.length ? prisma.cut.findMany({ where: { id: { in: cutIds } } }) : Promise.resolve([]),
+      ]);
+
+      const bobbinMap = new Map(bobbins.map(b => [b.id, b]));
+      const boxMap = new Map(boxes.map(b => [b.id, b]));
+      const operatorMap = new Map(operators.map(o => [o.id, o]));
+      const helperMap = new Map(helpers.map(h => [h.id, h]));
+      const cutMap = new Map(cuts.map(c => [c.id, c]));
+
+      const normalizedCrates = crates.map((crate, idx) => {
+        const rowIndex = idx + 1;
+        if (!crate?.cutId) {
+          throw new Error(`Missing cut for crate ${rowIndex}`);
+        }
+        const bobbinId = crate?.bobbinId || null;
+        const boxId = crate?.boxId || null;
+        const bobbin = bobbinId ? bobbinMap.get(bobbinId) : null;
+        const box = boxId ? boxMap.get(boxId) : null;
+        if (!bobbin) throw new Error(`Missing bobbin for crate ${rowIndex}`);
+        if (!box) throw new Error(`Missing box for crate ${rowIndex}`);
+
+        const bobbinQty = Math.max(0, toInt(crate?.bobbinQuantity) || 0);
+        if (bobbinQty <= 0) throw new Error(`Invalid bobbin quantity for crate ${rowIndex}`);
+        const gross = toNumber(crate?.grossWeight);
+        if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
+
+        const bobbinWeightRaw = bobbin.weight;
+        const bobbinWeight = Number(bobbinWeightRaw);
+        const boxWeight = Number(box.weight);
+        if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
+          throw new Error('Bobbin weight missing. Update bobbin first.');
+        }
+        if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+          throw new Error('Box weight missing. Update box first.');
+        }
+
+        const tare = bobbinWeight * bobbinQty + boxWeight;
+        const net = roundTo3Decimals(gross - tare);
+        if (!Number.isFinite(net) || net <= 0) {
+          throw new Error(`Net weight must be positive for crate ${rowIndex}`);
+        }
+
+        if (!cutMap.has(crate.cutId)) {
+          throw new Error(`Cut not found for crate ${rowIndex}`);
+        }
+
+        const operatorId = toOptionalString(crate?.operatorId);
+        if (operatorId) {
+          const operator = operatorMap.get(operatorId);
+          if (!operator || normalizeWorkerRole(operator.role) !== 'operator') {
+            throw new Error(`Invalid operator for crate ${rowIndex}`);
+          }
+        }
+
+        const helperId = toOptionalString(crate?.helperId);
+        if (helperId) {
+          const helper = helperMap.get(helperId);
+          if (!helper || normalizeWorkerRole(helper.role) !== 'helper') {
+            throw new Error(`Invalid helper for crate ${rowIndex}`);
+          }
+        }
+
+        return {
+          bobbinId,
+          boxId,
+          bobbinQty,
+          gross,
+          tare,
+          net,
+          operatorId,
+          helperId,
+          cutId: crate.cutId,
+          shift: toOptionalString(crate?.shift),
+          machineNo: toOptionalString(crate?.machineNo),
+        };
+      });
+
+      const totalNetWeight = roundTo3Decimals(normalizedCrates.reduce((sum, row) => sum + row.net, 0));
+      const totalBobbins = normalizedCrates.reduce((sum, row) => sum + row.bobbinQty, 0);
+      if (!Number.isFinite(totalNetWeight) || totalNetWeight <= 0) {
+        return res.status(400).json({ error: 'Total net weight must be greater than zero' });
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const lotNo = await allocateCutterPurchaseLot(tx, actorUserId);
+        const pieceId = `${lotNo}-1`;
+
+        await tx.lot.create({
+          data: {
+            lotNo,
+            date,
+            itemId,
+            firmId: firmId || null,
+            supplierId,
+            totalPieces: 1,
+            totalWeight: totalNetWeight,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        await tx.inboundItem.create({
+          data: {
+            id: pieceId,
+            lotNo,
+            itemId,
+            weight: totalNetWeight,
+            status: 'consumed',
+            seq: 1,
+            barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        const upload = await tx.receiveFromCutterMachineUpload.create({
+          data: {
+            originalFilename: 'cutter-purchase',
+            rowCount: normalizedCrates.length,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        const challanMeta = await allocateCutterChallanNumber(tx, actorUserId, date);
+        const uniqueOperatorIds = Array.from(new Set(normalizedCrates.map(row => row.operatorId).filter(Boolean)));
+        const uniqueHelperIds = Array.from(new Set(normalizedCrates.map(row => row.helperId).filter(Boolean)));
+        const uniqueCutIds = Array.from(new Set(normalizedCrates.map(row => row.cutId).filter(Boolean)));
+
+        const challan = await tx.receiveFromCutterMachineChallan.create({
+          data: {
+            challanNo: challanMeta.challanNo,
+            sequence: challanMeta.sequence,
+            fiscalYear: challanMeta.fiscalYear,
+            pieceId,
+            lotNo,
+            itemId,
+            date,
+            totalNetWeight,
+            totalBobbinQty: totalBobbins,
+            operatorId: uniqueOperatorIds.length === 1 ? uniqueOperatorIds[0] : null,
+            helperId: uniqueHelperIds.length === 1 ? uniqueHelperIds[0] : null,
+            cutId: uniqueCutIds.length === 1 ? uniqueCutIds[0] : null,
+            wastageNetWeight: 0,
+            changeLog: [
+              {
+                at: new Date().toISOString(),
+                action: 'create',
+                actorUserId,
+                details: { totalNetWeight, totalBobbinQty: totalBobbins },
+              },
+            ],
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        const rows = [];
+        let crateIndex = 0;
+        for (const row of normalizedCrates) {
+          crateIndex += 1;
+          const barcode = makeReceiveBarcode({ lotNo, seq: 1, crateIndex });
+          const vchNo = `CPUR-${randomUUID().slice(0, 8)}`;
+          const cut = row.cutId ? cutMap.get(row.cutId) : null;
+          const created = await tx.receiveFromCutterMachineRow.create({
+            data: {
+              uploadId: upload.id,
+              challanId: challan.id,
+              pieceId,
+              vchNo,
+              date,
+              itemName: itemRecord?.name || null,
+              grossWt: row.gross,
+              tareWt: row.tare,
+              netWt: row.net,
+              totalKg: row.net,
+              pktTypeName: boxMap.get(row.boxId)?.name || null,
+              pcsTypeName: bobbinMap.get(row.bobbinId)?.name || null,
+              bobbinId: row.bobbinId,
+              boxId: row.boxId,
+              operatorId: row.operatorId,
+              helperId: row.helperId,
+              bobbinQuantity: row.bobbinQty,
+              issuedBobbins: 0,
+              issuedBobbinWeight: 0,
+              employee: row.operatorId ? operatorMap.get(row.operatorId)?.name || null : null,
+              helperName: row.helperId ? helperMap.get(row.helperId)?.name || null : null,
+              cutId: row.cutId,
+              cut: cut ? cut.name : null,
+              shift: row.shift,
+              machineNo: row.machineNo,
+              narration: 'Cutter purchase',
+              createdBy: 'cutter_purchase',
+              barcode,
+              ...actorCreateFields(actorUserId),
+            },
+          });
+          rows.push({ id: created.id, barcode });
+        }
+
+        await tx.receiveFromCutterMachinePieceTotal.upsert({
+          where: { pieceId },
+          update: {
+            totalNetWeight: { increment: totalNetWeight },
+            totalBob: { increment: totalBobbins },
+            ...actorUpdateFields(actorUserId),
+          },
+          create: {
+            pieceId,
+            totalNetWeight,
+            totalBob: totalBobbins,
+            wastageNetWeight: 0,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        return {
+          lotNo,
+          pieceId,
+          uploadId: upload.id,
+          challanId: challan.id,
+          challanNo: challan.challanNo,
+          rows,
+        };
+      });
+
+      await logCrudWithActor(req, {
+        entityType: 'cutter_purchase_inbound',
+        entityId: result.lotNo,
+        action: 'create',
+        payload: {
+          lotNo: result.lotNo,
+          pieceId: result.pieceId,
+          challanNo: result.challanNo,
+          totalNetWeight,
+          totalBobbins,
+        },
+      });
+
+      res.json({ ok: true, ...result, totalNetWeight, totalBobbins });
+    } catch (err) {
+      console.error('Failed to create cutter purchase inbound', err);
+      res.status(400).json({ error: err.message || 'Failed to create cutter purchase inbound' });
+    }
+  },
+);
+
+router.get(
+  '/api/inbound/cutter_purchase/:lotNo',
+  requirePermission('inbound', PERM_READ),
+  requirePermission('receive.cutter', PERM_READ),
+  async (req, res) => {
+    try {
+      const lotNo = String(req.params.lotNo || '').trim();
+      if (!lotNo) return res.status(400).json({ error: 'Missing lotNo' });
+      if (!isCutterPurchaseLotNo(lotNo)) {
+        return res.status(400).json({ error: 'Not a cutter purchase lot' });
+      }
+
+      const lot = await prisma.lot.findUnique({ where: { lotNo } });
+      if (!lot) return res.status(404).json({ error: 'Lot not found' });
+
+      const pieces = await prisma.inboundItem.findMany({
+        where: { lotNo },
+        orderBy: { seq: 'asc' },
+      });
+      if (pieces.length !== 1) {
+        return res.status(400).json({ error: 'Cutter purchase lot must have exactly 1 inbound piece' });
+      }
+      const piece = pieces[0];
+
+      const challans = await prisma.receiveFromCutterMachineChallan.findMany({
+        where: { lotNo, pieceId: piece.id, isDeleted: false },
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      });
+      if (challans.length === 0) {
+        return res.status(404).json({ error: 'Cutter purchase challan not found' });
+      }
+      if (challans.length > 1) {
+        return res.status(409).json({ error: 'Multiple challans found for cutter purchase lot. Cannot edit.' });
+      }
+      const challan = challans[0];
+
+      const rows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { challanId: challan.id, isDeleted: false, createdBy: 'cutter_purchase' },
+        include: {
+          bobbin: { select: { id: true, name: true, weight: true } },
+          box: { select: { id: true, name: true, weight: true } },
+          operator: { select: { id: true, name: true, role: true } },
+          helper: { select: { id: true, name: true, role: true } },
+          cutMaster: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      res.json({ ok: true, lot, piece, challan, rows });
+    } catch (err) {
+      console.error('Failed to load cutter purchase lot', err);
+      res.status(500).json({ error: err.message || 'Failed to load cutter purchase' });
+    }
+  },
+);
+
+router.put(
+  '/api/inbound/cutter_purchase/:lotNo',
+  requireEditPermission('inbound'),
+  requireEditPermission('receive.cutter'),
+  async (req, res) => {
+    try {
+      const actorUserId = req.user?.id;
+      const lotNo = String(req.params.lotNo || '').trim();
+      if (!lotNo) return res.status(400).json({ error: 'Missing lotNo' });
+      if (!isCutterPurchaseLotNo(lotNo)) {
+        return res.status(400).json({ error: 'Not a cutter purchase lot' });
+      }
+
+      const { date, itemId, firmId, supplierId, crates } = req.body || {};
+      if (!date || !itemId || !supplierId) {
+        return res.status(400).json({ error: 'Missing required cutter purchase fields' });
+      }
+      if (!Array.isArray(crates) || crates.length === 0) {
+        return res.status(400).json({ error: 'Add at least one crate' });
+      }
+
+      const lot = await prisma.lot.findUnique({ where: { lotNo } });
+      if (!lot) return res.status(404).json({ error: 'Lot not found' });
+
+      const pieces = await prisma.inboundItem.findMany({ where: { lotNo }, orderBy: { seq: 'asc' } });
+      if (pieces.length !== 1) {
+        return res.status(400).json({ error: 'Cutter purchase lot must have exactly 1 inbound piece' });
+      }
+      const piece = pieces[0];
+
+      const challans = await prisma.receiveFromCutterMachineChallan.findMany({
+        where: { lotNo, pieceId: piece.id, isDeleted: false },
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      });
+      if (challans.length === 0) return res.status(404).json({ error: 'Cutter purchase challan not found' });
+      if (challans.length > 1) {
+        return res.status(409).json({ error: 'Multiple challans found for cutter purchase lot. Cannot edit.' });
+      }
+      const challan = challans[0];
+
+      const existingRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: piece.id },
+        select: {
+          id: true,
+          createdBy: true,
+          isDeleted: true,
+          uploadId: true,
+          challanId: true,
+          barcode: true,
+          issuedBobbins: true,
+          issuedBobbinWeight: true,
+          dispatchedCount: true,
+          dispatchedWeight: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const nonPurchaseRows = existingRows.filter(r => r.createdBy !== 'cutter_purchase');
+      if (nonPurchaseRows.length > 0) {
+        return res.status(409).json({ error: 'Lot contains non-purchase cutter receive rows. Cannot edit safely.' });
+      }
+
+      const activePurchaseRows = existingRows.filter(r => r.createdBy === 'cutter_purchase' && !r.isDeleted);
+      if (activePurchaseRows.some(r => r.challanId !== challan.id)) {
+        return res.status(409).json({ error: 'Cutter purchase rows do not belong to a single challan. Cannot edit.' });
+      }
+
+      const rowIds = existingRows.map(r => r.id);
+      const barcodes = existingRows.map(r => r.barcode).filter(Boolean);
+
+      const counterUsed = existingRows.find(r => Number(r.issuedBobbins || 0) > 0
+        || Number(r.issuedBobbinWeight || 0) > 0
+        || Number(r.dispatchedCount || 0) > 0
+        || Number(r.dispatchedWeight || 0) > 0);
+      if (counterUsed) {
+        return res.status(409).json({ error: 'Cannot edit cutter purchase: one or more crates were already issued or dispatched.' });
+      }
+
+      const [holoIssues, boxTransfers] = await Promise.all([
+        findHoloIssuesReferencingCutterRows({ rowIds, barcodes }),
+        findCutterBoxTransfersForRows({ rowIds, barcodes }),
+      ]);
+
+      if (holoIssues.length > 0) {
+        return res.status(409).json({
+          error: 'Cannot edit cutter purchase: already used in Holo issue.',
+          details: { holoIssueIds: holoIssues.map(i => i.id) },
+        });
+      }
+      if (boxTransfers.length > 0) {
+        return res.status(409).json({
+          error: 'Cannot edit cutter purchase: box transfer exists for one or more crates.',
+          details: { boxTransferIds: boxTransfers.map(t => t.id) },
+        });
+      }
+
+      const [itemRecord, firmRecord, supplierRecord] = await Promise.all([
+        prisma.item.findUnique({ where: { id: itemId } }),
+        firmId ? prisma.firm.findUnique({ where: { id: firmId } }) : Promise.resolve(null),
+        prisma.supplier.findUnique({ where: { id: supplierId } }),
+      ]);
+      if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
+      if (firmId && !firmRecord) return res.status(404).json({ error: 'Firm not found' });
+      if (!supplierRecord) return res.status(404).json({ error: 'Supplier not found' });
+
+      const bobbinIds = Array.from(new Set(crates.map(c => c?.bobbinId).filter(Boolean)));
+      const boxIds = Array.from(new Set(crates.map(c => c?.boxId).filter(Boolean)));
+      const operatorIds = Array.from(new Set(crates.map(c => c?.operatorId).filter(Boolean)));
+      const helperIds = Array.from(new Set(crates.map(c => c?.helperId).filter(Boolean)));
+      const cutIds = Array.from(new Set(crates.map(c => c?.cutId).filter(Boolean)));
+
+      const [bobbins, boxes, operators, helpers, cuts] = await Promise.all([
+        bobbinIds.length ? prisma.bobbin.findMany({ where: { id: { in: bobbinIds } } }) : Promise.resolve([]),
+        boxIds.length ? prisma.box.findMany({ where: { id: { in: boxIds } } }) : Promise.resolve([]),
+        operatorIds.length ? prisma.operator.findMany({ where: { id: { in: operatorIds } } }) : Promise.resolve([]),
+        helperIds.length ? prisma.operator.findMany({ where: { id: { in: helperIds } } }) : Promise.resolve([]),
+        cutIds.length ? prisma.cut.findMany({ where: { id: { in: cutIds } } }) : Promise.resolve([]),
+      ]);
+
+      const bobbinMap = new Map(bobbins.map(b => [b.id, b]));
+      const boxMap = new Map(boxes.map(b => [b.id, b]));
+      const operatorMap = new Map(operators.map(o => [o.id, o]));
+      const helperMap = new Map(helpers.map(h => [h.id, h]));
+      const cutMap = new Map(cuts.map(c => [c.id, c]));
+
+      const existingRowIdsSet = new Set(activePurchaseRows.map(r => r.id));
+      const payloadRowIds = new Set();
+
+      const normalizedCrates = crates.map((crate, idx) => {
+        const rowIndex = idx + 1;
+        const rowId = toOptionalString(crate?.rowId || crate?.id);
+        if (rowId) {
+          if (!existingRowIdsSet.has(rowId)) {
+            throw new Error(`Row not found in cutter purchase: ${rowId}`);
+          }
+          if (payloadRowIds.has(rowId)) {
+            throw new Error(`Duplicate row in payload: ${rowId}`);
+          }
+          payloadRowIds.add(rowId);
+        }
+
+        if (!crate?.cutId) {
+          throw new Error(`Missing cut for crate ${rowIndex}`);
+        }
+        const bobbinId = crate?.bobbinId || null;
+        const boxId = crate?.boxId || null;
+        const bobbin = bobbinId ? bobbinMap.get(bobbinId) : null;
+        const box = boxId ? boxMap.get(boxId) : null;
+        if (!bobbin) throw new Error(`Missing bobbin for crate ${rowIndex}`);
+        if (!box) throw new Error(`Missing box for crate ${rowIndex}`);
+
+        const bobbinQty = Math.max(0, toInt(crate?.bobbinQuantity) || 0);
+        if (bobbinQty <= 0) throw new Error(`Invalid bobbin quantity for crate ${rowIndex}`);
+        const gross = toNumber(crate?.grossWeight);
+        if (!Number.isFinite(gross) || gross <= 0) throw new Error(`Invalid gross weight for crate ${rowIndex}`);
+
+        const bobbinWeightRaw = bobbin.weight;
+        const bobbinWeight = Number(bobbinWeightRaw);
+        const boxWeight = Number(box.weight);
+        if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
+          throw new Error('Bobbin weight missing. Update bobbin first.');
+        }
+        if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
+          throw new Error('Box weight missing. Update box first.');
+        }
+
+        const tare = bobbinWeight * bobbinQty + boxWeight;
+        const net = roundTo3Decimals(gross - tare);
+        if (!Number.isFinite(net) || net <= 0) {
+          throw new Error(`Net weight must be positive for crate ${rowIndex}`);
+        }
+
+        if (!cutMap.has(crate.cutId)) {
+          throw new Error(`Cut not found for crate ${rowIndex}`);
+        }
+
+        const operatorId = toOptionalString(crate?.operatorId);
+        if (operatorId) {
+          const operator = operatorMap.get(operatorId);
+          if (!operator || normalizeWorkerRole(operator.role) !== 'operator') {
+            throw new Error(`Invalid operator for crate ${rowIndex}`);
+          }
+        }
+
+        const helperId = toOptionalString(crate?.helperId);
+        if (helperId) {
+          const helper = helperMap.get(helperId);
+          if (!helper || normalizeWorkerRole(helper.role) !== 'helper') {
+            throw new Error(`Invalid helper for crate ${rowIndex}`);
+          }
+        }
+
+        return {
+          rowId,
+          bobbinId,
+          boxId,
+          bobbinQty,
+          gross,
+          tare,
+          net,
+          operatorId,
+          helperId,
+          cutId: crate.cutId,
+          shift: toOptionalString(crate?.shift),
+          machineNo: toOptionalString(crate?.machineNo),
+        };
+      });
+
+      const removedRowIds = Array.from(existingRowIdsSet).filter(id => !payloadRowIds.has(id));
+      const totalNetWeight = roundTo3Decimals(normalizedCrates.reduce((sum, row) => sum + row.net, 0));
+      const totalBobbins = normalizedCrates.reduce((sum, row) => sum + row.bobbinQty, 0);
+      if (!Number.isFinite(totalNetWeight) || totalNetWeight <= 0) {
+        return res.status(400).json({ error: 'Total net weight must be greater than zero' });
+      }
+
+      const uploadIds = Array.from(new Set(existingRows.map(r => r.uploadId).filter(Boolean)));
+      if (uploadIds.length !== 1) {
+        return res.status(409).json({ error: 'Cutter purchase has multiple uploads. Cannot edit.' });
+      }
+      const uploadId = uploadIds[0];
+
+      // Determine the next crateIndex for newly added crates
+      const maxCrateIndex = activePurchaseRows.reduce((max, row) => {
+        const idx = parseReceiveCrateIndex(row.barcode);
+        if (!idx) return max;
+        return Math.max(max, idx);
+      }, 0);
+
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.lot.update({
+          where: { lotNo },
+          data: {
+            date,
+            itemId,
+            firmId: firmId || null,
+            supplierId,
+            totalPieces: 1,
+            totalWeight: totalNetWeight,
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+
+        await tx.inboundItem.update({
+          where: { id: piece.id },
+          data: {
+            itemId,
+            weight: totalNetWeight,
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+
+        const uniqueOperatorIds = Array.from(new Set(normalizedCrates.map(row => row.operatorId).filter(Boolean)));
+        const uniqueHelperIds = Array.from(new Set(normalizedCrates.map(row => row.helperId).filter(Boolean)));
+        const uniqueCutIds = Array.from(new Set(normalizedCrates.map(row => row.cutId).filter(Boolean)));
+
+        const updatedChallan = await tx.receiveFromCutterMachineChallan.update({
+          where: { id: challan.id },
+          data: {
+            itemId,
+            date,
+            totalNetWeight,
+            totalBobbinQty: totalBobbins,
+            operatorId: uniqueOperatorIds.length === 1 ? uniqueOperatorIds[0] : null,
+            helperId: uniqueHelperIds.length === 1 ? uniqueHelperIds[0] : null,
+            cutId: uniqueCutIds.length === 1 ? uniqueCutIds[0] : null,
+            wastageNote: null,
+            wastageNetWeight: 0,
+            changeLog: appendChangeLog(challan.changeLog, {
+              at: new Date().toISOString(),
+              action: 'update',
+              actorUserId,
+              details: { totalNetWeight, totalBobbinQty: totalBobbins },
+            }),
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+
+        if (removedRowIds.length > 0) {
+          await tx.receiveFromCutterMachineRow.deleteMany({
+            where: { id: { in: removedRowIds } },
+          });
+        }
+
+        for (const crate of normalizedCrates) {
+          const cut = crate.cutId ? cutMap.get(crate.cutId) : null;
+          if (crate.rowId) {
+            await tx.receiveFromCutterMachineRow.update({
+              where: { id: crate.rowId },
+              data: {
+                date,
+                itemName: itemRecord?.name || null,
+                grossWt: crate.gross,
+                tareWt: crate.tare,
+                netWt: crate.net,
+                totalKg: crate.net,
+                pktTypeName: boxMap.get(crate.boxId)?.name || null,
+                pcsTypeName: bobbinMap.get(crate.bobbinId)?.name || null,
+                bobbinId: crate.bobbinId,
+                boxId: crate.boxId,
+                operatorId: crate.operatorId,
+                helperId: crate.helperId,
+                bobbinQuantity: crate.bobbinQty,
+                employee: crate.operatorId ? operatorMap.get(crate.operatorId)?.name || null : null,
+                helperName: crate.helperId ? helperMap.get(crate.helperId)?.name || null : null,
+                cutId: crate.cutId,
+                cut: cut ? cut.name : null,
+                shift: crate.shift,
+                machineNo: crate.machineNo,
+                ...actorUpdateFields(actorUserId),
+              },
+            });
+          }
+        }
+
+        let crateIndex = maxCrateIndex;
+        const createdRows = [];
+        for (const crate of normalizedCrates.filter(c => !c.rowId)) {
+          crateIndex += 1;
+          const barcode = makeReceiveBarcode({ lotNo, seq: piece.seq || 1, crateIndex });
+          const vchNo = `CPUR-${randomUUID().slice(0, 8)}`;
+          const cut = crate.cutId ? cutMap.get(crate.cutId) : null;
+          const created = await tx.receiveFromCutterMachineRow.create({
+            data: {
+              uploadId,
+              challanId: challan.id,
+              pieceId: piece.id,
+              vchNo,
+              date,
+              itemName: itemRecord?.name || null,
+              grossWt: crate.gross,
+              tareWt: crate.tare,
+              netWt: crate.net,
+              totalKg: crate.net,
+              pktTypeName: boxMap.get(crate.boxId)?.name || null,
+              pcsTypeName: bobbinMap.get(crate.bobbinId)?.name || null,
+              bobbinId: crate.bobbinId,
+              boxId: crate.boxId,
+              operatorId: crate.operatorId,
+              helperId: crate.helperId,
+              bobbinQuantity: crate.bobbinQty,
+              issuedBobbins: 0,
+              issuedBobbinWeight: 0,
+              employee: crate.operatorId ? operatorMap.get(crate.operatorId)?.name || null : null,
+              helperName: crate.helperId ? helperMap.get(crate.helperId)?.name || null : null,
+              cutId: crate.cutId,
+              cut: cut ? cut.name : null,
+              shift: crate.shift,
+              machineNo: crate.machineNo,
+              narration: 'Cutter purchase',
+              createdBy: 'cutter_purchase',
+              barcode,
+              ...actorCreateFields(actorUserId),
+            },
+          });
+          createdRows.push({ id: created.id, barcode });
+        }
+
+        await tx.receiveFromCutterMachineUpload.update({
+          where: { id: uploadId },
+          data: { rowCount: normalizedCrates.length, ...actorUpdateFields(actorUserId) },
+        });
+
+        await tx.receiveFromCutterMachinePieceTotal.upsert({
+          where: { pieceId: piece.id },
+          update: {
+            totalNetWeight,
+            totalBob: totalBobbins,
+            wastageNetWeight: 0,
+            ...actorUpdateFields(actorUserId),
+          },
+          create: {
+            pieceId: piece.id,
+            totalNetWeight,
+            totalBob: totalBobbins,
+            wastageNetWeight: 0,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+
+        return { challan: updatedChallan, createdRows, removedRowIds };
+      });
+
+      await logCrudWithActor(req, {
+        entityType: 'cutter_purchase_inbound',
+        entityId: lotNo,
+        action: 'update',
+        payload: {
+          lotNo,
+          pieceId: piece.id,
+          challanNo: challan.challanNo,
+          totalNetWeight,
+          totalBobbins,
+          removedRows: removedRowIds.length,
+          addedRows: updated.createdRows.length,
+        },
+      });
+
+      res.json({ ok: true, lotNo, pieceId: piece.id, ...updated, totalNetWeight, totalBobbins });
+    } catch (err) {
+      console.error('Failed to update cutter purchase inbound', err);
+      res.status(400).json({ error: err.message || 'Failed to update cutter purchase inbound' });
+    }
+  },
+);
+
+router.delete(
+  '/api/inbound/cutter_purchase/:lotNo',
+  requireDeletePermission('inbound'),
+  requireDeletePermission('receive.cutter'),
+  async (req, res) => {
+    try {
+      const actorUserId = req.user?.id;
+      const lotNo = String(req.params.lotNo || '').trim();
+      if (!lotNo) return res.status(400).json({ error: 'Missing lotNo' });
+      if (!isCutterPurchaseLotNo(lotNo)) {
+        return res.status(400).json({ error: 'Not a cutter purchase lot' });
+      }
+
+      const lot = await prisma.lot.findUnique({ where: { lotNo } });
+      if (!lot) return res.status(404).json({ error: 'Lot not found' });
+
+      const pieces = await prisma.inboundItem.findMany({ where: { lotNo }, orderBy: { seq: 'asc' } });
+      if (pieces.length !== 1) {
+        return res.status(409).json({ error: 'Cutter purchase lot must have exactly 1 inbound piece' });
+      }
+      const piece = pieces[0];
+
+      const allRows = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { pieceId: piece.id },
+        select: {
+          id: true,
+          createdBy: true,
+          uploadId: true,
+          challanId: true,
+          barcode: true,
+          issuedBobbins: true,
+          issuedBobbinWeight: true,
+          dispatchedCount: true,
+          dispatchedWeight: true,
+        },
+      });
+
+      const nonPurchaseRows = allRows.filter(r => r.createdBy !== 'cutter_purchase');
+      if (nonPurchaseRows.length > 0) {
+        return res.status(409).json({ error: 'Lot contains non-purchase cutter receive rows. Cannot delete safely.' });
+      }
+
+      const rowIds = allRows.map(r => r.id);
+      const barcodes = allRows.map(r => r.barcode).filter(Boolean);
+
+      const counterUsed = allRows.find(r => Number(r.issuedBobbins || 0) > 0
+        || Number(r.issuedBobbinWeight || 0) > 0
+        || Number(r.dispatchedCount || 0) > 0
+        || Number(r.dispatchedWeight || 0) > 0);
+      if (counterUsed) {
+        return res.status(409).json({ error: 'Cannot delete cutter purchase: one or more crates were already issued or dispatched.' });
+      }
+
+      const [holoIssues, boxTransfers] = await Promise.all([
+        findHoloIssuesReferencingCutterRows({ rowIds, barcodes }),
+        findCutterBoxTransfersForRows({ rowIds, barcodes }),
+      ]);
+      if (holoIssues.length > 0) {
+        return res.status(409).json({
+          error: 'Cannot delete cutter purchase: already used in Holo issue.',
+          details: { holoIssueIds: holoIssues.map(i => i.id) },
+        });
+      }
+      if (boxTransfers.length > 0) {
+        return res.status(409).json({
+          error: 'Cannot delete cutter purchase: box transfer exists for one or more crates.',
+          details: { boxTransferIds: boxTransfers.map(t => t.id) },
+        });
+      }
+
+      const challans = await prisma.receiveFromCutterMachineChallan.findMany({
+        where: { lotNo, pieceId: piece.id },
+        select: { id: true, challanNo: true },
+      });
+      const challanIds = challans.map(c => c.id);
+      const uploadIds = Array.from(new Set(allRows.map(r => r.uploadId).filter(Boolean)));
+
+      await prisma.$transaction(async (tx) => {
+        if (allRows.length > 0) {
+          await tx.receiveFromCutterMachineRow.deleteMany({ where: { pieceId: piece.id } });
+        }
+        if (challanIds.length > 0) {
+          await tx.receiveFromCutterMachineChallan.deleteMany({ where: { id: { in: challanIds } } });
+        }
+        await tx.receiveFromCutterMachinePieceTotal.deleteMany({ where: { pieceId: piece.id } });
+
+        if (uploadIds.length > 0) {
+          for (const uploadId of uploadIds) {
+            const remaining = await tx.receiveFromCutterMachineRow.count({ where: { uploadId } });
+            if (remaining === 0) {
+              await tx.receiveFromCutterMachineUpload.delete({ where: { id: uploadId } });
+            }
+          }
+        }
+
+        await tx.inboundItem.deleteMany({ where: { lotNo } });
+        await tx.lot.delete({ where: { lotNo } });
+      });
+
+      await logCrudWithActor(req, {
+        entityType: 'cutter_purchase_inbound',
+        entityId: lotNo,
+        action: 'delete',
+        payload: {
+          lotNo,
+          pieceId: piece.id,
+          challanNos: challans.map(c => c.challanNo),
+          totalRows: allRows.length,
+        },
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Failed to delete cutter purchase inbound', err);
+      res.status(500).json({ error: err.message || 'Failed to delete cutter purchase inbound' });
+    }
+  },
+);
 
 router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PERM_WRITE), async (req, res) => {
   try {
@@ -4518,7 +5491,7 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
       const cutName = issueRecord.cutId ? (await prisma.cut.findUnique({ where: { id: issueRecord.cutId } })).name : '';
       // Include machineNumber for templates (alias of machineName)
       const machineNumber = machineName || '';
-      sendNotification('issue_to_cutter_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [] });
+      sendNotification('issue_to_cutter_machine_created', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, machineName, machineNumber, operatorName, cutName, pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [], createdByUserId: issueRecord.createdByUserId || actorUserId || null });
       // If this issue_to_cutter_machine made available pieces for this item drop to zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: issueRecord.itemId, status: 'available' } });
@@ -4728,7 +5701,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
       const wastageFormatted = Number(remaining).toFixed(3);
       const inboundWeight = Number(inbound.weight || 0);
       const wastagePercent = inboundWeight > 0 ? ((remaining / inboundWeight) * 100).toFixed(2) : '0.00';
-      sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent });
+      sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent, createdByUserId: updated?.createdByUserId || actorUserId || null });
     } catch (e) { console.error('notify piece wastage error', e); }
 
     await logCrudWithActor(req, {
@@ -5023,7 +5996,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         const itemName = itemRec ? itemRec.name || '' : '';
         const wastageFormatted = Number(wastageToMark).toFixed(3);
         const wastagePercent = inboundWeight > 0 ? ((wastageToMark / inboundWeight) * 100).toFixed(2) : '0.00';
-        sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent });
+        sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent, createdByUserId: created?.challan?.createdByUserId || actorUserId || null });
       } catch (e) {
         console.error('notify piece wastage error', e);
       }
@@ -5064,6 +6037,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         bobbinQuantity: totalBobbinQty,
         operatorName,
         challanNo: created.challan.challanNo,
+        createdByUserId: created?.challan?.createdByUserId || actorUserId || null,
       });
     } catch (e) { console.error('notify receive_from_cutter_machine bulk error', e); }
   } catch (err) {
@@ -5305,6 +6279,7 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
         bobbinQuantity: bobbinQty,
         operatorName: operatorRec.name,
         challanNo: 'N/A (Manual)',
+        createdByUserId: actorUserId || null,
       });
     } catch (e) { console.error('notify receive_from_cutter_machine manual error', e); }
   } catch (err) {
@@ -6060,6 +7035,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
         twistName: trace.twistName || '',
         cutName: trace.cutName || '',
         barcode: created.barcode,
+        createdByUserId: created.createdByUserId || actorUserId || null,
       });
     } catch (e) { console.error('notify issue_to_holo_machine error', e); }
   } catch (err) {
@@ -6217,6 +7193,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
         yarnName: trace.yarnName || '',
         yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode,
+        createdByUserId: createdRow?.createdByUserId || actorUserId || null,
       });
     } catch (e) { console.error('notify receive_from_holo_machine manual error', e); }
   } catch (err) {
@@ -6886,6 +7863,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         yarnName: trace.yarnName || '',
         yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode: created.barcode,
+        createdByUserId: created.createdByUserId || actorUserId || null,
       });
     } catch (e) { console.error('notify issue_to_coning_machine error', e); }
   } catch (err) {
@@ -7011,6 +7989,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
         yarnName: trace.yarnName || '',
         yarnKg: trace.yarnKg != null ? trace.yarnKg : null,
         barcode,
+        createdByUserId: createdRow?.createdByUserId || actorUserId || null,
       });
     } catch (e) { console.error('notify receive_from_coning_machine manual error', e); }
   } catch (err) {
@@ -7097,7 +8076,8 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
         lotNo: issue.lotNo || issue.lotLabel || '',
         itemName,
         wastage: wastageFormatted,
-        wastagePercent
+        wastagePercent,
+        createdByUserId: updated?.createdByUserId || actorUserId || null,
       });
     } catch (e) {
       console.error('notify coning wastage error', e);
@@ -9206,7 +10186,7 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
       const machineNameDel = machineRec ? machineRec.name : '';
       const operatorNameDel = operatorRec ? operatorRec.name : '';
       const machineNumberDel = machineNameDel || '';
-      sendNotification('issue_to_cutter_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel });
+      sendNotification('issue_to_cutter_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel, createdByUserId: issueRecord.createdByUserId || null });
     } catch (e) { console.error('notify issue_to_cutter_machine deleted error', e); }
   } catch (err) {
     console.error('Failed to delete issue_to_cutter_machine record', err);
@@ -9301,6 +10281,7 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
         metallicBobbinsWeight: issueRecord.metallicBobbinsWeight,
         machineName: machineRec?.name || '',
         operatorName: operatorRec?.name || '',
+        createdByUserId: issueRecord.createdByUserId || null,
       });
     } catch (e) { console.error('notify issue_to_holo_machine deleted error', e); }
   } catch (err) {
@@ -9366,6 +10347,7 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
         rollsIssued: issueRecord.rollsIssued,
         machineName: machineRec?.name || '',
         operatorName: operatorRec?.name || '',
+        createdByUserId: issueRecord.createdByUserId || null,
       });
     } catch (e) { console.error('notify issue_to_coning_machine deleted error', e); }
   } catch (err) {
@@ -9432,7 +10414,7 @@ router.delete('/api/inbound_items/:id', requireDeletePermission('inbound'), asyn
     // Notify inbound piece deleted
     try {
       const itemName = existing.itemId ? (await prisma.item.findUnique({ where: { id: existing.itemId } })).name : '';
-      sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id });
+      sendNotification('inbound_piece_deleted', { itemName, lotNo: existing.lotNo, pieceId: existing.id, createdByUserId: existing.createdByUserId || null });
       // If deleting this piece caused available count to become zero, notify
       try {
         const availableAfter = await prisma.inboundItem.count({ where: { itemId: existing.itemId, status: 'available' } });
@@ -9679,7 +10661,7 @@ router.delete('/api/lots/:lotNo', requireDeletePermission('inbound'), async (req
 
     // Notify lot deletion
     try {
-      sendNotification('lot_deleted', { itemName: itemRec ? itemRec.name : '', lotNo, totalPieces, date: lotRec ? lotRec.date : '' });
+      sendNotification('lot_deleted', { itemName: itemRec ? itemRec.name : '', lotNo, totalPieces, date: lotRec ? lotRec.date : '', createdByUserId: lotRec?.createdByUserId || null });
       // After removing the lot's pieces, if item has zero available pieces now, notify
       try {
         const itemIdentifier = lotRec ? lotRec.itemId : null;
@@ -12492,12 +13474,13 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
         totalWeight: netWeight,
         availableWeight,
       }) || 0;
+      const resolvedLotNo = await resolveLotNoFromPieceId(cutterRow.pieceId);
       return res.json({
         found: true,
         stage: 'cutter',
         itemId: cutterRow.id,
         barcode: cutterRow.barcode || cutterRow.vchNo,
-        lotNo: cutterRow.pieceId?.split('-')?.[0] || null,
+        lotNo: resolvedLotNo,
         pieceId: cutterRow.pieceId,
         itemName: cutterRow.itemName || null,
         currentCount: availableBobbins,
@@ -14085,13 +15068,15 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
       });
     }
 
+    const finalCaption = await appendCreatorToCaption(caption || '', req.user?.id || null);
+
     // Send via WhatsApp (file stays in memory, no disk storage)
     await whatsapp.sendMediaSafe(
       phone,
       file.buffer,          // Buffer directly from memory
       file.originalname,
       file.mimetype,
-      caption || ''
+      finalCaption
     );
 
     // Save metadata only (no file content)

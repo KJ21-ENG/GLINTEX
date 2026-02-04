@@ -13,6 +13,7 @@ export function PieceRow({
   onSaved,
   pendingWeight = 0,
   isIssued = false,
+  issuedLabel = '',
   wastageWeight = 0,
   totalUnits = 0,
   onDelete,
@@ -80,7 +81,14 @@ export function PieceRow({
           className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
         />
       </td>
-      <td className="py-2 pr-2 font-mono text-xs">{p.id}</td>
+      <td className="py-2 pr-2">
+        <div className="flex flex-col">
+          <span className="font-mono text-xs">{p.id}</span>
+          {issuedLabel ? (
+            <span className="text-[10px] text-muted-foreground">({issuedLabel})</span>
+          ) : null}
+        </div>
+      </td>
       <td className="py-2 pr-2 font-mono text-xs">
         {p.barcode ? (
           <a href={api.barcodeImageUrl(p.barcode)} target="_blank" rel="noreferrer" className="text-primary hover:underline">

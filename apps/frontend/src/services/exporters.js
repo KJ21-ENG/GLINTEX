@@ -3,6 +3,44 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatDateDDMMYYYY } from '../utils/formatting';
 
+function hexToRgb(hex) {
+  const str = String(hex || '').trim();
+  const match = str.match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return [46, 76, 166]; // default brand primary
+  const int = Number.parseInt(match[1], 16);
+  return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
+
+function inferImageFormat(dataUrl) {
+  const str = String(dataUrl || '');
+  const m = str.match(/^data:image\/(png|jpe?g);/i);
+  if (!m) return null;
+  const t = m[1].toLowerCase();
+  return t === 'png' ? 'PNG' : 'JPEG';
+}
+
+function formatPrintedAt(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const dd = pad(d.getDate());
+  const mm = pad(d.getMonth() + 1);
+  const yyyy = d.getFullYear();
+  const minutes = pad(d.getMinutes());
+  const hours24 = d.getHours();
+  const ampm = hours24 >= 12 ? 'PM' : 'AM';
+  const hours12 = hours24 % 12 || 12;
+  return `${dd}/${mm}/${yyyy} ${hours12}:${minutes} ${ampm}`;
+}
+
+function ellipsizeToWidth(doc, text, maxWidth) {
+  const raw = String(text ?? '');
+  if (doc.getTextWidth(raw) <= maxWidth) return raw;
+  let s = raw;
+  while (s.length > 1 && doc.getTextWidth(`${s}...`) > maxWidth) {
+    s = s.slice(0, -1);
+  }
+  return `${s}...`;
+}
+
 function orderLotsForExport(lots) {
   return [...lots].sort((a, b) => {
     const itemA = String(a?.itemName ?? '').toLowerCase();
@@ -134,171 +172,15 @@ export function exportStockXlsx(data, options = {}) {
     return;
   }
 
-  // Define columns and value extractors for each view type
-  const getColumns = () => {
-    const hidePending = statusFilter === 'available_to_issue';
-
-    switch (viewType) {
-      case 'jumbo':
-        if (groupBy) {
-          return [
-            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
-            { header: 'Item', key: 'itemName' },
-            { header: 'Supplier', key: 'supplierName' },
-            { header: 'Pieces (Avail/Total)', key: 'pieces', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? 0}` },
-            { header: 'Total Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-            ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
-          ];
-        }
-        return [
-          { header: 'Lot No', key: 'lotNo' },
-          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
-          { header: 'Item', key: 'itemName' },
-          { header: 'Firm', key: 'firmName' },
-          { header: 'Supplier', key: 'supplierName' },
-          { header: 'Pieces (Avail/Total)', key: 'pieces', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? (l.pieces || []).length}` },
-          { header: 'Total Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-          ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
-        ];
-
-      case 'bobbins':
-        if (groupBy) {
-          return [
-            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
-            { header: 'Item', key: 'itemName' },
-            { header: 'Cut', key: 'cutName' },
-            { header: 'Supplier', key: 'supplierName' },
-            { header: 'Bobbins (Avail/Total)', key: 'bobbins', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
-            { header: 'Weight (Avail/Total)', key: 'weight', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
-            { header: 'Crates', key: 'crateCount', format: (l) => l.crates?.length || l.crateCount || 0 },
-          ];
-        }
-        return [
-          { header: 'Lot No', key: 'lotNo' },
-          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
-          { header: 'Item', key: 'itemName' },
-          { header: 'Cut', key: 'cutName' },
-          { header: 'Firm', key: 'firmName' },
-          { header: 'Supplier', key: 'supplierName' },
-          { header: 'Bobbins (Avail/Total)', key: 'bobbins', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
-          { header: 'Weight (Avail/Total)', key: 'weight', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
-          { header: 'Crates', key: 'crateCount', format: (l) => l.crates?.length || l.crateCount || 0 },
-        ];
-
-      case 'holo':
-        if (groupBy) {
-          return [
-            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
-            { header: 'Item', key: 'itemName' },
-            { header: 'Cut', key: 'cutName' },
-            { header: 'Yarn / Twist', key: 'yarnTwist', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
-            { header: 'Supplier', key: 'supplierName' },
-            { header: 'Available Rolls', key: 'totalRolls' },
-            { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-          ];
-        }
-        return [
-          { header: 'Lot No', key: 'lotNo' },
-          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
-          { header: 'Item', key: 'itemName' },
-          { header: 'Cut', key: 'cutName' },
-          { header: 'Yarn / Twist', key: 'yarnTwist', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
-          { header: 'Firm', key: 'firmName' },
-          { header: 'Supplier', key: 'supplierName' },
-          { header: 'Available Rolls', key: 'totalRolls' },
-          { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-          { header: 'Steamed', key: 'steamed', format: (l) => `${l.steamedRolls ?? 0} / ${l.totalRolls ?? 0}` },
-        ];
-
-      case 'coning':
-        if (groupBy) {
-          return [
-            { header: 'Lots', key: 'lots', format: (l) => (l.lots || []).join(', ') },
-            { header: 'Item', key: 'itemName' },
-            { header: 'Cut', key: 'cutName' },
-            { header: 'Yarn', key: 'yarnName' },
-            { header: 'Supplier', key: 'supplierName' },
-            { header: 'Available Cones', key: 'totalCones' },
-            { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-          ];
-        }
-        return [
-          { header: 'Lot No', key: 'lotNo' },
-          { header: 'Date', key: 'date', format: (l) => formatDateDDMMYYYY(l.date) },
-          { header: 'Item', key: 'itemName' },
-          { header: 'Cut', key: 'cutName' },
-          { header: 'Yarn', key: 'yarnName' },
-          { header: 'Firm', key: 'firmName' },
-          { header: 'Supplier', key: 'supplierName' },
-          { header: 'Available Cones', key: 'totalCones' },
-          { header: 'Net Weight (kg)', key: 'totalWeight', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
-        ];
-
-      default:
-        return [];
-    }
-  };
-
-  const columns = getColumns();
+  const columns = getStockExportColumns({ viewType, groupBy, statusFilter });
   if (columns.length === 0) {
     alert('Unknown view type for export');
     return;
   }
 
   // Build rows with formatted values
-  const rows = data.map((item) => {
-    const row = {};
-    columns.forEach((col) => {
-      if (col.format) {
-        row[col.header] = col.format(item);
-      } else {
-        row[col.header] = item[col.key] ?? '';
-      }
-    });
-    return row;
-  });
-
-  // Add Grand Totals row
-  const totalsRow = {};
-  columns.forEach((col, idx) => {
-    if (idx === 0) {
-      totalsRow[col.header] = 'Grand Total';
-    } else {
-      // Try to get matching total value
-      switch (col.key) {
-        case 'pieces':
-          totalsRow[col.header] = `${grandTotals.availableCount ?? 0} / ${grandTotals.totalPieces ?? 0}`;
-          break;
-        case 'totalWeight':
-          totalsRow[col.header] = Number(grandTotals.totalWeight || grandTotals.pendingWeight || 0).toFixed(3);
-          break;
-        case 'pendingWeight':
-          totalsRow[col.header] = Number(grandTotals.pendingWeight || 0).toFixed(3);
-          break;
-        case 'bobbins':
-          totalsRow[col.header] = `${grandTotals.availableBobbins ?? 0} / ${grandTotals.totalBobbins ?? 0}`;
-          break;
-        case 'weight':
-          totalsRow[col.header] = `${Number(grandTotals.availableWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
-          break;
-        case 'crateCount':
-          totalsRow[col.header] = grandTotals.crateCount ?? 0;
-          break;
-        case 'totalRolls':
-          totalsRow[col.header] = grandTotals.totalRolls ?? 0;
-          break;
-        case 'steamed':
-          totalsRow[col.header] = `${grandTotals.steamedRolls ?? 0} / ${grandTotals.totalRolls ?? 0}`;
-          break;
-        case 'totalCones':
-          totalsRow[col.header] = grandTotals.totalCones ?? 0;
-          break;
-        default:
-          totalsRow[col.header] = '';
-      }
-    }
-  });
-  rows.push(totalsRow);
+  const rows = data.map((item) => buildStockExportRowObject(item, columns));
+  rows.push(buildStockTotalsRow(columns, { grandTotals }));
 
   // Create workbook and sheet
   const wb = utils.book_new();
@@ -325,6 +207,418 @@ export function exportStockXlsx(data, options = {}) {
   a.download = `stock-${viewType}${groupBy ? '-grouped' : ''}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function getStockExportColumns({ viewType = 'jumbo', groupBy = false, statusFilter = '' }) {
+  const hidePending = statusFilter === 'available_to_issue';
+
+  switch (viewType) {
+    case 'jumbo':
+      if (groupBy) {
+        return [
+          { header: 'Lots', key: 'lots', align: 'left', format: (l) => (l.lots || []).join(', ') },
+          { header: 'Item', key: 'itemName', align: 'left' },
+          { header: 'Supplier', key: 'supplierName', align: 'left' },
+          { header: 'Pieces (Avail/Total)', key: 'pieces', align: 'right', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? 0}` },
+          { header: 'Total Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', align: 'right', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
+        ];
+      }
+      return [
+        { header: 'Lot No', key: 'lotNo', align: 'left' },
+        { header: 'Date', key: 'date', align: 'center', format: (l) => formatDateDDMMYYYY(l.date) },
+        { header: 'Item', key: 'itemName', align: 'left' },
+        { header: 'Firm', key: 'firmName', align: 'left' },
+        { header: 'Supplier', key: 'supplierName', align: 'left' },
+        { header: 'Pieces (Avail/Total)', key: 'pieces', align: 'right', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? (l.pieces || []).length}` },
+        { header: 'Total Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', align: 'right', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
+      ];
+
+    case 'bobbins':
+      if (groupBy) {
+        return [
+          { header: 'Lots', key: 'lots', align: 'left', format: (l) => (l.lots || []).join(', ') },
+          { header: 'Item', key: 'itemName', align: 'left' },
+          { header: 'Cut', key: 'cutName', align: 'left' },
+          { header: 'Supplier', key: 'supplierName', align: 'left' },
+          { header: 'Bobbins (Avail/Total)', key: 'bobbins', align: 'right', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
+          { header: 'Weight (Avail/Total)', key: 'weight', align: 'right', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
+          { header: 'Crates', key: 'crateCount', align: 'right', format: (l) => l.crates?.length || l.crateCount || 0 },
+        ];
+      }
+      return [
+        { header: 'Lot No', key: 'lotNo', align: 'left' },
+        { header: 'Date', key: 'date', align: 'center', format: (l) => formatDateDDMMYYYY(l.date) },
+        { header: 'Item', key: 'itemName', align: 'left' },
+        { header: 'Cut', key: 'cutName', align: 'left' },
+        { header: 'Firm', key: 'firmName', align: 'left' },
+        { header: 'Supplier', key: 'supplierName', align: 'left' },
+        { header: 'Bobbins (Avail/Total)', key: 'bobbins', align: 'right', format: (l) => `${l.availableBobbins ?? 0} / ${l.totalBobbins ?? 0}` },
+        { header: 'Weight (Avail/Total)', key: 'weight', align: 'right', format: (l) => `${Number(l.availableWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
+        { header: 'Crates', key: 'crateCount', align: 'right', format: (l) => l.crates?.length || l.crateCount || 0 },
+      ];
+
+    case 'holo':
+      if (groupBy) {
+        return [
+          { header: 'Lots', key: 'lots', align: 'left', format: (l) => (l.lots || []).join(', ') },
+          { header: 'Item', key: 'itemName', align: 'left' },
+          { header: 'Cut', key: 'cutName', align: 'left' },
+          { header: 'Yarn / Twist', key: 'yarnTwist', align: 'left', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
+          { header: 'Supplier', key: 'supplierName', align: 'left' },
+          { header: 'Available Rolls', key: 'totalRolls', align: 'right' },
+          { header: 'Net Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        ];
+      }
+      return [
+        { header: 'Lot No', key: 'lotNo', align: 'left' },
+        { header: 'Date', key: 'date', align: 'center', format: (l) => formatDateDDMMYYYY(l.date) },
+        { header: 'Item', key: 'itemName', align: 'left' },
+        { header: 'Cut', key: 'cutName', align: 'left' },
+        { header: 'Yarn / Twist', key: 'yarnTwist', align: 'left', format: (l) => `${l.yarnName || '—'} / ${l.twistName || '—'}` },
+        { header: 'Firm', key: 'firmName', align: 'left' },
+        { header: 'Supplier', key: 'supplierName', align: 'left' },
+        { header: 'Available Rolls', key: 'totalRolls', align: 'right' },
+        { header: 'Net Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        { header: 'Steamed', key: 'steamed', align: 'right', format: (l) => `${l.steamedRolls ?? 0} / ${l.totalRolls ?? 0}` },
+      ];
+
+    case 'coning':
+      if (groupBy) {
+        return [
+          { header: 'Lots', key: 'lots', align: 'left', format: (l) => (l.lots || []).join(', ') },
+          { header: 'Item', key: 'itemName', align: 'left' },
+          { header: 'Cut', key: 'cutName', align: 'left' },
+          { header: 'Yarn', key: 'yarnName', align: 'left' },
+          { header: 'Supplier', key: 'supplierName', align: 'left' },
+          { header: 'Available Cones', key: 'totalCones', align: 'right' },
+          { header: 'Net Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        ];
+      }
+      return [
+        { header: 'Lot No', key: 'lotNo', align: 'left' },
+        { header: 'Date', key: 'date', align: 'center', format: (l) => formatDateDDMMYYYY(l.date) },
+        { header: 'Item', key: 'itemName', align: 'left' },
+        { header: 'Cut', key: 'cutName', align: 'left' },
+        { header: 'Yarn', key: 'yarnName', align: 'left' },
+        { header: 'Firm', key: 'firmName', align: 'left' },
+        { header: 'Supplier', key: 'supplierName', align: 'left' },
+        { header: 'Available Cones', key: 'totalCones', align: 'right' },
+        { header: 'Net Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+      ];
+
+    default:
+      return [];
+  }
+}
+
+function formatStockCell(item, col) {
+  if (col.format) return col.format(item);
+  return item?.[col.key] ?? '';
+}
+
+function buildStockExportRowObject(item, columns) {
+  const row = {};
+  columns.forEach((col) => {
+    row[col.header] = formatStockCell(item, col);
+  });
+  return row;
+}
+
+function buildStockTotalsRow(columns, { grandTotals = {} } = {}) {
+  const totalsRow = {};
+  columns.forEach((col, idx) => {
+    if (idx === 0) {
+      totalsRow[col.header] = 'Grand Total';
+      return;
+    }
+    switch (col.key) {
+      case 'pieces':
+        totalsRow[col.header] = `${grandTotals.availableCount ?? 0} / ${grandTotals.totalPieces ?? 0}`;
+        break;
+      case 'totalWeight':
+        totalsRow[col.header] = Number(grandTotals.totalWeight || grandTotals.pendingWeight || 0).toFixed(3);
+        break;
+      case 'pendingWeight':
+        totalsRow[col.header] = Number(grandTotals.pendingWeight || 0).toFixed(3);
+        break;
+      case 'bobbins':
+        totalsRow[col.header] = `${grandTotals.availableBobbins ?? 0} / ${grandTotals.totalBobbins ?? 0}`;
+        break;
+      case 'weight':
+        totalsRow[col.header] = `${Number(grandTotals.availableWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
+        break;
+      case 'crateCount':
+        totalsRow[col.header] = grandTotals.crateCount ?? 0;
+        break;
+      case 'totalRolls':
+        totalsRow[col.header] = grandTotals.totalRolls ?? 0;
+        break;
+      case 'steamed':
+        totalsRow[col.header] = `${grandTotals.steamedRolls ?? 0} / ${grandTotals.totalRolls ?? 0}`;
+        break;
+      case 'totalCones':
+        totalsRow[col.header] = grandTotals.totalCones ?? 0;
+        break;
+      default:
+        totalsRow[col.header] = '';
+    }
+  });
+  return totalsRow;
+}
+
+function getStockReportTitle(viewType) {
+  switch (viewType) {
+    case 'bobbins':
+      return 'Stock Report - Bobbins';
+    case 'holo':
+      return 'Stock Report - Holo';
+    case 'coning':
+      return 'Stock Report - Coning';
+    case 'jumbo':
+    default:
+      return 'Stock Report - Jumbo Rolls';
+  }
+}
+
+function drawStockPdfHeader(doc, {
+  companyName,
+  title,
+  printedAtStr,
+  brandPrimaryRgb,
+  brandGoldRgb,
+  logoDataUrl,
+  pageWidth,
+  marginX,
+  headerHeight,
+}) {
+  const topStripH = 4;
+  doc.setFillColor(...brandPrimaryRgb);
+  doc.rect(0, 0, pageWidth, topStripH, 'F');
+
+  doc.setDrawColor(...brandGoldRgb);
+  doc.setLineWidth(0.8);
+  doc.line(0, headerHeight, pageWidth, headerHeight);
+
+  const yBase = topStripH + 6;
+  const logoSize = 12;
+  let textX = marginX;
+
+  const imageFormat = inferImageFormat(logoDataUrl);
+  if (logoDataUrl && imageFormat) {
+    try {
+      doc.addImage(logoDataUrl, imageFormat, marginX, yBase - 4, logoSize, logoSize);
+      textX = marginX + logoSize + 3;
+    } catch {
+      // ignore logo failures
+    }
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(44, 62, 80);
+  doc.text(String(companyName || 'GLINTEX'), textX, yBase + 3);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text(String(title || ''), textX, yBase + 9);
+
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text(`Printed: ${printedAtStr}`, pageWidth - marginX, yBase + 3, { align: 'right' });
+}
+
+function drawStockPdfFooter(doc, {
+  pageWidth,
+  pageHeight,
+  marginX,
+  brandGoldRgb,
+  pageNumber,
+  totalPages,
+}) {
+  const yLine = pageHeight - 11;
+  doc.setDrawColor(...brandGoldRgb);
+  doc.setLineWidth(0.4);
+  doc.line(marginX, yLine, pageWidth - marginX, yLine);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(140, 140, 140);
+  doc.text(`Page ${pageNumber} of ${totalPages}`, pageWidth - marginX, pageHeight - 6, { align: 'right' });
+}
+
+function drawStockPdfMetaBox(doc, {
+  x,
+  y,
+  width,
+  pairs,
+}) {
+  const safePairs = (pairs || [])
+    .filter((p) => p && p.label && p.value !== undefined && p.value !== null && String(p.value).trim() !== '')
+    .map((p) => ({ label: String(p.label), value: String(p.value) }));
+
+  if (safePairs.length === 0) return y;
+
+  const padding = 3;
+  const colGap = 6;
+  const lineH = 4;
+  const titleH = 6;
+
+  const cols = 2;
+  const rows = Math.ceil(safePairs.length / cols);
+  const boxH = titleH + (rows * lineH) + padding + 2;
+
+  doc.setFillColor(248, 249, 250);
+  doc.roundedRect(x, y, width, boxH, 2, 2, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(44, 62, 80);
+  doc.text('Report Filters', x + padding, y + 5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(90, 90, 90);
+
+  const innerW = width - (padding * 2);
+  const colW = (innerW - colGap) / 2;
+  const left = safePairs.slice(0, rows);
+  const right = safePairs.slice(rows);
+
+  const startY = y + titleH + 2;
+
+  left.forEach((p, idx) => {
+    const line = `${p.label}: ${p.value}`;
+    doc.text(ellipsizeToWidth(doc, line, colW), x + padding, startY + (idx * lineH));
+  });
+  right.forEach((p, idx) => {
+    const line = `${p.label}: ${p.value}`;
+    doc.text(ellipsizeToWidth(doc, line, colW), x + padding + colW + colGap, startY + (idx * lineH));
+  });
+
+  return y + boxH + 6;
+}
+
+export function exportStockPdf(data, options = {}) {
+  const {
+    viewType = 'jumbo',
+    groupBy = false,
+    grandTotals = {},
+    statusFilter = '',
+    brand = { primary: '#2E4CA6', gold: '#D4AF37', logoDataUrl: '' },
+    companyName = 'GLINTEX',
+    metaPairs = [],
+  } = options;
+
+  if (!data || data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  const columns = getStockExportColumns({ viewType, groupBy, statusFilter });
+  if (columns.length === 0) {
+    alert('Unknown view type for export');
+    return;
+  }
+
+  const orientation = columns.length > 6 ? 'landscape' : 'portrait';
+  const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  const brandPrimaryRgb = hexToRgb(brand?.primary);
+  const brandGoldRgb = hexToRgb(brand?.gold);
+  const printedAtStr = formatPrintedAt(new Date());
+  const title = getStockReportTitle(viewType);
+
+  const marginX = 12;
+  const headerHeight = 24;
+  const footerHeight = 14;
+
+  let y = headerHeight + 6;
+  y = drawStockPdfMetaBox(doc, {
+    x: marginX,
+    y,
+    width: pageWidth - (marginX * 2),
+    pairs: metaPairs,
+  });
+
+  const bodyRows = data.map((item) => (
+    columns.map((col) => {
+      const v = formatStockCell(item, col);
+      return v === null || v === undefined ? '' : String(v);
+    })
+  ));
+
+  const totalsRowObj = buildStockTotalsRow(columns, { grandTotals });
+  const totalsRow = columns.map((col) => String(totalsRowObj[col.header] ?? ''));
+  bodyRows.push(totalsRow);
+
+  const columnStyles = {};
+  columns.forEach((col, idx) => {
+    columnStyles[idx] = { halign: col.align || 'left' };
+  });
+
+  autoTable(doc, {
+    startY: y,
+    head: [columns.map((c) => c.header)],
+    body: bodyRows,
+    margin: {
+      top: headerHeight + 6,
+      left: marginX,
+      right: marginX,
+      bottom: footerHeight,
+    },
+    styles: {
+      fontSize: 8,
+      textColor: [44, 62, 80],
+      cellPadding: { top: 1.5, right: 2, bottom: 1.5, left: 2 },
+      lineWidth: 0.1,
+      lineColor: [220, 220, 220],
+    },
+    headStyles: {
+      fillColor: brandPrimaryRgb,
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    alternateRowStyles: { fillColor: [248, 249, 250] },
+    columnStyles,
+    didParseCell: (data) => {
+      const isTotalsRow = data.section === 'body' && data.row.index === bodyRows.length - 1;
+      if (isTotalsRow) {
+        data.cell.styles.fillColor = [233, 236, 239];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+  });
+
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    drawStockPdfHeader(doc, {
+      companyName,
+      title,
+      printedAtStr,
+      brandPrimaryRgb,
+      brandGoldRgb,
+      logoDataUrl: brand?.logoDataUrl,
+      pageWidth,
+      marginX,
+      headerHeight,
+    });
+    drawStockPdfFooter(doc, {
+      pageWidth,
+      pageHeight,
+      marginX,
+      brandGoldRgb,
+      pageNumber: i,
+      totalPages,
+    });
+  }
+
+  doc.save(`stock-${viewType}${groupBy ? '-grouped' : ''}.pdf`);
 }
 
 export function exportCsv(lots, piecesByLot) {

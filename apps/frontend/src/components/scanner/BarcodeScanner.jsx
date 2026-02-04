@@ -24,9 +24,11 @@ const SUPPORTED_FORMATS = [
 
 // ============ FIX #2: Known GLINTEX barcode patterns ============
 const VALID_BARCODE_PATTERNS = [
-    /^INB-\d{3}-\d{3}$/,               // Inbound
-    /^ICU-\d{3}-\d{3}$/,               // Cutter Issue
-    /^RCU-\d{3}-\d{3}-C\d{3}$/,        // Cutter Receive
+    // NOTE: Lot numbers can be numeric (e.g. 001), opening-stock (OP-1064), or cutter-purchase (CP-001).
+    // Keep patterns strict to GLINTEX formats while allowing these lot prefixes.
+    /^INB-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Inbound
+    /^ICU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Cutter Issue
+    /^RCU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}-C\d{3}$/,   // Cutter Receive
     /^IHO-\d{1,4}$/,                   // Holo Issue (1-4 digits)
     /^RHO-\d{1,4}-C\d{3}$/,            // Holo Receive
     /^RHO-OP-\d{1,4}-C\d{3}$/,         // Legacy Holo Opening Stock

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
@@ -10,7 +10,7 @@ import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
-import { exportStockXlsx } from '../services';
+import { exportStockXlsx, exportStockPdf } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
@@ -49,7 +49,7 @@ function buildStockGroupKey(lot) {
 }
 
 export function Stock() {
-  const { db, createIssueToMachine, refreshing, refreshDb, process, ensureModuleData } = useInventory();
+  const { db, brand, createIssueToMachine, refreshing, refreshDb, process, ensureModuleData } = useInventory();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -111,6 +111,8 @@ export function Stock() {
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
   const [groupByItem, setGroupByItem] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
 
   // --- Filters ---
   const [search, setSearch] = useState("");
@@ -132,6 +134,24 @@ export function Stock() {
   // Clear export data when view changes to avoid stale data
   useEffect(() => { setExportData(null); }, [view, processId]);
 
+  // Close export menu when clicking outside / pressing escape
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onMouseDown = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [exportMenuOpen]);
 
   // --- Data Prep (Memoized) ---
 
@@ -147,6 +167,32 @@ export function Stock() {
     });
     return map;
   }, [db, receiveTotalsKey, receiveWeightField, receiveUnitField]);
+
+  const cutterIssueByPieceId = useMemo(() => {
+    if (!isCutter) return new Map();
+    const issues = Array.isArray(db?.issue_to_cutter_machine) ? db.issue_to_cutter_machine : [];
+    const machineMap = new Map((db?.machines || []).map(m => [m.id, m.name]));
+    const sortedIssues = [...issues].sort((a, b) => {
+      const aTime = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return String(b?.date || '').localeCompare(String(a?.date || ''));
+    });
+    const map = new Map();
+    sortedIssues.forEach((issue) => {
+      const pieceIds = Array.isArray(issue.pieceIds)
+        ? issue.pieceIds
+        : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
+      const machineName = issue.machineName || machineMap.get(issue.machineId) || '';
+      const issueDate = issue.date || '';
+      pieceIds.forEach((id) => {
+        if (!map.has(id)) {
+          map.set(id, { machineName, issueDate });
+        }
+      });
+    });
+    return map;
+  }, [db, isCutter]);
 
   const lotsMap = useMemo(() => {
     if (!db?.lots) return {};
@@ -164,7 +210,9 @@ export function Stock() {
         totalReceivedUnits: 0,
         wastageTotal: 0,
         wastageCount: 0,
+        wastageWeightBaseTotal: 0,
         avgWastage: 0,
+        wastagePercent: 0,
         cutNames: new Set(),
         yarnNames: new Set(),
       };
@@ -188,6 +236,10 @@ export function Stock() {
       const yarnName = piece.yarnName || piece.yarn?.name || (typeof piece.yarn === 'string' ? piece.yarn : '') || db.yarns?.find(y => y.id === piece.yarnId)?.name || '';
       if (yarnName) m[piece.lotNo].yarnNames.add(yarnName);
 
+      const issueMeta = cutterIssueByPieceId.get(piece.id);
+      const issuedLabel = issueMeta
+        ? `Issued${issueMeta.machineName ? `: ${issueMeta.machineName}` : ''}${issueMeta.issueDate ? ` • ${issueMeta.issueDate}` : ''}`
+        : '';
       const pieceEntry = {
         ...piece,
         pendingWeight: pendingForPiece,
@@ -195,7 +247,8 @@ export function Stock() {
         wastageWeight,
         totalUnits: pieceTotalUnits,
         cutName,
-        yarnName
+        yarnName,
+        issuedLabel
       };
 
       m[piece.lotNo].pieces.push(pieceEntry);
@@ -203,6 +256,7 @@ export function Stock() {
       if (wastageWeight > 0) {
         m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
         m[piece.lotNo].wastageCount = (m[piece.lotNo].wastageCount || 0) + 1;
+        m[piece.lotNo].wastageWeightBaseTotal = (m[piece.lotNo].wastageWeightBaseTotal || 0) + Number(piece.weight || 0);
       }
       const availableForIssue = isPieceAvailableForIssue(pieceEntry);
       if (availableForIssue) {
@@ -215,12 +269,13 @@ export function Stock() {
 
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
+      lot.wastagePercent = lot.wastageWeightBaseTotal > 0 ? ((lot.wastageTotal / lot.wastageWeightBaseTotal) * 100) : 0;
       lot.statusType = lotStatus(lot);
       lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
       lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
     });
     return m;
-  }, [db, receiveTotalsMap]);
+  }, [db, receiveTotalsMap, cutterIssueByPieceId]);
 
   const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
 
@@ -301,6 +356,11 @@ export function Stock() {
         pendingWeight: 0,
         availableCount: 0,
         totalPieces: 0,
+        wastageTotal: 0,
+        wastageCount: 0,
+        wastageWeightBaseTotal: 0,
+        avgWastage: 0,
+        wastagePercent: 0,
         pieces: [],
         lots: [], // Collect lot numbers
         statusType: 'inactive',
@@ -310,11 +370,19 @@ export function Stock() {
       const available = lot.availableCount ?? countAvailablePieces(lot.pieces || []);
       existing.availableCount += available;
       existing.totalPieces += lot.totalPieces ?? (lot.pieces || []).length;
+      existing.wastageTotal += Number(lot.wastageTotal || 0);
+      existing.wastageCount += Number(lot.wastageCount || 0);
+      existing.wastageWeightBaseTotal += Number(lot.wastageWeightBaseTotal || 0);
       existing.statusType = existing.pendingWeight > EPSILON ? 'active' : 'inactive';
       existing.lots.push(lot.lotNo); // Add lot number to group
       map.set(key, existing);
     });
-    return Array.from(map.values());
+    const grouped = Array.from(map.values());
+    grouped.forEach((lot) => {
+      lot.avgWastage = lot.wastageCount > 0 ? (lot.wastageTotal / lot.wastageCount) : 0;
+      lot.wastagePercent = lot.wastageWeightBaseTotal > 0 ? ((lot.wastageTotal / lot.wastageWeightBaseTotal) * 100) : 0;
+    });
+    return grouped;
   }, [filteredLots, groupByItem]);
 
   // Grand Totals for Jumbo Rolls view
@@ -324,11 +392,14 @@ export function Stock() {
       totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
       totalWeight: acc.totalWeight + Number(lot.totalWeight || 0),
       pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
-    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0 });
+      wastageTotal: acc.wastageTotal + Number(lot.wastageTotal || 0),
+      wastageCount: acc.wastageCount + Number(lot.wastageCount || 0),
+      wastageWeightBaseTotal: acc.wastageWeightBaseTotal + Number(lot.wastageWeightBaseTotal || 0),
+    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0 });
   }, [displayedLots]);
 
   // --- Export Handler ---
-  const handleExport = () => {
+  const handleExport = (format = 'xlsx') => {
     // Determine the correct view type for export
     let viewType = 'jumbo';
     if (isConing) viewType = 'coning';
@@ -366,6 +437,59 @@ export function Stock() {
           crateCount: (acc.crateCount || 0) + (lot.crates?.length || lot.crateCount || 0),
         }), {});
       }
+    }
+
+    const settings = db?.settings?.[0] || {};
+    const companyName = settings.challanFromName || 'GLINTEX';
+    const findNameById = (arr, id) => arr?.find((row) => String(row.id) === String(id))?.name || '';
+
+    const statusLabel = {
+      active: 'Active Only',
+      inactive: 'Inactive Only',
+      available_to_issue: 'Available to issue',
+      all: 'All',
+    }[filters.status] || filters.status;
+
+    const steamedLabel = {
+      all: 'All',
+      steamed: 'Steamed Only',
+      unsteamed: 'Unsteamed Only',
+    }[filters.steamed] || filters.steamed;
+
+    const viewLabel = {
+      jumbo: 'Jumbo Rolls',
+      bobbins: 'Bobbins',
+      holo: 'Holo',
+      coning: 'Coning',
+    }[viewType] || viewType;
+
+    const metaPairs = [
+      { label: 'Process', value: processDef?.label || processId },
+      { label: 'View', value: viewLabel },
+      { label: 'Grouped', value: groupByItem ? 'Yes' : 'No' },
+      { label: 'Status', value: statusLabel },
+      ...(filters.item ? [{ label: 'Item', value: findNameById(db?.items, filters.item) }] : []),
+      ...(filters.cut ? [{ label: 'Cut', value: findNameById(db?.cuts, filters.cut) }] : []),
+      ...(filters.yarn ? [{ label: 'Yarn', value: findNameById(db?.yarns, filters.yarn) }] : []),
+      ...(filters.firm ? [{ label: 'Firm', value: findNameById(db?.firms, filters.firm) }] : []),
+      ...(filters.supplier ? [{ label: 'Supplier', value: findNameById(db?.suppliers, filters.supplier) }] : []),
+      ...(isHolo && filters.steamed !== 'all' ? [{ label: 'Steamed', value: steamedLabel }] : []),
+      ...((filters.from || filters.to) ? [{ label: 'Date', value: `${filters.from || '—'} to ${filters.to || '—'}` }] : []),
+      ...(search ? [{ label: 'Search', value: search }] : []),
+      { label: 'Records', value: String(dataToExport?.length || 0) },
+    ];
+
+    if (format === 'pdf') {
+      exportStockPdf(dataToExport, {
+        viewType,
+        groupBy: groupByItem,
+        grandTotals: totals,
+        statusFilter: filters.status,
+        brand,
+        companyName,
+        metaPairs,
+      });
+      return;
     }
 
     exportStockXlsx(dataToExport, {
@@ -561,6 +685,18 @@ export function Stock() {
   // --- Render Helper ---
   const toggleExpand = (lotNo) => setExpandedLot(prev => prev === lotNo ? null : lotNo);
   const showBobbins = isCutter && view === 'bobbins';
+  const formatWastageSummary = (lot) => {
+    const count = Number(lot?.wastageCount || 0);
+    if (!count) return '—';
+    const avg = Number(lot?.avgWastage || 0);
+    const pct = Number(lot?.wastagePercent || 0);
+    return `${formatKg(avg)} kg (${pct.toFixed(1)}%)`;
+  };
+  const grandWastageSummary = formatWastageSummary({
+    wastageCount: grandTotals.wastageCount,
+    avgWastage: grandTotals.wastageCount > 0 ? (grandTotals.wastageTotal / grandTotals.wastageCount) : 0,
+    wastagePercent: grandTotals.wastageWeightBaseTotal > 0 ? ((grandTotals.wastageTotal / grandTotals.wastageWeightBaseTotal) * 100) : 0,
+  });
 
   return (
     <div className="space-y-6 fade-in">
@@ -587,9 +723,35 @@ export function Stock() {
               </div>
             ) : null}
             {/* Export Button */}
-            <Button variant="outline" size="icon" onClick={handleExport} className="ml-auto md:ml-0">
-              <Download className="w-4 h-4" />
-            </Button>
+            <div className="relative ml-auto md:ml-0" ref={exportMenuRef}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setExportMenuOpen((v) => !v)}
+                className="gap-2"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export</span>
+                <ChevronDown className={cn("w-4 h-4 opacity-70 transition-transform", exportMenuOpen ? "rotate-180" : "rotate-0")} />
+              </Button>
+
+              {exportMenuOpen && (
+                <div className="absolute right-0 z-50 mt-1 min-w-[180px] rounded-md border bg-popover shadow-md animate-in fade-in-0 zoom-in-95">
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                    onClick={() => { setExportMenuOpen(false); handleExport('xlsx'); }}
+                  >
+                    Excel (.xlsx)
+                  </button>
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                    onClick={() => { setExportMenuOpen(false); handleExport('pdf'); }}
+                  >
+                    PDF (.pdf)
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -704,11 +866,12 @@ export function Stock() {
                   <TableHead className="">Pieces</TableHead>
                   <TableHead className="">Total Wt</TableHead>
                   {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
+                  <TableHead className="">Wastage</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {displayedLots.length === 0 ? (
-                  <TableRow><TableCell colSpan={(groupByItem ? 9 : 10) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={(groupByItem ? 10 : 11) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
                 ) : (
                   displayedLots.map((l, idx) => {
                     const isExpanded = !groupByItem && expandedLot === l.lotNo;
@@ -755,10 +918,13 @@ export function Stock() {
                               {formatKg(l.pendingWeight)}
                             </TableCell>
                           )}
+                          <TableCell className="">
+                            {formatWastageSummary(l)}
+                          </TableCell>
                         </TableRow>
                         {isExpanded && !groupByItem && (
                           <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableCell colSpan={filters.status === 'available_to_issue' ? 9 : 10} className="p-4">
+                            <TableCell colSpan={filters.status === 'available_to_issue' ? 10 : 11} className="p-4">
                               <div className="bg-background border rounded-lg p-4 shadow-sm">
                                 <div className="flex justify-between items-center mb-4">
                                   <div className="flex gap-2">
@@ -828,6 +994,7 @@ export function Stock() {
                                         pendingWeight={p.pendingWeight}
                                         wastageWeight={p.wastageWeight}
                                         totalUnits={p.totalUnits}
+                                        issuedLabel={p.issuedLabel}
                                         onDelete={handleDeletePiece}
                                         isDeleting={deletingPieces.has(p.id)}
                                         hidePending={filters.status === 'available_to_issue'}
@@ -860,6 +1027,7 @@ export function Stock() {
                     {filters.status !== 'available_to_issue' && (
                       <TableCell className="font-bold text-primary">{formatKg(grandTotals.pendingWeight)}</TableCell>
                     )}
+                    <TableCell className="font-bold text-primary">{grandWastageSummary}</TableCell>
                   </TableRow>
                 )}
               </TableBody>
@@ -910,6 +1078,9 @@ export function Stock() {
                         <span>Pieces: {available} / {total}</span>
                         <span>Total: {formatKg(l.totalWeight)}</span>
                       </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Wastage: <span className="text-foreground">{formatWastageSummary(l)}</span>
+                      </div>
                     </div>
 
                     {isExpanded && !groupByItem && (
@@ -938,6 +1109,9 @@ export function Stock() {
                                 <div className="flex flex-col">
                                   <span className="font-mono text-xs">{p.barcode || p.id.substring(0, 8)}</span>
                                   <span className="text-xs text-muted-foreground">Seq: {p.seq || '—'}</span>
+                                  {p.issuedLabel ? (
+                                    <span className="text-[10px] text-muted-foreground">({p.issuedLabel})</span>
+                                  ) : null}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium">{formatKg(p.pendingWeight)}</span>

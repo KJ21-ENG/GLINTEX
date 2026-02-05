@@ -7269,13 +7269,14 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
     if (await isHoloRowReferencedByConing({ rowId: row.id, barcode: row.barcode })) {
       return res.status(400).json({ error: 'Cannot edit row: already issued to coning' });
     }
-    const transferCount = await prisma.boxTransfer.count({
+    const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'holo',
         OR: [{ fromItemId: id }, { toItemId: id }],
       },
+      select: { id: true },
     });
-    if (transferCount > 0) {
+    if (transfer) {
       return res.status(400).json({ error: 'Cannot edit row: box transfer exists' });
     }
 
@@ -7440,13 +7441,14 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
     if (await isHoloRowReferencedByConing({ rowId: row.id, barcode: row.barcode })) {
       return res.status(400).json({ error: 'Cannot delete row: already issued to coning' });
     }
-    const transferCount = await prisma.boxTransfer.count({
+    const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'holo',
         OR: [{ fromItemId: id }, { toItemId: id }],
       },
+      select: { id: true },
     });
-    if (transferCount > 0) {
+    if (transfer) {
       return res.status(400).json({ error: 'Cannot delete row: box transfer exists' });
     }
 
@@ -8164,13 +8166,14 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
     if (dispatchedWeight > 0 || dispatchedCount > 0) {
       return res.status(400).json({ error: 'Cannot edit row: already dispatched' });
     }
-    const transferCount = await prisma.boxTransfer.count({
+    const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'coning',
         OR: [{ fromItemId: id }, { toItemId: id }],
       },
+      select: { id: true },
     });
-    if (transferCount > 0) {
+    if (transfer) {
       return res.status(400).json({ error: 'Cannot edit row: box transfer exists' });
     }
 
@@ -8312,13 +8315,14 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
     if (dispatchedWeight > 0 || dispatchedCount > 0) {
       return res.status(400).json({ error: 'Cannot delete row: already dispatched' });
     }
-    const transferCount = await prisma.boxTransfer.count({
+    const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'coning',
         OR: [{ fromItemId: id }, { toItemId: id }],
       },
+      select: { id: true },
     });
-    if (transferCount > 0) {
+    if (transfer) {
       return res.status(400).json({ error: 'Cannot delete row: box transfer exists' });
     }
 
@@ -11911,7 +11915,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
 
     // ============ HELPER FUNCTIONS FOR TRACING ============
 
-    async function traceFromInbound(item, history) {
+    async function traceFromInbound(item, history, directCutterReceiveId = null) {
       const lot = await prisma.lot.findUnique({ where: { lotNo: item.lotNo } });
       const itemMaster = lot?.itemId ? await prisma.item.findUnique({ where: { id: lot.itemId } }) : null;
       const firm = lot?.firmId ? await prisma.firm.findUnique({ where: { id: lot.firmId } }) : null;
@@ -11940,14 +11944,15 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       });
 
       if (cutterIssue) {
-        await addCutterIssueAndForward(cutterIssue, item.id, history);
+        // Pass directCutterReceiveId to only show that specific cutter receive
+        await addCutterIssueAndForward(cutterIssue, item.id, history, directCutterReceiveId);
       }
 
       // Check if directly dispatched
       await addDispatchesForItem(item.barcode, 'inbound', history);
     }
 
-    async function addCutterIssueAndForward(issue, pieceId, history) {
+    async function addCutterIssueAndForward(issue, pieceId, history, directCutterReceiveId = null) {
       history.lineage.push({
         stage: 'cutter_issue',
         date: issue.date,
@@ -11964,14 +11969,26 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       });
 
       // Forward trace: Check cutter receives
-      const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
-        where: { pieceId: pieceId, isDeleted: false },
-        include: { bobbin: true, operator: true, challan: true },
-        orderBy: { createdAt: 'asc' },
-      });
+      // If directCutterReceiveId is provided, only show that specific cutter receive (direct lineage only)
+      if (directCutterReceiveId) {
+        const recv = await prisma.receiveFromCutterMachineRow.findFirst({
+          where: { id: directCutterReceiveId, isDeleted: false },
+          include: { bobbin: true, operator: true, challan: true },
+        });
+        if (recv) {
+          await addCutterReceiveAndForward(recv, history);
+        }
+      } else {
+        // When scanning inbound directly, show all cutter receives (but only first one traced forward)
+        const cutterReceive = await prisma.receiveFromCutterMachineRow.findFirst({
+          where: { pieceId: pieceId, isDeleted: false },
+          include: { bobbin: true, operator: true, challan: true },
+          orderBy: { createdAt: 'asc' },
+        });
 
-      for (const recv of cutterReceives) {
-        await addCutterReceiveAndForward(recv, history);
+        if (cutterReceive) {
+          await addCutterReceiveAndForward(cutterReceive, history);
+        }
       }
     }
 
@@ -12040,15 +12057,15 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         },
       });
 
-      // Forward trace: Check holo receives
-      const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+      // Forward trace: Check holo receives - only show first one for direct lineage
+      const holoReceive = await prisma.receiveFromHoloMachineRow.findFirst({
         where: { issueId: issue.id, isDeleted: false },
         include: { operator: true, rollType: true, box: true },
         orderBy: { createdAt: 'asc' },
       });
 
-      for (const recv of holoReceives) {
-        await addHoloReceiveAndForward(recv, history);
+      if (holoReceive) {
+        await addHoloReceiveAndForward(holoReceive, history);
       }
     }
 
@@ -12162,15 +12179,15 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         },
       });
 
-      // Forward trace: Check coning receives
-      const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
+      // Forward trace: Check coning receives - only show first one for direct lineage
+      const coningReceive = await prisma.receiveFromConingMachineRow.findFirst({
         where: { issueId: issue.id, isDeleted: false },
         include: { operator: true, box: true },
         orderBy: { createdAt: 'asc' },
       });
 
-      for (const recv of coningReceives) {
-        await addConingReceive(recv, history);
+      if (coningReceive) {
+        await addConingReceive(coningReceive, history);
       }
     }
 
@@ -12292,7 +12309,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     }
 
     async function traceFromConingIssue(issue, history) {
-      // Get holo receives referenced
+      // Get holo receives referenced - only trace from first one (direct lineage)
       try {
         // receivedRowRefs is a Prisma Json field - might be already parsed or a string
         let refs = issue.receivedRowRefs;
@@ -12305,18 +12322,15 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
 
         if (refIds.length > 0) {
-          const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+          // Get only the first holo receive for direct lineage
+          const holoReceive = await prisma.receiveFromHoloMachineRow.findFirst({
             where: { id: { in: refIds }, isDeleted: false },
             include: { operator: true, rollType: true, box: true },
           });
 
-          if (holoReceives.length > 0) {
-            // Trace from first holo receive
-            await traceFromHoloReceive(holoReceives[0], history);
-            // Add other holo receives
-            for (let i = 1; i < holoReceives.length; i++) {
-              await addHoloReceiveAndForward(holoReceives[i], history);
-            }
+          if (holoReceive) {
+            // Trace from this single holo receive (direct lineage only)
+            await traceFromHoloReceive(holoReceive, history);
           }
         }
       } catch (err) {
@@ -12342,7 +12356,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     }
 
     async function traceFromHoloIssue(issue, history) {
-      // Get cutter receives referenced
+      // Get cutter receives referenced - only trace from first one (direct lineage)
       try {
         // receivedRowRefs is a Prisma Json field - might be already parsed or a string
         let refs = issue.receivedRowRefs;
@@ -12355,18 +12369,15 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
 
         if (refIds.length > 0) {
-          const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+          // Get only the first cutter receive for direct lineage
+          const cutterReceive = await prisma.receiveFromCutterMachineRow.findFirst({
             where: { id: { in: refIds }, isDeleted: false },
             include: { bobbin: true, operator: true, challan: true },
           });
 
-          if (cutterReceives.length > 0) {
-            // Trace from first cutter receive
-            await traceFromCutterReceive(cutterReceives[0], history);
-            // Add other cutter receives
-            for (let i = 1; i < cutterReceives.length; i++) {
-              await addCutterReceiveAndForward(cutterReceives[i], history);
-            }
+          if (cutterReceive) {
+            // Trace from this single cutter receive (direct lineage only)
+            await traceFromCutterReceive(cutterReceive, history);
           }
         }
       } catch (err) {
@@ -12384,7 +12395,8 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       });
 
       if (inboundItem) {
-        await traceFromInbound(inboundItem, history);
+        // Pass the specific cutter receive ID for direct lineage filtering
+        await traceFromInbound(inboundItem, history, recv.id);
       } else {
         // Just add cutter receive
         await addCutterReceiveAndForward(recv, history);

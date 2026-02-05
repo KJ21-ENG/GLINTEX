@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Scale, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '../ui';
-import { catchWeight, isWebSerialSupported } from '../../utils/weightScale';
+import * as api from '../../api/client';
+import { getScaleManager, isWebSerialSupported } from '../../utils/weightScale';
+import { WeightCaptureDialog } from './WeightCaptureDialog';
 
 /**
  * Small icon button to capture weight from connected scale
@@ -10,26 +12,22 @@ import { catchWeight, isWebSerialSupported } from '../../utils/weightScale';
  * @param {boolean} disabled - Optional disable state
  * @param {string} className - Additional CSS classes
  */
-export function CatchWeightButton({ onWeightCaptured, disabled = false, className = '' }) {
+export function CatchWeightButton({ onWeightCaptured, disabled = false, className = '', context = null }) {
     const [status, setStatus] = useState('idle'); // idle | loading | error
     const [errorMessage, setErrorMessage] = useState('');
+    const [dialogOpen, setDialogOpen] = useState(false);
 
     const isSupported = isWebSerialSupported();
+    const effectiveContext = {
+        page: typeof window !== 'undefined' ? window.location.pathname : null,
+        ...(context && typeof context === 'object' ? context : {}),
+    };
 
     async function handleClick() {
         if (disabled || status === 'loading') return;
 
         if (!isSupported) {
-            // Fallback: prompt for manual entry
-            const manualWeight = window.prompt('Weight scale not supported. Enter weight manually (kg):');
-            if (manualWeight) {
-                const parsed = parseFloat(manualWeight);
-                if (!isNaN(parsed) && parsed > 0) {
-                    onWeightCaptured(parsed);
-                } else {
-                    alert('Invalid weight entered');
-                }
-            }
+            setDialogOpen(true);
             return;
         }
 
@@ -37,24 +35,31 @@ export function CatchWeightButton({ onWeightCaptured, disabled = false, classNam
         setErrorMessage('');
 
         try {
-            const weight = await catchWeight();
+            // Fast path: if already authorized + connected, try a quick stable capture.
+            const manager = getScaleManager();
+            const result = await manager.captureStableWeight({ timeoutMs: 2500, allowUserPrompt: false });
+            const meta = {
+                source: 'scale',
+                weightKg: result.weightKg,
+                portInfo: result.portInfo || null,
+                baudRate: result.baudRate || null,
+                parser: result.meta?.parser || null,
+                raw: result.meta?.raw || null,
+                stableFlag: Boolean(result.meta?.stable),
+            };
+            try {
+                await api.logWeightCapture({ ...meta, context: effectiveContext });
+            } catch (e) {
+                // Don't block the operator on audit log failures for scale captures.
+                console.warn('Failed to log weight capture', e);
+            }
+
             setStatus('idle');
-            onWeightCaptured(weight);
+            onWeightCaptured?.(result.weightKg, meta);
         } catch (err) {
             setStatus('error');
             setErrorMessage(err.message);
-
-            // Offer manual entry on error
-            const manualWeight = window.prompt(`${err.message}\n\nEnter weight manually (kg):`);
-            if (manualWeight) {
-                const parsed = parseFloat(manualWeight);
-                if (!isNaN(parsed) && parsed > 0) {
-                    onWeightCaptured(parsed);
-                }
-            }
-
-            // Reset to idle after showing error briefly
-            setTimeout(() => setStatus('idle'), 2000);
+            setDialogOpen(true);
         }
     }
 
@@ -77,16 +82,31 @@ export function CatchWeightButton({ onWeightCaptured, disabled = false, classNam
     };
 
     return (
-        <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className={`flex-shrink-0 ${className}`}
-            onClick={handleClick}
-            disabled={disabled || status === 'loading'}
-            title={getTitle()}
-        >
-            {getIcon()}
-        </Button>
+        <>
+            <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className={`flex-shrink-0 ${className}`}
+                onClick={handleClick}
+                disabled={disabled || status === 'loading'}
+                title={getTitle()}
+            >
+                {getIcon()}
+            </Button>
+
+            <WeightCaptureDialog
+                open={dialogOpen}
+                onOpenChange={(open) => {
+                    setDialogOpen(open);
+                    if (!open) setStatus('idle');
+                }}
+                onWeightCaptured={(weightKg, meta) => {
+                    onWeightCaptured?.(weightKg, meta);
+                    setStatus('idle');
+                }}
+                context={effectiveContext}
+            />
+        </>
     );
 }

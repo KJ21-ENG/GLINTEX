@@ -1113,6 +1113,52 @@ router.get('/api/health', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Weight scale capture audit (scale/manual)
+router.post('/api/weight_capture', requireAuth, async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const source = typeof req.body?.source === 'string' ? req.body.source.trim().toLowerCase() : '';
+    const weightKg = toNumber(req.body?.weightKg);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    const context = req.body?.context && typeof req.body.context === 'object' ? req.body.context : null;
+
+    if (!source || (source !== 'scale' && source !== 'manual')) {
+      return res.status(400).json({ error: 'Invalid source' });
+    }
+    if (!Number.isFinite(weightKg) || weightKg <= 0) {
+      return res.status(400).json({ error: 'Invalid weightKg' });
+    }
+    if (source === 'manual' && reason.length < 3) {
+      return res.status(400).json({ error: 'Manual entry requires a reason' });
+    }
+
+    const payload = {
+      source,
+      weightKg: roundTo3Decimals(weightKg),
+      reason: source === 'manual' ? reason : undefined,
+      context,
+      // Optional diagnostic metadata
+      portInfo: req.body?.portInfo ?? null,
+      baudRate: req.body?.baudRate ?? null,
+      parser: req.body?.parser ?? null,
+      raw: typeof req.body?.raw === 'string' ? req.body.raw.slice(0, 500) : null,
+      stableFlag: Boolean(req.body?.stableFlag),
+    };
+
+    await logCrudWithActor(req, {
+      entityType: 'weight_capture',
+      entityId: typeof context?.entityId === 'string' ? context.entityId : null,
+      action: 'create',
+      payload,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('weight capture log failed', err);
+    res.status(500).json({ error: 'Failed to log weight capture' });
+  }
+});
+
 // Public branding endpoint (accessible without login)
 router.get('/api/public/branding', async (req, res) => {
   try {

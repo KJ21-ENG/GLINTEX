@@ -1163,7 +1163,16 @@ export function OpeningStock() {
                       onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
                       className="flex-1"
                     />
-                    <CatchWeightButton onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))} />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'inboundEntry.weight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="flex items-center space-x-2 h-10">
@@ -1301,7 +1310,16 @@ export function OpeningStock() {
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
                     <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                    <CatchWeightButton onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'cutterEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -1509,7 +1527,16 @@ export function OpeningStock() {
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
                     <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                    <CatchWeightButton onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'holoEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
               </div>
@@ -1680,7 +1707,16 @@ export function OpeningStock() {
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
                     <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                    <CatchWeightButton onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'coningEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
               </div>

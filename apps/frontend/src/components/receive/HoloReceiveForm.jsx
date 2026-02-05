@@ -311,7 +311,17 @@ export function HoloReceiveForm() {
                                 <Label>Gross Weight</Label>
                                 <div className="flex gap-2">
                                     <Input type="number" value={form.grossWeight} onChange={e => setForm({ ...form, grossWeight: e.target.value })} className="flex-1" />
-                                    <CatchWeightButton onWeightCaptured={(wt) => setForm({ ...form, grossWeight: wt.toFixed(3) })} />
+                                    <CatchWeightButton
+                                        onWeightCaptured={(wt) => setForm({ ...form, grossWeight: wt.toFixed(3) })}
+                                        context={{
+                                            feature: 'receive',
+                                            stage: 'holo',
+                                            field: 'grossWeight',
+                                            issueId: issue?.id || null,
+                                            issueBarcode: issue?.barcode || null,
+                                            lotNo: issue?.lotNo || null,
+                                        }}
+                                    />
                                 </div>
                             </div>
                         </div>

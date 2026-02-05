@@ -205,6 +205,7 @@ export function Stock() {
         supplierName: db.suppliers.find(s => s.id === lot.supplierId)?.name || '—',
         pieces: [],
         availableCount: 0,
+        remainingWeight: 0,
         pendingWeight: 0,
         totalReceivedWeight: 0,
         totalReceivedUnits: 0,
@@ -228,6 +229,12 @@ export function Stock() {
       const pieceTotalUnits = totals.totalUnits || 0;
       const pendingRaw = inboundWeight - receivedWeight - wastageWeight - dispatchedWeight;
       const pendingForPiece = pendingRaw > EPSILON ? pendingRaw : 0;
+
+      // Remaining weight for Jumbo Rolls view should reflect pieces that are still present (not issued/consumed).
+      // We treat any piece with status === 'consumed' as not remaining.
+      if (piece.status !== 'consumed') {
+        m[piece.lotNo].remainingWeight = (m[piece.lotNo].remainingWeight || 0) + inboundWeight;
+      }
 
       // Cut & Yarn Resolution
       const cutName = piece.cutName || piece.cut?.name || (typeof piece.cut === 'string' ? piece.cut : '') || db.cuts?.find(c => c.id === piece.cutId)?.name || '';
@@ -353,6 +360,7 @@ export function Stock() {
         firmName: lot.firmName,
         supplierName: lot.supplierName,
         totalWeight: 0,
+        remainingWeight: 0,
         pendingWeight: 0,
         availableCount: 0,
         totalPieces: 0,
@@ -366,6 +374,7 @@ export function Stock() {
         statusType: 'inactive',
       };
       existing.totalWeight += Number(lot.totalWeight || 0);
+      existing.remainingWeight += Number(lot.remainingWeight || 0);
       existing.pendingWeight += Number(lot.pendingWeight || 0);
       const available = lot.availableCount ?? countAvailablePieces(lot.pieces || []);
       existing.availableCount += available;
@@ -391,11 +400,12 @@ export function Stock() {
       availableCount: acc.availableCount + (lot.availableCount ?? countAvailablePieces(lot.pieces || [])),
       totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
       totalWeight: acc.totalWeight + Number(lot.totalWeight || 0),
+      remainingWeight: acc.remainingWeight + Number(lot.remainingWeight || 0),
       pendingWeight: acc.pendingWeight + Number(lot.pendingWeight || 0),
       wastageTotal: acc.wastageTotal + Number(lot.wastageTotal || 0),
       wastageCount: acc.wastageCount + Number(lot.wastageCount || 0),
       wastageWeightBaseTotal: acc.wastageWeightBaseTotal + Number(lot.wastageWeightBaseTotal || 0),
-    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0 });
+    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, remainingWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0 });
   }, [displayedLots]);
 
   // --- Export Handler ---
@@ -864,7 +874,7 @@ export function Stock() {
                   {!groupByItem ? <TableHead>Firm</TableHead> : null}
                   <TableHead>Supplier</TableHead>
                   <TableHead className="">Pieces</TableHead>
-                  <TableHead className="">Total Wt</TableHead>
+                  <TableHead className="">Weight</TableHead>
                   {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
                   <TableHead className="">Wastage</TableHead>
                 </TableRow>
@@ -912,7 +922,9 @@ export function Stock() {
                           <TableCell className="">
                             {`${l.availableCount ?? countAvailablePieces(l.pieces || [])} / ${l.totalPieces ?? (l.pieces || []).length}`}
                           </TableCell>
-                          <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
+                          <TableCell className="">
+                            {formatKg(l.remainingWeight)} / {formatKg(l.totalWeight)}
+                          </TableCell>
                           {filters.status !== 'available_to_issue' && (
                             <TableCell className="font-bold">
                               {formatKg(l.pendingWeight)}
@@ -1020,10 +1032,11 @@ export function Stock() {
                     <TableCell className="font-bold text-primary">Grand Total</TableCell>
                     <TableCell></TableCell>
                     <TableCell></TableCell>
+                    <TableCell></TableCell>
                     {!groupByItem ? <TableCell></TableCell> : null}
                     <TableCell></TableCell>
                     <TableCell className="font-bold text-primary">{grandTotals.availableCount} / {grandTotals.totalPieces}</TableCell>
-                    <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                    <TableCell className="font-bold text-primary">{formatKg(grandTotals.remainingWeight)} / {formatKg(grandTotals.totalWeight)}</TableCell>
                     {filters.status !== 'available_to_issue' && (
                       <TableCell className="font-bold text-primary">{formatKg(grandTotals.pendingWeight)}</TableCell>
                     )}
@@ -1076,7 +1089,7 @@ export function Stock() {
                       </div>
                       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
                         <span>Pieces: {available} / {total}</span>
-                        <span>Total: {formatKg(l.totalWeight)}</span>
+                        <span>Weight: {formatKg(l.remainingWeight)} / {formatKg(l.totalWeight)}</span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
                         Wastage: <span className="text-foreground">{formatWastageSummary(l)}</span>

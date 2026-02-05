@@ -546,6 +546,15 @@ export function ConingReceiveForm() {
                                                             <CatchWeightButton
                                                                 onWeightCaptured={(wt) => updateRow(row.id, 'grossWeight', wt.toFixed(3))}
                                                                 className="h-8 w-8"
+                                                                context={{
+                                                                    feature: 'receive',
+                                                                    stage: 'coning',
+                                                                    field: 'grossWeight',
+                                                                    issueId: issue?.id || null,
+                                                                    issueBarcode: issue?.barcode || null,
+                                                                    lotNo: issue?.lotNo || null,
+                                                                    cartRowId: row.id,
+                                                                }}
                                                             />
                                                         </div>
                                                     </TableCell>

@@ -85,6 +85,7 @@ export async function getModuleOpeningStock() { return await request('/api/modul
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
 export async function getCutterPurchaseSequenceNext() { return await request('/api/inbound/cutter_purchase/sequence/next'); }
+export async function logWeightCapture(payload) { return await request('/api/weight_capture', { method: 'POST', body: payload }); }
 export async function getCutterPurchaseLot(lotNo) {
   if (!lotNo) throw new Error('lotNo is required');
   return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`);

@@ -220,7 +220,7 @@ function getStockExportColumns({ viewType = 'jumbo', groupBy = false, statusFilt
           { header: 'Item', key: 'itemName', align: 'left' },
           { header: 'Supplier', key: 'supplierName', align: 'left' },
           { header: 'Pieces (Avail/Total)', key: 'pieces', align: 'right', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? 0}` },
-          { header: 'Total Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+          { header: 'Weight (Rem/Total)', key: 'weight', align: 'right', format: (l) => `${Number(l.remainingWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
           ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', align: 'right', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
         ];
       }
@@ -231,7 +231,7 @@ function getStockExportColumns({ viewType = 'jumbo', groupBy = false, statusFilt
         { header: 'Firm', key: 'firmName', align: 'left' },
         { header: 'Supplier', key: 'supplierName', align: 'left' },
         { header: 'Pieces (Avail/Total)', key: 'pieces', align: 'right', format: (l) => `${l.availableCount ?? 0} / ${l.totalPieces ?? (l.pieces || []).length}` },
-        { header: 'Total Weight (kg)', key: 'totalWeight', align: 'right', format: (l) => Number(l.totalWeight || 0).toFixed(3) },
+        { header: 'Weight (Rem/Total)', key: 'weight', align: 'right', format: (l) => `${Number(l.remainingWeight || 0).toFixed(3)} / ${Number(l.totalWeight || 0).toFixed(3)}` },
         ...(!hidePending ? [{ header: 'Pending Weight (kg)', key: 'pendingWeight', align: 'right', format: (l) => Number(l.pendingWeight || 0).toFixed(3) }] : []),
       ];
 
@@ -347,7 +347,11 @@ function buildStockTotalsRow(columns, { grandTotals = {} } = {}) {
         totalsRow[col.header] = `${grandTotals.availableBobbins ?? 0} / ${grandTotals.totalBobbins ?? 0}`;
         break;
       case 'weight':
-        totalsRow[col.header] = `${Number(grandTotals.availableWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
+        if (grandTotals.remainingWeight !== undefined && grandTotals.remainingWeight !== null) {
+          totalsRow[col.header] = `${Number(grandTotals.remainingWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
+        } else {
+          totalsRow[col.header] = `${Number(grandTotals.availableWeight || 0).toFixed(3)} / ${Number(grandTotals.totalWeight || 0).toFixed(3)}`;
+        }
         break;
       case 'crateCount':
         totalsRow[col.header] = grandTotals.crateCount ?? 0;

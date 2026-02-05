@@ -12011,29 +12011,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         },
       });
 
-      // Forward trace: Check if used in holo issue
-      const holoIssues = await prisma.issueToHoloMachine.findMany({
-        where: { isDeleted: false },
-        include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
-      });
-
-      for (const holoIssue of holoIssues) {
-        try {
-          // receivedRowRefs is a Prisma Json field - might be already parsed or a string
-          let refs = holoIssue.receivedRowRefs;
-          if (typeof refs === 'string') {
-            refs = JSON.parse(refs || '[]');
-          }
-          refs = refs || [];
-          // refs is array of objects with rowId property
-          const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
-          if (refIds.includes(recv.id)) {
-            await addHoloIssueAndForward(holoIssue, history);
-          }
-        } catch { }
-      }
-
-      // Check if directly dispatched
+      // Check if directly dispatched (do not trace forward to all sibling holo issues)
       await addDispatchesForItem(recv.barcode || recv.vchNo, 'cutter', history);
     }
 
@@ -12124,29 +12102,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         },
       });
 
-      // Forward trace: Check if used in coning issue
-      const coningIssues = await prisma.issueToConingMachine.findMany({
-        where: { isDeleted: false },
-        include: { machine: true, operator: true },
-      });
-
-      for (const coningIssue of coningIssues) {
-        try {
-          // receivedRowRefs is a Prisma Json field - might be already parsed or a string
-          let refs = coningIssue.receivedRowRefs;
-          if (typeof refs === 'string') {
-            refs = JSON.parse(refs || '[]');
-          }
-          refs = refs || [];
-          // refs is array of objects with rowId property
-          const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
-          if (refIds.includes(recv.id)) {
-            await addConingIssueAndForward(coningIssue, history);
-          }
-        } catch { }
-      }
-
-      // Check if directly dispatched
+      // Check if directly dispatched (do not trace forward to all sibling coning issues)
       if (recv.barcode) {
         await addDispatchesForItem(recv.barcode, 'holo', history);
       }

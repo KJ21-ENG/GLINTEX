@@ -10,7 +10,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 export function ConingReceiveForm() {
-    const { db, refreshDb } = useInventory();
+    const { db, patchDb } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [scanInput, setScanInput] = useState('');
@@ -229,9 +229,11 @@ export function ConingReceiveForm() {
             const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
+            const createdRows = [];
+
             // Process receive entries
             for (const row of receiveEntries) {
-                await api.manualReceiveFromConingMachine({
+                const res = await api.manualReceiveFromConingMachine({
                     issueId: issue.id,
                     pieceId: issue.id,
                     coneCount: Number(row.coneCount),
@@ -241,6 +243,7 @@ export function ConingReceiveForm() {
                     operatorId: row.operatorId,
                     notes: row.notes
                 });
+                if (res?.row) createdRows.push(res.row);
 
                 if (confirmPrint) {
                     const index = receiveEntries.indexOf(row);
@@ -307,9 +310,11 @@ export function ConingReceiveForm() {
             }
 
             // Process wastage entry if present
+            let wastageTotals = null;
             if (wastageEntries.length > 0) {
                 try {
-                    await api.markConingWastage(issue.id);
+                    const res = await api.markConingWastage(issue.id);
+                    wastageTotals = res?.updated || null;
                 } catch (e) {
                     console.error('Failed to mark coning wastage', e);
                     alert('Warning: Failed to mark wastage. Please try again separately.');
@@ -323,7 +328,50 @@ export function ConingReceiveForm() {
                     { template }
                 );
             }
-            await refreshDb();
+
+            if (createdRows.length > 0 || wastageTotals) {
+                const workerNameById = new Map((db.workers || []).map(w => [w.id, w.name]));
+                const boxById = new Map((db.boxes || []).map(b => [b.id, b]));
+
+                const enrichedRows = createdRows.map((r) => ({
+                    ...r,
+                    box: r.boxId ? boxById.get(r.boxId) || null : null,
+                    operator: r.operatorId ? { id: r.operatorId, name: workerNameById.get(r.operatorId) || '' } : null,
+                    helper: r.helperId ? { id: r.helperId, name: workerNameById.get(r.helperId) || '' } : null,
+                }));
+
+                const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
+                const nextRows = [...enrichedRows, ...existingRows].filter((row, idx, arr) => {
+                    const id = row?.id;
+                    if (!id) return false;
+                    return arr.findIndex(r => r?.id === id) === idx;
+                });
+
+                const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
+                const pieceId = issue.id;
+                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                const incCones = createdRows.reduce((sum, r) => sum + (Number(r.coneCount) || 0), 0);
+                const incNet = createdRows.reduce((sum, r) => sum + (Number(r.netWeight) || 0), 0);
+
+                const nextTotal = wastageTotals
+                    ? { ...baseTotal, ...wastageTotals }
+                    : {
+                        ...baseTotal,
+                        totalCones: Number(baseTotal.totalCones || 0) + incCones,
+                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) + incNet,
+                    };
+
+                const nextTotals = [
+                    nextTotal,
+                    ...existingTotals.filter(t => t.pieceId !== pieceId),
+                ];
+
+                patchDb({
+                    receive_from_coning_machine_rows: nextRows,
+                    receive_from_coning_machine_piece_totals: nextTotals,
+                });
+            }
+
             setCart([]);
             setIsWastage(false);
             alert(wastageEntries.length > 0 && receiveEntries.length === 0

@@ -14,7 +14,7 @@ import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
-    const { db, process, refreshProcessData, refreshModuleData } = useInventory();
+    const { db, process, refreshProcessData, refreshModuleData, patchDb } = useInventory();
     const { canDelete: canDeleteInbound } = usePermission('inbound');
     const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
@@ -32,6 +32,17 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+
+    const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
+    const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
+    const rollTypeById = useMemo(() => new Map((db.rollTypes || []).map(r => [r.id, r])), [db.rollTypes]);
+
+    const calcNetFromGrossTare = (row) => {
+        const gross = Number(row?.grossWeight || 0);
+        const tare = Number(row?.tareWeight || 0);
+        const net = gross - tare;
+        return Number.isFinite(net) ? net : 0;
+    };
 
     const history = useMemo(() => {
         let rows = [];
@@ -806,7 +817,56 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 if (!editingReceiveRow.pieceId && receiveDraft.pieceId) {
                     payload.pieceId = receiveDraft.pieceId;
                 }
-                await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+                const res = await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+                const updatedRow = res?.row || null;
+                if (updatedRow) {
+                    const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+                    const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+
+                    const prevWeight = Number.isFinite(Number(editingReceiveRow.rollWeight))
+                        ? Number(editingReceiveRow.rollWeight)
+                        : calcNetFromGrossTare(editingReceiveRow);
+                    const nextWeight = Number.isFinite(Number(updatedRow.rollWeight))
+                        ? Number(updatedRow.rollWeight)
+                        : calcNetFromGrossTare(updatedRow);
+                    const prevRolls = Number(editingReceiveRow.rollCount || 0);
+                    const nextRolls = Number(updatedRow.rollCount || 0);
+                    const deltaNetWeight = nextWeight - prevWeight;
+                    const deltaRolls = nextRolls - prevRolls;
+
+                    const pieceId = updatedRow.pieceId || editingReceiveRow.pieceId || null;
+                    if (pieceId) {
+                        const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                        const nextTotal = {
+                            ...baseTotal,
+                            totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
+                            totalRolls: Number(baseTotal.totalRolls || 0) + deltaRolls,
+                        };
+                        const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+
+                        const nextRows = existingRows.map((r) => {
+                            if (r.id !== updatedRow.id) return r;
+                            return {
+                                ...r,
+                                ...updatedRow,
+                                pieceId,
+                                box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
+                                rollType: updatedRow.rollTypeId ? (rollTypeById.get(updatedRow.rollTypeId) || null) : null,
+                                operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
+                                helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
+                            };
+                        });
+
+                        patchDb({
+                            receive_from_holo_machine_rows: nextRows,
+                            receive_from_holo_machine_piece_totals: nextTotals,
+                        });
+                    } else {
+                        await refreshProcessData(process);
+                    }
+                } else {
+                    await refreshProcessData(process);
+                }
             } else if (process === 'coning') {
                 const payload = {
                     date: receiveDraft.date || null,
@@ -818,10 +878,52 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                     helperId: receiveDraft.helperId,
                     notes: receiveDraft.notes,
                 };
-                await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+                const res = await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+                const updatedRow = res?.row || null;
+                if (updatedRow) {
+                    const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
+                    const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
+
+                    const prevWeight = Number.isFinite(Number(editingReceiveRow.netWeight))
+                        ? Number(editingReceiveRow.netWeight)
+                        : calcNetFromGrossTare(editingReceiveRow);
+                    const nextWeight = Number.isFinite(Number(updatedRow.netWeight))
+                        ? Number(updatedRow.netWeight)
+                        : calcNetFromGrossTare(updatedRow);
+                    const prevCones = Number(editingReceiveRow.coneCount || 0);
+                    const nextCones = Number(updatedRow.coneCount || 0);
+                    const deltaNetWeight = nextWeight - prevWeight;
+                    const deltaCones = nextCones - prevCones;
+
+                    const pieceId = updatedRow.issueId || editingReceiveRow.issueId;
+                    const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                    const nextTotal = {
+                        ...baseTotal,
+                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
+                        totalCones: Number(baseTotal.totalCones || 0) + deltaCones,
+                    };
+                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+
+                    const nextRows = existingRows.map((r) => {
+                        if (r.id !== updatedRow.id) return r;
+                        return {
+                            ...r,
+                            ...updatedRow,
+                            box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
+                            operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
+                            helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
+                        };
+                    });
+
+                    patchDb({
+                        receive_from_coning_machine_rows: nextRows,
+                        receive_from_coning_machine_piece_totals: nextTotals,
+                    });
+                } else {
+                    await refreshProcessData(process);
+                }
             }
 
-            await refreshProcessData(process);
             closeReceiveEditor();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -860,10 +962,50 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 const pieceOptions = resolveHoloPieceOptions(row);
                 const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : null);
                 await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
+
+                const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+                const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+                const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
+                const prevRolls = Number(row.rollCount || 0);
+                const resolvedPieceId = pieceId || row.pieceId || null;
+
+                if (resolvedPieceId) {
+                    const baseTotal = existingTotals.find(t => t.pieceId === resolvedPieceId) || { pieceId: resolvedPieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                    const nextTotal = {
+                        ...baseTotal,
+                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                        totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
+                    };
+                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== resolvedPieceId)];
+                    const nextRows = existingRows.filter(r => r.id !== row.id);
+                    patchDb({
+                        receive_from_holo_machine_rows: nextRows,
+                        receive_from_holo_machine_piece_totals: nextTotals,
+                    });
+                } else {
+                    await refreshProcessData(process);
+                }
             } else {
                 await api.deleteConingReceiveRow(row.id);
+
+                const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
+                const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
+                const prevWeight = Number.isFinite(Number(row.netWeight)) ? Number(row.netWeight) : calcNetFromGrossTare(row);
+                const prevCones = Number(row.coneCount || 0);
+                const pieceId = row.issueId;
+                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                const nextTotal = {
+                    ...baseTotal,
+                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                    totalCones: Number(baseTotal.totalCones || 0) - prevCones,
+                };
+                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                const nextRows = existingRows.filter(r => r.id !== row.id);
+                patchDb({
+                    receive_from_coning_machine_rows: nextRows,
+                    receive_from_coning_machine_piece_totals: nextTotals,
+                });
             }
-            await refreshProcessData(process);
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
                 const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
@@ -886,7 +1028,24 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         setDeletingReceive(true);
         try {
             await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
-            await refreshProcessData(process);
+            const row = deletePrompt.row;
+            const pieceId = deletePrompt.pieceId;
+            const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+            const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
+            const prevRolls = Number(row.rollCount || 0);
+            const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+            const nextTotal = {
+                ...baseTotal,
+                totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
+            };
+            const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+            const nextRows = existingRows.filter(r => r.id !== row.id);
+            patchDb({
+                receive_from_holo_machine_rows: nextRows,
+                receive_from_holo_machine_piece_totals: nextTotals,
+            });
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');

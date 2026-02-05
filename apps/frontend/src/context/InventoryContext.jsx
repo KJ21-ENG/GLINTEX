@@ -83,6 +83,7 @@ export const InventoryProvider = ({ children }) => {
   const loadedModulesRef = useRef(new Set());
   const [loadedModules, setLoadedModules] = useState(new Set());
   const dbRef = useRef(db);
+  const inflightLoadsRef = useRef(new Map());
 
   const [brand, setBrand] = useState(defaultBrand);
   const [process, setProcess] = useState(() => {
@@ -113,50 +114,81 @@ export const InventoryProvider = ({ children }) => {
     return normalized;
   }, []);
 
+  const patchDb = useCallback((rawUpdate = {}, options = {}) => {
+    return applyDbUpdate(rawUpdate, options);
+  }, [applyDbUpdate]);
+
   const loadBootstrap = useCallback(async () => {
-    const res = await api.getBootstrap();
-    const slices = res?.slices || {};
-    const allowed = res?.allowed || {};
-    const clearKeys = BOOTSTRAP_KEYS.filter((key) => allowed[key] === false);
-    const normalized = applyDbUpdate(slices, { clearKeys });
-    if (res?.brand) {
-      setBrand({
-        primary: res.brand.primary || defaultBrand.primary,
-        gold: res.brand.gold || defaultBrand.gold,
-        logoDataUrl: res.brand.logoDataUrl || '',
-        faviconDataUrl: res.brand.faviconDataUrl || '',
-      });
-    } else {
-      setBrand(extractBrandFromDb(normalized));
+    const key = '__bootstrap__';
+    if (inflightLoadsRef.current.has(key)) {
+      return await inflightLoadsRef.current.get(key);
     }
-    return normalized;
+
+    const promise = (async () => {
+      const res = await api.getBootstrap();
+      const slices = res?.slices || {};
+      const allowed = res?.allowed || {};
+      const clearKeys = BOOTSTRAP_KEYS.filter((key) => allowed[key] === false);
+      const normalized = applyDbUpdate(slices, { clearKeys });
+      if (res?.brand) {
+        setBrand({
+          primary: res.brand.primary || defaultBrand.primary,
+          gold: res.brand.gold || defaultBrand.gold,
+          logoDataUrl: res.brand.logoDataUrl || '',
+          faviconDataUrl: res.brand.faviconDataUrl || '',
+        });
+      } else {
+        setBrand(extractBrandFromDb(normalized));
+      }
+      return normalized;
+    })();
+
+    inflightLoadsRef.current.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      inflightLoadsRef.current.delete(key);
+    }
   }, [applyDbUpdate]);
 
   const loadModuleData = useCallback(async (module, options = {}, { force = false } = {}) => {
     const moduleKey = getModuleKey(module, options);
     if (!force && loadedModulesRef.current.has(moduleKey)) return null;
-    setModuleLoading((prev) => ({ ...prev, [moduleKey]: true }));
-    try {
-      let raw = null;
-      if (module === 'inbound') {
-        raw = await api.getModuleInbound();
-      } else if (module === 'process') {
-        const process = options.process || 'cutter';
-        raw = await api.getModuleProcess(process, { full: options.full });
-      } else if (module === 'opening_stock') {
-        raw = await api.getModuleOpeningStock();
-      } else {
-        throw new Error(`Unknown module ${module}`);
+    if (inflightLoadsRef.current.has(moduleKey)) {
+      return await inflightLoadsRef.current.get(moduleKey);
+    }
+
+    const promise = (async () => {
+      setModuleLoading((prev) => ({ ...prev, [moduleKey]: true }));
+      try {
+        let raw = null;
+        if (module === 'inbound') {
+          raw = await api.getModuleInbound();
+        } else if (module === 'process') {
+          const process = options.process || 'cutter';
+          raw = await api.getModuleProcess(process, { full: options.full });
+        } else if (module === 'opening_stock') {
+          raw = await api.getModuleOpeningStock();
+        } else {
+          throw new Error(`Unknown module ${module}`);
+        }
+        const normalized = applyDbUpdate(raw || {});
+        loadedModulesRef.current.add(moduleKey);
+        setLoadedModules(new Set(loadedModulesRef.current));
+        return normalized;
+      } catch (err) {
+        console.error(`Failed to load module ${moduleKey}`, err);
+        throw err;
+      } finally {
+        setModuleLoading((prev) => ({ ...prev, [moduleKey]: false }));
       }
-      const normalized = applyDbUpdate(raw || {});
-      loadedModulesRef.current.add(moduleKey);
-      setLoadedModules(new Set(loadedModulesRef.current));
-      return normalized;
-    } catch (err) {
-      console.error(`Failed to load module ${moduleKey}`, err);
-      throw err;
+    })();
+
+    inflightLoadsRef.current.set(moduleKey, promise);
+    try {
+      return await promise;
     } finally {
-      setModuleLoading((prev) => ({ ...prev, [moduleKey]: false }));
+      inflightLoadsRef.current.delete(moduleKey);
     }
   }, [applyDbUpdate]);
 
@@ -399,6 +431,7 @@ export const InventoryProvider = ({ children }) => {
     process,
     setProcess,
     refreshDb,
+    patchDb,
     patchIssueRecord,
     refreshModuleData,
     refreshProcessData,
@@ -406,7 +439,7 @@ export const InventoryProvider = ({ children }) => {
     moduleLoading,
     loadedModules,
     ...actions
-  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
+  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, patchDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
 
   return (
     <InventoryContext.Provider value={value}>

@@ -12135,6 +12135,31 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       if (recv.barcode) {
         await addDispatchesForItem(recv.barcode, 'holo', history);
       }
+
+      // Forward trace to coning issue that references this specific holo receive (direct lineage only)
+      if (recv.id || recv.barcode) {
+        const rowIdArray = recv.id ? [recv.id] : ["__none__"];
+        const barcodeArray = recv.barcode ? [recv.barcode] : ["__none__"];
+        const coningIssues = await prisma.$queryRaw`
+          SELECT id FROM "IssueToConingMachine"
+          WHERE "isDeleted" = false
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+              WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+                 OR elem->>'barcode' = ANY (${barcodeArray}::text[])
+            )
+          LIMIT 1
+        `;
+        if (coningIssues && coningIssues.length > 0) {
+          const coningIssue = await prisma.issueToConingMachine.findUnique({
+            where: { id: coningIssues[0].id },
+            include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+          });
+          if (coningIssue) {
+            await addConingIssueAndForward(coningIssue, history);
+          }
+        }
+      }
     }
 
     async function addConingIssueAndForward(issue, history, directConingReceiveId = null) {

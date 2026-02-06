@@ -106,13 +106,34 @@ export function IssueToConing() {
             }
         }
 
-        // Defaults (factor in dispatch)
+        // Defaults (factor in dispatch AND already issued to coning)
         const totalRolls = Number(row.rollCount || 0);
         const totalWeight = Number(row.rollWeight || 0);
         const dispatchedRolls = Number(row.dispatchedCount || 0);
         const dispatchedWeight = Number(row.dispatchedWeight || 0);
-        const availableWeight = Math.max(0, totalWeight - dispatchedWeight);
-        const countBasedAvailable = Math.max(0, totalRolls - dispatchedRolls);
+
+        // Calculate rolls/weight already issued to coning for this specific holo receive row
+        let issuedToConingRolls = 0;
+        let issuedToConingWeight = 0;
+        (db.issue_to_coning_machine || []).forEach(coningIssue => {
+            if (coningIssue.isDeleted) return;
+            try {
+                const refs = typeof coningIssue.receivedRowRefs === 'string'
+                    ? JSON.parse(coningIssue.receivedRowRefs || '[]')
+                    : (coningIssue.receivedRowRefs || []);
+                refs.forEach(ref => {
+                    if (ref.rowId === row.id || ref.barcode === row.barcode) {
+                        issuedToConingRolls += Number(ref.issueRolls || 0);
+                        issuedToConingWeight += Number(ref.issueWeight || 0);
+                    }
+                });
+            } catch (e) { /* ignore parse errors */ }
+        });
+
+        const totalUsedRolls = dispatchedRolls + issuedToConingRolls;
+        const totalUsedWeight = dispatchedWeight + issuedToConingWeight;
+        const availableWeight = Math.max(0, totalWeight - totalUsedWeight);
+        const countBasedAvailable = Math.max(0, totalRolls - totalUsedRolls);
         const weightBasedAvailable = totalRolls > 0 && totalWeight > 0
             ? Math.floor(((availableWeight / totalWeight) * totalRolls) + 1e-6)
             : countBasedAvailable;

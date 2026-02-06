@@ -132,6 +132,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         row.supplierId || ''
       ].join('::');
       const existing = map.get(lotKey) || {
+        lotKey,
         lotNo: row.lotNo || '(No Lot)',
         twistKey: row.twistName || '—',
         itemId: row.itemId || '',
@@ -174,6 +175,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           : 'partial';
       return {
         ...rest,
+        lotKey: rest.lotKey || lot.lotKey,
         cutName,
         cutNames: lot.cutNames,
         lotNos: lotNosArr,
@@ -318,13 +320,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
             ) : (
               displayLots.map((l, idx) => {
-                const rowKey = groupBy
-                  ? (l.groupKey || idx)
-                  : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
-                const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+                // Keys must be unique and stable. Using only lotNo/twistName collides when the same lot is present
+                // with multiple yarns/cuts, which can cause stale rows to remain visible after filtering.
+                const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
+                const isExpanded = !groupBy && expandedLot === l.lotKey;
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -450,12 +452,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No holo stock found.</div>
         ) : (
           displayLots.map((l, idx) => {
-            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
-            const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
+            const isExpanded = !groupBy && expandedLot === l.lotKey;
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">

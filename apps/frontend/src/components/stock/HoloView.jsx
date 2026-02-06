@@ -123,7 +123,14 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const holoLots = useMemo(() => {
     const map = new Map();
     holoRows.forEach((row) => {
-      const lotKey = `${row.lotNo || '(No Lot)'}::${row.twistName || '—'}`; // separate rows per twist even if lot matches
+      const lotKey = [
+        row.lotNo || '(No Lot)',
+        row.itemId || '',
+        row.yarnId || '',
+        row.cutName || '',
+        row.twistName || '',
+        row.supplierId || ''
+      ].join('::');
       const existing = map.get(lotKey) || {
         lotNo: row.lotNo || '(No Lot)',
         twistKey: row.twistName || '—',

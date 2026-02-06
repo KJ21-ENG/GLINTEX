@@ -355,13 +355,14 @@ export function Inbound() {
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                 <h1 className="text-2xl font-bold tracking-tight">Inbound Receiving</h1>
                 {canReadCutter && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full md:w-auto">
                         <Label className="text-xs text-muted-foreground">Mode</Label>
                         <Select
                             value={mode}
                             onChange={e => setMode(e.target.value)}
                             options={INBOUND_MODE_OPTIONS}
                             searchable={false}
+                            className="w-full sm:w-auto"
                         />
                     </div>
                 )}
@@ -443,40 +444,73 @@ export function Inbound() {
                             </Button>
                         </div>
 
-                        {/* Cart Table */}
-                        <div className="mt-6 rounded-md border overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-[100px]">#</TableHead>
-                                        <TableHead>Piece ID (Preview)</TableHead>
-                                        <TableHead>Weight (kg)</TableHead>
-                                        <TableHead className="">Action</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {cart.length === 0 ? (
+                        {/* Cart */}
+                        <div className="mt-6">
+                            <div className="hidden sm:block rounded-md border overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
                                         <TableRow>
-                                            <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
-                                                No pieces added. Enter weight and press Enter.
-                                            </TableCell>
+                                            <TableHead className="w-[100px]">#</TableHead>
+                                            <TableHead>Piece ID (Preview)</TableHead>
+                                            <TableHead>Weight (kg)</TableHead>
+                                            <TableHead className="">Action</TableHead>
                                         </TableRow>
-                                    ) : (
-                                        cart.map((r) => (
-                                            <TableRow key={r.tempId}>
-                                                <TableCell className="font-medium">{r.seq}</TableCell>
-                                                <TableCell>{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Pending...'}</TableCell>
-                                                <TableCell>{formatKg(r.weight)}</TableCell>
-                                                <TableCell className="">
-                                                    <Button variant="ghost" size="icon" onClick={() => removeFromCart(r.tempId)} disabled={readOnly} className="h-8 w-8 text-destructive">
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </Button>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {cart.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                                                    No pieces added. Enter weight and press Enter.
                                                 </TableCell>
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
+                                        ) : (
+                                            cart.map((r) => (
+                                                <TableRow key={r.tempId}>
+                                                    <TableCell className="font-medium">{r.seq}</TableCell>
+                                                    <TableCell>{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Pending...'}</TableCell>
+                                                    <TableCell>{formatKg(r.weight)}</TableCell>
+                                                    <TableCell className="">
+                                                        <Button variant="ghost" size="icon" onClick={() => removeFromCart(r.tempId)} disabled={readOnly} className="h-8 w-8 text-destructive">
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            <div className="sm:hidden space-y-2">
+                                {cart.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+                                        No pieces added. Enter weight and press Enter.
+                                    </div>
+                                ) : (
+                                    cart.map((r) => (
+                                        <div key={r.tempId} className="border rounded-lg bg-card p-3 shadow-sm">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="text-xs text-muted-foreground">#{r.seq}</div>
+                                                    <div className="font-mono text-xs text-primary truncate">
+                                                        {previewLotNo ? `${previewLotNo}-${r.seq}` : 'Pending...'}
+                                                    </div>
+                                                    <div className="mt-1 font-medium">{formatKg(r.weight)}</div>
+                                                </div>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => removeFromCart(r.tempId)}
+                                                    disabled={readOnly}
+                                                    className="h-10 w-10 text-destructive"
+                                                >
+                                                    <Trash2 className="w-5 h-5" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
                         </div>
                     </CardContent>
                 </Card>
@@ -614,8 +648,9 @@ export function Inbound() {
                             </Button>
                         </div>
 
-                        <div className="mt-6 rounded-md border overflow-x-auto">
-                            <Table>
+                        <div className="mt-6">
+                            <div className="hidden sm:block rounded-md border overflow-x-auto">
+                                <Table>
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead>Bobbin</TableHead>
@@ -654,7 +689,50 @@ export function Inbound() {
                                         ))
                                     )}
                                 </TableBody>
-                            </Table>
+                                </Table>
+                            </div>
+
+                            <div className="sm:hidden space-y-2">
+                                {cutterCart.length === 0 ? (
+                                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+                                        No crates added.
+                                    </div>
+                                ) : (
+                                    cutterCart.map((row) => {
+                                        const bobbin = getBobbin(row.bobbinId)?.name || '—';
+                                        const box = getBox(row.boxId)?.name || '—';
+                                        const cut = row.cutId ? (getCut(row.cutId)?.name || '—') : '—';
+                                        const operator = row.operatorId ? (getOperator(row.operatorId)?.name || '—') : '—';
+                                        return (
+                                            <div key={row.id} className="border rounded-lg bg-card p-3 shadow-sm">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="font-medium truncate">{bobbin}</div>
+                                                        <div className="text-xs text-muted-foreground mt-1">
+                                                            Qty: <span className="font-medium text-foreground">{row.bobbinQuantity}</span> • Net: <span className="font-medium text-foreground">{formatKg(row.netWeight)}</span>
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground mt-1">
+                                                            Box: {box} • Gross: {formatKg(row.grossWeight)}
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground mt-1">
+                                                            Cut: {cut} • Op: {operator}
+                                                        </div>
+                                                    </div>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        onClick={() => removeCutterCrate(row.id)}
+                                                        disabled={purchaseReadOnly}
+                                                        className="h-10 w-10 text-destructive"
+                                                    >
+                                                        <Trash2 className="w-5 h-5" />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
                         </div>
 
                         {cutterCart.length > 0 && (
@@ -1211,16 +1289,16 @@ function RecentLotsTable({ db }) {
                                     </div>
                                 )}
 
-                                <div className="flex justify-between items-end gap-2">
-                                    <Button variant="outline" onClick={addCutterCrate} className="gap-2" disabled={cutterEditorLocked}>
+                                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-2">
+                                    <Button variant="outline" onClick={addCutterCrate} className="gap-2 w-full sm:w-auto" disabled={cutterEditorLocked}>
                                         <Plus className="w-4 h-4" /> Add Crate
                                     </Button>
-                                    <Button onClick={handleSaveCutterPurchaseEdit} disabled={cutterEditorSaving || cutterEditorLocked} className="gap-2">
+                                    <Button onClick={handleSaveCutterPurchaseEdit} disabled={cutterEditorSaving || cutterEditorLocked} className="gap-2 w-full sm:w-auto">
                                         {cutterEditorSaving ? 'Saving…' : <><Save className="w-4 h-4" /> Save Changes</>}
                                     </Button>
                                 </div>
 
-                                <div className="rounded-md border overflow-auto max-h-[60vh]">
+                                <div className="rounded-md border overflow-auto max-h-[60vh] hidden sm:block">
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
@@ -1386,6 +1464,176 @@ function RecentLotsTable({ db }) {
                                             )}
                                         </TableBody>
                                     </Table>
+                                </div>
+
+                                <div className="sm:hidden space-y-2">
+                                    {(cutterEditorForm.crates || []).length === 0 ? (
+                                        <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+                                            No crates.
+                                        </div>
+                                    ) : (
+                                        (cutterEditorForm.crates || []).map((row) => {
+                                            const { tare, net } = calcCutterWeights(row);
+                                            const netForStock = (cutterEditorLocked && Number.isFinite(Number(row.netWeight)))
+                                                ? Number(row.netWeight)
+                                                : net;
+                                            const tareForDisplay = (cutterEditorLocked && Number.isFinite(Number(row.tareWeight)))
+                                                ? Number(row.tareWeight)
+                                                : tare;
+
+                                            const totalCount = Number(row.bobbinQuantity || 0);
+                                            const issuedCount = Number(row.issuedBobbins || 0);
+                                            const dispatchedCount = Number(row.dispatchedCount || 0);
+                                            const issuedWeight = Number(row.issuedBobbinWeight || 0);
+                                            const dispatchedWeight = Number(row.dispatchedWeight || 0);
+                                            const availableWeight = round3(Math.max(0, netForStock - issuedWeight - dispatchedWeight));
+                                            const availableCount = calcAvailableCountFromWeight({
+                                                totalCount,
+                                                issuedCount,
+                                                dispatchedCount,
+                                                totalWeight: netForStock,
+                                                availableWeight,
+                                            });
+                                            const showLeft = (issuedCount > 0 || dispatchedCount > 0 || issuedWeight > 0 || dispatchedWeight > 0);
+
+                                            return (
+                                                <div key={row.id} className="border rounded-lg bg-card p-3 shadow-sm">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="text-xs text-muted-foreground">Crate</div>
+                                                            <div className="text-sm font-medium">
+                                                                Net: <span className="font-mono">{formatKg(netForStock)}</span>
+                                                                {showLeft ? (
+                                                                    <span className="text-muted-foreground"> (Left {formatKg(availableWeight)})</span>
+                                                                ) : null}
+                                                            </div>
+                                                        </div>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-10 w-10 text-destructive"
+                                                            disabled={cutterEditorLocked}
+                                                            onClick={() => removeCutterCrate(row.id)}
+                                                        >
+                                                            <Trash2 className="w-5 h-5" />
+                                                        </Button>
+                                                    </div>
+
+                                                    <div className="mt-3 grid grid-cols-1 gap-3">
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Bobbin</Label>
+                                                            <Select value={row.bobbinId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { bobbinId: e.target.value })}>
+                                                                <option value="">Select Bobbin</option>
+                                                                {(db?.bobbins || []).map(b => (
+                                                                    <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>
+                                                                ))}
+                                                            </Select>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Qty</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    value={row.bobbinQuantity}
+                                                                    disabled={cutterEditorLocked}
+                                                                    onChange={e => updateCutterCrate(row.id, { bobbinQuantity: e.target.value })}
+                                                                    className="text-right font-mono tabular-nums"
+                                                                />
+                                                                {showLeft ? (
+                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                        Left: <span className="font-medium text-foreground">{Number(availableCount || 0)}</span>
+                                                                    </div>
+                                                                ) : null}
+                                                            </div>
+
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Gross (kg)</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    step="0.001"
+                                                                    value={row.grossWeight}
+                                                                    disabled={cutterEditorLocked}
+                                                                    onChange={e => updateCutterCrate(row.id, { grossWeight: e.target.value })}
+                                                                    className="text-right font-mono tabular-nums"
+                                                                />
+                                                                <div className="text-[11px] text-muted-foreground">
+                                                                    Tare: <span className="font-mono text-foreground">{formatKg(tareForDisplay)}</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Box</Label>
+                                                            <Select value={row.boxId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { boxId: e.target.value })}>
+                                                                <option value="">Select Box</option>
+                                                                {filterByProcess(db?.boxes || [], 'cutter').map(b => (
+                                                                    <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>
+                                                                ))}
+                                                            </Select>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Cut</Label>
+                                                                <Select value={row.cutId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { cutId: e.target.value })}>
+                                                                    <option value="">Select Cut</option>
+                                                                    {(db?.cuts || []).map(c => (
+                                                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                                                    ))}
+                                                                </Select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Shift</Label>
+                                                                <Select
+                                                                    value={row.shift}
+                                                                    disabled={cutterEditorLocked}
+                                                                    onChange={e => updateCutterCrate(row.id, { shift: e.target.value })}
+                                                                    options={SHIFT_OPTIONS}
+                                                                    placeholder="Shift"
+                                                                    searchable={false}
+                                                                    clearable
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Operator</Label>
+                                                                <Select value={row.operatorId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { operatorId: e.target.value })}>
+                                                                    <option value="">Select Operator</option>
+                                                                    {filterByProcess(db?.operators || [], 'cutter').map(o => (
+                                                                        <option key={o.id} value={o.id}>{o.name}</option>
+                                                                    ))}
+                                                                </Select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">Helper</Label>
+                                                                <Select value={row.helperId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { helperId: e.target.value })}>
+                                                                    <option value="">Select Helper</option>
+                                                                    {filterByProcess(db?.helpers || [], 'cutter').map(h => (
+                                                                        <option key={h.id} value={h.id}>{h.name}</option>
+                                                                    ))}
+                                                                </Select>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Machine</Label>
+                                                            <Select value={row.machineId} disabled={cutterEditorLocked} onChange={e => updateCutterCrate(row.id, { machineId: e.target.value })}>
+                                                                <option value="">Select Machine</option>
+                                                                {filterByProcess(db?.machines || [], 'cutter').map(m => (
+                                                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                                                ))}
+                                                            </Select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    )}
                                 </div>
                             </div>
                         )}

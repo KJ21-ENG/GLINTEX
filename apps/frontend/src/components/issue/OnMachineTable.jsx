@@ -6,6 +6,7 @@ import { ArrowRight, Download } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { KeyValueGrid } from '../common/KeyValueGrid';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -18,6 +19,7 @@ export function OnMachineTable({ db, process }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [expandedIds, setExpandedIds] = useState(() => new Set());
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
@@ -509,7 +511,7 @@ export function OnMachineTable({ db, process }) {
                         onChange={(e) => setSearchTerm(e.target.value)}
                     />
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                     <div className="space-y-1">
                         <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
                         <input
@@ -694,26 +696,66 @@ export function OnMachineTable({ db, process }) {
                         const identifier = (process === 'cutter' || process === 'holo' || process === 'coning')
                             ? resolvePieceDisplay(entry)
                             : (entry.lotNo || '—');
+                        const isExpanded = expandedIds.has(entry.id);
+                        const pieceIds = Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList : [];
+                        const showPieces = pieceIds.slice(0, 6);
                         return (
                             <div key={entry.id} className="border rounded-lg p-4 bg-card shadow-sm">
                                 <div className="flex justify-between items-start gap-2">
                                     <div className="min-w-0 flex-1">
                                         <p className="font-semibold truncate" title={identifier}>{identifier}</p>
-                                        <p className="text-sm text-muted-foreground">
-                                            {machineNameById.get(entry.machineId)} • {operatorNameById.get(entry.operatorId)}
-                                        </p>
                                         <p className="text-xs text-muted-foreground mt-1">
                                             {formatDateDDMMYYYY(entry.date)} • {itemNameById.get(entry.itemId)}
-                                        </p>
-                                        <p className="text-xs text-muted-foreground mt-1">
-                                            Cut: {resolvedNames.cutName} • Yarn: {resolvedNames.yarnName} • Twist: {resolvedNames.twistName}
-                                            {process === 'coning' ? ` • Rolls: ${entry.rollsIssued || 0}` : ''}
                                         </p>
                                     </div>
                                     <Badge variant="outline" className="text-blue-600 border-blue-600 whitespace-nowrap">
                                         {formatKg(entry.pendingWeight)} pending
                                     </Badge>
                                 </div>
+
+                                <div className="mt-3">
+                                    <KeyValueGrid
+                                        items={[
+                                            { label: 'Machine', value: machineNameById.get(entry.machineId) },
+                                            { label: 'Operator', value: operatorNameById.get(entry.operatorId) },
+                                            { label: 'Cut', value: resolvedNames.cutName },
+                                            { label: 'Yarn', value: resolvedNames.yarnName },
+                                            { label: 'Twist', value: resolvedNames.twistName },
+                                            ...(process === 'coning'
+                                                ? [
+                                                    { label: 'Rolls', value: String(entry.rollsIssued || 0) },
+                                                    { label: 'Cone Type', value: resolveConingConeTypeName(entry) },
+                                                    { label: 'Per Cone', value: formatPerConeNet(entry.requiredPerConeNetWeight) },
+                                                ]
+                                                : []),
+                                            { label: 'Barcode', value: entry.barcode || entry.id?.substring?.(0, 8) || '—', mono: true },
+                                        ]}
+                                    />
+                                </div>
+
+                                {pieceIds.length > 0 ? (
+                                    <div className="mt-3">
+                                        <button
+                                            type="button"
+                                            className="text-xs font-medium text-primary hover:underline"
+                                            onClick={() => {
+                                                setExpandedIds(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(entry.id)) next.delete(entry.id);
+                                                    else next.add(entry.id);
+                                                    return next;
+                                                });
+                                            }}
+                                        >
+                                            {isExpanded ? 'Hide pieces' : `Show pieces (${pieceIds.length})`}
+                                        </button>
+                                        <div className="mt-2 text-xs text-muted-foreground">
+                                            {(isExpanded ? pieceIds : showPieces).join(', ')}
+                                            {!isExpanded && pieceIds.length > showPieces.length ? ' …' : ''}
+                                        </div>
+                                    </div>
+                                ) : null}
+
                                 <div className="mt-3 flex items-center justify-between gap-2">
                                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                         <span>Issued: {formatKg(entry.issuedWeight)}</span>

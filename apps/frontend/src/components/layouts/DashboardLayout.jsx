@@ -175,7 +175,8 @@ export default function DashboardLayout() {
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
+        {/* NOTE: Avoid overflow clipping here; it breaks dropdowns/menus on smaller screens. */}
+        <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
           <Outlet />
         </div>
       </main>

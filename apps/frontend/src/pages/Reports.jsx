@@ -91,7 +91,7 @@ function BarcodeHistory() {
         );
 
         return (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
                 {entries.map(([key, value]) => (
                     <div key={key} className="bg-muted/50 p-2 rounded">
                         <div className="text-muted-foreground text-xs capitalize">
@@ -150,7 +150,7 @@ function BarcodeHistory() {
 
             {history && history.found && (
                 <div className="space-y-4">
-                    <div className="flex justify-between items-center px-1">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 px-1">
                         <h2 className="text-lg font-semibold flex items-center gap-2">
                             <Clock className="w-5 h-5 text-primary" />
                             Barcode Journey
@@ -452,7 +452,7 @@ function ProductionReport() {
 
             {/* Summary Cards */}
             {report && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <Card className="bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 border-indigo-500/20">
                         <CardContent className="py-4">
                             <div className="flex items-center gap-3">
@@ -710,7 +710,7 @@ function ProductionReport() {
                                             </div>
 
                                             <div className="p-4 border-t border-border/50">
-                                                <div className="grid grid-cols-2 gap-2 text-sm mb-4">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm mb-4">
                                                     {headers.slice(1).map((header, i) => (
                                                         <div key={i} className="flex justify-between">
                                                             <span className="text-muted-foreground">{header}:</span>
@@ -763,7 +763,7 @@ function ProductionReport() {
                                             <div className="font-bold text-primary">Grand Total</div>
                                         </div>
                                         <div className="p-4 border-t border-primary/10">
-                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                                                 <div className="flex justify-between">
                                                     <span className="text-muted-foreground">Received (kg):</span>
                                                     <span className="font-bold">{formatKg(grandTotals.received)}</span>

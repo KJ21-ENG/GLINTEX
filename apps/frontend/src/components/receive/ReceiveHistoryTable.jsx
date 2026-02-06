@@ -1923,7 +1923,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                         <div className="space-y-1">
                             <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
                             <input

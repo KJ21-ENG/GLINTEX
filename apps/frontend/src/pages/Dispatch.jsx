@@ -1214,7 +1214,7 @@ export function Dispatch() {
                         </div>
 
                         {/* Dispatch Mode & Weight/Count Inputs */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {/* Dispatch Mode Toggle - Only for stages that support count */}
                             {selectedItem?.availableCount > 0 && (
                                 <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
@@ -1346,7 +1346,7 @@ export function Dispatch() {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <Label>Date</Label>
                                 <Input

@@ -161,17 +161,19 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle>{title}</CardTitle>
-                <div className="relative w-48">
+                <div className="relative w-full sm:w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                     <Input placeholder={`New ${title} name`} value={newName} onChange={e => setNewName(e.target.value)} disabled={!allowCreate} />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto">
+                        <Plus className="w-4 h-4 mr-2" /> Add
+                    </Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -291,18 +293,18 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle>{title}</CardTitle>
-                <div className="relative w-48">
+                <div className="relative w-full sm:w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                     <Input placeholder="Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" disabled={!allowCreate} />
-                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-32" disabled={!allowCreate} />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Input placeholder="Weight (kg)" type="number" step="0.001" value={newWeight} onChange={e => setNewWeight(e.target.value)} className="w-full sm:w-32" disabled={!allowCreate} />
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -428,25 +430,25 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle>Machines</CardTitle>
-                <div className="relative w-48">
+                <div className="relative w-full sm:w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                     <Input placeholder="Machine Name" value={newName} onChange={e => setNewName(e.target.value)} className="flex-1" disabled={!allowCreate} />
                     <Select
                         value={newProcessType}
                         onChange={e => setNewProcessType(e.target.value)}
-                        className="w-40"
+                        className="w-full sm:w-40"
                         options={PROCESS_OPTIONS}
                         searchable={false}
                         disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -587,9 +589,9 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle>Workers</CardTitle>
-                <div className="relative w-48">
+                <div className="relative w-full sm:w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
@@ -613,7 +615,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
                         searchable={false}
                         disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -700,7 +702,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
                             {editingId === item.id ? (
                                 <div className="space-y-2">
                                     <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Name" disabled={!allowEdit} />
-                                    <div className="grid grid-cols-2 gap-2">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                         <Select value={editRole} onChange={e => setEditRole(e.target.value)} options={[{ value: 'operator', label: 'Operator' }, { value: 'helper', label: 'Helper' }]} searchable={false} disabled={!allowEdit} />
                                         <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     </div>
@@ -771,9 +773,9 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
 
     return (
         <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle>Boxes</CardTitle>
-                <div className="relative w-48">
+                <div className="relative w-full sm:w-48">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
                 </div>
@@ -790,7 +792,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                         searchable={false}
                         disabled={!allowCreate}
                     />
-                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
                 <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
@@ -868,7 +870,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                             {editingId === item.id ? (
                                 <div className="space-y-2">
                                     <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Box Name" disabled={!allowEdit} />
-                                    <div className="grid grid-cols-2 gap-2">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                         <Input type="number" step="0.001" value={editWeight} onChange={e => setEditWeight(e.target.value)} placeholder="Weight (kg)" disabled={!allowEdit} />
                                         <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     </div>

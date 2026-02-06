@@ -17,3 +17,5 @@ export { ColumnFilter } from './ColumnFilter.jsx';
 export { ValueFilterMenu, DateFilterMenu } from './SheetFilterMenu.jsx';
 export { ContextMenu } from './ContextMenu.jsx';
 export { CatchWeightButton } from './CatchWeightButton.jsx';
+export { ResponsiveToolbar } from './ResponsiveToolbar.jsx';
+export { KeyValueGrid } from './KeyValueGrid.jsx';

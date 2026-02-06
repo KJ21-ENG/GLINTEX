@@ -78,7 +78,7 @@ function PermissionEditor({ value, onChange, disabled }) {
     <div className="space-y-4">
       <div>
         <div className="text-sm font-medium mb-2">Module Permissions</div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-3">
           {MODULE_PERMISSIONS.map((perm) => (
             <div key={perm.key} className="flex items-center justify-between gap-3 border rounded-md px-3 py-2">
               <span className="text-sm">{perm.label}</span>
@@ -110,11 +110,49 @@ function PermissionEditor({ value, onChange, disabled }) {
             </div>
           ))}
         </div>
+
+        {/* Mobile cards */}
+        <div className="md:hidden space-y-2">
+          {MODULE_PERMISSIONS.map((perm) => {
+            const level = value?.[perm.key];
+            const baseDisabled = disabled || Number(level || 0) <= ACCESS_LEVELS.NONE;
+            return (
+              <div key={perm.key} className="border rounded-lg bg-card p-3 space-y-2">
+                <div className="font-medium text-sm">{perm.label}</div>
+                <PermissionSelect
+                  value={value?.[perm.key]}
+                  onChange={(lvl) => updatePermission(perm.key, lvl)}
+                  disabled={disabled}
+                />
+                {(perm.supportsEdit || perm.supportsDelete) ? (
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {perm.supportsEdit ? (
+                      <ActionToggle
+                        label="Edit"
+                        checked={isActionEnabled(perm.key, 'edit')}
+                        onChange={(checked) => updateAction(perm.key, 'edit', checked)}
+                        disabled={baseDisabled}
+                      />
+                    ) : null}
+                    {perm.supportsDelete ? (
+                      <ActionToggle
+                        label="Delete"
+                        checked={isActionEnabled(perm.key, 'delete')}
+                        onChange={(checked) => updateAction(perm.key, 'delete', checked)}
+                        disabled={baseDisabled}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div>
         <div className="text-sm font-medium mb-2">Stage Permissions (Issue & Receive)</div>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-sm">
+        <div className="hidden md:grid grid-cols-1 md:grid-cols-5 gap-2 text-sm">
           <div className="font-medium text-muted-foreground">Stage</div>
           <div className="font-medium text-muted-foreground">Issue</div>
           <div className="font-medium text-muted-foreground">Receive</div>
@@ -171,6 +209,83 @@ function PermissionEditor({ value, onChange, disabled }) {
               </div>
             </React.Fragment>
           ))}
+        </div>
+
+        {/* Mobile stage accordion cards */}
+        <div className="md:hidden space-y-2">
+          {stageRows.map((row) => {
+            const issueLevel = Number(value?.[row.issueKey] || 0);
+            const recvLevel = Number(value?.[row.receiveKey] || 0);
+            const issueBaseDisabled = disabled || issueLevel <= ACCESS_LEVELS.NONE;
+            const recvBaseDisabled = disabled || recvLevel <= ACCESS_LEVELS.NONE;
+
+            return (
+              <details key={row.stage} className="border rounded-lg bg-card p-3">
+                <summary className="cursor-pointer select-none font-medium text-sm">
+                  {row.label}
+                </summary>
+                <div className="pt-3 space-y-3">
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Issue</div>
+                    <PermissionSelect
+                      value={value?.[row.issueKey]}
+                      onChange={(lvl) => updatePermission(row.issueKey, lvl)}
+                      disabled={disabled}
+                    />
+                    {(row.issueSupportsEdit || row.issueSupportsDelete) ? (
+                      <div className="flex flex-wrap gap-3">
+                        {row.issueSupportsEdit ? (
+                          <ActionToggle
+                            label="Edit"
+                            checked={isActionEnabled(row.issueKey, 'edit')}
+                            onChange={(checked) => updateAction(row.issueKey, 'edit', checked)}
+                            disabled={issueBaseDisabled}
+                          />
+                        ) : null}
+                        {row.issueSupportsDelete ? (
+                          <ActionToggle
+                            label="Delete"
+                            checked={isActionEnabled(row.issueKey, 'delete')}
+                            onChange={(checked) => updateAction(row.issueKey, 'delete', checked)}
+                            disabled={issueBaseDisabled}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receive</div>
+                    <PermissionSelect
+                      value={value?.[row.receiveKey]}
+                      onChange={(lvl) => updatePermission(row.receiveKey, lvl)}
+                      disabled={disabled}
+                    />
+                    {(row.receiveSupportsEdit || row.receiveSupportsDelete) ? (
+                      <div className="flex flex-wrap gap-3">
+                        {row.receiveSupportsEdit ? (
+                          <ActionToggle
+                            label="Edit"
+                            checked={isActionEnabled(row.receiveKey, 'edit')}
+                            onChange={(checked) => updateAction(row.receiveKey, 'edit', checked)}
+                            disabled={recvBaseDisabled}
+                          />
+                        ) : null}
+                        {row.receiveSupportsDelete ? (
+                          <ActionToggle
+                            label="Delete"
+                            checked={isActionEnabled(row.receiveKey, 'delete')}
+                            onChange={(checked) => updateAction(row.receiveKey, 'delete', checked)}
+                            disabled={recvBaseDisabled}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </details>
+            );
+          })}
         </div>
       </div>
     </div>

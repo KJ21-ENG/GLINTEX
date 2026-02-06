@@ -227,11 +227,11 @@ export function SendDocuments() {
                 </div>
 
                 {/* Tab Toggle */}
-                <div className="flex p-1 bg-muted rounded-lg">
+                <div className="flex p-1 bg-muted rounded-lg w-full sm:w-auto">
                     <button
                         onClick={() => setActiveTab('send')}
                         className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                            "flex-1 sm:flex-none px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-2",
                             activeTab === 'send'
                                 ? "bg-background shadow text-foreground"
                                 : "text-muted-foreground hover:text-foreground"
@@ -243,7 +243,7 @@ export function SendDocuments() {
                     <button
                         onClick={() => setActiveTab('history')}
                         className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                            "flex-1 sm:flex-none px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center justify-center gap-2",
                             activeTab === 'history'
                                 ? "bg-background shadow text-foreground"
                                 : "text-muted-foreground hover:text-foreground"

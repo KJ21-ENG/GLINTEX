@@ -539,7 +539,7 @@ export function MobileDispatchView({
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {/* Dispatch Mode Toggle - Full Width */}
                             {selectedItem?.availableCount > 0 && (
                                 <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
@@ -665,7 +665,7 @@ export function MobileDispatchView({
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                                 <Label>Date</Label>
                                 <Input

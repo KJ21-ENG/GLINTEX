@@ -71,7 +71,7 @@ export function PieceRow({ p, lotNo, selected, onToggle, onSaved, initialWeight 
         <div className="flex items-center justify-end gap-2">
               {editing ? (
             <>
-              <Input type="number" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} style={{ width: 120 }} />
+              <Input type="number" step="0.001" value={weight} onChange={e=>setWeight(e.target.value)} className="w-full sm:w-32" />
               <button onClick={(e)=>{ e.stopPropagation(); setEditing(false); setWeight(p.weight); }} disabled={saving} title="Cancel" className={`w-8 h-8 rounded-full flex items-center justify-center border ${cls.cardBorder} ${cls.cardBg} btn-hover`}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-red-400"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>

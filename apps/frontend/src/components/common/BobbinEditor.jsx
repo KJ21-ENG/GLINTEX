@@ -66,7 +66,7 @@ export function BobbinEditor({ items = [], onAdd, onDelete, onEdit, disabled = f
 
   return (
     <div className={className}>
-      <div className="flex gap-2 mb-3 items-center">
+      <div className="flex flex-col sm:flex-row gap-2 mb-3 sm:items-center">
         <Input
           inputRef={nameInputRef}
           value={name}
@@ -86,7 +86,7 @@ export function BobbinEditor({ items = [], onAdd, onDelete, onEdit, disabled = f
           value={weight}
           onChange={e => setWeight(e.target.value)}
           placeholder="Weight (kg)"
-          style={{ width: '120px' }}
+          className="w-full sm:w-32"
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -94,8 +94,10 @@ export function BobbinEditor({ items = [], onAdd, onDelete, onEdit, disabled = f
             }
           }}
         />
-        <Button onClick={handleAdd} disabled={disabled || working || isDuplicate || !name.trim()}>Add</Button>
-        {isDuplicate && <div className="text-sm text-gray-500 ml-2">Duplicate</div>}
+        <div className="flex items-center gap-2">
+          <Button onClick={handleAdd} disabled={disabled || working || isDuplicate || !name.trim()}>Add</Button>
+          {isDuplicate && <div className="text-sm text-gray-500">Duplicate</div>}
+        </div>
       </div>
 
       {message && (
@@ -189,7 +191,7 @@ function BobbinRow({ item, onDelete, onEdit, disabled, className = '' }) {
         </>
       ) : (
         <>
-          <div className="flex-1 mr-4 flex items-center gap-2">
+          <div className="flex-1 mr-4 flex flex-col sm:flex-row sm:items-center gap-2 min-w-0">
             <Input
               inputRef={nameEditRef}
               value={name}
@@ -198,7 +200,7 @@ function BobbinRow({ item, onDelete, onEdit, disabled, className = '' }) {
                 if (e.key === 'Enter') saveEdit();
                 if (e.key === 'Escape') cancelEdit();
               }}
-              style={{ flex: 1 }}
+              className="flex-1 min-w-0"
             />
             <Input
               type="number"
@@ -206,7 +208,7 @@ function BobbinRow({ item, onDelete, onEdit, disabled, className = '' }) {
               value={weight}
               onChange={e => setWeight(e.target.value)}
               placeholder="Weight (kg)"
-              style={{ width: '120px' }}
+              className="w-full sm:w-32"
               onKeyDown={e => {
                 if (e.key === 'Enter') saveEdit();
                 if (e.key === 'Escape') cancelEdit();
@@ -222,4 +224,3 @@ function BobbinRow({ item, onDelete, onEdit, disabled, className = '' }) {
     </li>
   );
 }
-

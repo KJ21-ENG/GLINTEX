@@ -768,7 +768,7 @@ export function Stock() {
         {/* Filter Bar */}
         <Card className="bg-muted/40 border-none shadow-none">
           <CardContent className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 items-end">
-            <div className="sm:col-span-2 lg:col-span-2 min-w-[200px]">
+            <div className="sm:col-span-2 lg:col-span-2 min-w-0">
               <Label className="text-xs mb-1 block">Search</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1106,8 +1106,10 @@ export function Stock() {
                           >
                             <Button
                               variant="ghost"
-                              className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 px-2"
-                              style={{ width: 'auto', padding: '0 8px', fontSize: '11px' }}
+                              // Inline styles here made the button awkward to size across breakpoints.
+                              // Keep it purely utility-driven so it behaves consistently on mobile.
+                              size="sm"
+                              className="h-7 px-2 text-[11px] text-destructive hover:text-destructive hover:bg-destructive/10"
                               onClick={(e) => handleDeleteLot(l.lotNo, e)}
                             >
                               <Trash2 className="w-3 h-3 mr-1" /> Delete Lot

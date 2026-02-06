@@ -275,7 +275,7 @@ export function MobileBarcodeHistory() {
                                         {/* Stage Details */}
                                         {isExpanded && stage.data && (
                                             <div className="px-3 pb-3 pt-0 border-t">
-                                                <div className="pt-2 grid grid-cols-2 gap-2 text-xs">
+                                                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                                                     {Object.entries(stage.data)
                                                         .filter(([key, value]) =>
                                                             value !== null &&

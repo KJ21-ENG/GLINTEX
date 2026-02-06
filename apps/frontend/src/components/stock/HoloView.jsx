@@ -213,14 +213,14 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     }
 
     return list.filter(l => {
-      if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.item && String(l.itemId) !== String(filters.item)) return false;
       if (filters.cut) {
-        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        const cutName = db?.cuts?.find(c => String(c.id) === String(filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
-      if (filters.yarn && l.yarnId !== filters.yarn) return false;
-      if (filters.firm && l.firmId !== filters.firm) return false;
-      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.yarn && String(l.yarnId) !== String(filters.yarn)) return false;
+      if (filters.firm && String(l.firmId) !== String(filters.firm)) return false;
+      if (filters.supplier && String(l.supplierId) !== String(filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;

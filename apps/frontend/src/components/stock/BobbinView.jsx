@@ -13,6 +13,8 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
+const idEq = (a, b) => String(a ?? '') === String(b ?? '');
+
 export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -105,6 +107,12 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       const lotNo = crate.lotNo || '(No Lot)';
       const existing = map.get(lotNo) || {
         lotNo,
+        lotKey: [
+          lotNo,
+          crate.itemId || '',
+          crate.supplierId || '',
+          crate.firmId || '',
+        ].join('::'),
         date: crate.date || '',
         itemId: crate.itemId,
         firmId: crate.firmId,
@@ -169,14 +177,14 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     }
 
     return list.filter(l => {
-      if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.item && !idEq(l.itemId, filters.item)) return false;
       if (filters.cut) {
-        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
       if (filters.yarn && l.yarnId && l.yarnId !== filters.yarn) return false;
-      if (filters.firm && l.firmId !== filters.firm) return false;
-      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
+      if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
 
@@ -272,7 +280,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
             ) : (
               displayData.map((l, idx) => {
                 const isExpanded = !groupBy && expandedLot === l.lotNo;
-                const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo || idx);
+                const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
@@ -369,7 +377,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         ) : (
           displayData.map((l, idx) => {
             const isExpanded = !groupBy && expandedLot === l.lotNo;
-            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo || idx);
+            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">

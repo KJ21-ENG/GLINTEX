@@ -21,6 +21,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/lab
 import { usePermission, useStagePermission } from '../hooks/usePermission';
 
 const EPSILON = 1e-9;
+const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
 const isPieceAvailableForIssue = (piece) => (
   piece?.status === 'available'
@@ -318,13 +319,13 @@ export function Stock() {
 
     return list.filter(l => {
       // Filters
-      if (filters.item && l.itemId !== filters.item) return false;
+      if (filters.item && !idEq(l.itemId, filters.item)) return false;
       if (filters.cut) {
-        const cutName = db?.cuts?.find(c => c.id === filters.cut)?.name;
+        const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
-      if (filters.firm && l.firmId !== filters.firm) return false;
-      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
+      if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
 

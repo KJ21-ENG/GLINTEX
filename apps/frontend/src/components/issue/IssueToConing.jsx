@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToConing() {
     const { db, refreshDb } = useInventory();
@@ -27,6 +28,14 @@ export function IssueToConing() {
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [scanDialogOpen, setScanDialogOpen] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState(null);
+
+    useEffect(() => {
+        if (!scanFeedback) return;
+        const t = setTimeout(() => setScanFeedback(null), 2000);
+        return () => clearTimeout(t);
+    }, [scanFeedback]);
 
     // --- Derived ---
     const coningMeta = useMemo(() => {
@@ -49,9 +58,9 @@ export function IssueToConing() {
 
     // --- Handlers ---
 
-    async function handleScan() {
-        if (!scanInput.trim()) return;
-        const normalized = scanInput.trim().toUpperCase();
+    async function addBarcode(raw) {
+        const normalized = String(raw || '').trim().toUpperCase();
+        if (!normalized) return;
         const normalizeValue = (val) => String(val || '').trim().toUpperCase();
 
         // Find in Holo Receive Rows
@@ -179,6 +188,11 @@ export function IssueToConing() {
             cut: cutName
         }]);
         setScanInput('');
+        setScanFeedback(`Added ${normalized}`);
+    }
+
+    async function handleScan() {
+        return await addBarcode(scanInput);
     }
 
     function updateCrate(rowId, field, val) {
@@ -384,7 +398,7 @@ export function IssueToConing() {
             <Card>
                 <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Holo Crates</CardTitle>
-                    <div className="flex gap-2 w-full sm:w-auto">
+                    <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Barcode"
                             value={scanInput}
@@ -393,9 +407,15 @@ export function IssueToConing() {
                             className="flex-1 sm:w-48"
                         />
                         <Button onClick={handleScan}>Add</Button>
+                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
+                            Scan
+                        </Button>
                     </div>
                 </CardHeader>
                 <CardContent>
+                    {scanFeedback && (
+                        <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
+                    )}
                     <div className="border rounded-md overflow-x-auto">
                         <Table>
                             <TableHeader>
@@ -447,6 +467,16 @@ export function IssueToConing() {
                     </div>
                 </CardContent>
             </Card>
+
+            <BarcodeScanDialog
+                open={scanDialogOpen}
+                onOpenChange={setScanDialogOpen}
+                onScanned={(code) => {
+                    setScanDialogOpen(false);
+                    setScanInput(code);
+                    addBarcode(code);
+                }}
+            />
         </div>
     );
 }

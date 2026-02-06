@@ -49,7 +49,7 @@ function triggerScanFeedback() {
     }
 }
 
-export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = false }) {
+export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = false, containerId = null }) {
     const [isScanning, setIsScanning] = useState(false);
     const [error, setError] = useState(null);
     const [lastScanned, setLastScanned] = useState(null);
@@ -59,6 +59,18 @@ export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = fa
     const onInvalidScanRef = useRef(onInvalidScan);
     const scannerRef = useRef(null);
     const containerRef = useRef(null);
+    const containerIdRef = useRef(null);
+
+    // Use a per-instance container id so multiple scanners never conflict.
+    // html5-qrcode expects an element id.
+    if (!containerIdRef.current) {
+        if (typeof containerId === 'string' && containerId.trim()) {
+            containerIdRef.current = containerId.trim();
+        } else {
+            const rand = Math.random().toString(36).slice(2, 10);
+            containerIdRef.current = `barcode-scanner-${Date.now()}-${rand}`;
+        }
+    }
 
     // ============ FIX #3: Multi-read confirmation ============
     const confirmationRef = useRef({ barcode: null, count: 0 });
@@ -75,7 +87,7 @@ export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = fa
             setError(null);
 
             // Create scanner instance
-            const scanner = new Html5Qrcode('barcode-scanner-container');
+            const scanner = new Html5Qrcode(containerIdRef.current);
             scannerRef.current = scanner;
 
             // Get available cameras
@@ -209,7 +221,7 @@ export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = fa
         <div className={cn("relative w-full h-full bg-black rounded-lg overflow-hidden", className)}>
             {/* Scanner container */}
             <div
-                id="barcode-scanner-container"
+                id={containerIdRef.current}
                 ref={containerRef}
                 className="w-full h-full"
             />

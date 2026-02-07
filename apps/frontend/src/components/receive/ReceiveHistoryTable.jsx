@@ -35,6 +35,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
 
     const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
     const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
+    const bobbinById = useMemo(() => new Map((db.bobbins || []).map(b => [b.id, b])), [db.bobbins]);
     const rollTypeById = useMemo(() => new Map((db.rollTypes || []).map(r => [r.id, r])), [db.rollTypes]);
 
     const calcNetFromGrossTare = (row) => {
@@ -279,8 +280,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     };
 
     const computeNetWeight = (bobbinId, boxId, bobbinQty, grossWeight) => {
-        const bobbinWeight = Number(bobbinMap.get(bobbinId)?.weight || 0);
-        const boxWeight = Number(boxMap.get(boxId)?.weight || 0);
+        const bobbinWeight = Number(bobbinById.get(bobbinId)?.weight || 0);
+        const boxWeight = Number(boxById.get(boxId)?.weight || 0);
         const qty = Number(bobbinQty || 0);
         const gross = Number(grossWeight || 0);
         const net = gross - (boxWeight + bobbinWeight * qty);
@@ -1055,8 +1056,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     };
 
     const recalcEditRow = (row) => {
-        const bobbinWeight = Number(bobbinMap.get(row.bobbinId)?.weight || 0);
-        const boxWeight = Number(boxMap.get(row.boxId)?.weight || 0);
+        const bobbinWeight = Number(bobbinById.get(row.bobbinId)?.weight || 0);
+        const boxWeight = Number(boxById.get(row.boxId)?.weight || 0);
         const qty = Number(row.bobbinQty || 0);
         const gross = Number(row.grossWeight || 0);
         const tare = boxWeight + bobbinWeight * qty;
@@ -1065,8 +1066,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             ...row,
             tareWeight: Number.isFinite(tare) ? tare : 0,
             netWeight: Number.isFinite(net) ? net : 0,
-            boxName: boxMap.get(row.boxId)?.name || row.boxName,
-            bobbinName: bobbinMap.get(row.bobbinId)?.name || row.bobbinName
+            boxName: boxById.get(row.boxId)?.name || row.boxName,
+            bobbinName: bobbinById.get(row.bobbinId)?.name || row.bobbinName
         };
     };
 

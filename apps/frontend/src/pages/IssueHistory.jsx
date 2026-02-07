@@ -1593,7 +1593,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         issueDraft.crates.map((crate) => (
                           <div key={crate.rowId} className="border rounded p-2 space-y-2">
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span className="font-mono">Row {crate.rowId}</span>
+                              <span className="font-mono">Barcode {crate.barcode || crate.rowId}</span>
                               {crate.pieceId ? <span>Piece {crate.pieceId}</span> : null}
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -1768,7 +1768,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         issueDraft.crates.map((crate) => (
                           <div key={crate.rowId} className="border rounded p-2 space-y-2">
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span className="font-mono">Row {crate.rowId}</span>
+                              <span className="font-mono">Barcode {crate.barcode || crate.rowId}</span>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                               <div className="space-y-1">

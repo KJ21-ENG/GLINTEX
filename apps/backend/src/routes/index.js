@@ -2215,6 +2215,29 @@ router.get(
   },
 );
 
+// Reserve a cutter purchase lot number (increments sequence, guarantees lot number for this session)
+router.post(
+  '/api/inbound/cutter_purchase/reserve',
+  requirePermission('inbound', PERM_WRITE),
+  requirePermission('receive.cutter', PERM_WRITE),
+  async (req, res) => {
+    try {
+      const actorUserId = req.user?.id;
+      // Allocate (increment) the sequence to reserve the lot number
+      const seq = await prisma.sequence.upsert({
+        where: { id: CUTTER_PURCHASE_LOT_SEQUENCE_ID },
+        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+        create: { id: CUTTER_PURCHASE_LOT_SEQUENCE_ID, nextValue: 1, ...actorCreateFields(actorUserId) },
+      });
+      const reservedLotNo = formatCutterPurchaseLotNo(seq.nextValue);
+      res.json({ ok: true, reservedLotNo, raw: seq.nextValue });
+    } catch (err) {
+      console.error('Failed to reserve cutter purchase lot', err);
+      res.status(500).json({ error: 'Failed to reserve lot number' });
+    }
+  },
+);
+
 // Set the lot sequence to a specific integer value (so the next created lot becomes value+1)
 router.post('/api/sequence/set', async (req, res) => {
   try {
@@ -4581,7 +4604,7 @@ router.post(
   async (req, res) => {
     try {
       const actorUserId = req.user?.id;
-      const { date, itemId, firmId, supplierId, crates } = req.body || {};
+      const { date, itemId, firmId, supplierId, crates, reservedLotNo } = req.body || {};
       if (!date || !itemId || !supplierId) {
         return res.status(400).json({ error: 'Missing required cutter purchase fields' });
       }
@@ -4693,7 +4716,10 @@ router.post(
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const lotNo = await allocateCutterPurchaseLot(tx, actorUserId);
+        // Use reserved lot number if provided, otherwise allocate a new one
+        const lotNo = reservedLotNo && isCutterPurchaseLotNo(reservedLotNo)
+          ? reservedLotNo
+          : await allocateCutterPurchaseLot(tx, actorUserId);
         const pieceId = `${lotNo}-1`;
 
         await tx.lot.create({

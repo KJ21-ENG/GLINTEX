@@ -4,7 +4,7 @@ import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
-import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
+import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, printStageTemplatesBatch, makeReceiveBarcode } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search, Printer, Download, Edit2 } from 'lucide-react';
 import { exportHistoryToExcel } from '../services';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
@@ -87,6 +87,7 @@ export function Inbound() {
     const [cart, setCart] = useState([]);
     const [cutterEntry, setCutterEntry] = useState(EMPTY_CUTTER_ENTRY);
     const [cutterCart, setCutterCart] = useState([]);
+    const [reservedCutterLotNo, setReservedCutterLotNo] = useState(null); // Reserved lot number for sticker printing
     const [saving, setSaving] = useState(false);
 
     const weightRef = useRef(null);
@@ -249,7 +250,7 @@ export function Inbound() {
         }
     }
 
-    const addCutterCrate = () => {
+    const addCutterCrate = async () => {
         if (purchaseReadOnly) return;
         if (!cutterEntry.cutId) {
             alert('Cut is required.');
@@ -277,6 +278,26 @@ export function Inbound() {
             return;
         }
 
+        // Reserve lot number on first crate add
+        let lotNo = reservedCutterLotNo;
+        if (!lotNo) {
+            try {
+                const reserveRes = await api.reserveCutterPurchaseLot();
+                lotNo = reserveRes?.reservedLotNo;
+                if (!lotNo) {
+                    alert('Failed to reserve lot number.');
+                    return;
+                }
+                setReservedCutterLotNo(lotNo);
+            } catch (err) {
+                alert(err.message || 'Failed to reserve lot number.');
+                return;
+            }
+        }
+
+        const crateIndex = cutterCart.length + 1;
+        const barcode = makeReceiveBarcode({ lotNo, seq: 1, crateIndex });
+
         const newCrate = {
             id: uid('crate'),
             ...cutterEntry,
@@ -284,9 +305,46 @@ export function Inbound() {
             grossWeight: gross,
             netWeight: net,
             tareWeight: tare,
+            crateIndex,
+            barcode,
         };
 
         setCutterCart(prev => [...prev, newCrate]);
+
+        // Print sticker immediately per-crate
+        try {
+            const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+            if (template && barcode) {
+                const confirmPrint = window.confirm('Print sticker for this crate?');
+                if (confirmPrint) {
+                    const itemName = db.items?.find(i => i.id === itemId)?.name;
+                    await printStageTemplate(
+                        LABEL_STAGE_KEYS.CUTTER_RECEIVE,
+                        {
+                            lotNo,
+                            itemName,
+                            pieceId: `${lotNo}-1`,
+                            barcode,
+                            netWeight: net,
+                            grossWeight: gross,
+                            tareWeight: tare,
+                            bobbinQty,
+                            bobbinName: bobbin?.name,
+                            boxName: box?.name,
+                            cut: getCut(cutterEntry.cutId)?.name,
+                            cutName: getCut(cutterEntry.cutId)?.name,
+                            operatorName: getOperator(cutterEntry.operatorId)?.name,
+                            helperName: getHelper(cutterEntry.helperId)?.name,
+                            shift: cutterEntry.shift,
+                            date,
+                        },
+                        { template },
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('Failed to print sticker', err);
+        }
 
         setCutterEntry(prev => ({
             ...prev,
@@ -313,6 +371,7 @@ export function Inbound() {
                 itemId,
                 firmId: firmId || null,
                 supplierId,
+                reservedLotNo: reservedCutterLotNo, // Pass reserved lot number to ensure consistency
                 crates: cutterCart.map(row => ({
                     bobbinId: row.bobbinId,
                     boxId: row.boxId,
@@ -325,48 +384,14 @@ export function Inbound() {
                     machineNo: row.machineId ? (getMachine(row.machineId)?.name || '') : null,
                 })),
             };
-            // Capture item name before async call (db state may be stale after refreshDb)
-            const itemName = db.items?.find(i => i.id === itemId)?.name;
-            const result = await api.createCutterPurchaseInbound(payload);
+            await api.createCutterPurchaseInbound(payload);
             await refreshDb();
 
-            // Print stickers using actual lotNo and barcodes from API response (like Raw Inbound)
-            const lotNo = result?.lotNo;
-            const rows = result?.rows || [];
-            if (rows.length > 0) {
-                const cutterTemplate = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
-                if (cutterTemplate) {
-                    const confirmPrint = window.confirm(`Print ${rows.length} sticker(s) for lot ${lotNo}?`);
-                    if (confirmPrint) {
-                        const batchData = rows.map((row, idx) => {
-                            const cartRow = cutterCart[idx];
-                            return {
-                                lotNo,
-                                itemName,
-                                pieceId: result.pieceId,
-                                barcode: row.barcode,
-                                netWeight: cartRow?.netWeight,
-                                grossWeight: cartRow?.grossWeight,
-                                tareWeight: cartRow?.tareWeight,
-                                bobbinQty: cartRow?.bobbinQuantity,
-                                bobbinName: getBobbin(cartRow?.bobbinId)?.name,
-                                boxName: getBox(cartRow?.boxId)?.name,
-                                cut: getCut(cartRow?.cutId)?.name,
-                                cutName: getCut(cartRow?.cutId)?.name,
-                                operatorName: getOperator(cartRow?.operatorId)?.name,
-                                helperName: getHelper(cartRow?.helperId)?.name,
-                                shift: cartRow?.shift,
-                                machineName: cartRow?.machineId ? getMachine(cartRow.machineId)?.name : null,
-                                date,
-                            };
-                        });
-                        await printStageTemplatesBatch(LABEL_STAGE_KEYS.CUTTER_RECEIVE, batchData, { template: cutterTemplate });
-                    }
-                }
-            }
+            // Stickers already printed per-crate during addCutterCrate, no batch print needed
 
             setCutterCart([]);
             setCutterEntry(EMPTY_CUTTER_ENTRY);
+            setReservedCutterLotNo(null); // Clear reserved lot number
             setDate(todayISO());
             setItemId("");
             setFirmId("");
@@ -678,7 +703,7 @@ export function Inbound() {
                                 <Button onClick={addCutterCrate} disabled={!canAddCutter || purchaseReadOnly} className="flex-1 sm:flex-none gap-2">
                                     <Plus className="w-4 h-4" /> Add Crate
                                 </Button>
-                                <Button variant="outline" onClick={() => setCutterCart([])} disabled={cutterCart.length === 0 || purchaseReadOnly} className="flex-1 sm:flex-none text-destructive hover:text-destructive">
+                                <Button variant="outline" onClick={() => { setCutterCart([]); setReservedCutterLotNo(null); }} disabled={cutterCart.length === 0 || purchaseReadOnly} className="flex-1 sm:flex-none text-destructive hover:text-destructive">
                                     Clear
                                 </Button>
                             </div>

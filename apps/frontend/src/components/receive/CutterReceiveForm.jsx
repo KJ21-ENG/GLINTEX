@@ -614,7 +614,18 @@ export function CutterReceiveForm() {
                                 <Label>Gross Weight</Label>
                                 <div className="flex gap-2">
                                     <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" disabled={receiveFieldsDisabled} />
-                                    <CatchWeightButton onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))} disabled={receiveFieldsDisabled} />
+                                    <CatchWeightButton
+                                        onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))}
+                                        disabled={receiveFieldsDisabled}
+                                        context={{
+                                            feature: 'receive',
+                                            stage: 'cutter',
+                                            field: 'grossWeight',
+                                            issueId: issueRecord?.id || null,
+                                            issueBarcode: issueRecord?.barcode || null,
+                                            lotNo: issueRecord?.lotNo || null,
+                                        }}
+                                    />
                                 </div>
                             </div>
                         </div>

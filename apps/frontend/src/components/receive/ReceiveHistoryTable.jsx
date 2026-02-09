@@ -10,9 +10,13 @@ import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { UserBadge } from '../common/UserBadge';
+import { usePermission } from '../../hooks/usePermission';
 
-export function ReceiveHistoryTable() {
-    const { db, process, refreshDb } = useInventory();
+export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
+    const { db, process, refreshProcessData, refreshModuleData, patchDb } = useInventory();
+    const { canDelete: canDeleteInbound } = usePermission('inbound');
+    const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
     const [editingChallan, setEditingChallan] = useState(null);
     const [editRows, setEditRows] = useState([]);
@@ -28,6 +32,18 @@ export function ReceiveHistoryTable() {
     const [searchTerm, setSearchTerm] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+
+    const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
+    const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
+    const bobbinById = useMemo(() => new Map((db.bobbins || []).map(b => [b.id, b])), [db.bobbins]);
+    const rollTypeById = useMemo(() => new Map((db.rollTypes || []).map(r => [r.id, r])), [db.rollTypes]);
+
+    const calcNetFromGrossTare = (row) => {
+        const gross = Number(row?.grossWeight || 0);
+        const tare = Number(row?.tareWeight || 0);
+        const net = gross - tare;
+        return Number.isFinite(net) ? net : 0;
+    };
 
     const history = useMemo(() => {
         let rows = [];
@@ -168,6 +184,34 @@ export function ReceiveHistoryTable() {
         ];
     };
 
+    const resolvePieceCutName = (piece) => {
+        if (!piece) return '';
+        const cutVal = piece.cut;
+        return piece.cutName
+            || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
+            || piece.cutMaster?.name
+            || (piece.cutId ? db.cuts?.find(c => c.id === piece.cutId)?.name : '')
+            || '';
+    };
+
+    const resolvePieceYarnName = (piece) => {
+        if (!piece) return '';
+        const yarnVal = piece.yarn;
+        return piece.yarnName
+            || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name)
+            || (piece.yarnId ? db.yarns?.find(y => y.id === piece.yarnId)?.name : '')
+            || '';
+    };
+
+    const resolvePieceTwistName = (piece) => {
+        if (!piece) return '';
+        const twistVal = piece.twist;
+        return piece.twistName
+            || (typeof twistVal === 'string' ? twistVal : twistVal?.name)
+            || (piece.twistId ? db.twists?.find(t => t.id === piece.twistId)?.name : '')
+            || '';
+    };
+
     const getCutterChallanMeta = (challan) => {
         const item = db.items?.find(i => i.id === challan.itemId);
         const operator = db.operators?.find(o => o.id === challan.operatorId) || db.workers?.find(w => w.id === challan.operatorId);
@@ -236,8 +280,8 @@ export function ReceiveHistoryTable() {
     };
 
     const computeNetWeight = (bobbinId, boxId, bobbinQty, grossWeight) => {
-        const bobbinWeight = Number(bobbinMap.get(bobbinId)?.weight || 0);
-        const boxWeight = Number(boxMap.get(boxId)?.weight || 0);
+        const bobbinWeight = Number(bobbinById.get(bobbinId)?.weight || 0);
+        const boxWeight = Number(boxById.get(boxId)?.weight || 0);
         const qty = Number(bobbinQty || 0);
         const gross = Number(grossWeight || 0);
         const net = gross - (boxWeight + bobbinWeight * qty);
@@ -517,17 +561,26 @@ export function ReceiveHistoryTable() {
                 const cut = resolved.cutName === '—' ? '' : resolved.cutName;
 
                 // Calculate tare weight
-                const boxWeight = box?.weight || 0;
-                const rollTypeWeight = rollType?.weight || 0;
-                const tareWeight = boxWeight + rollTypeWeight;
+                const boxWeight = Number(box?.weight || 0);
+                const rollTypeWeight = Number(rollType?.weight || 0);
+                const rollCount = Number(row.rollCount || 1);
+                const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
+                const tareWeight = Number.isFinite(row.tareWeight) ? Number(row.tareWeight) : calculatedTare;
 
                 const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
+                const netWeight = Number.isFinite(row.rollWeight)
+                    ? Number(row.rollWeight)
+                    : Number.isFinite(row.netWeight)
+                        ? Number(row.netWeight)
+                        : Number.isFinite(row.grossWeight)
+                            ? Math.max(0, Number(row.grossWeight) - tareWeight)
+                            : 0;
                 data = {
                     lotNo: lotLabel,
                     itemName: item?.name || '',
-                    rollCount: row.rollCount || 1,
+                    rollCount,
                     rollType: rollType?.name || '',
-                    netWeight: row.rollWeight ?? row.netWeight ?? row.grossWeight,
+                    netWeight,
                     grossWeight: row.grossWeight,
                     tareWeight: tareWeight,
                     boxName: box?.name || row.box?.name || '',
@@ -568,13 +621,19 @@ export function ReceiveHistoryTable() {
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
                 const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
+                const netWeight = Number.isFinite(row.netWeight)
+                    ? Number(row.netWeight)
+                    : Number.isFinite(row.grossWeight) && Number.isFinite(row.tareWeight)
+                        ? Math.max(0, Number(row.grossWeight) - Number(row.tareWeight))
+                        : Number(row.grossWeight || 0);
+
                 data = {
                     lotNo: lotLabel,
                     itemName: item?.name || '',
                     coneCount: row.coneCount,
                     grossWeight: row.grossWeight,
                     tareWeight: row.tareWeight || 0,
-                    netWeight: row.netWeight ?? row.grossWeight,
+                    netWeight,
                     boxName: box?.name || row.box?.name || '',
                     cut: cut,
                     yarnName: yarnName,
@@ -615,6 +674,7 @@ export function ReceiveHistoryTable() {
     };
 
     const openReceiveEditor = (row) => {
+        if (!canEdit) return;
         if (!row) return;
         setPieceOptionsOverride(null);
         setEditingReceiveRow(row);
@@ -758,7 +818,56 @@ export function ReceiveHistoryTable() {
                 if (!editingReceiveRow.pieceId && receiveDraft.pieceId) {
                     payload.pieceId = receiveDraft.pieceId;
                 }
-                await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+                const res = await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+                const updatedRow = res?.row || null;
+                if (updatedRow) {
+                    const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+                    const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+
+                    const prevWeight = Number.isFinite(Number(editingReceiveRow.rollWeight))
+                        ? Number(editingReceiveRow.rollWeight)
+                        : calcNetFromGrossTare(editingReceiveRow);
+                    const nextWeight = Number.isFinite(Number(updatedRow.rollWeight))
+                        ? Number(updatedRow.rollWeight)
+                        : calcNetFromGrossTare(updatedRow);
+                    const prevRolls = Number(editingReceiveRow.rollCount || 0);
+                    const nextRolls = Number(updatedRow.rollCount || 0);
+                    const deltaNetWeight = nextWeight - prevWeight;
+                    const deltaRolls = nextRolls - prevRolls;
+
+                    const pieceId = updatedRow.pieceId || editingReceiveRow.pieceId || null;
+                    if (pieceId) {
+                        const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                        const nextTotal = {
+                            ...baseTotal,
+                            totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
+                            totalRolls: Number(baseTotal.totalRolls || 0) + deltaRolls,
+                        };
+                        const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+
+                        const nextRows = existingRows.map((r) => {
+                            if (r.id !== updatedRow.id) return r;
+                            return {
+                                ...r,
+                                ...updatedRow,
+                                pieceId,
+                                box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
+                                rollType: updatedRow.rollTypeId ? (rollTypeById.get(updatedRow.rollTypeId) || null) : null,
+                                operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
+                                helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
+                            };
+                        });
+
+                        patchDb({
+                            receive_from_holo_machine_rows: nextRows,
+                            receive_from_holo_machine_piece_totals: nextTotals,
+                        });
+                    } else {
+                        await refreshProcessData(process);
+                    }
+                } else {
+                    await refreshProcessData(process);
+                }
             } else if (process === 'coning') {
                 const payload = {
                     date: receiveDraft.date || null,
@@ -770,10 +879,52 @@ export function ReceiveHistoryTable() {
                     helperId: receiveDraft.helperId,
                     notes: receiveDraft.notes,
                 };
-                await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+                const res = await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+                const updatedRow = res?.row || null;
+                if (updatedRow) {
+                    const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
+                    const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
+
+                    const prevWeight = Number.isFinite(Number(editingReceiveRow.netWeight))
+                        ? Number(editingReceiveRow.netWeight)
+                        : calcNetFromGrossTare(editingReceiveRow);
+                    const nextWeight = Number.isFinite(Number(updatedRow.netWeight))
+                        ? Number(updatedRow.netWeight)
+                        : calcNetFromGrossTare(updatedRow);
+                    const prevCones = Number(editingReceiveRow.coneCount || 0);
+                    const nextCones = Number(updatedRow.coneCount || 0);
+                    const deltaNetWeight = nextWeight - prevWeight;
+                    const deltaCones = nextCones - prevCones;
+
+                    const pieceId = updatedRow.issueId || editingReceiveRow.issueId;
+                    const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                    const nextTotal = {
+                        ...baseTotal,
+                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
+                        totalCones: Number(baseTotal.totalCones || 0) + deltaCones,
+                    };
+                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+
+                    const nextRows = existingRows.map((r) => {
+                        if (r.id !== updatedRow.id) return r;
+                        return {
+                            ...r,
+                            ...updatedRow,
+                            box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
+                            operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
+                            helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
+                        };
+                    });
+
+                    patchDb({
+                        receive_from_coning_machine_rows: nextRows,
+                        receive_from_coning_machine_piece_totals: nextTotals,
+                    });
+                } else {
+                    await refreshProcessData(process);
+                }
             }
 
-            await refreshDb();
             closeReceiveEditor();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -792,6 +943,7 @@ export function ReceiveHistoryTable() {
     };
 
     const handleDeleteReceiveRow = async (row) => {
+        if (!canDelete) return;
         if (!row || (process !== 'holo' && process !== 'coning')) return;
 
         if (process === 'holo') {
@@ -811,10 +963,50 @@ export function ReceiveHistoryTable() {
                 const pieceOptions = resolveHoloPieceOptions(row);
                 const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : null);
                 await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
+
+                const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+                const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+                const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
+                const prevRolls = Number(row.rollCount || 0);
+                const resolvedPieceId = pieceId || row.pieceId || null;
+
+                if (resolvedPieceId) {
+                    const baseTotal = existingTotals.find(t => t.pieceId === resolvedPieceId) || { pieceId: resolvedPieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                    const nextTotal = {
+                        ...baseTotal,
+                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                        totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
+                    };
+                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== resolvedPieceId)];
+                    const nextRows = existingRows.filter(r => r.id !== row.id);
+                    patchDb({
+                        receive_from_holo_machine_rows: nextRows,
+                        receive_from_holo_machine_piece_totals: nextTotals,
+                    });
+                } else {
+                    await refreshProcessData(process);
+                }
             } else {
                 await api.deleteConingReceiveRow(row.id);
+
+                const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
+                const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
+                const prevWeight = Number.isFinite(Number(row.netWeight)) ? Number(row.netWeight) : calcNetFromGrossTare(row);
+                const prevCones = Number(row.coneCount || 0);
+                const pieceId = row.issueId;
+                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                const nextTotal = {
+                    ...baseTotal,
+                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                    totalCones: Number(baseTotal.totalCones || 0) - prevCones,
+                };
+                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                const nextRows = existingRows.filter(r => r.id !== row.id);
+                patchDb({
+                    receive_from_coning_machine_rows: nextRows,
+                    receive_from_coning_machine_piece_totals: nextTotals,
+                });
             }
-            await refreshDb();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
                 const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
@@ -837,7 +1029,24 @@ export function ReceiveHistoryTable() {
         setDeletingReceive(true);
         try {
             await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
-            await refreshDb();
+            const row = deletePrompt.row;
+            const pieceId = deletePrompt.pieceId;
+            const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+            const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
+            const prevRolls = Number(row.rollCount || 0);
+            const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+            const nextTotal = {
+                ...baseTotal,
+                totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
+            };
+            const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+            const nextRows = existingRows.filter(r => r.id !== row.id);
+            patchDb({
+                receive_from_holo_machine_rows: nextRows,
+                receive_from_holo_machine_piece_totals: nextTotals,
+            });
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');
@@ -847,8 +1056,8 @@ export function ReceiveHistoryTable() {
     };
 
     const recalcEditRow = (row) => {
-        const bobbinWeight = Number(bobbinMap.get(row.bobbinId)?.weight || 0);
-        const boxWeight = Number(boxMap.get(row.boxId)?.weight || 0);
+        const bobbinWeight = Number(bobbinById.get(row.bobbinId)?.weight || 0);
+        const boxWeight = Number(boxById.get(row.boxId)?.weight || 0);
         const qty = Number(row.bobbinQty || 0);
         const gross = Number(row.grossWeight || 0);
         const tare = boxWeight + bobbinWeight * qty;
@@ -857,12 +1066,13 @@ export function ReceiveHistoryTable() {
             ...row,
             tareWeight: Number.isFinite(tare) ? tare : 0,
             netWeight: Number.isFinite(net) ? net : 0,
-            boxName: boxMap.get(row.boxId)?.name || row.boxName,
-            bobbinName: bobbinMap.get(row.bobbinId)?.name || row.bobbinName
+            boxName: boxById.get(row.boxId)?.name || row.boxName,
+            bobbinName: bobbinById.get(row.bobbinId)?.name || row.bobbinName
         };
     };
 
     const handleEditChallan = async (challan) => {
+        if (!canEdit) return;
         const rows = await resolveChallanRows(challan.id);
         const mappedRows = rows.map((row) => {
             const bobbinQty = row.bobbinQuantity != null ? String(row.bobbinQuantity) : '';
@@ -953,7 +1163,7 @@ export function ReceiveHistoryTable() {
         setSavingEdit(true);
         try {
             await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
-            await refreshDb();
+            await refreshProcessData(process);
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1005,7 +1215,7 @@ export function ReceiveHistoryTable() {
                 );
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
-                    await refreshDb();
+                    await refreshProcessData(process);
                     closeEditDialog();
                 }
             } else {
@@ -1017,11 +1227,12 @@ export function ReceiveHistoryTable() {
     };
 
     const handleDeleteChallan = async (challan) => {
+        if (!canDelete) return;
         const ok = window.confirm(`Delete challan ${challan.challanNo}? This will revert its receive entries.`);
         if (!ok) return;
         try {
             await api.deleteCutterReceiveChallan(challan.id);
-            await refreshDb();
+            await refreshProcessData(process);
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
@@ -1057,7 +1268,7 @@ export function ReceiveHistoryTable() {
                 );
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
-                    await refreshDb();
+                    await refreshProcessData(process);
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');
@@ -1397,6 +1608,24 @@ export function ReceiveHistoryTable() {
         URL.revokeObjectURL(url);
     };
 
+    const isCutterPurchaseLot = (lotNo) => String(lotNo || '').toUpperCase().startsWith('CP-');
+
+    const handleDeleteCutterPurchase = async (challan) => {
+        if (!challan?.lotNo) return;
+        const lotNo = challan.lotNo;
+        const confirmed = window.confirm(
+            `Delete cutter purchase ${lotNo}?\n\nThis will delete the challan, all crates, piece totals, and the inbound lot.`
+        );
+        if (!confirmed) return;
+        try {
+            await api.deleteCutterPurchaseLot(lotNo);
+            await refreshProcessData(process || 'cutter');
+            await refreshModuleData('inbound');
+        } catch (err) {
+            alert(err.message || 'Failed to delete cutter purchase');
+        }
+    };
+
     const getActions = (row) => [
         {
             label: 'Reprint',
@@ -1408,44 +1637,72 @@ export function ReceiveHistoryTable() {
                 label: 'Edit',
                 icon: <Edit2 className="w-4 h-4" />,
                 onClick: () => openReceiveEditor(row),
+                disabled: !canEdit,
+                disabledReason: 'You do not have permission to edit receive records.',
             },
             {
                 label: 'Delete',
                 icon: <Trash2 className="w-4 h-4" />,
                 onClick: () => handleDeleteReceiveRow(row),
                 variant: 'destructive',
+                disabled: !canDelete,
+                disabledReason: 'You do not have permission to delete receive records.',
             },
         ] : []),
     ];
 
-    const getChallanActions = (challan) => ([
-        {
-            label: 'Print',
-            icon: <Printer className="w-4 h-4" />,
-            onClick: () => handleChallanPrint(challan),
-        },
-        {
-            label: 'Export CSV',
-            icon: <Download className="w-4 h-4" />,
-            onClick: () => handleChallanExport(challan),
-        },
-        {
-            label: 'Edit',
-            icon: <Edit2 className="w-4 h-4" />,
-            onClick: () => handleEditChallan(challan),
-        },
-        {
-            label: 'View Log',
-            icon: <History className="w-4 h-4" />,
-            onClick: () => setLogChallan(challan),
-        },
-        {
-            label: 'Delete',
-            icon: <Trash2 className="w-4 h-4" />,
-            onClick: () => handleDeleteChallan(challan),
-            variant: 'destructive',
-        },
-    ]);
+    const getChallanActions = (challan) => {
+        const base = [
+            {
+                label: 'Print',
+                icon: <Printer className="w-4 h-4" />,
+                onClick: () => handleChallanPrint(challan),
+            },
+            {
+                label: 'Export CSV',
+                icon: <Download className="w-4 h-4" />,
+                onClick: () => handleChallanExport(challan),
+            },
+            {
+                label: 'View Log',
+                icon: <History className="w-4 h-4" />,
+                onClick: () => setLogChallan(challan),
+            },
+        ];
+
+        if (process === 'cutter' && isCutterPurchaseLot(challan?.lotNo)) {
+            return [
+                ...base,
+                {
+                    label: 'Delete Cutter Purchase',
+                    icon: <Trash2 className="w-4 h-4" />,
+                    onClick: () => handleDeleteCutterPurchase(challan),
+                    variant: 'destructive',
+                    disabled: !canDeleteCutterPurchase,
+                    disabledReason: 'You need delete access for both Receive (Cutter) and Inbound.',
+                },
+            ];
+        }
+
+        return [
+            ...base,
+            {
+                label: 'Edit',
+                icon: <Edit2 className="w-4 h-4" />,
+                onClick: () => handleEditChallan(challan),
+                disabled: !canEdit,
+                disabledReason: 'You do not have permission to edit receive challans.',
+            },
+            {
+                label: 'Delete',
+                icon: <Trash2 className="w-4 h-4" />,
+                onClick: () => handleDeleteChallan(challan),
+                variant: 'destructive',
+                disabled: !canDelete,
+                disabledReason: 'You do not have permission to delete receive challans.',
+            },
+        ];
+    };
 
     const holoEditTotals = useMemo(() => {
         if (process !== 'holo' || !receiveDraft) return null;
@@ -1482,11 +1739,16 @@ export function ReceiveHistoryTable() {
             exportData = history.map(row => {
                 const piece = db.inbound_items?.find(p => p.id === row.pieceId);
                 const item = db.items?.find(i => i.id === piece?.itemId);
+                const resolvedCut = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || resolvePieceCutName(piece) || '—';
+                const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                const resolvedTwist = resolvePieceTwistName(piece) || '—';
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
                     item: item?.name || '—',
                     piece: row.pieceId || '—',
-                    cut: row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '—',
+                    cut: resolvedCut,
+                    yarn: resolvedYarn,
+                    twist: resolvedTwist,
                     barcode: row.barcode || '—',
                     machine: row.machineNo || '—',
                     employee: row.operator?.name || '—',
@@ -1498,8 +1760,10 @@ export function ReceiveHistoryTable() {
             columns = [
                 { key: 'date', header: 'Date' },
                 { key: 'item', header: 'Item' },
-                { key: 'cut', header: 'Cut' },
                 { key: 'piece', header: 'Piece' },
+                { key: 'cut', header: 'Cut' },
+                { key: 'yarn', header: 'Yarn' },
+                { key: 'twist', header: 'Twist' },
                 { key: 'barcode', header: 'Barcode' },
                 { key: 'machine', header: 'Machine' },
                 { key: 'employee', header: 'Employee' },
@@ -1623,7 +1887,7 @@ export function ReceiveHistoryTable() {
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 10 : process === 'holo' ? 14 : 17;
+    const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 14 : 17;
 
     return (
         <Card>
@@ -1660,7 +1924,7 @@ export function ReceiveHistoryTable() {
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                         <div className="space-y-1">
                             <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
                             <input
@@ -1711,12 +1975,15 @@ export function ReceiveHistoryTable() {
                                                 <TableHead>Item</TableHead>
                                                 <TableHead>Piece</TableHead>
                                                 <TableHead>Cut</TableHead>
+                                                <TableHead>Yarn</TableHead>
+                                                <TableHead>Twist</TableHead>
                                                 <TableHead>Barcode</TableHead>
                                                 <TableHead>Machine</TableHead>
                                                 <TableHead>Employee</TableHead>
                                                 <TableHead className="text-right">Net Wt (kg)</TableHead>
                                                 <TableHead className="text-right">Bobbin Qty</TableHead>
                                                 <TableHead>Bobbin</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1735,6 +2002,7 @@ export function ReceiveHistoryTable() {
                                                 <TableHead>Operator</TableHead>
                                                 <TableHead>Helper</TableHead>
                                                 <TableHead>Notes</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1756,6 +2024,7 @@ export function ReceiveHistoryTable() {
                                                 <TableHead>Machine</TableHead>
                                                 <TableHead>Operator</TableHead>
                                                 <TableHead>Notes</TableHead>
+                                                <TableHead>Added By</TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
                                             </>
                                         )}
@@ -1770,13 +2039,18 @@ export function ReceiveHistoryTable() {
                                                 const infoItems = getCutterReceiveInfo(r);
                                                 const piece = db.inbound_items?.find(p => p.id === r.pieceId);
                                                 const item = db.items?.find(i => i.id === piece?.itemId);
+                                                const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
+                                                const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                                                const resolvedTwist = resolvePieceTwistName(piece) || '—';
                                                 const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                 return (
                                                     <TableRow key={r.id}>
                                                         <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
                                                         <TableCell>{item?.name || '—'}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                        <TableCell>{r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</TableCell>
+                                                        <TableCell>{resolvedCut}</TableCell>
+                                                        <TableCell>{resolvedYarn}</TableCell>
+                                                        <TableCell>{resolvedTwist}</TableCell>
                                                         <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
                                                         <TableCell>{r.machineNo || '—'}</TableCell>
                                                         <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
@@ -1799,6 +2073,9 @@ export function ReceiveHistoryTable() {
                                                         </TableCell>
                                                         <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
                                                         <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );
@@ -1824,6 +2101,9 @@ export function ReceiveHistoryTable() {
                                                         <TableCell>{r.operator?.name || '—'}</TableCell>
                                                         <TableCell>{r.helper?.name || '—'}</TableCell>
                                                         <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );
@@ -1855,6 +2135,9 @@ export function ReceiveHistoryTable() {
                                                         <TableCell>{getConingMachineName(r)}</TableCell>
                                                         <TableCell>{r.operator?.name || '—'}</TableCell>
                                                         <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                        </TableCell>
                                                         <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
                                                     </TableRow>
                                                 );
@@ -1876,6 +2159,9 @@ export function ReceiveHistoryTable() {
                                     if (process === 'cutter') {
                                         const piece = db.inbound_items?.find(p => p.id === r.pieceId);
                                         const item = db.items?.find(i => i.id === piece?.itemId);
+                                        const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
+                                        const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                                        const resolvedTwist = resolvePieceTwistName(piece) || '—';
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
@@ -1892,9 +2178,12 @@ export function ReceiveHistoryTable() {
                                                             <div className="text-[10px] text-muted-foreground uppercase">{r.bobbinQuantity} bobbins</div>
                                                         </div>
                                                     </div>
-                                                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                        <span>Cut: {r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || '—'}</span>
-                                                        <span>Mac: {r.machineNo || '—'}</span>
+                                                    <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                                        <div className="flex items-center justify-between">
+                                                            <span>Cut: {resolvedCut}</span>
+                                                            <span>Mac: {r.machineNo || '—'}</span>
+                                                        </div>
+                                                        <div>Yarn: {resolvedYarn} • Twist: {resolvedTwist}</div>
                                                     </div>
                                                 </div>
                                                 <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">

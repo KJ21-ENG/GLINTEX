@@ -4,7 +4,7 @@ import {
     Button, Input, Select, Card, CardContent, Badge, Label
 } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
-import { formatKg, todayISO } from '../../utils';
+import { formatKg, todayISO, estimateWeightFromCount } from '../../utils';
 import {
     Trash2, Package, ChevronRight, Keyboard, ScanLine, Plus,
     Loader2, AlertCircle, CheckCircle2
@@ -363,7 +363,7 @@ export function MobileDispatchView({
                             <Input
                                 placeholder="Enter barcode manually..."
                                 value={manualBarcode}
-                                onChange={e => setManualBarcode(e.target.value)}
+                                onChange={e => setManualBarcode(e.target.value.toUpperCase())}
                                 className="text-center text-lg"
                                 autoFocus
                             />
@@ -377,6 +377,7 @@ export function MobileDispatchView({
                     <BarcodeScanner
                         onScan={handleBarcodeScan}
                         className="h-full"
+                        disabled={lookingUp !== null}
                     />
                 )}
 
@@ -538,7 +539,7 @@ export function MobileDispatchView({
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {/* Dispatch Mode Toggle - Full Width */}
                             {selectedItem?.availableCount > 0 && (
                                 <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
@@ -577,11 +578,14 @@ export function MobileDispatchView({
                                         onChange={e => {
                                             const val = e.target.value;
                                             const intVal = parseInt(val) || 0;
-                                            const avgWeight = selectedItem.avgWeightPerPiece || 0;
-                                            const fullMatch = intVal === (selectedItem?.availableCount || 0) && selectedItem?.availableWeight;
-                                            const estimatedWeight = fullMatch
-                                                ? Number(selectedItem.availableWeight).toFixed(3)
-                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '');
+                                            const estimatedWeight = estimateWeightFromCount({
+                                                count: intVal,
+                                                availableCount: selectedItem?.availableCount,
+                                                availableWeight: selectedItem?.availableWeight,
+                                                avgWeightPerPiece: selectedItem?.avgWeightPerPiece,
+                                                totalWeight: selectedItem?.weight,
+                                                totalCount: selectedItem?.totalCount,
+                                            });
                                             setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
                                         }}
                                         max={selectedItem?.availableCount}
@@ -661,7 +665,7 @@ export function MobileDispatchView({
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                                 <Label>Date</Label>
                                 <Input
@@ -695,11 +699,14 @@ export function MobileDispatchView({
                                                 onChange={e => {
                                                     const nextCount = e.target.value;
                                                     const intVal = parseInt(nextCount) || 0;
-                                                    const avgWeight = item.avgWeightPerPiece || 0;
-                                                    const fullMatch = intVal === (item.availableCount || 0) && item.availableWeight;
-                                                    const nextWeight = fullMatch
-                                                        ? Number(item.availableWeight).toFixed(3)
-                                                        : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : item.weight);
+                                                    const nextWeight = estimateWeightFromCount({
+                                                        count: intVal,
+                                                        availableCount: item.availableCount,
+                                                        availableWeight: item.availableWeight,
+                                                        avgWeightPerPiece: item.avgWeightPerPiece,
+                                                        totalWeight: item.totalWeight,
+                                                        totalCount: item.totalCount,
+                                                    }) || item.weight;
                                                     setBulkItems(prev => prev.map(i => (
                                                         i.stageItemId === item.stageItemId
                                                             ? { ...i, count: nextCount, weight: nextWeight }

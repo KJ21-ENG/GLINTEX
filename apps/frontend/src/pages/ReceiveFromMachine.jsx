@@ -4,6 +4,8 @@ import { ManualReceiveForm, HoloReceiveForm, ConingReceiveForm, CutterReceiveFor
 import { Button } from '../components/ui';
 import { sendSummaryWhatsApp } from '../api/client';
 import { Send, Calendar } from 'lucide-react';
+import { useStagePermission } from '../hooks/usePermission';
+import AccessDenied from '../components/common/AccessDenied';
 
 function getTodayISO() {
   return new Date().toISOString().split('T')[0];
@@ -18,7 +20,10 @@ function formatDateDisplay(dateStr) {
 }
 
 export function ReceiveFromMachine() {
-  const { process } = useInventory();
+  const { process, ensureModuleData } = useInventory();
+  const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
+  const { canRead, canWrite, canEdit, canDelete } = useStagePermission('receive', stage);
+  const readOnly = canRead && !canWrite;
   const [cutterMode, setCutterMode] = useState('scan');
   const [sendingSum, setSendingSum] = useState(false);
   const [sumMessage, setSumMessage] = useState(null);
@@ -32,6 +37,12 @@ export function ReceiveFromMachine() {
       setCutterMode('scan');
     }
   }, [process]);
+
+  useEffect(() => {
+    if (canRead) {
+      ensureModuleData('process', { process: stage });
+    }
+  }, [canRead, ensureModuleData, stage]);
 
   // Close date picker on outside click
   useEffect(() => {
@@ -77,11 +88,20 @@ export function ReceiveFromMachine() {
     setShowDatePicker(false);
   };
 
+  if (!canRead) {
+    return (
+      <div className="space-y-6 fade-in">
+        <h1 className="text-2xl font-bold tracking-tight">Receive from Machine</h1>
+        <AccessDenied message="You do not have access to this stage. Select another stage or contact an administrator." />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight">Receive from Machine</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {sumMessage && (
             <span className={`text-sm ${sumMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
               {sumMessage.text}
@@ -98,7 +118,7 @@ export function ReceiveFromMachine() {
             size="sm"
             onClick={handleSendSummary}
             onContextMenu={handleRightClick}
-            disabled={sendingSum}
+            disabled={sendingSum || readOnly}
             className="flex items-center gap-2"
             title="Left-click to send, Right-click to change date"
           >
@@ -133,28 +153,35 @@ export function ReceiveFromMachine() {
         </div>
       )}
 
-      {process === 'holo' ? (
-        <HoloReceiveForm />
-      ) : process === 'coning' ? (
-        <ConingReceiveForm />
-      ) : process === 'cutter' ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            <Button variant={cutterMode === 'scan' ? 'default' : 'outline'} onClick={() => setCutterMode('scan')} className="flex-1 sm:flex-none">
-              Manual / Barcode
-            </Button>
-            <Button variant={cutterMode === 'csv' ? 'default' : 'outline'} onClick={() => setCutterMode('csv')} className="flex-1 sm:flex-none">
-              CSV Upload
-            </Button>
-          </div>
-          {cutterMode === 'csv' ? <CutterCsvUpload /> : <CutterReceiveForm />}
+      {readOnly ? (
+        <div className="rounded-md border p-4 text-sm text-muted-foreground">
+          You can view receive data, but you cannot create or edit receives for this stage.
         </div>
       ) : (
-        <ManualReceiveForm />
+        <>
+          {process === 'holo' ? (
+            <HoloReceiveForm />
+          ) : process === 'coning' ? (
+            <ConingReceiveForm />
+          ) : process === 'cutter' ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button variant={cutterMode === 'scan' ? 'default' : 'outline'} onClick={() => setCutterMode('scan')} className="flex-1 sm:flex-none">
+                  Manual / Barcode
+                </Button>
+                <Button variant={cutterMode === 'csv' ? 'default' : 'outline'} onClick={() => setCutterMode('csv')} className="flex-1 sm:flex-none">
+                  CSV Upload
+                </Button>
+              </div>
+              {cutterMode === 'csv' ? <CutterCsvUpload /> : <CutterReceiveForm />}
+            </div>
+          ) : (
+            <ManualReceiveForm />
+          )}
+        </>
       )}
 
-      <ReceiveHistoryTable />
+      <ReceiveHistoryTable canEdit={canEdit} canDelete={canDelete} />
     </div>
   );
 }
-

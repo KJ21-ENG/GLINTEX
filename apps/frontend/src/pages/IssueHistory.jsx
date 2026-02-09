@@ -9,9 +9,10 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
+import { UserBadge } from '../components/common/UserBadge';
 
-export function IssueHistory({ db, refreshDb }) {
-  const { process } = useInventory();
+export function IssueHistory({ db, canEdit = false, canDelete = false }) {
+  const { process, patchIssueRecord, refreshProcessData } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -56,13 +57,14 @@ export function IssueHistory({ db, refreshDb }) {
   };
 
   const handleDelete = async (issueId) => {
+    if (!canDelete) return;
     if (!confirm('Are you sure you want to delete this issue record? This will make the pieces available again for re-issuing.')) {
       return;
     }
     setDeletingId(issueId);
     try {
       await api.deleteIssueToMachine(issueId, process);
-      await refreshDb();
+      await refreshProcessData(process);
       alert('Issue record deleted.');
     } catch (err) {
       alert(err.message || 'Failed to delete issue record');
@@ -180,6 +182,7 @@ export function IssueHistory({ db, refreshDb }) {
       boxId: firstRef.boxId || '',
       crates,
       cratesTouched: false,
+      metaTouched: false,
     });
   };
 
@@ -190,7 +193,14 @@ export function IssueHistory({ db, refreshDb }) {
   };
 
   const updateIssueDraftField = (field, value) => {
-    setIssueDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+    setIssueDraft((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [field]: value };
+      if (process === 'coning' && ['coneTypeId', 'wrapperId', 'boxId'].includes(field)) {
+        next.metaTouched = true;
+      }
+      return next;
+    });
   };
 
   const handleAddPiece = () => {
@@ -434,6 +444,7 @@ export function IssueHistory({ db, refreshDb }) {
     }
     setSavingIssue(true);
     try {
+      let updatedIssue = null;
       if (process === 'cutter') {
         const payload = {
           date: issueDraft.date,
@@ -445,7 +456,8 @@ export function IssueHistory({ db, refreshDb }) {
         if (!editingIssue.hasReceives && issueDraft.piecesTouched) {
           payload.pieceIds = issueDraft.pieceIds;
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToCutterMachine || res?.issueToMachine || null;
       } else if (process === 'holo') {
         const payload = {
           date: issueDraft.date,
@@ -467,7 +479,8 @@ export function IssueHistory({ db, refreshDb }) {
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToHoloMachine || null;
       } else {
         const payload = {
           date: issueDraft.date,
@@ -479,6 +492,11 @@ export function IssueHistory({ db, refreshDb }) {
         if (!editingIssue.hasReceives) {
           if (issueDraft.requiredPerConeNetWeight !== '') {
             payload.requiredPerConeNetWeight = Number(issueDraft.requiredPerConeNetWeight || 0);
+          }
+          if (issueDraft.metaTouched) {
+            payload.coneTypeId = issueDraft.coneTypeId || null;
+            payload.wrapperId = issueDraft.wrapperId || null;
+            payload.boxId = issueDraft.boxId || null;
           }
           if (issueDraft.cratesTouched) {
             payload.crates = issueDraft.crates.map(c => ({
@@ -492,9 +510,14 @@ export function IssueHistory({ db, refreshDb }) {
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        updatedIssue = res?.issueToConingMachine || null;
       }
-      await refreshDb();
+      if (process === 'coning' && updatedIssue) {
+        patchIssueRecord(process, updatedIssue);
+      } else {
+        await refreshProcessData(process);
+      }
       closeIssueEditor();
       alert('Issue record updated.');
     } catch (err) {
@@ -548,9 +571,9 @@ export function IssueHistory({ db, refreshDb }) {
         let bobbinType = '';
         let bobbinQty = 0;
         let cut = '';
-        let netWeight = 0;
         let totalRolls = row.metallicBobbins || 0;
         let totalWeight = row.metallicBobbinsWeight || 0;
+        let issuedWeight = 0;
 
         try {
           const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
@@ -558,6 +581,7 @@ export function IssueHistory({ db, refreshDb }) {
             // Sum up bobbins from all refs
             refs.forEach(ref => {
               bobbinQty += Number(ref.issuedBobbins || 0);
+              issuedWeight += Number(ref.issuedBobbinWeight || 0);
             });
 
             // Get cut - first check direct cutId (Opening Stock), then cutter source row
@@ -569,10 +593,12 @@ export function IssueHistory({ db, refreshDb }) {
             const cutterRow = db.receive_from_cutter_machine_rows?.find(r => !r.isDeleted && r.id === firstRef.rowId);
             if (cutterRow) {
               bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-              netWeight += Number(cutterRow.netWt || 0);
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+
+        const resolvedBobbinQty = bobbinQty || row.metallicBobbins || 0;
+        const resolvedNetWeight = issuedWeight || totalWeight || 0;
 
         data = {
           lotNo: lotLabel,
@@ -582,10 +608,10 @@ export function IssueHistory({ db, refreshDb }) {
           yarnName,
           twistName,
           bobbinType,
-          bobbinQty,
+          bobbinQty: resolvedBobbinQty,
           totalRolls,
           totalWeight,
-          netWeight: netWeight || totalWeight,
+          netWeight: resolvedNetWeight,
           metallicBobbins: row.metallicBobbins,
           metallicBobbinsWeight: row.metallicBobbinsWeight,
           yarnKg: row.yarnKg,
@@ -631,6 +657,8 @@ export function IssueHistory({ db, refreshDb }) {
               totalWeight += Number(ref.issueWeight || 0);
             });
             netWeight = totalWeight;
+            grossWeight = totalWeight;
+            tareWeight = 0;
 
             const resolved = resolveConingTrace(row, traceContext);
             cut = resolved.cutName === '—' ? '' : resolved.cutName;
@@ -641,6 +669,8 @@ export function IssueHistory({ db, refreshDb }) {
             twist = twistName;
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+        if (!grossWeight && totalWeight) grossWeight = totalWeight;
+        if (!tareWeight) tareWeight = 0;
 
         data = {
           lotNo: lotLabel,
@@ -766,6 +796,68 @@ export function IssueHistory({ db, refreshDb }) {
     return map;
   }, [db.cuts]);
 
+  const twistNameById = useMemo(() => {
+    const map = new Map();
+    (db.twists || []).forEach(t => map.set(t.id, t.name || '—'));
+    return map;
+  }, [db.twists]);
+
+  const yarnNameById = useMemo(() => {
+    const map = new Map();
+    (db.yarns || []).forEach(y => map.set(y.id, y.name || '—'));
+    return map;
+  }, [db.yarns]);
+
+  const resolvePieceCutName = (piece) => {
+    if (!piece) return '';
+    const cutVal = piece.cut;
+    return piece.cutName
+      || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
+      || piece.cutMaster?.name
+      || (piece.cutId ? cutNameById.get(piece.cutId) : '')
+      || '';
+  };
+
+  const resolvePieceYarnName = (piece) => {
+    if (!piece) return '';
+    const yarnVal = piece.yarn;
+    return piece.yarnName
+      || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name)
+      || (piece.yarnId ? yarnNameById.get(piece.yarnId) : '')
+      || '';
+  };
+
+  const resolvePieceTwistName = (piece) => {
+    if (!piece) return '';
+    const twistVal = piece.twist;
+    return piece.twistName
+      || (typeof twistVal === 'string' ? twistVal : twistVal?.name)
+      || (piece.twistId ? twistNameById.get(piece.twistId) : '')
+      || '';
+  };
+
+  const resolveCutterIssueDetails = (row) => {
+    if (!row) return { cutName: '—', yarnName: '—', twistName: '—' };
+    const directCut = cutNameById.get(row.cutId) || '';
+    const pieceIds = parseIssuePieceIds(row);
+    const firstPiece = db.inbound_items?.find(p => p.id === pieceIds[0]);
+    const fallbackCut = resolvePieceCutName(firstPiece);
+    const fallbackYarn = resolvePieceYarnName(firstPiece);
+    const fallbackTwist = resolvePieceTwistName(firstPiece);
+    return {
+      cutName: directCut || fallbackCut || '—',
+      yarnName: fallbackYarn || '—',
+      twistName: fallbackTwist || '—',
+    };
+  };
+
+  const resolveIssueTraceNames = (row) => {
+    if (!row) return { cutName: '—', yarnName: '—', twistName: '—' };
+    if (process === 'holo') return resolveHoloTrace(row, holoTraceContext);
+    if (process === 'coning') return resolveConingTrace(row, traceContext);
+    return resolveCutterIssueDetails(row);
+  };
+
   const issues = useMemo(() => {
     let rows = [];
     if (process === 'holo') {
@@ -820,24 +912,14 @@ export function IssueHistory({ db, refreshDb }) {
     return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
   }, [db, process, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
 
-  const twistNameById = useMemo(() => {
-    const map = new Map();
-    (db.twists || []).forEach(t => map.set(t.id, t.name || '—'));
-    return map;
-  }, [db.twists]);
-
-  const yarnNameById = useMemo(() => {
-    const map = new Map();
-    (db.yarns || []).forEach(y => map.set(y.id, y.name || '—'));
-    return map;
-  }, [db.yarns]);
-
   const getActions = (row) => {
     const actions = [
       {
         label: 'Edit',
         icon: <Edit2 className="w-4 h-4" />,
         onClick: () => openIssueEditor(row),
+        disabled: !canEdit,
+        disabledReason: 'You do not have permission to edit issue records.',
       },
       {
         label: 'Reprint',
@@ -860,7 +942,10 @@ export function IssueHistory({ db, refreshDb }) {
       icon: <Trash2 className="w-4 h-4" />,
       onClick: () => handleDelete(row.id),
       variant: 'destructive',
-      disabled: deletingId === row.id,
+      disabled: deletingId === row.id || !canDelete,
+      disabledReason: !canDelete
+        ? 'You do not have permission to delete issue records.'
+        : 'Deleting in progress.',
     });
 
     return actions;
@@ -879,20 +964,24 @@ export function IssueHistory({ db, refreshDb }) {
       };
 
       if (process === 'cutter') {
+        const resolved = resolveCutterIssueDetails(r);
         return {
           ...baseData,
           pieceIds: Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || ''),
-          cut: cutNameById.get(r.cutId) || '—',
+          cut: resolved.cutName,
+          yarn: resolved.yarnName,
+          twist: resolved.twistName,
           qty: r.count || 0,
           weight: formatKg(r.totalWeight),
         };
       } else if (process === 'holo') {
+        const resolved = resolveHoloTrace(r, holoTraceContext);
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
-          cut: (resolveHoloTrace(r, holoTraceContext).cutName || '—'),
-          yarnName: yarnNameById.get(r.yarnId) || '—',
-          twistName: twistNameById.get(r.twistId) || '—',
+          cut: resolved.cutName || '—',
+          yarnName: resolved.yarnName || '—',
+          twistName: resolved.twistName || '—',
           metallicBobbins: r.metallicBobbins || 0,
           metallicBobbinsWeight: formatKg(r.metallicBobbinsWeight),
           yarnKg: formatKg(r.yarnKg),
@@ -900,12 +989,13 @@ export function IssueHistory({ db, refreshDb }) {
         };
       } else {
         // Coning - resolve cut/yarn from referenced source rows
-        const resolved = r ? resolveConingTrace(r, traceContext) : { cutName: '—', yarnName: '—' };
+        const resolved = r ? resolveConingTrace(r, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
         return {
           ...baseData,
           lotNo: lotLabelFor(r),
           cut: resolved.cutName,
           yarn: resolved.yarnName,
+          twist: resolved.twistName,
           coneType: resolveConingConeTypeName(r) || '—',
           perConeNetG: Number.isFinite(Number(r.requiredPerConeNetWeight)) ? Number(r.requiredPerConeNetWeight) : '',
           rollsIssued: r.count || r.rollsIssued || 0,
@@ -921,6 +1011,8 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'itemName', header: 'Item' },
         { key: 'pieceIds', header: 'Piece IDs' },
         { key: 'cut', header: 'Cut' },
+        { key: 'yarn', header: 'Yarn' },
+        { key: 'twist', header: 'Twist' },
         { key: 'machineName', header: 'Machine' },
         { key: 'operatorName', header: 'Operator' },
         { key: 'qty', header: 'Qty' },
@@ -934,10 +1026,10 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'itemName', header: 'Item' },
         { key: 'lotNo', header: 'Lot' },
         { key: 'cut', header: 'Cut' },
-        { key: 'machineName', header: 'Machine' },
-        { key: 'operatorName', header: 'Operator' },
         { key: 'yarnName', header: 'Yarn' },
         { key: 'twistName', header: 'Twist' },
+        { key: 'machineName', header: 'Machine' },
+        { key: 'operatorName', header: 'Operator' },
         { key: 'metallicBobbins', header: 'Metallic Bobbins' },
         { key: 'metallicBobbinsWeight', header: 'Met. Bob. Wt (kg)' },
         { key: 'yarnKg', header: 'Yarn Wt (kg)' },
@@ -952,6 +1044,7 @@ export function IssueHistory({ db, refreshDb }) {
         { key: 'lotNo', header: 'Lot' },
         { key: 'cut', header: 'Cut' },
         { key: 'yarn', header: 'Yarn' },
+        { key: 'twist', header: 'Twist' },
         { key: 'coneType', header: 'Cone Type' },
         { key: 'perConeNetG', header: 'Per Cone (g)' },
         { key: 'machineName', header: 'Machine' },
@@ -965,6 +1058,8 @@ export function IssueHistory({ db, refreshDb }) {
     const today = new Date().toISOString().split('T')[0];
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
+
+  const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 16 : 15;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1075,12 +1170,15 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Item</TableHead>
                   <TableHead>Piece</TableHead>
                   <TableHead>Cut</TableHead>
+                  <TableHead>Yarn</TableHead>
+                  <TableHead>Twist</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Weight (kg)</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1089,16 +1187,18 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Lot</TableHead>
-                  <TableHead>Machine</TableHead>
-                  <TableHead>Operator</TableHead>
+                  <TableHead>Cut</TableHead>
                   <TableHead>Yarn</TableHead>
                   <TableHead>Twist</TableHead>
+                  <TableHead>Machine</TableHead>
+                  <TableHead>Operator</TableHead>
                   <TableHead>Metallic Bobbins</TableHead>
                   <TableHead>Met. Bob. Wt (kg)</TableHead>
                   <TableHead>Yarn Wt (kg)</TableHead>
                   <TableHead>Rolls Prod. Est.</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1107,6 +1207,9 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead>Lot</TableHead>
+                  <TableHead>Cut</TableHead>
+                  <TableHead>Yarn</TableHead>
+                  <TableHead>Twist</TableHead>
                   <TableHead>Machine</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Cone Type</TableHead>
@@ -1114,6 +1217,7 @@ export function IssueHistory({ db, refreshDb }) {
                   <TableHead>Rolls Issued</TableHead>
                   <TableHead>Barcode</TableHead>
                   <TableHead>Note</TableHead>
+                  <TableHead>Added By</TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1121,60 +1225,78 @@ export function IssueHistory({ db, refreshDb }) {
           </TableHeader>
           <TableBody>
             {issues.length === 0 ? (
-              <TableRow><TableCell colSpan={14} className="text-center py-4 text-muted-foreground">No issue records found for {process}.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No issue records found for {process}.</TableCell></TableRow>
             ) : (
-              issues.map((r) => (
-                <TableRow key={r.id}>
-                  {process === 'cutter' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
-                      <TableCell>{cutNameById.get(r.cutId) || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{r.count}</TableCell>
-                      <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  {process === 'holo' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{yarnNameById.get(r.yarnId)}</TableCell>
-                      <TableCell>{twistNameById.get(r.twistId)}</TableCell>
-                      <TableCell>{r.metallicBobbins || 0}</TableCell>
-                      <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
-                      <TableCell>{formatKg(r.yarnKg)}</TableCell>
-                      <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  {process === 'coning' && (
-                    <>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                      <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                      <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                      <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                      <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                      <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
-                      <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
-                      <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                    </>
-                  )}
-                  <TableCell>
-                    <ActionMenu actions={getActions(r)} />
-                  </TableCell>
-                </TableRow>
-              ))
+              issues.map((r) => {
+                const resolved = resolveIssueTraceNames(r);
+                return (
+                  <TableRow key={r.id}>
+                    {process === 'cutter' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{r.count}</TableCell>
+                        <TableCell>{formatKg(r.totalWeight)}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    {process === 'holo' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{r.metallicBobbins || 0}</TableCell>
+                        <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
+                        <TableCell>{formatKg(r.yarnKg)}</TableCell>
+                        <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    {process === 'coning' && (
+                      <>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
+                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
+                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
+                        <TableCell>{resolved.cutName || '—'}</TableCell>
+                        <TableCell>{resolved.yarnName || '—'}</TableCell>
+                        <TableCell>{resolved.twistName || '—'}</TableCell>
+                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
+                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
+                        <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
+                        <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
+                        <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
+                        <TableCell>
+                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                        </TableCell>
+                      </>
+                    )}
+                    <TableCell>
+                      <ActionMenu actions={getActions(r)} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -1189,6 +1311,7 @@ export function IssueHistory({ db, refreshDb }) {
         ) : (
           issues.map((r) => {
             const pieceDisplay = Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || lotLabelFor(r) || '—');
+            const resolved = resolveIssueTraceNames(r);
             return (
               <div key={r.id} className="border rounded-lg p-4 bg-card shadow-sm">
                 <div className="flex justify-between items-start gap-2">
@@ -1199,6 +1322,9 @@ export function IssueHistory({ db, refreshDb }) {
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {formatDateDDMMYYYY(r.date)} • {itemNameById.get(r.itemId)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Cut: {resolved.cutName || '—'} • Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}
                     </p>
                     {process === 'coning' && (
                       <p className="text-xs text-muted-foreground mt-1">
@@ -1467,7 +1593,7 @@ export function IssueHistory({ db, refreshDb }) {
                         issueDraft.crates.map((crate) => (
                           <div key={crate.rowId} className="border rounded p-2 space-y-2">
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span className="font-mono">Row {crate.rowId}</span>
+                              <span className="font-mono">Barcode {crate.barcode || crate.rowId}</span>
                               {crate.pieceId ? <span>Piece {crate.pieceId}</span> : null}
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -1642,7 +1768,7 @@ export function IssueHistory({ db, refreshDb }) {
                         issueDraft.crates.map((crate) => (
                           <div key={crate.rowId} className="border rounded p-2 space-y-2">
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span className="font-mono">Row {crate.rowId}</span>
+                              <span className="font-mono">Barcode {crate.barcode || crate.rowId}</span>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                               <div className="space-y-1">

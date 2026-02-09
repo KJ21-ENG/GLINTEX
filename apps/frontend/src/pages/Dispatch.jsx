@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
@@ -7,13 +6,17 @@ import {
     Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge
 } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
+import { formatKg, todayISO, formatDateDDMMYYYY, estimateWeightFromCount } from '../utils';
 import { exportHistoryToExcel, exportHistoryToCsv } from '../services';
 import { Truck, Plus, Search, History, Package, X, ChevronRight, ChevronDown, Trash2, Printer, ScanLine, Download } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { printDispatchChallan } from '../utils/printDispatchChallan';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileDispatchView } from '../components/dispatch/MobileDispatchView';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -24,6 +27,8 @@ const STAGES = [
 
 export function Dispatch() {
     const { refreshDb, db } = useInventory();
+    const { canRead, canWrite, canDelete } = usePermission('dispatch');
+    const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [activeTab, setActiveTab] = useState('dispatch'); // 'dispatch' | 'history'
     const [useMobileMode, setUseMobileMode] = useState(false); // Manual toggle for mobile scanner mode
@@ -76,6 +81,7 @@ export function Dispatch() {
 
     // Load customers
     useEffect(() => {
+        if (!canRead) return;
         async function loadCustomers() {
             try {
                 const res = await api.listCustomers();
@@ -85,10 +91,11 @@ export function Dispatch() {
             }
         }
         loadCustomers();
-    }, []);
+    }, [canRead]);
 
     // Load available items when stage changes
     useEffect(() => {
+        if (!canRead) return;
         async function loadAvailableItems() {
             setLoadingItems(true);
             try {
@@ -104,7 +111,7 @@ export function Dispatch() {
         if (activeTab === 'dispatch') {
             loadAvailableItems();
         }
-    }, [selectedStage, activeTab]);
+    }, [canRead, selectedStage, activeTab]);
 
     useEffect(() => {
         setSelectedIds(new Set());
@@ -113,6 +120,7 @@ export function Dispatch() {
 
     // Load dispatch history
     useEffect(() => {
+        if (!canRead) return;
         async function loadDispatches() {
             setLoadingDispatches(true);
             try {
@@ -128,7 +136,7 @@ export function Dispatch() {
         if (activeTab === 'history') {
             loadDispatches();
         }
-    }, [activeTab]);
+    }, [canRead, activeTab]);
 
     // Filter items based on search
     const filteredItems = useMemo(() => {
@@ -232,6 +240,7 @@ export function Dispatch() {
     }
 
     function openDispatchModal(item) {
+        if (readOnly) return;
         setSelectedItem(item);
         // Default to count mode if item has piece count, otherwise weight
         const hasCount = item.availableCount > 0;
@@ -268,6 +277,7 @@ export function Dispatch() {
     }
 
     function openBulkDispatchModal() {
+        if (readOnly) return;
         if (selectedItems.length === 0) {
             alert('Select at least one item to dispatch');
             return;
@@ -291,34 +301,68 @@ export function Dispatch() {
     }
 
     function handleScanSubmit(e) {
+        if (readOnly) return;
         e.preventDefault();
-        const normalized = scanInput.trim().toUpperCase();
-        if (!normalized) return;
+        const rawInput = scanInput.trim().toUpperCase();
+        if (!rawInput) return;
         setScanInput('');
 
-        setScanQueue(prev => {
-            if (prev.some(entry => entry.barcode === normalized)) {
-                return prev;
-            }
+        // Split input by spaces, commas, newlines, or tabs to support bulk paste
+        const barcodes = rawInput
+            .split(/[\s,\t\n]+/)
+            .map(b => b.trim())
+            .filter(Boolean);
+
+        if (barcodes.length === 0) return;
+
+        // Process each barcode
+        const newEntries = [];
+        const foundItemIds = new Set();
+
+        for (const barcode of barcodes) {
+            // Check if already in queue
+            const alreadyInQueue = scanQueue.some(entry => entry.barcode === barcode) ||
+                newEntries.some(entry => entry.barcode === barcode);
+            if (alreadyInQueue) continue;
+
             const match = availableItems.find(item =>
-                (item.barcode || '').toUpperCase() === normalized ||
-                (item.legacyBarcode || '').toUpperCase() === normalized ||
-                (item.lotNo || '').toUpperCase() === normalized ||
-                (item.pieceId || '').toUpperCase() === normalized
+                (item.barcode || '').toUpperCase() === barcode ||
+                (item.legacyBarcode || '').toUpperCase() === barcode ||
+                (item.lotNo || '').toUpperCase() === barcode ||
+                (item.pieceId || '').toUpperCase() === barcode
             );
+
             if (!match) {
-                return [{ barcode: normalized, status: 'not_found', error: `Not found in ${selectedStage}` }, ...prev];
+                newEntries.push({ barcode, status: 'not_found', error: `Not found in ${selectedStage}` });
+            } else {
+                // Check if this item is already selected (by ID)
+                const alreadySelected = scanQueue.some(entry => entry.itemId === match.id) ||
+                    foundItemIds.has(match.id);
+                if (!alreadySelected) {
+                    newEntries.push({
+                        barcode,
+                        status: 'found',
+                        itemId: match.id,
+                        label: match.lotLabel || match.lotNo || match.pieceId || '—'
+                    });
+                    foundItemIds.add(match.id);
+                }
             }
-            if (prev.some(entry => entry.itemId === match.id)) {
-                return prev;
-            }
+        }
+
+        // Update selectedIds with all found items
+        if (foundItemIds.size > 0) {
             setSelectedIds(ids => {
                 const next = new Set(ids);
-                next.add(match.id);
+                foundItemIds.forEach(id => next.add(id));
                 return next;
             });
-            return [{ barcode: normalized, status: 'found', itemId: match.id, label: match.lotLabel || match.lotNo || match.pieceId || '—' }, ...prev];
-        });
+        }
+
+        // Add new entries to the queue (newest first)
+        if (newEntries.length > 0) {
+            setScanQueue(prev => [...newEntries.reverse(), ...prev]);
+        }
     }
 
     function clearScanQueue() {
@@ -326,6 +370,7 @@ export function Dispatch() {
     }
 
     async function handleCreateDispatch() {
+        if (readOnly) return;
         if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
             return;
@@ -401,6 +446,7 @@ export function Dispatch() {
     }
 
     async function handleCreateBulkDispatch() {
+        if (readOnly) return;
         if (!bulkForm.customerId) {
             alert('Please select a customer');
             return;
@@ -471,6 +517,7 @@ export function Dispatch() {
     }
 
     async function handleDeleteDispatch(challanNo) {
+        if (!canDelete) return;
         if (!confirm('Are you sure you want to cancel this challan? All items will be restored.')) return;
 
         try {
@@ -484,6 +531,7 @@ export function Dispatch() {
     }
 
     async function handleCreateCustomer() {
+        if (readOnly) return;
         if (!newCustomerForm.name.trim()) {
             alert('Customer name is required');
             return;
@@ -521,6 +569,7 @@ export function Dispatch() {
 
     // Handler for mobile dispatch view to create dispatch
     async function handleMobileDispatchCreate(dispatchData) {
+        if (readOnly) return null;
         const res = await api.createDispatch(dispatchData);
 
         const shouldPrint = confirm('Dispatch created successfully! Do you want to print the challan?');
@@ -540,6 +589,7 @@ export function Dispatch() {
     }
 
     async function handleMobileDispatchBulk(dispatchData) {
+        if (readOnly) return null;
         const res = await api.createDispatchBulk(dispatchData);
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
@@ -549,6 +599,7 @@ export function Dispatch() {
 
     // Handler for mobile dispatch view to add customer
     async function handleMobileAddCustomer(customerData) {
+        if (readOnly) return null;
         const res = await api.createCustomer(customerData);
         setCustomers(prev => [...prev, res.customer].sort((a, b) => a.name.localeCompare(b.name)));
         await refreshDb();
@@ -562,6 +613,15 @@ export function Dispatch() {
         return 'Pieces';
     };
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Dispatch</h1>
+                <AccessDenied message="You do not have access to dispatch. Contact an administrator to request access." />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 fade-in">
             {/* Header */}
@@ -572,6 +632,11 @@ export function Dispatch() {
                         Dispatch
                     </h1>
                     <p className="text-muted-foreground text-sm">Dispatch goods from any production stage</p>
+                    {readOnly && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Read-only access: dispatch creation is disabled. Deletions require delete permission.
+                        </p>
+                    )}
                 </div>
 
                 {/* Tab Toggle */}
@@ -677,8 +742,9 @@ export function Dispatch() {
                                         placeholder="Scan barcode..."
                                         value={scanInput}
                                         onChange={e => setScanInput(e.target.value)}
+                                        disabled={readOnly}
                                     />
-                                    <Button type="submit" variant="outline">Add</Button>
+                                    <Button type="submit" variant="outline" disabled={readOnly}>Add</Button>
                                 </form>
                                 {scanQueue.length > 0 && (
                                     <div className="flex flex-wrap gap-2">
@@ -726,7 +792,7 @@ export function Dispatch() {
                                             <Button
                                                 size="sm"
                                                 onClick={openBulkDispatchModal}
-                                                disabled={selectedIds.size === 0}
+                                                disabled={selectedIds.size === 0 || readOnly}
                                             >
                                                 Dispatch Selected
                                             </Button>
@@ -744,6 +810,7 @@ export function Dispatch() {
                                                         type="checkbox"
                                                         checked={filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.id))}
                                                         onChange={toggleSelectAllItems}
+                                                        disabled={readOnly}
                                                         className="h-4 w-4 rounded border-gray-300"
                                                     />
                                                 </TableHead>
@@ -779,6 +846,7 @@ export function Dispatch() {
                                                                 type="checkbox"
                                                                 checked={selectedIds.has(item.id)}
                                                                 onChange={() => toggleSelectItem(item.id)}
+                                                                disabled={readOnly}
                                                                 className="h-4 w-4 rounded border-gray-300"
                                                             />
                                                         </TableCell>
@@ -799,6 +867,7 @@ export function Dispatch() {
                                                             <Button
                                                                 size="sm"
                                                                 onClick={() => openDispatchModal(item)}
+                                                                disabled={readOnly}
                                                             >
                                                                 <ChevronRight className="w-4 h-4 mr-1" />
                                                                 Dispatch
@@ -839,6 +908,7 @@ export function Dispatch() {
                                                     size="sm"
                                                     className="mt-3 w-full"
                                                     onClick={() => openDispatchModal(item)}
+                                                    disabled={readOnly}
                                                 >
                                                     <ChevronRight className="w-4 h-4 mr-1" /> Dispatch
                                                 </Button>
@@ -936,19 +1006,20 @@ export function Dispatch() {
                                         <TableHead>Stage</TableHead>
                                         <TableHead>Items</TableHead>
                                         <TableHead className="text-right">Total Weight</TableHead>
+                                        <TableHead>Added By</TableHead>
                                         <TableHead className="w-[120px] text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {loadingDispatches ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center">
+                                            <TableCell colSpan={9} className="h-24 text-center">
                                                 Loading...
                                             </TableCell>
                                         </TableRow>
                                     ) : filteredDispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                                 No dispatches found
                                             </TableCell>
                                         </TableRow>
@@ -974,6 +1045,9 @@ export function Dispatch() {
                                                         </TableCell>
                                                         <TableCell className="text-sm">{d.items.length} items</TableCell>
                                                         <TableCell className="text-right font-medium">{formatKg(d.totalWeight)}</TableCell>
+                                                        <TableCell>
+                                                            <UserBadge user={d.createdByUser} timestamp={d.createdAt} />
+                                                        </TableCell>
                                                         <TableCell className="text-right whitespace-nowrap">
                                                             <Button
                                                                 size="sm"
@@ -984,20 +1058,25 @@ export function Dispatch() {
                                                             >
                                                                 <Printer className="w-4 h-4" />
                                                             </Button>
-                                                            <Button
-                                                                size="sm"
-                                                                variant="ghost"
-                                                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                                                onClick={(e) => { e.stopPropagation(); handleDeleteDispatch(d.challanNo); }}
-                                                                title="Delete Challan"
+                                                            <DisabledWithTooltip
+                                                                disabled={!canDelete}
+                                                                tooltip="You do not have permission to delete dispatches."
                                                             >
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                                    onClick={(e) => { e.stopPropagation(); handleDeleteDispatch(d.challanNo); }}
+                                                                    title="Delete Challan"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </Button>
+                                                            </DisabledWithTooltip>
                                                         </TableCell>
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={8} className="p-4">
+                                                            <TableCell colSpan={9} className="p-4">
                                                                 <div className="border rounded-md bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>
@@ -1057,9 +1136,14 @@ export function Dispatch() {
                                                     <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
                                                         <Printer className="w-4 h-4" />
                                                     </Button>
-                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.challanNo)}>
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </Button>
+                                                    <DisabledWithTooltip
+                                                        disabled={!canDelete}
+                                                        tooltip="You do not have permission to delete dispatches."
+                                                    >
+                                                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive" onClick={() => handleDeleteDispatch(d.challanNo)}>
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </DisabledWithTooltip>
                                                 </div>
                                             </div>
                                             <Button
@@ -1122,6 +1206,7 @@ export function Dispatch() {
                                     size="icon"
                                     onClick={() => setNewCustomerModalOpen(true)}
                                     title="Add New Customer"
+                                    disabled={readOnly}
                                 >
                                     <Plus className="w-4 h-4" />
                                 </Button>
@@ -1129,7 +1214,7 @@ export function Dispatch() {
                         </div>
 
                         {/* Dispatch Mode & Weight/Count Inputs */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {/* Dispatch Mode Toggle - Only for stages that support count */}
                             {selectedItem?.availableCount > 0 && (
                                 <div className="col-span-2 flex gap-4 border p-2 rounded-md bg-muted/20">
@@ -1168,11 +1253,14 @@ export function Dispatch() {
                                         onChange={e => {
                                             const val = e.target.value;
                                             const intVal = parseInt(val) || 0;
-                                            const avgWeight = selectedItem.avgWeightPerPiece || 0;
-                                            const fullMatch = intVal === (selectedItem?.availableCount || 0) && selectedItem?.availableWeight;
-                                            const estimatedWeight = fullMatch
-                                                ? Number(selectedItem.availableWeight).toFixed(3)
-                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : '');
+                                            const estimatedWeight = estimateWeightFromCount({
+                                                count: intVal,
+                                                availableCount: selectedItem?.availableCount,
+                                                availableWeight: selectedItem?.availableWeight,
+                                                avgWeightPerPiece: selectedItem?.avgWeightPerPiece,
+                                                totalWeight: selectedItem?.weight,
+                                                totalCount: selectedItem?.totalCount,
+                                            });
                                             setDispatchForm(prev => ({ ...prev, count: val, weight: estimatedWeight }));
                                         }}
                                         max={selectedItem?.availableCount}
@@ -1220,7 +1308,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateDispatch}
-                                disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight}
+                                disabled={submitting || !dispatchForm.customerId || !dispatchForm.weight || readOnly}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>
@@ -1251,13 +1339,14 @@ export function Dispatch() {
                                     size="icon"
                                     onClick={() => setNewCustomerModalOpen(true)}
                                     title="Add New Customer"
+                                    disabled={readOnly}
                                 >
                                     <Plus className="w-4 h-4" />
                                 </Button>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <Label>Date</Label>
                                 <Input
@@ -1303,11 +1392,14 @@ export function Dispatch() {
                                                         onChange={e => {
                                                             const nextCount = e.target.value;
                                                             const intVal = parseInt(nextCount) || 0;
-                                                            const avgWeight = item.avgWeightPerPiece || 0;
-                                                            const fullMatch = intVal === (item.availableCount || 0) && item.availableWeight;
-                                                            const nextWeight = fullMatch
-                                                                ? Number(item.availableWeight).toFixed(3)
-                                                                : (avgWeight > 0 ? (intVal * avgWeight).toFixed(3) : item.weight);
+                                                            const nextWeight = estimateWeightFromCount({
+                                                                count: intVal,
+                                                                availableCount: item.availableCount,
+                                                                availableWeight: item.availableWeight,
+                                                                avgWeightPerPiece: item.avgWeightPerPiece,
+                                                                totalWeight: item.totalWeight,
+                                                                totalCount: item.totalCount,
+                                                            }) || item.weight;
                                                             setBulkItems(prev => prev.map(i => (
                                                                 i.stageItemId === item.stageItemId
                                                                     ? { ...i, count: nextCount, weight: nextWeight }
@@ -1347,7 +1439,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateBulkDispatch}
-                                disabled={submitting || !bulkForm.customerId}
+                                disabled={submitting || !bulkForm.customerId || readOnly}
                             >
                                 {submitting ? 'Creating...' : 'Create Dispatch'}
                             </Button>
@@ -1390,7 +1482,7 @@ export function Dispatch() {
                             </Button>
                             <Button
                                 onClick={handleCreateCustomer}
-                                disabled={savingCustomer || !newCustomerForm.name.trim()}
+                                disabled={savingCustomer || !newCustomerForm.name.trim() || readOnly}
                             >
                                 {savingCustomer ? 'Saving...' : 'Add Customer'}
                             </Button>

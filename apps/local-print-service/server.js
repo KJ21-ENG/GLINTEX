@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { exec } = require('child_process');
+const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -10,10 +11,55 @@ const app = express();
 const PORT = 9090;
 const MAX_QUEUE = 100;
 const jobQueue = [];
+const PRINT_JOB_MIN_INTERVAL_MS = Number(process.env.PRINT_JOB_MIN_INTERVAL_MS || 800);
+const execAsync = promisify(exec);
+const fsPromises = fs.promises;
 
 const pushJob = (job) => {
     jobQueue.push(job);
     if (jobQueue.length > MAX_QUEUE) jobQueue.splice(0, jobQueue.length - MAX_QUEUE);
+};
+
+const pendingJobs = [];
+let isProcessing = false;
+let lastJobAt = 0;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const enqueuePrintJob = (jobFn) => new Promise((resolve, reject) => {
+    pendingJobs.push({ jobFn, resolve, reject });
+    processQueue();
+});
+
+const processQueue = async () => {
+    if (isProcessing) return;
+    isProcessing = true;
+    while (pendingJobs.length > 0) {
+        const { jobFn, resolve, reject } = pendingJobs.shift();
+        try {
+            const elapsed = Date.now() - lastJobAt;
+            if (elapsed < PRINT_JOB_MIN_INTERVAL_MS) {
+                await sleep(PRINT_JOB_MIN_INTERVAL_MS - elapsed);
+            }
+            const result = await jobFn();
+            lastJobAt = Date.now();
+            resolve(result);
+        } catch (err) {
+            lastJobAt = Date.now();
+            reject(err);
+        }
+    }
+    isProcessing = false;
+};
+
+const execCommand = async (command) => {
+    try {
+        return await execAsync(command);
+    } catch (error) {
+        const err = new Error(error?.stderr || error?.message || 'Failed to send print job');
+        err.details = error;
+        throw err;
+    }
 };
 
 // Middleware to set Chrome PNA header for all responses
@@ -86,7 +132,7 @@ app.get('/printers', (req, res) => {
 });
 
 // Endpoint to handle print jobs
-app.post('/print', (req, res) => {
+app.post('/print', async (req, res) => {
     const { printer, content, type } = req.body;
 
     if (!printer || !content) {
@@ -103,27 +149,26 @@ app.post('/print', (req, res) => {
     };
     pushJob(job);
 
-    const tempDir = os.tmpdir();
-    const timestamp = Date.now();
-    const tempFilePath = path.join(tempDir, `print_job_${timestamp}.txt`);
+    try {
+        const result = await enqueuePrintJob(async () => {
+            job.status = 'processing';
+            const tempDir = os.tmpdir();
+            const timestamp = Date.now();
+            const nonce = Math.random().toString(16).slice(2, 8);
+            const tempFilePath = path.join(tempDir, `print_job_${timestamp}_${nonce}.txt`);
 
-    // Write content to a temporary file
-    fs.writeFile(tempFilePath, content, (err) => {
-        if (err) {
-            console.error(`Error writing temp file: ${err.message}`);
-            job.status = 'error';
-            job.error = err.message;
-            return res.status(500).json({ error: 'Failed to process print job' });
-        }
+            await fsPromises.writeFile(tempFilePath, content);
 
-        const platform = os.platform();
-        let command = '';
+            const platform = os.platform();
+            let command = '';
+            let psScriptPath = null;
 
-        if (platform === 'win32') {
-            // Windows: Use PowerShell to send raw bytes to the printer via Win32 API.
-            // This allows targeting a specific printer and avoids the "text-only" printing of notepad.
-            const psScriptPath = path.join(tempDir, `print_raw_${timestamp}.ps1`);
-            const psScript = `
+            try {
+                if (platform === 'win32') {
+                    // Windows: Use PowerShell to send raw bytes to the printer via Win32 API.
+                    // This allows targeting a specific printer and avoids the "text-only" printing of notepad.
+                    psScriptPath = path.join(tempDir, `print_raw_${timestamp}_${nonce}.ps1`);
+                    const psScript = `
 $printerName = "${printer}"
 $data = Get-Content -Path "${tempFilePath.replace(/\\/g, '\\\\')}" -Raw -Encoding utf8
 
@@ -199,61 +244,38 @@ public class RawPrinterHelper {
 Add-Type -TypeDefinition $definition
 [RawPrinterHelper]::SendStringToPrinter($printerName, $data)
 `;
-            fs.writeFileSync(psScriptPath, psScript);
-            command = `powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`;
-
-            // Wrap exec to cleanup the script file too
-            const originalExec = exec;
-            const customExec = (cmd, cb) => {
-                originalExec(cmd, (err, so, se) => {
-                    fs.unlink(psScriptPath, (unlErr) => {
-                        if (unlErr) console.error(`Error deleting ps1 file: ${unlErr.message}`);
-                    });
-                    cb(err, so, se);
-                });
-            };
-            customExec(command, (error, stdout, stderr) => {
-                // Cleanup temp file
-                fs.unlink(tempFilePath, (unlinkErr) => {
-                    if (unlinkErr) console.error(`Error deleting temp file: ${unlinkErr.message}`);
-                });
-
-                if (error) {
-                    console.error(`Error printing: ${error.message}`);
-                    job.status = 'error';
-                    job.error = stderr || error.message;
-                    return res.status(500).json({ error: 'Failed to send print job' });
+                    await fsPromises.writeFile(psScriptPath, psScript);
+                    command = `powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`;
+                    await execCommand(command);
+                } else {
+                    // Mac/Linux printing using lp
+                    const options = type === 'raw' ? '-o raw' : '';
+                    command = `lp -d "${printer}" ${options} "${tempFilePath}"`;
+                    await execCommand(command);
                 }
-
-                console.log(`Print job sent to ${printer}`);
-                job.status = 'sent';
-                res.json({ success: true, message: 'Print job sent successfully' });
-            });
-            return; // Exit here as we handled the response in customExec
-        } else {
-            // Mac/Linux printing using lp
-            const options = type === 'raw' ? '-o raw' : '';
-            command = `lp -d "${printer}" ${options} "${tempFilePath}"`;
-        }
-
-        exec(command, (error, stdout, stderr) => {
-            // Cleanup temp file
-            fs.unlink(tempFilePath, (unlinkErr) => {
-                if (unlinkErr) console.error(`Error deleting temp file: ${unlinkErr.message}`);
-            });
-
-            if (error) {
-                console.error(`Error printing: ${error.message}`);
-                job.status = 'error';
-                job.error = stderr || error.message;
-                return res.status(500).json({ error: 'Failed to send print job' });
+            } finally {
+                if (psScriptPath) {
+                    fsPromises.unlink(psScriptPath).catch((err) => {
+                        console.error(`Error deleting ps1 file: ${err.message}`);
+                    });
+                }
+                fsPromises.unlink(tempFilePath).catch((err) => {
+                    console.error(`Error deleting temp file: ${err.message}`);
+                });
             }
 
-            console.log(`Print job sent to ${printer}`);
-            job.status = 'sent';
-            res.json({ success: true, message: 'Print job sent successfully' });
+            return { success: true, message: 'Print job sent successfully' };
         });
-    });
+
+        job.status = 'sent';
+        console.log(`Print job sent to ${printer}`);
+        return res.json({ success: true, message: result.message || 'Print job sent successfully' });
+    } catch (error) {
+        console.error(`Error printing: ${error.message}`);
+        job.status = 'error';
+        job.error = error.message;
+        return res.status(500).json({ error: 'Failed to send print job', details: error.message });
+    }
 });
 
 app.listen(PORT, () => {

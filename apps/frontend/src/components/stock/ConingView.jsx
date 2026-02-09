@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
@@ -13,6 +13,8 @@ const buildGroupKey = (lot) => ([
   lot.yarnName || '',
   lot.twistName || ''
 ].join('::'));
+
+const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
 export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
@@ -60,7 +62,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
       const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
-      const availableCones = Math.max(0, coneCount - dispatchedCones);
+      const availableCones = calcAvailableCountFromWeight({
+        totalCount: coneCount,
+        issuedCount: 0,
+        dispatchedCount: dispatchedCones,
+        totalWeight: baseNetWeight,
+        availableWeight,
+      }) || 0;
       const grossWeight = Number(row.grossWeight ?? 0);
 
       // Trace Cut & Yarn from source holo crates used in coning issue
@@ -114,6 +122,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       const lotNo = row.lotNo || '(No Lot)';
       const existing = map.get(lotNo) || {
         lotNo,
+        lotKey: [
+          lotNo,
+          row.itemId || '',
+          row.yarnId || '',
+          row.supplierId || '',
+          row.firmId || '',
+        ].join('::'),
         itemId: row.itemId || '',
         itemName: row.itemName || '—',
         firmId: row.firmId || '',
@@ -174,10 +189,14 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     }
 
     return list.filter(l => {
-      if (filters.item && l.itemId !== filters.item) return false;
-      if (filters.yarn && l.yarnId !== filters.yarn) return false;
-      if (filters.firm && l.firmId !== filters.firm) return false;
-      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.item && !idEq(l.itemId, filters.item)) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
+      if (filters.yarn && !idEq(l.yarnId, filters.yarn)) return false;
+      if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
+      if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;
@@ -188,7 +207,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [coningLots, filters, search]);
+  }, [coningLots, filters, search, db.cuts]);
 
 
   const displayLots = useMemo(() => {
@@ -259,11 +278,11 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
             ) : (
               displayLots.map((lot, idx) => {
-                const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotNo || idx);
-                const isExpanded = !groupBy && expandedLot === lot.lotNo;
+                const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
+                const isExpanded = !groupBy && expandedLot === (lot.lotKey || lot.lotNo);
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -362,12 +381,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No coning stock found.</div>
         ) : (
           displayLots.map((lot, idx) => {
-            const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotNo || idx);
-            const isExpanded = !groupBy && expandedLot === lot.lotNo;
+            const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
+            const isExpanded = !groupBy && expandedLot === (lot.lotKey || lot.lotNo);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : lot.lotNo)}>
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">

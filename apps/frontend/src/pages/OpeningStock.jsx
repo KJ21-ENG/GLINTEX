@@ -23,6 +23,10 @@ import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -46,7 +50,9 @@ const round3 = (val) => {
 };
 
 export function OpeningStock() {
-  const { db, refreshDb } = useInventory();
+  const { db, refreshDb, ensureModuleData } = useInventory();
+  const { canRead, canWrite, canDelete } = usePermission('opening_stock');
+  const isReadOnly = canRead && !canWrite;
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
   const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const [stage, setStage] = useState('inbound');
@@ -64,6 +70,12 @@ export function OpeningStock() {
   const fileInputRef = useRef(null);
   const holoCrateSeqRef = useRef(0);
   const coningCrateSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (canRead) {
+      ensureModuleData('opening_stock');
+    }
+  }, [canRead, ensureModuleData]);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -95,6 +107,7 @@ export function OpeningStock() {
   };
 
   const handleBulkUpload = async (e) => {
+    if (isReadOnly) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -451,6 +464,7 @@ export function OpeningStock() {
   const canSaveCommon = date && itemId && supplierId;
 
   const addInboundPiece = () => {
+    if (isReadOnly) return;
     const w = Number(inboundEntry.weight || 0);
     if (w <= 0) return;
     setInboundCart(prev => [
@@ -468,6 +482,7 @@ export function OpeningStock() {
   };
 
   const addCutterCrate = async () => {
+    if (isReadOnly) return;
     if (!cutterEntry.cutId) {
       alert('Cut is required.');
       return;
@@ -553,6 +568,7 @@ export function OpeningStock() {
   };
 
   const addHoloCrate = async () => {
+    if (isReadOnly) return;
     if (!holoEntry.rollTypeId) return;
     const rollType = getRollType(holoEntry.rollTypeId);
     if (!Number(rollType?.weight)) {
@@ -643,6 +659,7 @@ export function OpeningStock() {
   };
 
   const addConingCrate = async () => {
+    if (isReadOnly) return;
     if (!coningIssue.coneTypeId) {
       alert('Select cone type first.');
       return;
@@ -732,6 +749,7 @@ export function OpeningStock() {
   };
 
   const handleSaveInbound = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || inboundCart.length === 0) return;
     setSaving(true);
     try {
@@ -758,10 +776,12 @@ export function OpeningStock() {
   };
 
   const handleRemove = (setter, id) => {
+    if (isReadOnly) return;
     setter(prev => prev.filter(row => row.id !== id));
   };
 
   const handleDeleteOpeningInbound = async (pieceId) => {
+    if (!canDelete) return;
     if (!pieceId) return;
     const ok = window.confirm(`Remove opening piece ${pieceId}? This will only work if it is not used further.`);
     if (!ok) return;
@@ -778,6 +798,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningCutterRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening cutter receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -794,6 +815,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningHoloRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening holo receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -810,6 +832,7 @@ export function OpeningStock() {
   };
 
   const handleDeleteOpeningConingRow = async (rowId) => {
+    if (!canDelete) return;
     if (!rowId) return;
     const ok = window.confirm('Remove this opening coning receive row? This will only work if it is not used further.');
     if (!ok) return;
@@ -826,6 +849,7 @@ export function OpeningStock() {
   };
 
   const handleSaveCutter = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || cutterCart.length === 0) return;
     if (cutterCart.some(row => !row.cutId)) {
       alert('Cut is required for every crate.');
@@ -862,6 +886,7 @@ export function OpeningStock() {
   };
 
   const handleSaveHolo = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || !holoIssue.twistId || holoCart.length === 0) return;
     setSaving(true);
     try {
@@ -902,6 +927,7 @@ export function OpeningStock() {
   };
 
   const handleSaveConing = async () => {
+    if (isReadOnly) return;
     if (!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0) return;
     setSaving(true);
     try {
@@ -944,6 +970,7 @@ export function OpeningStock() {
   const currentStageName = STAGE_OPTIONS.find(s => s.id === stage)?.label || stage;
 
   const handleFileSelect = (e) => {
+    if (isReadOnly) return;
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
@@ -953,6 +980,7 @@ export function OpeningStock() {
   };
 
   const handleModalUpload = async () => {
+    if (isReadOnly) return;
     if (!selectedFile) return;
     // Create a synthetic event to match existing handleBulkUpload signature
     const syntheticEvent = { target: { files: [selectedFile], value: selectedFile.name } };
@@ -960,6 +988,15 @@ export function OpeningStock() {
     setSelectedFile(null);
     setShowBulkModal(false);
   };
+
+  if (!canRead) {
+    return (
+      <div className="space-y-6 fade-in">
+        <h1 className="text-2xl font-bold tracking-tight">Opening Stock</h1>
+        <AccessDenied message="You do not have access to Opening Stock. Contact an administrator." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 fade-in">
@@ -975,10 +1012,15 @@ export function OpeningStock() {
           <h1 className="text-2xl font-bold tracking-tight">Opening Stock</h1>
           <p className="text-sm text-muted-foreground">Create OP lots and print stickers to continue normal flow.</p>
         </div>
-        <Button variant="outline" onClick={() => setShowBulkModal(true)} className="gap-2">
+        <Button variant="outline" onClick={() => setShowBulkModal(true)} className="gap-2 w-full md:w-auto" disabled={isReadOnly}>
           <Upload className="w-4 h-4" /> Bulk Upload
         </Button>
       </div>
+      {isReadOnly && (
+        <div className="text-sm text-muted-foreground">
+          Read-only access: you can view opening entries but cannot add or upload records. Deletions require delete permission.
+        </div>
+      )}
 
       {/* Bulk Upload Modal */}
       {showBulkModal && (
@@ -1017,8 +1059,8 @@ export function OpeningStock() {
                   Upload your filled template to create entries in bulk.
                 </p>
                 <div
-                  className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${isReadOnly ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-primary/50'}`}
+                  onClick={() => { if (!isReadOnly) fileInputRef.current?.click(); }}
                 >
                   {selectedFile ? (
                     <div className="space-y-1">
@@ -1042,7 +1084,7 @@ export function OpeningStock() {
                 </div>
                 <Button
                   onClick={handleModalUpload}
-                  disabled={!selectedFile || saving}
+                  disabled={!selectedFile || saving || isReadOnly}
                   className="w-full gap-2"
                 >
                   {saving ? 'Uploading...' : <><Upload className="w-4 h-4" /> Upload</>}
@@ -1063,33 +1105,48 @@ export function OpeningStock() {
         <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="space-y-2">
             <Label>Stage</Label>
-            <Select value={stage} onChange={e => setStage(e.target.value)}>
+            <div className="sm:hidden">
+              <Select value={stage} onChange={e => setStage(e.target.value)}>
+                {STAGE_OPTIONS.map(opt => (
+                  <option key={opt.id} value={opt.id}>{opt.label}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="hidden sm:flex flex-wrap gap-2">
               {STAGE_OPTIONS.map(opt => (
-                <option key={opt.id} value={opt.id}>{opt.label}</option>
+                <Button
+                  key={opt.id}
+                  type="button"
+                  size="sm"
+                  variant={stage === opt.id ? 'default' : 'outline'}
+                  onClick={() => setStage(opt.id)}
+                >
+                  {opt.label}
+                </Button>
               ))}
-            </Select>
+            </div>
           </div>
           <div className="space-y-2">
             <Label>Date</Label>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={isReadOnly} />
           </div>
           <div className="space-y-2">
             <Label>Item</Label>
-            <Select value={itemId} onChange={e => setItemId(e.target.value)}>
+            <Select value={itemId} onChange={e => setItemId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Item</option>
               {db.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Firm (Optional)</Label>
-            <Select value={firmId} onChange={e => setFirmId(e.target.value)}>
+            <Select value={firmId} onChange={e => setFirmId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Firm</option>
               {db.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Supplier</Label>
-            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+            <Select value={supplierId} onChange={e => setSupplierId(e.target.value)} disabled={isReadOnly}>
               <option value="">Select Supplier</option>
               {db.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
@@ -1107,122 +1164,133 @@ export function OpeningStock() {
             <CardTitle>Opening Inbound Stock</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-              <div className="space-y-2">
-                <Label>Piece Weight (kg)</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.001"
-                    value={inboundEntry.weight}
-                    onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
-                    onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
-                    className="flex-1"
-                  />
-                  <CatchWeightButton onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))} />
+            <fieldset disabled={isReadOnly} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                <div className="space-y-2">
+                  <Label>Piece Weight (kg)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={inboundEntry.weight}
+                      onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
+                      onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
+                      className="flex-1"
+                    />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'inboundEntry.weight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
+                  </div>
                 </div>
+                <div className="flex items-center space-x-2 h-10">
+                  <input
+                    type="checkbox"
+                    id="isConsumed"
+                    className="w-4 h-4"
+                    checked={inboundEntry.isConsumed}
+                    onChange={e => setInboundEntry(prev => ({ ...prev, isConsumed: e.target.checked }))}
+                  />
+                  <Label htmlFor="isConsumed" className="cursor-pointer">Mark as Consumed</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label>Consumption Date (if consumed)</Label>
+                  <Input
+                    type="date"
+                    disabled={!inboundEntry.isConsumed}
+                    value={inboundEntry.consumptionDate}
+                    onChange={e => setInboundEntry(prev => ({ ...prev, consumptionDate: e.target.value }))}
+                  />
+                </div>
+                <Button onClick={addInboundPiece} className="gap-2 w-full sm:w-auto">
+                  <Plus className="w-4 h-4" /> Add Piece
+                </Button>
               </div>
-              <div className="flex items-center space-x-2 h-10">
-                <input
-                  type="checkbox"
-                  id="isConsumed"
-                  className="w-4 h-4"
-                  checked={inboundEntry.isConsumed}
-                  onChange={e => setInboundEntry(prev => ({ ...prev, isConsumed: e.target.checked }))}
-                />
-                <Label htmlFor="isConsumed" className="cursor-pointer">Mark as Consumed</Label>
-              </div>
-              <div className="space-y-2">
-                <Label>Consumption Date (if consumed)</Label>
-                <Input
-                  type="date"
-                  disabled={!inboundEntry.isConsumed}
-                  value={inboundEntry.consumptionDate}
-                  onChange={e => setInboundEntry(prev => ({ ...prev, consumptionDate: e.target.value }))}
-                />
-              </div>
-              <Button onClick={addInboundPiece} className="gap-2">
-                <Plus className="w-4 h-4" /> Add Piece
-              </Button>
-            </div>
 
-            <div className="flex justify-end">
-              <Button onClick={handleSaveInbound} disabled={!canSaveCommon || inboundCart.length === 0 || saving} className="gap-2">
-                {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
-              </Button>
-            </div>
+              <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
+                <Button onClick={handleSaveInbound} disabled={!canSaveCommon || inboundCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
+                  {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
+                </Button>
+              </div>
 
-            <div className="hidden sm:block rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Seq</TableHead>
-                    <TableHead>Weight (kg)</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Consumption Date</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {inboundCart.length === 0 ? (
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">No pieces added.</TableCell>
+                      <TableHead>Seq</TableHead>
+                      <TableHead>Weight (kg)</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Consumption Date</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
-                  ) : inboundCart.map((row, idx) => (
-                    <TableRow key={row.id}>
-                      <TableCell>{idx + 1}</TableCell>
-                      <TableCell>{formatKg(row.weight)}</TableCell>
-                      <TableCell>
-                        <span className={row.isConsumed ? 'text-orange-600 font-medium' : 'text-green-600 font-medium'}>
-                          {row.isConsumed ? 'Consumed' : 'Available'}
-                        </span>
-                      </TableCell>
-                      <TableCell>{row.isConsumed ? row.consumptionDate : '—'}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleRemove(setInboundCart, row.id)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {inboundCart.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-muted-foreground">No pieces added.</TableCell>
+                      </TableRow>
+                    ) : inboundCart.map((row, idx) => (
+                      <TableRow key={row.id}>
+                        <TableCell>{idx + 1}</TableCell>
+                        <TableCell>{formatKg(row.weight)}</TableCell>
+                        <TableCell>
+                          <span className={row.isConsumed ? 'text-orange-600 font-medium' : 'text-green-600 font-medium'}>
+                            {row.isConsumed ? 'Consumed' : 'Available'}
+                          </span>
+                        </TableCell>
+                        <TableCell>{row.isConsumed ? row.consumptionDate : '—'}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => handleRemove(setInboundCart, row.id)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
-            {/* Mobile Card View */}
-            <div className="block sm:hidden space-y-2">
-              {inboundCart.length === 0 ? (
-                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No pieces added.</div>
-              ) : inboundCart.map((row, idx) => (
-                <div key={row.id} className="border rounded-lg bg-card p-3 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-muted-foreground w-6">#{idx + 1}</span>
-                    <div>
-                      <div className="font-medium">{formatKg(row.weight)}</div>
-                      <div className="text-xs">
-                        <span className={row.isConsumed ? 'text-orange-600' : 'text-green-600'}>
-                          {row.isConsumed ? 'Consumed' : 'Available'}
-                        </span>
-                        {row.isConsumed && row.consumptionDate && (
-                          <span className="text-muted-foreground ml-2">{row.consumptionDate}</span>
-                        )}
+              {/* Mobile Card View */}
+              <div className="block sm:hidden space-y-2">
+                {inboundCart.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No pieces added.</div>
+                ) : inboundCart.map((row, idx) => (
+                  <div key={row.id} className="border rounded-lg bg-card p-3 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-muted-foreground w-6">#{idx + 1}</span>
+                      <div>
+                        <div className="font-medium">{formatKg(row.weight)}</div>
+                        <div className="text-xs">
+                          <span className={row.isConsumed ? 'text-orange-600' : 'text-green-600'}>
+                            {row.isConsumed ? 'Consumed' : 'Available'}
+                          </span>
+                          {row.isConsumed && row.consumptionDate && (
+                            <span className="text-muted-foreground ml-2">{row.consumptionDate}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
+                    <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleRemove(setInboundCart, row.id)}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => handleRemove(setInboundCart, row.id)}>
-                    <Trash2 className="w-4 h-4 text-destructive" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            {inboundCart.length > 0 && (
-              <div className="flex justify-between text-sm text-muted-foreground font-medium">
-                <div>Total: {inboundCart.length} pieces</div>
-                <div>Available: {inboundTotals.totalAvailable} | Consumed: {inboundTotals.totalConsumed}</div>
-                <div>Total Weight: {formatKg(inboundTotals.totalWeight)} kg</div>
+                ))}
               </div>
-            )}
+              {inboundCart.length > 0 && (
+                <div className="flex justify-between text-sm text-muted-foreground font-medium">
+                  <div>Total: {inboundCart.length} pieces</div>
+                  <div>Available: {inboundTotals.totalAvailable} | Consumed: {inboundTotals.totalConsumed}</div>
+                  <div>Total Weight: {formatKg(inboundTotals.totalWeight)} kg</div>
+                </div>
+              )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1233,154 +1301,165 @@ export function OpeningStock() {
             <CardTitle>Opening Cutter Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-              <div className="space-y-2">
-                <Label>Bobbin</Label>
-                <Select value={cutterEntry.bobbinId} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinId: e.target.value }))}>
-                  <option value="">Select Bobbin</option>
-                  {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Bobbin Qty</Label>
-                <Input type="number" min="0" value={cutterEntry.bobbinQuantity} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinQuantity: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Box</Label>
-                <Select value={cutterEntry.boxId} onChange={e => setCutterEntry(prev => ({ ...prev, boxId: e.target.value }))}>
-                  <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Gross Weight (kg)</Label>
-                <div className="flex gap-2">
-                  <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                  <CatchWeightButton onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+            <fieldset disabled={isReadOnly} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                <div className="space-y-2">
+                  <Label>Bobbin</Label>
+                  <Select value={cutterEntry.bobbinId} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinId: e.target.value }))}>
+                    <option value="">Select Bobbin</option>
+                    {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                  </Select>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Operator (Optional)</Label>
-                <Select value={cutterEntry.operatorId} onChange={e => setCutterEntry(prev => ({ ...prev, operatorId: e.target.value }))}>
-                  <option value="">Select Operator</option>
-                  {filterByProcess(db.operators, 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Helper (Optional)</Label>
-                <Select value={cutterEntry.helperId} onChange={e => setCutterEntry(prev => ({ ...prev, helperId: e.target.value }))}>
-                  <option value="">Select Helper</option>
-                  {filterByProcess(db.helpers, 'cutter').map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Cut</Label>
-                <Select value={cutterEntry.cutId} onChange={e => setCutterEntry(prev => ({ ...prev, cutId: e.target.value }))}>
-                  <option value="">Select Cut</option>
-                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Shift (Optional)</Label>
-                <Select
-                  value={cutterEntry.shift}
-                  onChange={e => setCutterEntry(prev => ({ ...prev, shift: e.target.value }))}
-                  options={SHIFT_OPTIONS}
-                  placeholder="Select Shift"
-                  clearable
-                  searchable={false}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Machine (Optional)</Label>
-                <Select value={cutterEntry.machineId} onChange={e => setCutterEntry(prev => ({ ...prev, machineId: e.target.value }))}>
-                  <option value="">Select Machine</option>
-                  {filterByProcess(db.machines, 'cutter').map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-            {/* Live weight preview */}
-            {cutterEntry.bobbinId && cutterEntry.boxId && cutterEntry.bobbinQuantity && cutterEntry.grossWeight && (
-              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-                Tare: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).tare)}</span> |
-                Net: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).net)}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <Button onClick={addCutterCrate} className="gap-2">
-                <Plus className="w-4 h-4" /> Add Crate
-              </Button>
-              <Button onClick={handleSaveCutter} disabled={!canSaveCommon || cutterCart.length === 0 || saving} className="gap-2">
-                {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
-              </Button>
-            </div>
-            <div className="hidden sm:block rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Bobbin</TableHead>
-                    <TableHead>Qty</TableHead>
-                    <TableHead>Box</TableHead>
-                    <TableHead>Gross</TableHead>
-                    <TableHead>Net</TableHead>
-                    <TableHead>Cut</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {cutterCart.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground">No crates added.</TableCell>
-                    </TableRow>
-                  ) : cutterCart.map(row => (
-                    <TableRow key={row.id}>
-                      <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                      <TableCell>{row.bobbinQuantity}</TableCell>
-                      <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
-                      <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                      <TableCell>{formatKg(row.netWeight)}</TableCell>
-                      <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleRemove(setCutterCart, row.id)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Mobile Card View */}
-            <div className="block sm:hidden space-y-2">
-              {cutterCart.length === 0 ? (
-                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
-              ) : cutterCart.map(row => (
-                <div key={row.id} className="border rounded-lg bg-card p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{getBobbin(row.bobbinId)?.name || '—'} × {row.bobbinQuantity}</div>
-                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
-                        <span>Box: {getBox(row.boxId)?.name || '—'}</span>
-                        <span>Cut: {row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</span>
-                        <span>Gross: {formatKg(row.grossWeight)}</span>
-                        <span className="font-medium text-foreground">Net: {formatKg(row.netWeight)}</span>
-                      </div>
-                    </div>
-                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setCutterCart, row.id)}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+                <div className="space-y-2">
+                  <Label>Bobbin Qty</Label>
+                  <Input type="number" min="0" value={cutterEntry.bobbinQuantity} onChange={e => setCutterEntry(prev => ({ ...prev, bobbinQuantity: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Box</Label>
+                  <Select value={cutterEntry.boxId} onChange={e => setCutterEntry(prev => ({ ...prev, boxId: e.target.value }))}>
+                    <option value="">Select Box</option>
+                    {filterByProcess(db.boxes, 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Gross Weight (kg)</Label>
+                  <div className="flex gap-2">
+                    <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'cutterEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
-              ))}
-            </div>
-            {cutterCart.length > 0 && (
-              <div className="text-sm text-muted-foreground">
-                Total: {cutterTotals.totalBobbins} bobbins, {formatKg(cutterTotals.totalNet)} kg
+                <div className="space-y-2">
+                  <Label>Operator (Optional)</Label>
+                  <Select value={cutterEntry.operatorId} onChange={e => setCutterEntry(prev => ({ ...prev, operatorId: e.target.value }))}>
+                    <option value="">Select Operator</option>
+                    {filterByProcess(db.operators, 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Helper (Optional)</Label>
+                  <Select value={cutterEntry.helperId} onChange={e => setCutterEntry(prev => ({ ...prev, helperId: e.target.value }))}>
+                    <option value="">Select Helper</option>
+                    {filterByProcess(db.helpers, 'cutter').map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Cut</Label>
+                  <Select value={cutterEntry.cutId} onChange={e => setCutterEntry(prev => ({ ...prev, cutId: e.target.value }))}>
+                    <option value="">Select Cut</option>
+                    {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Shift (Optional)</Label>
+                  <Select
+                    value={cutterEntry.shift}
+                    onChange={e => setCutterEntry(prev => ({ ...prev, shift: e.target.value }))}
+                    options={SHIFT_OPTIONS}
+                    placeholder="Select Shift"
+                    clearable
+                    searchable={false}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Machine (Optional)</Label>
+                  <Select value={cutterEntry.machineId} onChange={e => setCutterEntry(prev => ({ ...prev, machineId: e.target.value }))}>
+                    <option value="">Select Machine</option>
+                    {filterByProcess(db.machines, 'cutter').map(m => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </Select>
+                </div>
               </div>
-            )}
+              {/* Live weight preview */}
+              {cutterEntry.bobbinId && cutterEntry.boxId && cutterEntry.bobbinQuantity && cutterEntry.grossWeight && (
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                  Tare: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).tare)}</span> |
+                  Net: <span className="font-medium">{formatKg(calcCutterWeights(cutterEntry).net)}</span>
+                </div>
+              )}
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+                <Button onClick={addCutterCrate} className="gap-2 w-full sm:w-auto">
+                  <Plus className="w-4 h-4" /> Add Crate
+                </Button>
+                <Button onClick={handleSaveCutter} disabled={!canSaveCommon || cutterCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
+                  {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
+                </Button>
+              </div>
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Bobbin</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Box</TableHead>
+                      <TableHead>Gross</TableHead>
+                      <TableHead>Net</TableHead>
+                      <TableHead>Cut</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cutterCart.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center text-muted-foreground">No crates added.</TableCell>
+                      </TableRow>
+                    ) : cutterCart.map(row => (
+                      <TableRow key={row.id}>
+                        <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
+                        <TableCell>{row.bobbinQuantity}</TableCell>
+                        <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
+                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => handleRemove(setCutterCart, row.id)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="block sm:hidden space-y-2">
+                {cutterCart.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+                ) : cutterCart.map(row => (
+                  <div key={row.id} className="border rounded-lg bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">{getBobbin(row.bobbinId)?.name || '—'} × {row.bobbinQuantity}</div>
+                        <div className="text-xs text-muted-foreground mt-1 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          <span>Box: {getBox(row.boxId)?.name || '—'}</span>
+                          <span>Cut: {row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</span>
+                          <span>Gross: {formatKg(row.grossWeight)}</span>
+                          <span className="font-medium text-foreground">Net: {formatKg(row.netWeight)}</span>
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleRemove(setCutterCart, row.id)}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {cutterCart.length > 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Total: {cutterTotals.totalBobbins} bobbins, {formatKg(cutterTotals.totalNet)} kg
+                </div>
+              )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1391,158 +1470,169 @@ export function OpeningStock() {
             <CardTitle>Opening Holo Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="space-y-2">
-                <Label>Twist</Label>
-                <Select value={holoIssue.twistId} onChange={e => setHoloIssue(prev => ({ ...prev, twistId: e.target.value }))}>
-                  <option value="">Select Twist</option>
-                  {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Yarn (Optional)</Label>
-                <Select value={holoIssue.yarnId} onChange={e => setHoloIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
-                  <option value="">Select Yarn</option>
-                  {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Cut (Optional)</Label>
-                <Select value={holoIssue.cutId} onChange={e => setHoloIssue(prev => ({ ...prev, cutId: e.target.value }))}>
-                  <option value="">Select Cut</option>
-                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Machine (Optional)</Label>
-                <Select value={holoIssue.machineId} onChange={e => setHoloIssue(prev => ({ ...prev, machineId: e.target.value }))}>
-                  <option value="">Select Machine</option>
-                  {filterByProcess(db.machines, 'holo').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Operator (Optional)</Label>
-                <Select value={holoIssue.operatorId} onChange={e => setHoloIssue(prev => ({ ...prev, operatorId: e.target.value }))}>
-                  <option value="">Select Operator</option>
-                  {filterByProcess(db.operators, 'holo').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Shift (Optional)</Label>
-                <Select
-                  value={holoIssue.shift}
-                  onChange={e => setHoloIssue(prev => ({ ...prev, shift: e.target.value }))}
-                  options={SHIFT_OPTIONS}
-                  placeholder="Select Shift"
-                  clearable
-                  searchable={false}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
-              <div className="space-y-2">
-                <Label>Roll Type</Label>
-                <Select value={holoEntry.rollTypeId} onChange={e => setHoloEntry(prev => ({ ...prev, rollTypeId: e.target.value }))}>
-                  <option value="">Select Roll Type</option>
-                  {db.rollTypes?.map(r => <option key={r.id} value={r.id}>{r.name} ({r.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Roll Count</Label>
-                <Input type="number" min="0" value={holoEntry.rollCount} onChange={e => setHoloEntry(prev => ({ ...prev, rollCount: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Box (Optional)</Label>
-                <Select value={holoEntry.boxId} onChange={e => setHoloEntry(prev => ({ ...prev, boxId: e.target.value }))}>
-                  <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'holo').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Gross Weight (kg)</Label>
-                <div className="flex gap-2">
-                  <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                  <CatchWeightButton onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+            <fieldset disabled={isReadOnly} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                <div className="space-y-2">
+                  <Label>Twist</Label>
+                  <Select value={holoIssue.twistId} onChange={e => setHoloIssue(prev => ({ ...prev, twistId: e.target.value }))}>
+                    <option value="">Select Twist</option>
+                    {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Yarn (Optional)</Label>
+                  <Select value={holoIssue.yarnId} onChange={e => setHoloIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
+                    <option value="">Select Yarn</option>
+                    {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Cut (Optional)</Label>
+                  <Select value={holoIssue.cutId} onChange={e => setHoloIssue(prev => ({ ...prev, cutId: e.target.value }))}>
+                    <option value="">Select Cut</option>
+                    {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Machine (Optional)</Label>
+                  <Select value={holoIssue.machineId} onChange={e => setHoloIssue(prev => ({ ...prev, machineId: e.target.value }))}>
+                    <option value="">Select Machine</option>
+                    {filterByProcess(db.machines, 'holo').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Operator (Optional)</Label>
+                  <Select value={holoIssue.operatorId} onChange={e => setHoloIssue(prev => ({ ...prev, operatorId: e.target.value }))}>
+                    <option value="">Select Operator</option>
+                    {filterByProcess(db.operators, 'holo').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Shift (Optional)</Label>
+                  <Select
+                    value={holoIssue.shift}
+                    onChange={e => setHoloIssue(prev => ({ ...prev, shift: e.target.value }))}
+                    options={SHIFT_OPTIONS}
+                    placeholder="Select Shift"
+                    clearable
+                    searchable={false}
+                  />
                 </div>
               </div>
-            </div>
-            {/* Live weight preview */}
-            {holoEntry.rollTypeId && holoEntry.rollCount && holoEntry.grossWeight && (
-              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-                Tare: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).tare)}</span> |
-                Net: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).net)}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <Button onClick={addHoloCrate} className="gap-2">
-                <Plus className="w-4 h-4" /> Add Crate
-              </Button>
-              <Button onClick={handleSaveHolo} disabled={!canSaveCommon || !holoIssue.twistId || holoCart.length === 0 || saving} className="gap-2">
-                {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
-              </Button>
-            </div>
-            <div className="hidden sm:block rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Roll Type</TableHead>
-                    <TableHead>Count</TableHead>
-                    <TableHead>Box</TableHead>
-                    <TableHead>Gross</TableHead>
-                    <TableHead>Net</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {holoCart.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">No crates added.</TableCell>
-                    </TableRow>
-                  ) : holoCart.map(row => (
-                    <TableRow key={row.id}>
-                      <TableCell>{getRollType(row.rollTypeId)?.name || '—'}</TableCell>
-                      <TableCell>{row.rollCount}</TableCell>
-                      <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
-                      <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                      <TableCell>{formatKg(row.netWeight)}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleRemove(setHoloCart, row.id)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Mobile Card View */}
-            <div className="block sm:hidden space-y-2">
-              {holoCart.length === 0 ? (
-                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
-              ) : holoCart.map(row => (
-                <div key={row.id} className="border rounded-lg bg-card p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{getRollType(row.rollTypeId)?.name || '—'} × {row.rollCount}</div>
-                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
-                        <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
-                        <span>Gross: {formatKg(row.grossWeight)}</span>
-                        <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
-                      </div>
-                    </div>
-                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setHoloCart, row.id)}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div className="space-y-2">
+                  <Label>Roll Type</Label>
+                  <Select value={holoEntry.rollTypeId} onChange={e => setHoloEntry(prev => ({ ...prev, rollTypeId: e.target.value }))}>
+                    <option value="">Select Roll Type</option>
+                    {db.rollTypes?.map(r => <option key={r.id} value={r.id}>{r.name} ({r.weight}kg)</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Roll Count</Label>
+                  <Input type="number" min="0" value={holoEntry.rollCount} onChange={e => setHoloEntry(prev => ({ ...prev, rollCount: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Box (Optional)</Label>
+                  <Select value={holoEntry.boxId} onChange={e => setHoloEntry(prev => ({ ...prev, boxId: e.target.value }))}>
+                    <option value="">Select Box</option>
+                    {filterByProcess(db.boxes, 'holo').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Gross Weight (kg)</Label>
+                  <div className="flex gap-2">
+                    <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'holoEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
-              ))}
-            </div>
-            {holoCart.length > 0 && (
-              <div className="text-sm text-muted-foreground">
-                Total: {holoTotals.totalRolls} rolls, {formatKg(holoTotals.totalNet)} kg
               </div>
-            )}
+              {/* Live weight preview */}
+              {holoEntry.rollTypeId && holoEntry.rollCount && holoEntry.grossWeight && (
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                  Tare: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).tare)}</span> |
+                  Net: <span className="font-medium">{formatKg(calcHoloWeights(holoEntry).net)}</span>
+                </div>
+              )}
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+                <Button onClick={addHoloCrate} className="gap-2 w-full sm:w-auto">
+                  <Plus className="w-4 h-4" /> Add Crate
+                </Button>
+                <Button onClick={handleSaveHolo} disabled={!canSaveCommon || !holoIssue.twistId || holoCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
+                  {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
+                </Button>
+              </div>
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Roll Type</TableHead>
+                      <TableHead>Count</TableHead>
+                      <TableHead>Box</TableHead>
+                      <TableHead>Gross</TableHead>
+                      <TableHead>Net</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {holoCart.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground">No crates added.</TableCell>
+                      </TableRow>
+                    ) : holoCart.map(row => (
+                      <TableRow key={row.id}>
+                        <TableCell>{getRollType(row.rollTypeId)?.name || '—'}</TableCell>
+                        <TableCell>{row.rollCount}</TableCell>
+                        <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
+                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => handleRemove(setHoloCart, row.id)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="block sm:hidden space-y-2">
+                {holoCart.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+                ) : holoCart.map(row => (
+                  <div key={row.id} className="border rounded-lg bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">{getRollType(row.rollTypeId)?.name || '—'} × {row.rollCount}</div>
+                        <div className="text-xs text-muted-foreground mt-1 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
+                          <span>Gross: {formatKg(row.grossWeight)}</span>
+                          <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleRemove(setHoloCart, row.id)}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {holoCart.length > 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Total: {holoTotals.totalRolls} rolls, {formatKg(holoTotals.totalNet)} kg
+                </div>
+              )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1553,163 +1643,174 @@ export function OpeningStock() {
             <CardTitle>Opening Coning Receive</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4">
-              <div className="space-y-2">
-                <Label>Cone Type</Label>
-                <Select value={coningIssue.coneTypeId} onChange={e => setConingIssue(prev => ({ ...prev, coneTypeId: e.target.value }))}>
-                  <option value="">Select Cone Type</option>
-                  {db.cone_types?.map(c => <option key={c.id} value={c.id}>{c.name} ({c.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Wrapper (Optional)</Label>
-                <Select value={coningIssue.wrapperId} onChange={e => setConingIssue(prev => ({ ...prev, wrapperId: e.target.value }))}>
-                  <option value="">Select Wrapper</option>
-                  {db.wrappers?.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Yarn (Optional)</Label>
-                <Select value={coningIssue.yarnId} onChange={e => setConingIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
-                  <option value="">Select Yarn</option>
-                  {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Twist (Optional)</Label>
-                <Select value={coningIssue.twistId} onChange={e => setConingIssue(prev => ({ ...prev, twistId: e.target.value }))}>
-                  <option value="">Select Twist</option>
-                  {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Cut (Optional)</Label>
-                <Select value={coningIssue.cutId} onChange={e => setConingIssue(prev => ({ ...prev, cutId: e.target.value }))}>
-                  <option value="">Select Cut</option>
-                  {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Machine (Optional)</Label>
-                <Select value={coningIssue.machineId} onChange={e => setConingIssue(prev => ({ ...prev, machineId: e.target.value }))}>
-                  <option value="">Select Machine</option>
-                  {filterByProcess(db.machines, 'coning').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Operator (Optional)</Label>
-                <Select value={coningIssue.operatorId} onChange={e => setConingIssue(prev => ({ ...prev, operatorId: e.target.value }))}>
-                  <option value="">Select Operator</option>
-                  {filterByProcess(db.operators, 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Shift (Optional)</Label>
-                <Select
-                  value={coningIssue.shift}
-                  onChange={e => setConingIssue(prev => ({ ...prev, shift: e.target.value }))}
-                  options={SHIFT_OPTIONS}
-                  placeholder="Select Shift"
-                  clearable
-                  searchable={false}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              <div className="space-y-2">
-                <Label>Cone Count</Label>
-                <Input type="number" min="0" value={coningEntry.coneCount} onChange={e => setConingEntry(prev => ({ ...prev, coneCount: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Box (Optional)</Label>
-                <Select value={coningEntry.boxId} onChange={e => setConingEntry(prev => ({ ...prev, boxId: e.target.value }))}>
-                  <option value="">Select Box</option>
-                  {filterByProcess(db.boxes, 'coning').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Gross Weight (kg)</Label>
-                <div className="flex gap-2">
-                  <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
-                  <CatchWeightButton onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))} />
+            <fieldset disabled={isReadOnly} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4">
+                <div className="space-y-2">
+                  <Label>Cone Type</Label>
+                  <Select value={coningIssue.coneTypeId} onChange={e => setConingIssue(prev => ({ ...prev, coneTypeId: e.target.value }))}>
+                    <option value="">Select Cone Type</option>
+                    {db.cone_types?.map(c => <option key={c.id} value={c.id}>{c.name} ({c.weight}kg)</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Wrapper (Optional)</Label>
+                  <Select value={coningIssue.wrapperId} onChange={e => setConingIssue(prev => ({ ...prev, wrapperId: e.target.value }))}>
+                    <option value="">Select Wrapper</option>
+                    {db.wrappers?.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Yarn (Optional)</Label>
+                  <Select value={coningIssue.yarnId} onChange={e => setConingIssue(prev => ({ ...prev, yarnId: e.target.value }))}>
+                    <option value="">Select Yarn</option>
+                    {db.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Twist (Optional)</Label>
+                  <Select value={coningIssue.twistId} onChange={e => setConingIssue(prev => ({ ...prev, twistId: e.target.value }))}>
+                    <option value="">Select Twist</option>
+                    {db.twists?.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Cut (Optional)</Label>
+                  <Select value={coningIssue.cutId} onChange={e => setConingIssue(prev => ({ ...prev, cutId: e.target.value }))}>
+                    <option value="">Select Cut</option>
+                    {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Machine (Optional)</Label>
+                  <Select value={coningIssue.machineId} onChange={e => setConingIssue(prev => ({ ...prev, machineId: e.target.value }))}>
+                    <option value="">Select Machine</option>
+                    {filterByProcess(db.machines, 'coning').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Operator (Optional)</Label>
+                  <Select value={coningIssue.operatorId} onChange={e => setConingIssue(prev => ({ ...prev, operatorId: e.target.value }))}>
+                    <option value="">Select Operator</option>
+                    {filterByProcess(db.operators, 'coning').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Shift (Optional)</Label>
+                  <Select
+                    value={coningIssue.shift}
+                    onChange={e => setConingIssue(prev => ({ ...prev, shift: e.target.value }))}
+                    options={SHIFT_OPTIONS}
+                    placeholder="Select Shift"
+                    clearable
+                    searchable={false}
+                  />
                 </div>
               </div>
-            </div>
-            {/* Live weight preview */}
-            {coningIssue.coneTypeId && coningEntry.coneCount && coningEntry.grossWeight && (
-              <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-                Tare: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).tare)}</span> |
-                Net: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).net)}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <Button onClick={addConingCrate} className="gap-2">
-                <Plus className="w-4 h-4" /> Add Crate
-              </Button>
-              <Button onClick={handleSaveConing} disabled={!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0 || saving} className="gap-2">
-                {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
-              </Button>
-            </div>
-            <div className="hidden sm:block rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Cones</TableHead>
-                    <TableHead>Box</TableHead>
-                    <TableHead>Gross</TableHead>
-                    <TableHead>Net</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {coningCart.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">No crates added.</TableCell>
-                    </TableRow>
-                  ) : coningCart.map(row => (
-                    <TableRow key={row.id}>
-                      <TableCell>{row.coneCount}</TableCell>
-                      <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
-                      <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                      <TableCell>{formatKg(row.netWeight)}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleRemove(setConingCart, row.id)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Mobile Card View */}
-            <div className="block sm:hidden space-y-2">
-              {coningCart.length === 0 ? (
-                <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
-              ) : coningCart.map(row => (
-                <div key={row.id} className="border rounded-lg bg-card p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{row.coneCount} cones</div>
-                      <div className="text-xs text-muted-foreground mt-1 grid grid-cols-2 gap-1">
-                        <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
-                        <span>Gross: {formatKg(row.grossWeight)}</span>
-                        <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
-                      </div>
-                    </div>
-                    <Button variant="ghost" size="icon" onClick={() => handleRemove(setConingCart, row.id)}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <Label>Cone Count</Label>
+                  <Input type="number" min="0" value={coningEntry.coneCount} onChange={e => setConingEntry(prev => ({ ...prev, coneCount: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Box (Optional)</Label>
+                  <Select value={coningEntry.boxId} onChange={e => setConingEntry(prev => ({ ...prev, boxId: e.target.value }))}>
+                    <option value="">Select Box</option>
+                    {filterByProcess(db.boxes, 'coning').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Gross Weight (kg)</Label>
+                  <div className="flex gap-2">
+                    <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <CatchWeightButton
+                      onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      context={{
+                        feature: 'opening_stock',
+                        stage,
+                        field: 'coningEntry.grossWeight',
+                        lotNo: previewLotNo || null,
+                        itemId: itemId || null,
+                      }}
+                    />
                   </div>
                 </div>
-              ))}
-            </div>
-            {coningCart.length > 0 && (
-              <div className="text-sm text-muted-foreground">
-                Total: {coningTotals.totalCones} cones, {formatKg(coningTotals.totalNet)} kg
               </div>
-            )}
+              {/* Live weight preview */}
+              {coningIssue.coneTypeId && coningEntry.coneCount && coningEntry.grossWeight && (
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                  Tare: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).tare)}</span> |
+                  Net: <span className="font-medium">{formatKg(calcConingWeights(coningEntry).net)}</span>
+                </div>
+              )}
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+                <Button onClick={addConingCrate} className="gap-2 w-full sm:w-auto">
+                  <Plus className="w-4 h-4" /> Add Crate
+                </Button>
+                <Button onClick={handleSaveConing} disabled={!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
+                  {saving ? 'Saving...' : <><Save className="w-4 h-4" /> Save Opening</>}
+                </Button>
+              </div>
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Cones</TableHead>
+                      <TableHead>Box</TableHead>
+                      <TableHead>Gross</TableHead>
+                      <TableHead>Net</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {coningCart.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-muted-foreground">No crates added.</TableCell>
+                      </TableRow>
+                    ) : coningCart.map(row => (
+                      <TableRow key={row.id}>
+                        <TableCell>{row.coneCount}</TableCell>
+                        <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
+                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => handleRemove(setConingCart, row.id)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="block sm:hidden space-y-2">
+                {coningCart.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No crates added.</div>
+                ) : coningCart.map(row => (
+                  <div key={row.id} className="border rounded-lg bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">{row.coneCount} cones</div>
+                        <div className="text-xs text-muted-foreground mt-1 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          <span>Box: {row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</span>
+                          <span>Gross: {formatKg(row.grossWeight)}</span>
+                          <span className="font-medium text-foreground col-span-2">Net: {formatKg(row.netWeight)}</span>
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleRemove(setConingCart, row.id)}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {coningCart.length > 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Total: {coningTotals.totalCones} cones, {formatKg(coningTotals.totalNet)} kg
+                </div>
+              )}
+            </fieldset>
           </CardContent>
         </Card>
       )}
@@ -1735,20 +1836,20 @@ export function OpeningStock() {
                 className="pl-9"
               />
             </div>
-            <div className="flex gap-2 items-center">
-              <Label className="text-sm text-muted-foreground whitespace-nowrap">From</Label>
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+              <Label className="text-sm text-muted-foreground">From</Label>
               <Input
                 type="date"
                 value={historyStartDate}
                 onChange={e => setHistoryStartDate(e.target.value)}
-                className="w-auto"
+                className="w-full sm:w-auto"
               />
-              <Label className="text-sm text-muted-foreground whitespace-nowrap">To</Label>
+              <Label className="text-sm text-muted-foreground">To</Label>
               <Input
                 type="date"
                 value={historyEndDate}
                 onChange={e => setHistoryEndDate(e.target.value)}
-                className="w-auto"
+                className="w-full sm:w-auto"
               />
               {(historySearchTerm || historyStartDate || historyEndDate) && (
                 <Button
@@ -1775,210 +1876,478 @@ export function OpeningStock() {
         </div>
         <CardContent>
           {stage === 'inbound' && (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Lot</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Piece</TableHead>
-                    <TableHead>Weight</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {openingHistory.inbound.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
-                    </TableRow>
-                  ) : openingHistory.inbound.map(row => (
-                    <TableRow key={row.id}>
-                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
-                      <TableCell>{row.lotNo}</TableCell>
-                      <TableCell>{db.items?.find(i => i.id === row.itemId)?.name || '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.id}</TableCell>
-                      <TableCell>{formatKg(row.weight)}</TableCell>
-                      <TableCell>
-                        <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
-                          {row.status}
-                        </span>
-                      </TableCell>
-                      <TableCell>
+            <>
+              {/* Mobile cards */}
+              <div className="sm:hidden space-y-2">
+                {openingHistory.inbound.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening inbound entries found.</div>
+                ) : openingHistory.inbound.map(row => (
+                  <div key={row.id} className="border rounded-lg bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-medium truncate">{row.lotNo || '—'}</div>
+                          <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</div>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground truncate">
+                          {db.items?.find(i => i.id === row.itemId)?.name || '—'}
+                        </div>
+                        <div className="mt-2 grid grid-cols-1 gap-1 text-sm">
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Piece</span>
+                            <span className="font-mono text-xs truncate">{row.id}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Weight</span>
+                            <span className="font-medium">{formatKg(row.weight)}</span>
+                          </div>
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Status</span>
+                            <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
+                              {row.status}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2">
+                          <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                        </div>
+                      </div>
+                      <DisabledWithTooltip
+                        disabled={!canDelete || deletingKey === `inbound:${row.id}`}
+                        tooltip="You do not have permission to delete opening stock records."
+                      >
                         <Button
                           variant="ghost"
                           size="icon"
-                          disabled={deletingKey === `inbound:${row.id}`}
+                          className="h-10 w-10"
                           onClick={() => handleDeleteOpeningInbound(row.id)}
                         >
                           <Trash2 className="w-4 h-4 text-destructive" />
                         </Button>
-                      </TableCell>
+                      </DisabledWithTooltip>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop table */}
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Lot</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Piece</TableHead>
+                      <TableHead>Weight</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Added By</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {openingHistory.inbound.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
+                      </TableRow>
+                    ) : openingHistory.inbound.map(row => (
+                      <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
+                        <TableCell>{row.lotNo}</TableCell>
+                        <TableCell>{db.items?.find(i => i.id === row.itemId)?.name || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.id}</TableCell>
+                        <TableCell>{formatKg(row.weight)}</TableCell>
+                        <TableCell>
+                          <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
+                            {row.status}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                        </TableCell>
+                        <TableCell>
+                          <DisabledWithTooltip
+                            disabled={!canDelete || deletingKey === `inbound:${row.id}`}
+                            tooltip="You do not have permission to delete opening stock records."
+                          >
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteOpeningInbound(row.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </DisabledWithTooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
 
           {stage === 'cutter' && (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Lot</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Barcode</TableHead>
-                    <TableHead>Bobbin</TableHead>
-                    <TableHead>Qty</TableHead>
-                    <TableHead>Cut</TableHead>
-                    <TableHead>Net Wt</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {openingHistory.cutter.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
-                    </TableRow>
-                  ) : openingHistory.cutter.map(row => {
-                    // Get item name from inbound_items via pieceId
-                    const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
-                    const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
-                        <TableCell>{row.pieceId?.split('-').slice(0, 2).join('-')}</TableCell>
-                        <TableCell>{itemName}</TableCell>
-                        <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
-                        <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                        <TableCell>{row.bobbinQuantity || 0}</TableCell>
-                        <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
-                        <TableCell>{formatKg(row.netWt)}</TableCell>
-                        <TableCell>
+            <>
+              <div className="sm:hidden space-y-2">
+                {openingHistory.cutter.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening cutter receive entries found.</div>
+                ) : openingHistory.cutter.map(row => {
+                  const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
+                  const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
+                  const lot = row.pieceId?.split('-').slice(0, 2).join('-') || '—';
+                  const cutName = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—';
+                  return (
+                    <div key={row.id} className="border rounded-lg bg-card p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium truncate">{lot}</div>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground truncate">{itemName}</div>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-sm">
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Bobbin</span>
+                              <span className="font-medium truncate">{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'} × {row.bobbinQuantity || 0}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Cut</span>
+                              <span className="truncate">{cutName}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Net</span>
+                              <span className="font-medium">{formatKg(row.netWt)}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Barcode</span>
+                              <span className="font-mono text-xs truncate">{row.barcode || row.vchNo || '—'}</span>
+                            </div>
+                          </div>
+                          <div className="mt-2">
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </div>
+                        </div>
+                        <DisabledWithTooltip
+                          disabled={!canDelete || deletingKey === `cutter:${row.id}`}
+                          tooltip="You do not have permission to delete opening stock records."
+                        >
                           <Button
                             variant="ghost"
                             size="icon"
-                            disabled={deletingKey === `cutter:${row.id}`}
+                            className="h-10 w-10"
                             onClick={() => handleDeleteOpeningCutterRow(row.id)}
                           >
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
-                        </TableCell>
+                        </DisabledWithTooltip>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Lot</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Barcode</TableHead>
+                      <TableHead>Bobbin</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Cut</TableHead>
+                      <TableHead>Net Wt</TableHead>
+                      <TableHead>Added By</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openingHistory.cutter.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={10} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
                       </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                    ) : openingHistory.cutter.map(row => {
+                      const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
+                      const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
+                      return (
+                        <TableRow key={row.id}>
+                          <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                          <TableCell>{row.pieceId?.split('-').slice(0, 2).join('-')}</TableCell>
+                          <TableCell>{itemName}</TableCell>
+                          <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
+                          <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
+                          <TableCell>{row.bobbinQuantity || 0}</TableCell>
+                          <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
+                          <TableCell>{formatKg(row.netWt)}</TableCell>
+                          <TableCell>
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </TableCell>
+                          <TableCell>
+                            <DisabledWithTooltip
+                              disabled={!canDelete || deletingKey === `cutter:${row.id}`}
+                              tooltip="You do not have permission to delete opening stock records."
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteOpeningCutterRow(row.id)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </DisabledWithTooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
 
           {stage === 'holo' && (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Lot</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Barcode</TableHead>
-                    <TableHead>Roll Type</TableHead>
-                    <TableHead>Rolls</TableHead>
-                    <TableHead>Cut</TableHead>
-                    <TableHead>Net Wt</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {openingHistory.holo.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
-                    </TableRow>
-                  ) : openingHistory.holo.map(row => {
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-                    const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
-                    const cutName = resolved.cutName;
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
-                        <TableCell>{issue?.lotNo || '—'}</TableCell>
-                        <TableCell>{itemName || '—'}</TableCell>
-                        <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                        <TableCell>{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'}</TableCell>
-                        <TableCell>{row.rollCount || 0}</TableCell>
-                        <TableCell>{cutName || '—'}</TableCell>
-                        <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
-                        <TableCell>
+            <>
+              <div className="sm:hidden space-y-2">
+                {openingHistory.holo.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening holo receive entries found.</div>
+                ) : openingHistory.holo.map(row => {
+                  const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                  const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                  const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                  const cutName = resolved.cutName;
+                  const net = row.rollWeight || (row.grossWeight - (row.tareWeight || 0));
+                  return (
+                    <div key={row.id} className="border rounded-lg bg-card p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium truncate">{issue?.lotNo || '—'}</div>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground truncate">{itemName || '—'}</div>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-sm">
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Rolls</span>
+                              <span className="font-medium truncate">{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'} × {row.rollCount || 0}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Cut</span>
+                              <span className="truncate">{cutName || '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Net</span>
+                              <span className="font-medium">{formatKg(net)}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Barcode</span>
+                              <span className="font-mono text-xs truncate">{row.barcode || '—'}</span>
+                            </div>
+                          </div>
+                          <div className="mt-2">
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </div>
+                        </div>
+                        <DisabledWithTooltip
+                          disabled={!canDelete || deletingKey === `holo:${row.id}`}
+                          tooltip="You do not have permission to delete opening stock records."
+                        >
                           <Button
                             variant="ghost"
                             size="icon"
-                            disabled={deletingKey === `holo:${row.id}`}
+                            className="h-10 w-10"
                             onClick={() => handleDeleteOpeningHoloRow(row.id)}
                           >
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
-                        </TableCell>
+                        </DisabledWithTooltip>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Lot</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Barcode</TableHead>
+                      <TableHead>Roll Type</TableHead>
+                      <TableHead>Rolls</TableHead>
+                      <TableHead>Cut</TableHead>
+                      <TableHead>Net Wt</TableHead>
+                      <TableHead>Added By</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openingHistory.holo.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={10} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
                       </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                    ) : openingHistory.holo.map(row => {
+                      const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                      const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                      const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                      const cutName = resolved.cutName;
+                      return (
+                        <TableRow key={row.id}>
+                          <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                          <TableCell>{issue?.lotNo || '—'}</TableCell>
+                          <TableCell>{itemName || '—'}</TableCell>
+                          <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                          <TableCell>{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'}</TableCell>
+                          <TableCell>{row.rollCount || 0}</TableCell>
+                          <TableCell>{cutName || '—'}</TableCell>
+                          <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
+                          <TableCell>
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </TableCell>
+                          <TableCell>
+                            <DisabledWithTooltip
+                              disabled={!canDelete || deletingKey === `holo:${row.id}`}
+                              tooltip="You do not have permission to delete opening stock records."
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteOpeningHoloRow(row.id)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </DisabledWithTooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
 
           {stage === 'coning' && (
-            <div className="rounded-md border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Lot</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Barcode</TableHead>
-                    <TableHead>Cones</TableHead>
-                    <TableHead>Cut</TableHead>
-                    <TableHead>Net Wt</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {openingHistory.coning.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
-                    </TableRow>
-                  ) : openingHistory.coning.map(row => {
-                    const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                    const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
-                    const cutName = resolved.cutName;
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
-                        <TableCell>{issue?.lotNo || '—'}</TableCell>
-                        <TableCell>{itemName || '—'}</TableCell>
-                        <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                        <TableCell>{row.coneCount || 0}</TableCell>
-                        <TableCell>{cutName}</TableCell>
-                        <TableCell>{formatKg(row.netWeight)}</TableCell>
-                        <TableCell>
+            <>
+              <div className="sm:hidden space-y-2">
+                {openingHistory.coning.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening coning receive entries found.</div>
+                ) : openingHistory.coning.map(row => {
+                  const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                  const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                  const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+                  const cutName = resolved.cutName;
+                  return (
+                    <div key={row.id} className="border rounded-lg bg-card p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium truncate">{issue?.lotNo || '—'}</div>
+                            <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground truncate">{itemName || '—'}</div>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-sm">
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Cones</span>
+                              <span className="font-medium">{row.coneCount || 0}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Cut</span>
+                              <span className="truncate">{cutName || '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Net</span>
+                              <span className="font-medium">{formatKg(row.netWeight)}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Barcode</span>
+                              <span className="font-mono text-xs truncate">{row.barcode || '—'}</span>
+                            </div>
+                          </div>
+                          <div className="mt-2">
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </div>
+                        </div>
+                        <DisabledWithTooltip
+                          disabled={!canDelete || deletingKey === `coning:${row.id}`}
+                          tooltip="You do not have permission to delete opening stock records."
+                        >
                           <Button
                             variant="ghost"
                             size="icon"
-                            disabled={deletingKey === `coning:${row.id}`}
+                            className="h-10 w-10"
                             onClick={() => handleDeleteOpeningConingRow(row.id)}
                           >
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
-                        </TableCell>
+                        </DisabledWithTooltip>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden sm:block rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Lot</TableHead>
+                      <TableHead>Item</TableHead>
+                      <TableHead>Barcode</TableHead>
+                      <TableHead>Cones</TableHead>
+                      <TableHead>Cut</TableHead>
+                      <TableHead>Net Wt</TableHead>
+                      <TableHead>Added By</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openingHistory.coning.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={9} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
                       </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                    ) : openingHistory.coning.map(row => {
+                      const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                      const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
+                      const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
+                      const cutName = resolved.cutName;
+                      return (
+                        <TableRow key={row.id}>
+                          <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
+                          <TableCell>{issue?.lotNo || '—'}</TableCell>
+                          <TableCell>{itemName || '—'}</TableCell>
+                          <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
+                          <TableCell>{row.coneCount || 0}</TableCell>
+                          <TableCell>{cutName}</TableCell>
+                          <TableCell>{formatKg(row.netWeight)}</TableCell>
+                          <TableCell>
+                            <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
+                          </TableCell>
+                          <TableCell>
+                            <DisabledWithTooltip
+                              disabled={!canDelete || deletingKey === `coning:${row.id}`}
+                              tooltip="You do not have permission to delete opening stock records."
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteOpeningConingRow(row.id)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </DisabledWithTooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

@@ -413,6 +413,7 @@ export const parseReceiveCrateIndex = (barcode) => {
 export const buildTspl = (dimensions, content, data = {}, options = {}) => {
   const stageKey = options.stageKey || '';
   const copiesOverride = options.copies || null;
+  const splitCopies = options.splitCopies !== false;
   const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
   const baseDensity = clampInt(dims.density ?? 8, 0, 15);
   const {
@@ -429,14 +430,17 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
     orientation,
   } = dims;
   const totalWidth = Math.max(pageWidth, width * columns + horizontalGap * (columns - 1));
+  // Enhanced buffer clearing sequence to prevent ghosting from previous print jobs
+  // This addresses printer buffer conflicts when multiple jobs are sent rapidly
   const lines = [
+    'CLS',            // Clear image buffer first to discard any pending data
     `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
     `GAP ${verticalGap.toFixed(2)} mm,0`,
     `DENSITY ${baseDensity}`,
     'SPEED 4',
     `DIRECTION ${orientation === 'landscape' ? 1 : 0}`,
     'REFERENCE 0,0',
-    'CLS',
+    'CLS',            // Clear image buffer again after setup for clean slate
   ];
 
   const fontName = '3';
@@ -735,7 +739,17 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
     });
   }
 
-  const finalCopies = copiesOverride || mergedContent.copies || 1;
+  const normalizeCopies = (val) => {
+    const num = Number(val);
+    if (!Number.isFinite(num) || num <= 0) return 1;
+    return Math.max(1, Math.round(num));
+  };
+  const finalCopies = normalizeCopies(copiesOverride || mergedContent.copies || 1);
+  if (splitCopies && finalCopies > 1) {
+    lines.push('PRINT 1');
+    const single = `${lines.join('\r\n')}\r\n`;
+    return single.repeat(finalCopies);
+  }
   lines.push(`PRINT ${finalCopies}`);
   return `${lines.join('\r\n')}\r\n`;
 };
@@ -882,6 +896,23 @@ export const setPreferredPrinter = (printerName) => {
   }
 };
 
+// Print queue to prevent rapid consecutive prints from causing buffer conflicts
+// This addresses the ghosting issue where fast consecutive jobs overlap in printer memory
+const PRINT_JOB_MIN_INTERVAL_MS = 800; // Minimum delay between print jobs
+let lastPrintJobTime = 0;
+let printQueuePromise = Promise.resolve();
+
+const waitForPrintQueue = () => {
+  const now = Date.now();
+  const elapsed = now - lastPrintJobTime;
+  const waitTime = Math.max(0, PRINT_JOB_MIN_INTERVAL_MS - elapsed);
+
+  if (waitTime > 0) {
+    return new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  return Promise.resolve();
+};
+
 export const sendToLocalPrinter = async ({
   printer,
   content,
@@ -891,26 +922,40 @@ export const sendToLocalPrinter = async ({
   if (!content) {
     return { success: false, error: 'Missing print content' };
   }
-  try {
-    const resolved = serviceBase
-      ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
-      : await resolvePrintServiceBase();
-    if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
-    const base = resolved.serviceBase;
 
-    const response = await fetch(`${base}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ printer, content, type }),
-    });
-    const result = await response.json();
-    if (result.success) {
-      return { success: true, result };
+  // Queue this print job to ensure sequential execution with delay
+  // This prevents printer buffer conflicts when users create multiple issues rapidly
+  const executeJob = async () => {
+    await waitForPrintQueue();
+
+    try {
+      const resolved = serviceBase
+        ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
+        : await resolvePrintServiceBase();
+      if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
+      const base = resolved.serviceBase;
+
+      const response = await fetch(`${base}/print`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printer, content, type }),
+      });
+
+      lastPrintJobTime = Date.now(); // Record time after job is sent
+
+      const result = await response.json();
+      if (result.success) {
+        return { success: true, result };
+      }
+      return { success: false, error: result.error || 'Failed to send print job', result };
+    } catch (err) {
+      return { success: false, error: err.message || 'Failed to send print job' };
     }
-    return { success: false, error: result.error || 'Failed to send print job', result };
-  } catch (err) {
-    return { success: false, error: err.message || 'Failed to send print job' };
-  }
+  };
+
+  // Chain this job to the queue to ensure sequential execution
+  printQueuePromise = printQueuePromise.then(executeJob).catch(() => executeJob());
+  return printQueuePromise;
 };
 
 export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {}) => {

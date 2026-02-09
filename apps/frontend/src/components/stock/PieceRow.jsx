@@ -4,6 +4,7 @@ import { formatKg } from '../../utils';
 import * as api from '../../api';
 import { Check, X, Edit2, AlertTriangle, MoreVertical, Trash2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { DisabledWithTooltip } from '../common/DisabledWithTooltip';
 
 export function PieceRow({
   p,
@@ -12,11 +13,15 @@ export function PieceRow({
   onSaved,
   pendingWeight = 0,
   isIssued = false,
+  issuedLabel = '',
   wastageWeight = 0,
   totalUnits = 0,
   onDelete,
   isDeleting = false,
-  hidePending = false
+  hidePending = false,
+  canEdit = false,
+  canDelete = false,
+  selectDisabled = false
 }) {
   const EPSILON = 1e-9;
   const [editing, setEditing] = useState(false);
@@ -59,8 +64,8 @@ export function PieceRow({
     }
   }
 
-  const canEdit = !isWastageMarked && !isIssued;
-  const canDelete = !isWastageMarked && !isIssued && p.status !== 'consumed';
+  const allowEdit = !!canEdit && !isWastageMarked && !isIssued;
+  const allowDelete = !!canDelete && !isWastageMarked && !isIssued && p.status !== 'consumed';
 
   return (
     <tr className={cn(
@@ -72,11 +77,18 @@ export function PieceRow({
           type="checkbox"
           checked={selected}
           onChange={onToggle}
-          disabled={!isAvailable || !hasPending}
+          disabled={selectDisabled || !isAvailable || !hasPending}
           className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
         />
       </td>
-      <td className="py-2 pr-2 font-mono text-xs">{p.id}</td>
+      <td className="py-2 pr-2">
+        <div className="flex flex-col">
+          <span className="font-mono text-xs">{p.id}</span>
+          {issuedLabel ? (
+            <span className="text-[10px] text-muted-foreground">({issuedLabel})</span>
+          ) : null}
+        </div>
+      </td>
       <td className="py-2 pr-2 font-mono text-xs">
         {p.barcode ? (
           <a href={api.barcodeImageUrl(p.barcode)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
@@ -131,20 +143,30 @@ export function PieceRow({
           </Button>
           {menuOpen && (
             <div className="absolute right-8 top-0 z-50 w-40 rounded-md border bg-popover p-1 shadow-md animate-in fade-in zoom-in-95 duration-100">
-              <button
-                className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                onClick={() => { setEditing(true); setMenuOpen(false); }}
-                disabled={!canEdit}
+              <DisabledWithTooltip
+                disabled={!allowEdit}
+                tooltip="You do not have permission to edit inbound records."
+                className="w-full"
               >
-                <Edit2 className="mr-2 h-3 w-3" /> Edit Weight
-              </button>
-              <button
-                className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-destructive/10 text-destructive disabled:opacity-50"
-                onClick={() => { onDelete && onDelete(p.id); setMenuOpen(false); }}
-                disabled={!canDelete || isDeleting}
+                <button
+                  className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                  onClick={() => { setEditing(true); setMenuOpen(false); }}
+                >
+                  <Edit2 className="mr-2 h-3 w-3" /> Edit Weight
+                </button>
+              </DisabledWithTooltip>
+              <DisabledWithTooltip
+                disabled={!allowDelete || isDeleting}
+                tooltip="You do not have permission to delete inbound records."
+                className="w-full"
               >
-                <Trash2 className="mr-2 h-3 w-3" /> {isDeleting ? 'Deleting...' : 'Delete Piece'}
-              </button>
+                <button
+                  className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-destructive/10 text-destructive disabled:opacity-50"
+                  onClick={() => { onDelete && onDelete(p.id); setMenuOpen(false); }}
+                >
+                  <Trash2 className="mr-2 h-3 w-3" /> {isDeleting ? 'Deleting...' : 'Delete Piece'}
+                </button>
+              </DisabledWithTooltip>
             </div>
           )}
         </div>

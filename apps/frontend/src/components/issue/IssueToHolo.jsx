@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToHolo() {
     const { db, refreshDb } = useInventory();
@@ -22,6 +23,14 @@ export function IssueToHolo() {
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [scanDialogOpen, setScanDialogOpen] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState(null);
+
+    useEffect(() => {
+        if (!scanFeedback) return;
+        const t = setTimeout(() => setScanFeedback(null), 2000);
+        return () => clearTimeout(t);
+    }, [scanFeedback]);
 
     // --- Derived Data ---
 
@@ -50,11 +59,11 @@ export function IssueToHolo() {
 
     // --- Handlers ---
 
-    async function handleScan() {
-        if (!scanInput.trim()) return;
+    function addBarcode(raw) {
+        const normalized = String(raw || '').trim().toUpperCase();
+        if (!normalized) return;
 
         // Lookup in cutter receive rows
-        const normalized = scanInput.trim().toUpperCase();
         const row = (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && (r.barcode || '').toUpperCase() === normalized);
 
         if (!row) {
@@ -85,12 +94,29 @@ export function IssueToHolo() {
             return;
         }
 
-        // Calculate Default Issue Qty (Available)
-        const issuedCount = row.issuedBobbins || 0;
-        const availCount = Math.max(0, (row.bobbinQuantity || 0) - issuedCount);
+        // Calculate Default Issue Qty (Available), factoring in dispatch
+        const totalCount = Number(row.bobbinQuantity || 0);
+        const issuedCount = Number(row.issuedBobbins || 0);
+        const dispatchedCount = Number(row.dispatchedCount || 0);
+        const countBasedAvailable = Math.max(0, totalCount - issuedCount - dispatchedCount);
 
-        const issuedWt = row.issuedBobbinWeight || 0;
-        const availWt = Math.max(0, (row.netWt || 0) - issuedWt);
+        const netWeight = Number(row.netWt || 0);
+        const issuedWt = Number(row.issuedBobbinWeight || 0);
+        const dispatchedWt = Number(row.dispatchedWeight || 0);
+        const availWt = Math.max(0, netWeight - issuedWt - dispatchedWt);
+
+        const weightBasedAvailable = totalCount > 0 && netWeight > 0
+            ? Math.floor(((availWt / netWeight) * totalCount) + 1e-6)
+            : countBasedAvailable;
+        const availCount = totalCount > 0
+            ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
+            : countBasedAvailable;
+
+        if (availCount <= 0 || availWt <= 0) {
+            alert('No bobbins available for issue (may have been dispatched).');
+            setScanInput('');
+            return;
+        }
 
         const newCrate = {
             rowId: row.id,
@@ -107,6 +133,11 @@ export function IssueToHolo() {
 
         setCrates(prev => [...prev, newCrate]);
         setScanInput('');
+        setScanFeedback(`Added ${normalized}`);
+    }
+
+    async function handleScan() {
+        return addBarcode(scanInput);
     }
 
     function updateCrate(rowId, field, val) {
@@ -285,7 +316,7 @@ export function IssueToHolo() {
             <Card>
                 <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Crates</CardTitle>
-                    <div className="flex gap-2 w-full sm:w-auto">
+                    <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Barcode"
                             value={scanInput}
@@ -294,9 +325,15 @@ export function IssueToHolo() {
                             className="flex-1 sm:w-48"
                         />
                         <Button onClick={handleScan}>Add</Button>
+                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
+                            Scan
+                        </Button>
                     </div>
                 </CardHeader>
                 <CardContent>
+                    {scanFeedback && (
+                        <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
+                    )}
                     <div className="border rounded-md overflow-x-auto">
                         <Table>
                             <TableHeader>
@@ -349,6 +386,16 @@ export function IssueToHolo() {
                     </div>
                 </CardContent>
             </Card>
+
+            <BarcodeScanDialog
+                open={scanDialogOpen}
+                onOpenChange={setScanDialogOpen}
+                onScanned={(code) => {
+                    setScanDialogOpen(false);
+                    setScanInput(code);
+                    addBarcode(code);
+                }}
+            />
         </div>
     );
 }

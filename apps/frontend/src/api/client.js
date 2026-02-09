@@ -48,10 +48,57 @@ async function request(path, { method = 'GET', body, headers } = {}) {
   return await res.json();
 }
 
+// Send FormData (for file uploads)
+async function requestFormData(path, formData) {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+  if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    }
+    const raw = await res.text();
+    let message = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      message = parsed.error || parsed.message || message;
+    } catch (_) { }
+    if (!message) message = `API POST ${path} failed with ${res.status}`;
+    throw new Error(message);
+  }
+  return await res.json();
+}
+
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
+export async function getBootstrap() { return await request('/api/bootstrap'); }
+export async function getModuleInbound() { return await request('/api/module/inbound'); }
+export async function getModuleProcess(process, options = {}) {
+  const params = new URLSearchParams();
+  if (options.full) params.set('full', 'true');
+  const qs = params.toString();
+  return await request(`/api/module/process/${process}${qs ? `?${qs}` : ''}`);
+}
+export async function getModuleOpeningStock() { return await request('/api/module/opening_stock'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
+export async function getCutterPurchaseSequenceNext() { return await request('/api/inbound/cutter_purchase/sequence/next'); }
+export async function reserveCutterPurchaseLot() { return await request('/api/inbound/cutter_purchase/reserve', { method: 'POST' }); }
+export async function logWeightCapture(payload) { return await request('/api/weight_capture', { method: 'POST', body: payload }); }
+export async function getCutterPurchaseLot(lotNo) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`);
+}
+export async function updateCutterPurchaseLot(lotNo, payload) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`, { method: 'PUT', body: payload });
+}
+export async function deleteCutterPurchaseLot(lotNo) {
+  if (!lotNo) throw new Error('lotNo is required');
+  return await request(`/api/inbound/cutter_purchase/${encodeURIComponent(lotNo)}`, { method: 'DELETE' });
+}
 export async function reserveOpeningIssueSeries(stage) {
   return await request('/api/opening_stock/issue_series/reserve', { method: 'POST', body: { stage } });
 }
@@ -67,23 +114,26 @@ export async function authLogout() { return await request('/api/auth/logout', { 
 
 // Admin (roles/users)
 export async function listAdminRoles() { return await request('/api/admin/roles'); }
-export async function createAdminRole({ key, name, description }) {
-  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description } });
+export async function createAdminRole({ key, name, description, permissions }) {
+  return await request('/api/admin/roles', { method: 'POST', body: { key, name, description, permissions } });
 }
-export async function updateAdminRole(id, { name, description }) {
-  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description } });
+export async function updateAdminRole(id, { name, description, permissions }) {
+  return await request(`/api/admin/roles/${id}`, { method: 'PUT', body: { name, description, permissions } });
 }
 export async function listAdminUsers() { return await request('/api/admin/users'); }
-export async function createAdminUser({ username, displayName, password, roleId, isActive }) {
-  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleId, isActive } });
+export async function createAdminUser({ username, displayName, password, roleIds, isActive }) {
+  return await request('/api/admin/users', { method: 'POST', body: { username, displayName, password, roleIds, isActive } });
 }
-export async function updateAdminUser(id, { displayName, roleId, isActive }) {
-  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleId, isActive } });
+export async function updateAdminUser(id, { displayName, roleIds, isActive }) {
+  return await request(`/api/admin/users/${id}`, { method: 'PUT', body: { displayName, roleIds, isActive } });
 }
 export async function resetAdminUserPassword(id, password) {
   return await request(`/api/admin/users/${id}/password`, { method: 'PUT', body: { password } });
 }
 export async function createLot(payload) { return await request('/api/lots', { method: 'POST', body: payload }); }
+export async function createCutterPurchaseInbound(payload) {
+  return await request('/api/inbound/cutter_purchase', { method: 'POST', body: payload });
+}
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
 export async function updateIssueToCutterMachine(id, payload) {
@@ -137,6 +187,9 @@ export async function deleteConingReceiveRow(id, payload) {
   return await request(`/api/receive_from_coning_machine/rows/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload });
 }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
+export async function markConingWastage(issueId) { return await request('/api/receive_from_coning_machine/mark_wastage', { method: 'POST', body: { issueId } }); }
+export async function sendDocument(formData) { return await requestFormData('/api/documents/send', formData); }
+export async function getDocumentHistory() { return await request('/api/documents/history'); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
 export async function manualReceiveFromMachine(payload) { return await manualReceiveFromCutterMachine(payload); }
@@ -225,6 +278,7 @@ export async function listWhatsappTemplates() { return await request('/api/whats
 export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
 export async function sendWhatsappEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
 export async function whatsappGroups() { return await request('/api/whatsapp/groups'); }
+export async function getWhatsappContacts() { return await request('/api/whatsapp/contacts'); }
 
 // Backups
 export async function listBackups() { return await request('/api/backups'); }
@@ -340,6 +394,9 @@ export default {
   deleteCutterReceiveChallan,
   getReceiveCrateStats,
   markPieceWastage,
+  markConingWastage,
+  sendDocument,
+  getDocumentHistory,
   updateInboundItem,
   deleteLot,
   deleteIssueToMachine,

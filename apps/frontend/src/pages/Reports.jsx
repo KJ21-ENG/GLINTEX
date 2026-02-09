@@ -2,15 +2,17 @@ import React, { useState, useEffect } from 'react';
 import * as api from '../api/client';
 import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
-    Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge
+    Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Badge
 } from '../components/ui';
 import { formatKg, formatDateDDMMYYYY, todayISO } from '../utils';
 import {
     BarChart3, Search, ChevronDown, ChevronRight,
     Package, Truck, Factory, Clock, Users, Gauge,
-    Calendar, FileBarChart2
+    Calendar, FileBarChart2, ScanLine
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useMobileDetect } from '../utils/useMobileDetect';
+import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
 
 const STAGE_ICONS = {
     inbound: Package,
@@ -89,7 +91,7 @@ function BarcodeHistory() {
         );
 
         return (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
                 {entries.map(([key, value]) => (
                     <div key={key} className="bg-muted/50 p-2 rounded">
                         <div className="text-muted-foreground text-xs capitalize">
@@ -148,7 +150,7 @@ function BarcodeHistory() {
 
             {history && history.found && (
                 <div className="space-y-4">
-                    <div className="flex justify-between items-center px-1">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 px-1">
                         <h2 className="text-lg font-semibold flex items-center gap-2">
                             <Clock className="w-5 h-5 text-primary" />
                             Barcode Journey
@@ -397,6 +399,12 @@ function ProductionReport() {
         return [item.machineNo || item.machineName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
     };
 
+    const grandTotals = report?.data?.reduce((acc, item) => {
+        acc.received += (Number(item.received) || 0);
+        acc.count += (Number(item.count || item.rollCount || item.coneCount) || 0);
+        return acc;
+    }, { received: 0, count: 0 }) || { received: 0, count: 0 };
+
     return (
         <div className="space-y-6">
             {/* Filters */}
@@ -444,7 +452,7 @@ function ProductionReport() {
 
             {/* Summary Cards */}
             {report && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <Card className="bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 border-indigo-500/20">
                         <CardContent className="py-4">
                             <div className="flex items-center gap-3">
@@ -591,14 +599,21 @@ function ProductionReport() {
 
                                                                                 return Object.entries(groupedDetails).map(([sectionName, sectionRows]) => (
                                                                                     <div key={sectionName}>
-                                                                                        {view === 'machine' && (
-                                                                                            <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
-                                                                                                <span>Section: {sectionName}</span>
-                                                                                                <span className="text-muted-foreground">
-                                                                                                    Total: {formatKg(sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0))}
-                                                                                                </span>
-                                                                                            </div>
-                                                                                        )}
+                                                                                        {(() => {
+                                                                                            const totalWeight = sectionRows.reduce((sum, r) => sum + (r.receivedWeight || 0), 0);
+                                                                                            const totalCount = sectionRows.reduce((sum, r) => sum + (r.receivedQty || 0), 0);
+                                                                                            const unitLabel = process === 'cutter' ? 'Bobbins' : process === 'holo' ? 'Rolls' : 'Cones';
+                                                                                            // Only show section label for machine view (where we have multiple sections)
+                                                                                            const showSectionLabel = view === 'machine' && sectionName !== 'All';
+                                                                                            return (
+                                                                                                <div className="px-4 py-2 bg-muted/50 font-medium text-xs border-b flex justify-between">
+                                                                                                    <span>{showSectionLabel ? `Section: ${sectionName}` : 'Details Summary'}</span>
+                                                                                                    <span className="text-muted-foreground">
+                                                                                                        Total: {totalCount} {unitLabel} | {formatKg(totalWeight)} kg
+                                                                                                    </span>
+                                                                                                </div>
+                                                                                            );
+                                                                                        })()}
                                                                                         <Table>
                                                                                             <TableHeader>
                                                                                                 <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -663,6 +678,15 @@ function ProductionReport() {
                                             );
                                         })}
                                     </TableBody>
+                                    <TableFooter>
+                                        <TableRow className="bg-muted/50 font-bold hover:bg-muted/50">
+                                            <TableCell></TableCell>
+                                            <TableCell className="text-center">Grand Total</TableCell>
+                                            {view === 'item' && <TableCell></TableCell>}
+                                            <TableCell className="text-right">{formatKg(grandTotals.received)}</TableCell>
+                                            <TableCell className="text-right">{grandTotals.count}</TableCell>
+                                        </TableRow>
+                                    </TableFooter>
                                 </Table>
                             </div>
 
@@ -686,7 +710,7 @@ function ProductionReport() {
                                             </div>
 
                                             <div className="p-4 border-t border-border/50">
-                                                <div className="grid grid-cols-2 gap-2 text-sm mb-4">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm mb-4">
                                                     {headers.slice(1).map((header, i) => (
                                                         <div key={i} className="flex justify-between">
                                                             <span className="text-muted-foreground">{header}:</span>
@@ -732,6 +756,26 @@ function ProductionReport() {
                                         </div>
                                     );
                                 })}
+
+                                {report.data.length > 0 && (
+                                    <div className="border rounded-lg bg-primary/5 shadow-sm overflow-hidden border-primary/20 mt-4">
+                                        <div className="p-4 flex items-center justify-between bg-primary/10">
+                                            <div className="font-bold text-primary">Grand Total</div>
+                                        </div>
+                                        <div className="p-4 border-t border-primary/10">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                                <div className="flex justify-between">
+                                                    <span className="text-muted-foreground">Received (kg):</span>
+                                                    <span className="font-bold">{formatKg(grandTotals.received)}</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-muted-foreground">Count:</span>
+                                                    <span className="font-bold">{grandTotals.count}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}
@@ -743,6 +787,43 @@ function ProductionReport() {
 
 export function Reports() {
     const [activeTab, setActiveTab] = useState('barcode');
+    const { isMobile, isTouchDevice } = useMobileDetect();
+    const [useMobileMode, setUseMobileMode] = useState(false);
+
+    // Auto-enable mobile mode on mobile touch devices
+    useEffect(() => {
+        if (isMobile && isTouchDevice) {
+            setUseMobileMode(true);
+        }
+    }, [isMobile, isTouchDevice]);
+
+    // Mobile view for Barcode History
+    if (useMobileMode && activeTab === 'barcode') {
+        return (
+            <div className="space-y-4">
+                {/* Header with toggle */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div>
+                        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                            <BarChart3 className="w-6 h-6" />
+                            Reports & Analytics
+                        </h1>
+                        <p className="text-muted-foreground text-sm">Scan barcode to trace history</p>
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setUseMobileMode(false)}
+                        className="flex items-center gap-2"
+                    >
+                        <Package className="w-4 h-4" />
+                        <span>Desktop View</span>
+                    </Button>
+                </div>
+                <MobileBarcodeHistory />
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6 fade-in">
@@ -756,32 +837,47 @@ export function Reports() {
                     <p className="text-muted-foreground text-sm">Track inventory lifecycle and production metrics</p>
                 </div>
 
-                {/* Tab Toggle */}
-                <div className="flex p-1 bg-muted rounded-lg">
-                    <button
-                        onClick={() => setActiveTab('barcode')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'barcode'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <Search className="w-4 h-4" />
-                        Barcode History
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('production')}
-                        className={cn(
-                            "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
-                            activeTab === 'production'
-                                ? "bg-background shadow text-foreground"
-                                : "text-muted-foreground hover:text-foreground"
-                        )}
-                    >
-                        <Factory className="w-4 h-4" />
-                        Production Report
-                    </button>
+                {/* Scanner Toggle + Tab Toggle */}
+                <div className="flex gap-2">
+                    {activeTab === 'barcode' && (
+                        <Button
+                            variant={useMobileMode ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setUseMobileMode(!useMobileMode)}
+                            className="flex items-center gap-2"
+                        >
+                            <ScanLine className="w-4 h-4" />
+                            <span className="hidden sm:inline">Scanner</span>
+                        </Button>
+                    )}
+
+                    {/* Tab Toggle */}
+                    <div className="flex p-1 bg-muted rounded-lg">
+                        <button
+                            onClick={() => setActiveTab('barcode')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'barcode'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Search className="w-4 h-4" />
+                            Barcode History
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('production')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'production'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Factory className="w-4 h-4" />
+                            Production Report
+                        </button>
+                    </div>
                 </div>
             </div>
 

@@ -3,8 +3,15 @@ import { boxTransferLookup, boxTransferExecute, boxTransferHistory, boxTransferR
 import { Button, Input, Card } from '../components/ui';
 import { ArrowRightLeft, Search, RotateCcw, Package, ArrowDown, Loader2, CheckCircle2, XCircle, History } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { estimateWeightFromCount } from '../utils';
+import { usePermission } from '../hooks/usePermission';
+import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import AccessDenied from '../components/common/AccessDenied';
+import { UserBadge } from '../components/common/UserBadge';
 
 export function BoxTransfer() {
+    const { canRead, canWrite, canDelete } = usePermission('box_transfer');
+    const isReadOnly = canRead && !canWrite;
 
     // Transfer form state
     const [fromBarcode, setFromBarcode] = useState('');
@@ -94,6 +101,7 @@ export function BoxTransfer() {
     };
 
     const handleTransfer = async () => {
+        if (isReadOnly) return;
         setError('');
         setSuccess('');
 
@@ -157,6 +165,7 @@ export function BoxTransfer() {
     };
 
     const handleReverse = async (transferId) => {
+        if (!canDelete) return;
         if (!confirm('Are you sure you want to reverse this transfer?')) return;
 
         try {
@@ -172,10 +181,14 @@ export function BoxTransfer() {
 
     const calculateWeight = () => {
         if (!fromItem || !pieceCount) return '0.000';
-        const count = parseInt(pieceCount, 10) || 0;
-        if (count <= 0 || fromItem.currentCount <= 0) return '0.000';
-        const weightPerPiece = fromItem.currentWeight / fromItem.currentCount;
-        return (count * weightPerPiece).toFixed(3);
+        const estimated = estimateWeightFromCount({
+            count: pieceCount,
+            availableCount: fromItem.currentCount,
+            availableWeight: fromItem.currentWeight,
+            totalWeight: fromItem.totalWeight,
+            totalCount: fromItem.totalCount,
+        });
+        return estimated || '0.000';
     };
 
     const getStageBadgeColor = (stage) => {
@@ -205,10 +218,19 @@ export function BoxTransfer() {
         }
     };
 
+    if (!canRead) {
+        return (
+            <div className="space-y-6 fade-in">
+                <h1 className="text-2xl font-bold tracking-tight">Box Transfer</h1>
+                <AccessDenied message="You do not have access to Box Transfer. Contact an administrator." />
+            </div>
+        );
+    }
+
     return (
-        <div className="space-y-6">
+            <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
                         <ArrowRightLeft className="h-6 w-6" />
@@ -219,6 +241,11 @@ export function BoxTransfer() {
                     </p>
                 </div>
             </div>
+            {isReadOnly && (
+                <div className="text-sm text-muted-foreground">
+                    Read-only access: you can view transfer history, but you cannot create transfers. Reversals require delete permission.
+                </div>
+            )}
 
             {/* Alerts */}
             {error && (
@@ -395,6 +422,7 @@ export function BoxTransfer() {
                                     min="1"
                                     max={fromItem.currentCount}
                                     placeholder={`Max: ${fromItem.currentCount}`}
+                                    disabled={isReadOnly}
                                 />
                             </div>
                             <div className="space-y-2">
@@ -409,6 +437,7 @@ export function BoxTransfer() {
                                     value={notes}
                                     onChange={(e) => setNotes(e.target.value)}
                                     placeholder="Add notes..."
+                                    disabled={isReadOnly}
                                 />
                             </div>
                         </div>
@@ -416,7 +445,7 @@ export function BoxTransfer() {
 
                     <Button
                         onClick={handleTransfer}
-                        disabled={loading || !fromItem || !toItem || fromItem.stage !== toItem.stage || !pieceCount}
+                        disabled={loading || isReadOnly || !fromItem || !toItem || fromItem.stage !== toItem.stage || !pieceCount}
                         className="w-full sm:w-auto"
                     >
                         {loading ? (
@@ -481,6 +510,7 @@ export function BoxTransfer() {
                                     <th className="text-right py-2 px-2 font-medium">Pieces</th>
                                     <th className="text-right py-2 px-2 font-medium">Weight</th>
                                     <th className="text-left py-2 px-2 font-medium">Status</th>
+                                    <th className="text-left py-2 px-2 font-medium">Added By</th>
                                     <th className="text-center py-2 px-2 font-medium">Actions</th>
                                 </tr>
                             </thead>
@@ -506,16 +536,24 @@ export function BoxTransfer() {
                                                 <span className="text-xs text-green-600 dark:text-green-400">Active</span>
                                             )}
                                         </td>
+                                        <td className="py-2 px-2">
+                                            <UserBadge user={transfer.createdByUser} timestamp={transfer.createdAt} />
+                                        </td>
                                         <td className="py-2 px-2 text-center">
                                             {!transfer.isReversed && !transfer.reversedById && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={() => handleReverse(transfer.id)}
-                                                    title="Reverse transfer"
+                                                <DisabledWithTooltip
+                                                    disabled={!canDelete}
+                                                    tooltip="You do not have permission to reverse transfers."
                                                 >
-                                                    <RotateCcw className="h-3 w-3" />
-                                                </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => handleReverse(transfer.id)}
+                                                        title="Reverse transfer"
+                                                    >
+                                                        <RotateCcw className="h-3 w-3" />
+                                                    </Button>
+                                                </DisabledWithTooltip>
                                             )}
                                         </td>
                                     </tr>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToConing() {
     const { db, refreshDb } = useInventory();
@@ -27,6 +28,14 @@ export function IssueToConing() {
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [scanDialogOpen, setScanDialogOpen] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState(null);
+
+    useEffect(() => {
+        if (!scanFeedback) return;
+        const t = setTimeout(() => setScanFeedback(null), 2000);
+        return () => clearTimeout(t);
+    }, [scanFeedback]);
 
     // --- Derived ---
     const coningMeta = useMemo(() => {
@@ -49,9 +58,9 @@ export function IssueToConing() {
 
     // --- Handlers ---
 
-    async function handleScan() {
-        if (!scanInput.trim()) return;
-        const normalized = scanInput.trim().toUpperCase();
+    async function addBarcode(raw) {
+        const normalized = String(raw || '').trim().toUpperCase();
+        if (!normalized) return;
         const normalizeValue = (val) => String(val || '').trim().toUpperCase();
 
         // Find in Holo Receive Rows
@@ -106,13 +115,49 @@ export function IssueToConing() {
             }
         }
 
-        // Defaults
-        const remainingRolls = Math.max(0, (row.rollCount || 0) - (row.issuedRolls || 0)); // Simplified logic, assumes 'issuedRolls' tracking exists or we rely on manual check
-        // Note: Real implementation needs strict 'issuedSoFar' check from db.issue_to_coning_machine refs. 
-        // For now assuming full crate availability if not tracking partially. 
-        // Actually, let's calculate unit weight.
+        // Defaults (factor in dispatch AND already issued to coning)
+        const totalRolls = Number(row.rollCount || 0);
+        const totalWeight = Number(row.rollWeight || 0);
+        const dispatchedRolls = Number(row.dispatchedCount || 0);
+        const dispatchedWeight = Number(row.dispatchedWeight || 0);
 
-        const unitWeight = row.rollCount > 0 ? (row.rollWeight / row.rollCount) : 0;
+        // Calculate rolls/weight already issued to coning for this specific holo receive row
+        let issuedToConingRolls = 0;
+        let issuedToConingWeight = 0;
+        (db.issue_to_coning_machine || []).forEach(coningIssue => {
+            if (coningIssue.isDeleted) return;
+            try {
+                const refs = typeof coningIssue.receivedRowRefs === 'string'
+                    ? JSON.parse(coningIssue.receivedRowRefs || '[]')
+                    : (coningIssue.receivedRowRefs || []);
+                refs.forEach(ref => {
+                    if (ref.rowId === row.id || ref.barcode === row.barcode) {
+                        issuedToConingRolls += Number(ref.issueRolls || 0);
+                        issuedToConingWeight += Number(ref.issueWeight || 0);
+                    }
+                });
+            } catch (e) { /* ignore parse errors */ }
+        });
+
+        const totalUsedRolls = dispatchedRolls + issuedToConingRolls;
+        const totalUsedWeight = dispatchedWeight + issuedToConingWeight;
+        const availableWeight = Math.max(0, totalWeight - totalUsedWeight);
+        const countBasedAvailable = Math.max(0, totalRolls - totalUsedRolls);
+        const weightBasedAvailable = totalRolls > 0 && totalWeight > 0
+            ? Math.floor(((availableWeight / totalWeight) * totalRolls) + 1e-6)
+            : countBasedAvailable;
+        const availableRolls = totalRolls > 0
+            ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
+            : countBasedAvailable;
+
+        if (availableRolls <= 0 || availableWeight <= 0) {
+            alert('No rolls available for issue (may have been dispatched).');
+            setScanInput('');
+            return;
+        }
+
+        const unitWeight = totalRolls > 0 ? (totalWeight / totalRolls) : 0;
+        const defaultIssueWeight = Number((availableRolls * unitWeight).toFixed(3));
 
         // Trace piece IDs
         let pieceIds = [];
@@ -135,14 +180,19 @@ export function IssueToConing() {
             barcode: row.barcode,
             lotNo: rowLot,
             pieceIdsDisplay, // Show piece IDs in the 'Piece' column
-            availRolls: row.rollCount,
+            availRolls: availableRolls,
             unitWeight,
-            issueRolls: row.rollCount, // Default all
-            issueWeight: row.rollWeight,
+            issueRolls: availableRolls, // Default all available
+            issueWeight: defaultIssueWeight,
             itemId: scannedItemId,
             cut: cutName
         }]);
         setScanInput('');
+        setScanFeedback(`Added ${normalized}`);
+    }
+
+    async function handleScan() {
+        return await addBarcode(scanInput);
     }
 
     function updateCrate(rowId, field, val) {
@@ -348,7 +398,7 @@ export function IssueToConing() {
             <Card>
                 <CardHeader className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                     <CardTitle>Scan Holo Crates</CardTitle>
-                    <div className="flex gap-2 w-full sm:w-auto">
+                    <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
                         <Input
                             placeholder="Scan Barcode"
                             value={scanInput}
@@ -357,9 +407,15 @@ export function IssueToConing() {
                             className="flex-1 sm:w-48"
                         />
                         <Button onClick={handleScan}>Add</Button>
+                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
+                            Scan
+                        </Button>
                     </div>
                 </CardHeader>
                 <CardContent>
+                    {scanFeedback && (
+                        <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
+                    )}
                     <div className="border rounded-md overflow-x-auto">
                         <Table>
                             <TableHeader>
@@ -411,6 +467,16 @@ export function IssueToConing() {
                     </div>
                 </CardContent>
             </Card>
+
+            <BarcodeScanDialog
+                open={scanDialogOpen}
+                onOpenChange={setScanDialogOpen}
+                onScanned={(code) => {
+                    setScanDialogOpen(false);
+                    setScanInput(code);
+                    addBarcode(code);
+                }}
+            />
         </div>
     );
 }

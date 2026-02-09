@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as api from "../api/client";
 import { normalizeDb, extractBrandFromDb, defaultBrand, THEME_KEY, themeClasses } from "../utils";
 
@@ -14,13 +14,76 @@ export const useInventory = () => {
 
 export const useBrand = useInventory;
 
+const BOOTSTRAP_KEYS = [
+  'items',
+  'yarns',
+  'cuts',
+  'twists',
+  'firms',
+  'customers',
+  'suppliers',
+  'machines',
+  'workers',
+  'bobbins',
+  'boxes',
+  'roll_types',
+  'cone_types',
+  'wrappers',
+  'settings',
+];
+
+const buildRawFromDb = (db) => ({
+  items: db?.items || [],
+  yarns: db?.yarns || [],
+  cuts: db?.cuts || [],
+  twists: db?.twists || [],
+  firms: db?.firms || [],
+  customers: db?.customers || [],
+  suppliers: db?.suppliers || [],
+  machines: db?.machines || [],
+  workers: db?.workers || [],
+  bobbins: db?.bobbins || [],
+  boxes: db?.boxes || [],
+  lots: db?.lots || [],
+  inbound_items: db?.inbound_items || [],
+  roll_types: db?.rollTypes || [],
+  cone_types: db?.cone_types || [],
+  wrappers: db?.wrappers || [],
+  issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
+  issue_to_holo_machine: db?.issue_to_holo_machine || [],
+  issue_to_coning_machine: db?.issue_to_coning_machine || [],
+  settings: db?.settings || [],
+  receive_from_cutter_machine_uploads: db?.receive_from_cutter_machine_uploads || [],
+  receive_from_cutter_machine_rows: db?.receive_from_cutter_machine_rows || [],
+  receive_from_cutter_machine_challans: db?.receive_from_cutter_machine_challans || [],
+  receive_from_cutter_machine_piece_totals: db?.receive_from_cutter_machine_piece_totals || [],
+  receive_from_holo_machine_rows: db?.receive_from_holo_machine_rows || [],
+  receive_from_holo_machine_piece_totals: db?.receive_from_holo_machine_piece_totals || [],
+  receive_from_coning_machine_rows: db?.receive_from_coning_machine_rows || [],
+  receive_from_coning_machine_piece_totals: db?.receive_from_coning_machine_piece_totals || [],
+});
+
+const getModuleKey = (module, options = {}) => {
+  if (module === 'process') {
+    const process = options.process || 'cutter';
+    const scope = options.full ? 'full' : 'default';
+    return `process:${process}:${scope}`;
+  }
+  return module;
+};
+
 export const InventoryProvider = ({ children }) => {
   // --- State ---
   const [db, setDb] = useState(() => normalizeDb({}));
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [moduleLoading, setModuleLoading] = useState({});
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || "light"); // Default to light for modern feel
+  const loadedModulesRef = useRef(new Set());
+  const [loadedModules, setLoadedModules] = useState(new Set());
+  const dbRef = useRef(db);
+  const inflightLoadsRef = useRef(new Map());
 
   const [brand, setBrand] = useState(defaultBrand);
   const [process, setProcess] = useState(() => {
@@ -33,21 +96,136 @@ export const InventoryProvider = ({ children }) => {
   // --- Derived State ---
   const cls = useMemo(() => themeClasses(theme), [theme]);
 
+  useEffect(() => {
+    dbRef.current = db;
+  }, [db]);
+
   // --- Effects ---
 
-  // 1. Load DB
-  const loadDb = useCallback(async () => {
-    const raw = await api.getDB();
-    const normalized = normalizeDb(raw);
+  const applyDbUpdate = useCallback((rawUpdate = {}, { clearKeys = [] } = {}) => {
+    const baseRaw = buildRawFromDb(dbRef.current || {});
+    const nextRaw = { ...baseRaw, ...rawUpdate };
+    clearKeys.forEach((key) => {
+      nextRaw[key] = [];
+    });
+    const normalized = normalizeDb(nextRaw);
+    dbRef.current = normalized;
     setDb(normalized);
     return normalized;
   }, []);
 
+  const patchDb = useCallback((rawUpdate = {}, options = {}) => {
+    return applyDbUpdate(rawUpdate, options);
+  }, [applyDbUpdate]);
+
+  const loadBootstrap = useCallback(async () => {
+    const key = '__bootstrap__';
+    if (inflightLoadsRef.current.has(key)) {
+      return await inflightLoadsRef.current.get(key);
+    }
+
+    const promise = (async () => {
+      const res = await api.getBootstrap();
+      const slices = res?.slices || {};
+      const allowed = res?.allowed || {};
+      const clearKeys = BOOTSTRAP_KEYS.filter((key) => allowed[key] === false);
+      const normalized = applyDbUpdate(slices, { clearKeys });
+      if (res?.brand) {
+        setBrand({
+          primary: res.brand.primary || defaultBrand.primary,
+          gold: res.brand.gold || defaultBrand.gold,
+          logoDataUrl: res.brand.logoDataUrl || '',
+          faviconDataUrl: res.brand.faviconDataUrl || '',
+        });
+      } else {
+        setBrand(extractBrandFromDb(normalized));
+      }
+      return normalized;
+    })();
+
+    inflightLoadsRef.current.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      inflightLoadsRef.current.delete(key);
+    }
+  }, [applyDbUpdate]);
+
+  const loadModuleData = useCallback(async (module, options = {}, { force = false } = {}) => {
+    const moduleKey = getModuleKey(module, options);
+    if (!force && loadedModulesRef.current.has(moduleKey)) return null;
+    if (inflightLoadsRef.current.has(moduleKey)) {
+      return await inflightLoadsRef.current.get(moduleKey);
+    }
+
+    const promise = (async () => {
+      setModuleLoading((prev) => ({ ...prev, [moduleKey]: true }));
+      try {
+        let raw = null;
+        if (module === 'inbound') {
+          raw = await api.getModuleInbound();
+        } else if (module === 'process') {
+          const process = options.process || 'cutter';
+          raw = await api.getModuleProcess(process, { full: options.full });
+        } else if (module === 'opening_stock') {
+          raw = await api.getModuleOpeningStock();
+        } else {
+          throw new Error(`Unknown module ${module}`);
+        }
+        const normalized = applyDbUpdate(raw || {});
+        loadedModulesRef.current.add(moduleKey);
+        setLoadedModules(new Set(loadedModulesRef.current));
+        return normalized;
+      } catch (err) {
+        console.error(`Failed to load module ${moduleKey}`, err);
+        throw err;
+      } finally {
+        setModuleLoading((prev) => ({ ...prev, [moduleKey]: false }));
+      }
+    })();
+
+    inflightLoadsRef.current.set(moduleKey, promise);
+    try {
+      return await promise;
+    } finally {
+      inflightLoadsRef.current.delete(moduleKey);
+    }
+  }, [applyDbUpdate]);
+
+  const loadModuleDataByKey = useCallback(async (moduleKey, { force = false } = {}) => {
+    if (moduleKey.startsWith('process:')) {
+      const parts = moduleKey.split(':');
+      const process = parts[1] || 'cutter';
+      const scope = parts[2] || 'default';
+      const full = scope === 'full';
+      return await loadModuleData('process', { process, full }, { force });
+    }
+    return await loadModuleData(moduleKey, {}, { force });
+  }, [loadModuleData]);
+
+  const ensureModuleData = useCallback(async (module, options = {}) => {
+    return await loadModuleData(module, options, { force: false });
+  }, [loadModuleData]);
+
+  const refreshModuleData = useCallback(async (module, options = {}) => {
+    return await loadModuleData(module, options, { force: true });
+  }, [loadModuleData]);
+
+  const refreshProcessData = useCallback(async (process, options = {}) => {
+    if (!process) return null;
+    const fullKey = `process:${process}:full`;
+    const wantsFull = options.full === true || loadedModulesRef.current.has(fullKey);
+    return await loadModuleData('process', { process, full: wantsFull }, { force: true });
+  }, [loadModuleData]);
+
   const refreshDb = useCallback(async () => {
     setRefreshing(true);
     try {
-      const normalized = await loadDb();
-      setBrand(extractBrandFromDb(normalized));
+      const normalized = await loadBootstrap();
+      const moduleKeys = Array.from(loadedModulesRef.current);
+      for (const key of moduleKeys) {
+        await loadModuleDataByKey(key, { force: true });
+      }
       setError(null);
       return normalized;
     } catch (err) {
@@ -57,27 +235,41 @@ export const InventoryProvider = ({ children }) => {
     } finally {
       setRefreshing(false);
     }
-  }, [loadDb]);
+  }, [loadBootstrap, loadModuleDataByKey]);
+
+  const patchIssueRecord = useCallback((process, updatedIssue) => {
+    if (!updatedIssue?.id) return;
+    const key = process === 'holo'
+      ? 'issue_to_holo_machine'
+      : process === 'coning'
+        ? 'issue_to_coning_machine'
+        : 'issue_to_cutter_machine';
+    const current = dbRef.current?.[key] || [];
+    const idx = current.findIndex(row => row.id === updatedIssue.id);
+    const next = idx >= 0
+      ? current.map(row => (row.id === updatedIssue.id ? { ...row, ...updatedIssue } : row))
+      : [updatedIssue, ...current];
+    applyDbUpdate({ [key]: next });
+  }, [applyDbUpdate]);
 
   // Initial Load
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const normalized = await loadDb();
+        await loadBootstrap();
         if (cancelled) return;
-        setBrand(extractBrandFromDb(normalized));
         setError(null);
       } catch (err) {
         if (cancelled) return;
-        console.error("Failed to load DB", err);
+        console.error("Failed to load bootstrap", err);
         setError(err.message || "Failed to load data from server");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [loadDb]);
+  }, [loadBootstrap]);
 
   // 2. Theme & Brand Handling
   useEffect(() => {
@@ -239,8 +431,15 @@ export const InventoryProvider = ({ children }) => {
     process,
     setProcess,
     refreshDb,
+    patchDb,
+    patchIssueRecord,
+    refreshModuleData,
+    refreshProcessData,
+    ensureModuleData,
+    moduleLoading,
+    loadedModules,
     ...actions
-  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, actions]);
+  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, patchDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
 
   return (
     <InventoryContext.Provider value={value}>

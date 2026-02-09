@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MoreVertical } from 'lucide-react';
 import { Button } from './Button';
+import { DisabledWithTooltip } from '../common/DisabledWithTooltip';
 
 /**
  * ActionMenu - A kebab (⋮) dropdown menu for row actions
  * 
  * @param {Object} props
- * @param {Array} props.actions - Array of action objects: { label, icon, onClick, variant, disabled }
+ * @param {Array} props.actions - Array of action objects: { label, icon, onClick, variant, disabled, disabledReason }
  *   - label: Display text
  *   - icon: Optional React node (icon component)
  *   - onClick: Click handler
@@ -59,20 +60,25 @@ export function ActionMenu({ actions = [] }) {
                 <div className="absolute right-0 z-50 mt-1 min-w-[140px] rounded-md border bg-popover shadow-md animate-in fade-in-0 zoom-in-95">
                     <div className="py-1">
                         {actions.map((action, idx) => (
-                            <button
+                            <DisabledWithTooltip
                                 key={idx}
-                                onClick={() => handleAction(action)}
-                                disabled={action.disabled}
-                                className={`
-                                    w-full flex items-center gap-2 px-3 py-2 text-sm text-left
-                                    hover:bg-muted transition-colors
-                                    disabled:opacity-50 disabled:cursor-not-allowed
-                                    ${action.variant === 'destructive' ? 'text-destructive hover:bg-destructive/10' : ''}
-                                `}
+                                disabled={!!action.disabled}
+                                tooltip={action.disabledReason || 'Action not available.'}
+                                className="w-full"
                             >
-                                {action.icon && <span className="w-4 h-4">{action.icon}</span>}
-                                {action.label}
-                            </button>
+                                <button
+                                    onClick={() => handleAction(action)}
+                                    className={`
+                                        w-full flex items-center gap-2 px-3 py-2 text-sm text-left
+                                        hover:bg-muted transition-colors
+                                        disabled:opacity-50 disabled:cursor-not-allowed
+                                        ${action.variant === 'destructive' ? 'text-destructive hover:bg-destructive/10' : ''}
+                                    `}
+                                >
+                                    {action.icon && <span className="w-4 h-4">{action.icon}</span>}
+                                    {action.label}
+                                </button>
+                            </DisabledWithTooltip>
                         ))}
                     </div>
                 </div>

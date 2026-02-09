@@ -3,6 +3,7 @@ import { Plus, Save, Edit2, X, KeyRound, RefreshCw } from 'lucide-react';
 import { Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui';
 import * as api from '../../api';
 import { useAuth } from '../../context/AuthContext';
+import { ACCESS_LEVELS, ISSUE_STAGE_PERMISSIONS, MODULE_PERMISSIONS, RECEIVE_STAGE_PERMISSIONS, normalizePermissions } from '../../utils/permissions';
 
 function formatDateTime(value) {
   if (!value) return '—';
@@ -13,9 +14,311 @@ function formatDateTime(value) {
   }
 }
 
+const ACCESS_OPTIONS = [
+  { value: ACCESS_LEVELS.NONE, label: 'None' },
+  { value: ACCESS_LEVELS.READ, label: 'Read' },
+  { value: ACCESS_LEVELS.WRITE, label: 'Read & Write' },
+];
+
+function PermissionSelect({ value, onChange, disabled }) {
+  return (
+    <Select value={String(value ?? ACCESS_LEVELS.WRITE)} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled}>
+      {ACCESS_OPTIONS.map(opt => (
+        <option key={opt.value} value={opt.value}>{opt.label}</option>
+      ))}
+    </Select>
+  );
+}
+
+function ActionToggle({ label, checked, onChange, disabled }) {
+  return (
+    <label className={`inline-flex items-center gap-2 text-xs ${disabled ? 'text-muted-foreground' : ''}`}>
+      <Checkbox checked={checked} onCheckedChange={onChange} disabled={disabled} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function PermissionEditor({ value, onChange, disabled }) {
+  const stageRows = ISSUE_STAGE_PERMISSIONS.map(issueStage => ({
+    stage: issueStage.stage,
+    label: issueStage.label,
+    issueKey: issueStage.key,
+    issueSupportsEdit: !!issueStage.supportsEdit,
+    issueSupportsDelete: !!issueStage.supportsDelete,
+    receiveKey: (RECEIVE_STAGE_PERMISSIONS.find(r => r.stage === issueStage.stage) || {}).key,
+    receiveSupportsEdit: !!(RECEIVE_STAGE_PERMISSIONS.find(r => r.stage === issueStage.stage) || {}).supportsEdit,
+    receiveSupportsDelete: !!(RECEIVE_STAGE_PERMISSIONS.find(r => r.stage === issueStage.stage) || {}).supportsDelete,
+  }));
+
+  const updatePermission = (key, level) => {
+    if (!key) return;
+    const next = {
+      ...value,
+      [key]: level,
+    };
+    if (level <= ACCESS_LEVELS.NONE) {
+      next[`${key}.edit`] = ACCESS_LEVELS.NONE;
+      next[`${key}.delete`] = ACCESS_LEVELS.NONE;
+    }
+    onChange(next);
+  };
+
+  const updateAction = (key, action, enabled) => {
+    if (!key) return;
+    onChange({
+      ...value,
+      [`${key}.${action}`]: enabled ? ACCESS_LEVELS.READ : ACCESS_LEVELS.NONE,
+    });
+  };
+
+  const isActionEnabled = (key, action) => Number(value?.[`${key}.${action}`] || 0) >= ACCESS_LEVELS.READ;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-sm font-medium mb-2">Module Permissions</div>
+        <div className="hidden md:grid grid-cols-1 md:grid-cols-2 gap-3">
+          {MODULE_PERMISSIONS.map((perm) => (
+            <div key={perm.key} className="flex items-center justify-between gap-3 border rounded-md px-3 py-2">
+              <span className="text-sm">{perm.label}</span>
+              <div className="flex items-center gap-3">
+                <div className="w-40">
+                  <PermissionSelect
+                    value={value?.[perm.key]}
+                    onChange={(level) => updatePermission(perm.key, level)}
+                    disabled={disabled}
+                  />
+                </div>
+                {perm.supportsEdit && (
+                  <ActionToggle
+                    label="Edit"
+                    checked={isActionEnabled(perm.key, 'edit')}
+                    onChange={(checked) => updateAction(perm.key, 'edit', checked)}
+                    disabled={disabled || Number(value?.[perm.key] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+                {perm.supportsDelete && (
+                  <ActionToggle
+                    label="Delete"
+                    checked={isActionEnabled(perm.key, 'delete')}
+                    onChange={(checked) => updateAction(perm.key, 'delete', checked)}
+                    disabled={disabled || Number(value?.[perm.key] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Mobile cards */}
+        <div className="md:hidden space-y-2">
+          {MODULE_PERMISSIONS.map((perm) => {
+            const level = value?.[perm.key];
+            const baseDisabled = disabled || Number(level || 0) <= ACCESS_LEVELS.NONE;
+            return (
+              <div key={perm.key} className="border rounded-lg bg-card p-3 space-y-2">
+                <div className="font-medium text-sm">{perm.label}</div>
+                <PermissionSelect
+                  value={value?.[perm.key]}
+                  onChange={(lvl) => updatePermission(perm.key, lvl)}
+                  disabled={disabled}
+                />
+                {(perm.supportsEdit || perm.supportsDelete) ? (
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {perm.supportsEdit ? (
+                      <ActionToggle
+                        label="Edit"
+                        checked={isActionEnabled(perm.key, 'edit')}
+                        onChange={(checked) => updateAction(perm.key, 'edit', checked)}
+                        disabled={baseDisabled}
+                      />
+                    ) : null}
+                    {perm.supportsDelete ? (
+                      <ActionToggle
+                        label="Delete"
+                        checked={isActionEnabled(perm.key, 'delete')}
+                        onChange={(checked) => updateAction(perm.key, 'delete', checked)}
+                        disabled={baseDisabled}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-sm font-medium mb-2">Stage Permissions (Issue & Receive)</div>
+        <div className="hidden md:grid grid-cols-1 md:grid-cols-5 gap-2 text-sm">
+          <div className="font-medium text-muted-foreground">Stage</div>
+          <div className="font-medium text-muted-foreground">Issue</div>
+          <div className="font-medium text-muted-foreground">Receive</div>
+          <div className="font-medium text-muted-foreground">Issue Actions</div>
+          <div className="font-medium text-muted-foreground">Receive Actions</div>
+          {stageRows.map((row) => (
+            <React.Fragment key={row.stage}>
+              <div className="flex items-center">{row.label}</div>
+              <PermissionSelect
+                value={value?.[row.issueKey]}
+                onChange={(level) => updatePermission(row.issueKey, level)}
+                disabled={disabled}
+              />
+              <PermissionSelect
+                value={value?.[row.receiveKey]}
+                onChange={(level) => updatePermission(row.receiveKey, level)}
+                disabled={disabled}
+              />
+              <div className="flex items-center gap-3">
+                {row.issueSupportsEdit && (
+                  <ActionToggle
+                    label="Edit"
+                    checked={isActionEnabled(row.issueKey, 'edit')}
+                    onChange={(checked) => updateAction(row.issueKey, 'edit', checked)}
+                    disabled={disabled || Number(value?.[row.issueKey] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+                {row.issueSupportsDelete && (
+                  <ActionToggle
+                    label="Delete"
+                    checked={isActionEnabled(row.issueKey, 'delete')}
+                    onChange={(checked) => updateAction(row.issueKey, 'delete', checked)}
+                    disabled={disabled || Number(value?.[row.issueKey] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {row.receiveSupportsEdit && (
+                  <ActionToggle
+                    label="Edit"
+                    checked={isActionEnabled(row.receiveKey, 'edit')}
+                    onChange={(checked) => updateAction(row.receiveKey, 'edit', checked)}
+                    disabled={disabled || Number(value?.[row.receiveKey] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+                {row.receiveSupportsDelete && (
+                  <ActionToggle
+                    label="Delete"
+                    checked={isActionEnabled(row.receiveKey, 'delete')}
+                    onChange={(checked) => updateAction(row.receiveKey, 'delete', checked)}
+                    disabled={disabled || Number(value?.[row.receiveKey] || 0) <= ACCESS_LEVELS.NONE}
+                  />
+                )}
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
+
+        {/* Mobile stage accordion cards */}
+        <div className="md:hidden space-y-2">
+          {stageRows.map((row) => {
+            const issueLevel = Number(value?.[row.issueKey] || 0);
+            const recvLevel = Number(value?.[row.receiveKey] || 0);
+            const issueBaseDisabled = disabled || issueLevel <= ACCESS_LEVELS.NONE;
+            const recvBaseDisabled = disabled || recvLevel <= ACCESS_LEVELS.NONE;
+
+            return (
+              <details key={row.stage} className="border rounded-lg bg-card p-3">
+                <summary className="cursor-pointer select-none font-medium text-sm">
+                  {row.label}
+                </summary>
+                <div className="pt-3 space-y-3">
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Issue</div>
+                    <PermissionSelect
+                      value={value?.[row.issueKey]}
+                      onChange={(lvl) => updatePermission(row.issueKey, lvl)}
+                      disabled={disabled}
+                    />
+                    {(row.issueSupportsEdit || row.issueSupportsDelete) ? (
+                      <div className="flex flex-wrap gap-3">
+                        {row.issueSupportsEdit ? (
+                          <ActionToggle
+                            label="Edit"
+                            checked={isActionEnabled(row.issueKey, 'edit')}
+                            onChange={(checked) => updateAction(row.issueKey, 'edit', checked)}
+                            disabled={issueBaseDisabled}
+                          />
+                        ) : null}
+                        {row.issueSupportsDelete ? (
+                          <ActionToggle
+                            label="Delete"
+                            checked={isActionEnabled(row.issueKey, 'delete')}
+                            onChange={(checked) => updateAction(row.issueKey, 'delete', checked)}
+                            disabled={issueBaseDisabled}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receive</div>
+                    <PermissionSelect
+                      value={value?.[row.receiveKey]}
+                      onChange={(lvl) => updatePermission(row.receiveKey, lvl)}
+                      disabled={disabled}
+                    />
+                    {(row.receiveSupportsEdit || row.receiveSupportsDelete) ? (
+                      <div className="flex flex-wrap gap-3">
+                        {row.receiveSupportsEdit ? (
+                          <ActionToggle
+                            label="Edit"
+                            checked={isActionEnabled(row.receiveKey, 'edit')}
+                            onChange={(checked) => updateAction(row.receiveKey, 'edit', checked)}
+                            disabled={recvBaseDisabled}
+                          />
+                        ) : null}
+                        {row.receiveSupportsDelete ? (
+                          <ActionToggle
+                            label="Delete"
+                            checked={isActionEnabled(row.receiveKey, 'delete')}
+                            onChange={(checked) => updateAction(row.receiveKey, 'delete', checked)}
+                            disabled={recvBaseDisabled}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleMultiSelect({ roles, selectedIds, onChange, disabled }) {
+  const toggle = (roleId) => {
+    if (disabled) return;
+    if (selectedIds.includes(roleId)) {
+      onChange(selectedIds.filter(id => id !== roleId));
+    } else {
+      onChange([...selectedIds, roleId]);
+    }
+  };
+
+  return (
+    <div className="border rounded-md p-2 space-y-2 max-h-40 overflow-auto">
+      {(roles || []).length === 0 ? (
+        <div className="text-xs text-muted-foreground">No roles available.</div>
+      ) : (roles || []).map((role) => (
+        <label key={role.id} className="flex items-center gap-2 text-sm">
+          <Checkbox checked={selectedIds.includes(role.id)} onCheckedChange={() => toggle(role.id)} />
+          <span>{role.name} ({role.key})</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export default function UserManagement() {
   const { user } = useAuth();
-  const isAdmin = user?.roleKey === 'admin';
+  const isAdmin = user?.isAdmin || (user?.roleKeys || []).includes('admin');
 
   const [roles, setRoles] = useState([]);
   const [users, setUsers] = useState([]);
@@ -25,19 +328,21 @@ export default function UserManagement() {
   const [roleKey, setRoleKey] = useState('');
   const [roleName, setRoleName] = useState('');
   const [roleDescription, setRoleDescription] = useState('');
+  const [rolePermissions, setRolePermissions] = useState(() => normalizePermissions({}));
   const [editingRoleId, setEditingRoleId] = useState(null);
   const [editRoleName, setEditRoleName] = useState('');
   const [editRoleDescription, setEditRoleDescription] = useState('');
+  const [editRolePermissions, setEditRolePermissions] = useState(() => normalizePermissions({}));
 
   const [newUsername, setNewUsername] = useState('');
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newRoleId, setNewRoleId] = useState('');
+  const [newRoleIds, setNewRoleIds] = useState([]);
   const [newIsActive, setNewIsActive] = useState(true);
 
   const [editingUserId, setEditingUserId] = useState(null);
   const [editDisplayName, setEditDisplayName] = useState('');
-  const [editRoleId, setEditRoleId] = useState('');
+  const [editRoleIds, setEditRoleIds] = useState([]);
   const [editIsActive, setEditIsActive] = useState(true);
 
   const roleOptions = useMemo(() => roles || [], [roles]);
@@ -50,10 +355,14 @@ export default function UserManagement() {
         api.listAdminRoles(),
         api.listAdminUsers(),
       ]);
-      setRoles(rolesRes?.roles || []);
+      const nextRoles = (rolesRes?.roles || []).map(r => ({
+        ...r,
+        permissions: normalizePermissions(r.permissions || {}),
+      }));
+      setRoles(nextRoles);
       setUsers(usersRes?.users || []);
-      if (!newRoleId && (rolesRes?.roles || []).length) {
-        setNewRoleId((rolesRes.roles[0] || {}).id || '');
+      if (newRoleIds.length === 0 && nextRoles.length) {
+        setNewRoleIds([nextRoles[0].id]);
       }
     } catch (err) {
       setError(err?.message || 'Failed to load users/roles');
@@ -75,10 +384,12 @@ export default function UserManagement() {
         key: roleKey.trim().toLowerCase(),
         name: roleName.trim(),
         description: roleDescription.trim() || null,
+        permissions: rolePermissions,
       });
       setRoleKey('');
       setRoleName('');
       setRoleDescription('');
+      setRolePermissions(normalizePermissions({}));
       await load();
     } catch (err) {
       setError(err?.message || 'Failed to create role');
@@ -94,6 +405,7 @@ export default function UserManagement() {
       await api.updateAdminRole(id, {
         name: editRoleName.trim(),
         description: editRoleDescription.trim() || null,
+        permissions: editRolePermissions,
       });
       setEditingRoleId(null);
       await load();
@@ -105,7 +417,7 @@ export default function UserManagement() {
   }
 
   async function handleCreateUser() {
-    if (!newUsername.trim() || !newPassword || !newRoleId) return;
+    if (!newUsername.trim() || !newPassword || newRoleIds.length === 0) return;
     setLoading(true);
     setError(null);
     try {
@@ -113,13 +425,14 @@ export default function UserManagement() {
         username: newUsername.trim(),
         displayName: newDisplayName.trim() || null,
         password: newPassword,
-        roleId: newRoleId,
+        roleIds: newRoleIds,
         isActive: newIsActive,
       });
       setNewUsername('');
       setNewDisplayName('');
       setNewPassword('');
       setNewIsActive(true);
+      setNewRoleIds(roleOptions[0] ? [roleOptions[0].id] : []);
       await load();
     } catch (err) {
       setError(err?.message || 'Failed to create user');
@@ -134,7 +447,7 @@ export default function UserManagement() {
     try {
       await api.updateAdminUser(id, {
         displayName: editDisplayName.trim() || null,
-        roleId: editRoleId,
+        roleIds: editRoleIds,
         isActive: editIsActive,
       });
       setEditingUserId(null);
@@ -205,6 +518,9 @@ export default function UserManagement() {
               <Input value={roleDescription} onChange={(e) => setRoleDescription(e.target.value)} placeholder="Optional" />
             </div>
           </div>
+          <div className="rounded-md border bg-muted/10 p-4">
+            <PermissionEditor value={rolePermissions} onChange={setRolePermissions} />
+          </div>
           <Button onClick={handleCreateRole} disabled={loading || !roleKey.trim() || !roleName.trim()}>
             <Plus className="w-4 h-4 mr-2" /> Add Role
           </Button>
@@ -261,6 +577,7 @@ export default function UserManagement() {
                               setEditingRoleId(r.id);
                               setEditRoleName(r.name || '');
                               setEditRoleDescription(r.description || '');
+                              setEditRolePermissions(normalizePermissions(r.permissions || {}));
                             }}
                           >
                             <Edit2 className="w-4 h-4" />
@@ -302,12 +619,20 @@ export default function UserManagement() {
                       setEditingRoleId(r.id);
                       setEditRoleName(r.name || '');
                       setEditRoleDescription(r.description || '');
+                      setEditRolePermissions(normalizePermissions(r.permissions || {}));
                     }}><Edit2 className="w-4 h-4" /></Button>
                   </div>
                 )}
               </div>
             ))}
           </div>
+
+          {editingRoleId && (
+            <div className="rounded-md border bg-muted/10 p-4">
+              <div className="text-sm font-medium mb-2">Edit Permissions</div>
+              <PermissionEditor value={editRolePermissions} onChange={setEditRolePermissions} />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -329,13 +654,9 @@ export default function UserManagement() {
               <Label>Password</Label>
               <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min 6 chars" />
             </div>
-            <div className="space-y-2">
-              <Label>Role</Label>
-              <Select value={newRoleId} onChange={(e) => setNewRoleId(e.target.value)} className="h-10">
-                {(roleOptions || []).map((r) => (
-                  <option key={r.id} value={r.id}>{r.name} ({r.key})</option>
-                ))}
-              </Select>
+            <div className="space-y-2 lg:col-span-2">
+              <Label>Roles</Label>
+              <RoleMultiSelect roles={roleOptions} selectedIds={newRoleIds} onChange={setNewRoleIds} />
             </div>
             <div className="space-y-2">
               <Label>Active</Label>
@@ -345,7 +666,7 @@ export default function UserManagement() {
               </div>
             </div>
           </div>
-          <Button onClick={handleCreateUser} disabled={loading || !newUsername.trim() || !newPassword || !newRoleId}>
+          <Button onClick={handleCreateUser} disabled={loading || !newUsername.trim() || !newPassword || newRoleIds.length === 0}>
             <Plus className="w-4 h-4 mr-2" /> Add User
           </Button>
 
@@ -355,7 +676,7 @@ export default function UserManagement() {
                 <TableRow>
                   <TableHead>Username</TableHead>
                   <TableHead>Display Name</TableHead>
-                  <TableHead>Role</TableHead>
+                  <TableHead>Roles</TableHead>
                   <TableHead>Active</TableHead>
                   <TableHead>Last Login</TableHead>
                   <TableHead className="w-[170px] text-right">Actions</TableHead>
@@ -378,15 +699,11 @@ export default function UserManagement() {
                     </TableCell>
                     <TableCell>
                       {editingUserId === u.id ? (
-                        <Select value={editRoleId} onChange={(e) => setEditRoleId(e.target.value)} className="h-8">
-                          {(roleOptions || []).map((r) => (
-                            <option key={r.id} value={r.id}>{r.name} ({r.key})</option>
-                          ))}
-                        </Select>
+                        <RoleMultiSelect roles={roleOptions} selectedIds={editRoleIds} onChange={setEditRoleIds} />
                       ) : (
-                        u.role ? (
-                          u.role.name
-                        ) : '—'
+                        (u.roles && u.roles.length > 0)
+                          ? u.roles.map(r => r.name).join(', ')
+                          : '—'
                       )}
                     </TableCell>
                     <TableCell>
@@ -416,7 +733,7 @@ export default function UserManagement() {
                             onClick={() => {
                               setEditingUserId(u.id);
                               setEditDisplayName(u.displayName || '');
-                              setEditRoleId(u.role?.id || (roleOptions[0] ? roleOptions[0].id : ''));
+                              setEditRoleIds((u.roles || []).map(r => r.id));
                               setEditIsActive(!!u.isActive);
                             }}
                           >
@@ -443,11 +760,7 @@ export default function UserManagement() {
                 {editingUserId === u.id ? (
                   <div className="space-y-2">
                     <Input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} placeholder="Display Name" />
-                    <Select value={editRoleId} onChange={(e) => setEditRoleId(e.target.value)}>
-                      {(roleOptions || []).map((r) => (
-                        <option key={r.id} value={r.id}>{r.name} ({r.key})</option>
-                      ))}
-                    </Select>
+                    <RoleMultiSelect roles={roleOptions} selectedIds={editRoleIds} onChange={setEditRoleIds} />
                     <div className="flex items-center gap-2">
                       <Checkbox checked={editIsActive} onCheckedChange={(v) => setEditIsActive(!!v)} />
                       <span className="text-sm">{editIsActive ? 'Active' : 'Disabled'}</span>
@@ -463,7 +776,7 @@ export default function UserManagement() {
                       <div className="font-medium">{u.displayName || u.username}</div>
                       <div className="text-xs text-muted-foreground">
                         <span className="font-mono">{u.username}</span>
-                        {u.role && <span className="ml-2">• {u.role.name}</span>}
+                        {u.roles && u.roles.length > 0 && <span className="ml-2">• {u.roles.map(r => r.name).join(', ')}</span>}
                       </div>
                       <div className="text-xs mt-1">
                         <span className={u.isActive ? 'text-green-600' : 'text-orange-600'}>{u.isActive ? 'Active' : 'Disabled'}</span>
@@ -474,7 +787,7 @@ export default function UserManagement() {
                       <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
                         setEditingUserId(u.id);
                         setEditDisplayName(u.displayName || '');
-                        setEditRoleId(u.role?.id || (roleOptions[0] ? roleOptions[0].id : ''));
+                        setEditRoleIds((u.roles || []).map(r => r.id));
                         setEditIsActive(!!u.isActive);
                       }}><Edit2 className="w-4 h-4" /></Button>
                       <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleResetPassword(u)} title="Reset password">
@@ -491,4 +804,3 @@ export default function UserManagement() {
     </div>
   );
 }
-

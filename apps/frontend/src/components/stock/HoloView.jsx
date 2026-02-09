@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
@@ -78,9 +78,17 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
       const dispatchedRolls = Number(row.dispatchedCount || 0);
       const dispatchedWeight = Number(row.dispatchedWeight || 0);
-      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight);
+      const issuedToConingRolls = Number(row.issuedToConingRolls || 0);
+      const issuedToConingWeight = Number(row.issuedToConingWeight || 0);
+      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight - issuedToConingWeight);
       const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
-      const availableRolls = Math.max(0, Number(row.rollCount || 0) - dispatchedRolls);
+      const availableRolls = calcAvailableCountFromWeight({
+        totalCount: Number(row.rollCount || 0),
+        issuedCount: issuedToConingRolls,
+        dispatchedCount: dispatchedRolls,
+        totalWeight: baseNetWeight,
+        availableWeight,
+      }) || 0;
 
       return {
         ...row,
@@ -103,6 +111,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         rollWeight: Number(row.rollWeight || 0),
         netWeight: baseNetWeight,
         availableWeight,
+        issuedToConingRolls,
+        issuedToConingWeight,
         isSteamed: !!row.isSteamed,
         steamedAt: row.steamedAt || null,
       };
@@ -113,8 +123,16 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const holoLots = useMemo(() => {
     const map = new Map();
     holoRows.forEach((row) => {
-      const lotKey = `${row.lotNo || '(No Lot)'}::${row.twistName || '—'}`; // separate rows per twist even if lot matches
+      const lotKey = [
+        row.lotNo || '(No Lot)',
+        row.itemId || '',
+        row.yarnId || '',
+        row.cutName || '',
+        row.twistName || '',
+        row.supplierId || ''
+      ].join('::');
       const existing = map.get(lotKey) || {
+        lotKey,
         lotNo: row.lotNo || '(No Lot)',
         twistKey: row.twistName || '—',
         itemId: row.itemId || '',
@@ -150,14 +168,16 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return Array.from(map.values()).map((lot) => {
       const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
       const lotNosArr = Array.from(lot.lotNos || []);
-      const { cutNames, lotNos, ...rest } = lot;
+      const { lotNos, ...rest } = lot;
       // Determine steamed status type for filtering
       const steamedStatusType = rest.steamedRolls === 0 ? 'not_steamed'
         : rest.steamedRolls >= rest.totalRolls ? 'steamed'
           : 'partial';
       return {
         ...rest,
+        lotKey: rest.lotKey || lot.lotKey,
         cutName,
+        cutNames: lot.cutNames,
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
@@ -195,10 +215,14 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     }
 
     return list.filter(l => {
-      if (filters.item && l.itemId !== filters.item) return false;
-      if (filters.yarn && l.yarnId !== filters.yarn) return false;
-      if (filters.firm && l.firmId !== filters.firm) return false;
-      if (filters.supplier && l.supplierId !== filters.supplier) return false;
+      if (filters.item && String(l.itemId) !== String(filters.item)) return false;
+      if (filters.cut) {
+        const cutName = db?.cuts?.find(c => String(c.id) === String(filters.cut))?.name;
+        if (cutName && !l.cutNames?.has(cutName)) return false;
+      }
+      if (filters.yarn && String(l.yarnId) !== String(filters.yarn)) return false;
+      if (filters.firm && String(l.firmId) !== String(filters.firm)) return false;
+      if (filters.supplier && String(l.supplierId) !== String(filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;
       if (filters.to && l.date > filters.to) return false;
       if (filters.status !== 'all' && l.statusType !== filters.status) return false;
@@ -215,7 +239,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [holoLots, filters, search]);
+  }, [holoLots, filters, search, db.cuts]);
 
 
   const displayLots = useMemo(() => {
@@ -296,13 +320,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
             ) : (
               displayLots.map((l, idx) => {
-                const rowKey = groupBy
-                  ? (l.groupKey || idx)
-                  : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
-                const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+                // Keys must be unique and stable. Using only lotNo/twistName collides when the same lot is present
+                // with multiple yarns/cuts, which can cause stale rows to remain visible after filtering.
+                const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
+                const isExpanded = !groupBy && expandedLot === l.lotKey;
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -428,12 +452,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No holo stock found.</div>
         ) : (
           displayLots.map((l, idx) => {
-            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotNo ? `${l.lotNo}::${l.twistName || ''}` : idx);
-            const isExpanded = !groupBy && expandedLot === `${l.lotNo}::${l.twistName}`;
+            const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
+            const isExpanded = !groupBy && expandedLot === l.lotKey;
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : `${l.lotNo}::${l.twistName}`)}>
+                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">

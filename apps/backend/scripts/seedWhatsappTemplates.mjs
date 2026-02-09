@@ -71,7 +71,7 @@ async function seed() {
         '🔢 *Lot:* @lotNo\n' +
         '🧶 *Bobbins:* @metallicBobbins\n' +
         '⚖️ *Bobbin Wt:* @metallicBobbinsWeight kg\n' +
-        '🧵 *Yarn:* @yarnKg kg\n' +
+        '🧵 *Yarn:* @yarnName (@yarnKg kg)\n' +
         '🏗️ *Machine:* @machineName\n' +
         '👤 *Operator:* @operatorName\n' +
         '🌀 *Twist:* @twistName\n' +

@@ -106,6 +106,63 @@ export function groupBy(arr, keyFn) {
   return m;
 }
 
+// Mirror backend availability logic so weight-only dispatches reduce counts accurately.
+export function calcAvailableCountFromWeight({
+  totalCount,
+  issuedCount,
+  dispatchedCount,
+  totalWeight,
+  availableWeight,
+}) {
+  const total = Number(totalCount || 0);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  const issued = Number(issuedCount || 0);
+  const dispatched = Number(dispatchedCount || 0);
+  const countBased = Math.max(0, total - issued - dispatched);
+  const totalWt = Number(totalWeight || 0);
+  if (!Number.isFinite(totalWt) || totalWt <= 0) return countBased;
+  const availWt = Number(availableWeight || 0);
+  if (!Number.isFinite(availWt) || availWt <= 0) return 0;
+  const ratio = availWt / totalWt;
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  const weightBased = Math.floor((ratio * total) + 1e-6);
+  return Math.max(0, Math.min(countBased, weightBased));
+}
+
+export function estimateWeightFromCount({
+  count,
+  availableCount,
+  availableWeight,
+  avgWeightPerPiece,
+  totalWeight,
+  totalCount,
+}) {
+  const pieces = Number(count || 0);
+  if (!Number.isFinite(pieces) || pieces <= 0) return '';
+
+  const availCount = Number(availableCount || 0);
+  const availWeight = Number(availableWeight || 0);
+  if (Number.isFinite(availCount) && Number.isFinite(availWeight) && pieces === availCount && availWeight > 0) {
+    return availWeight.toFixed(3);
+  }
+
+  let avgWeight = Number(avgWeightPerPiece || 0);
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) {
+    if (Number.isFinite(availCount) && availCount > 0 && Number.isFinite(availWeight) && availWeight > 0) {
+      avgWeight = availWeight / availCount;
+    }
+  }
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) {
+    const totalCnt = Number(totalCount || 0);
+    const totalWt = Number(totalWeight || 0);
+    if (Number.isFinite(totalCnt) && totalCnt > 0 && Number.isFinite(totalWt) && totalWt > 0) {
+      avgWeight = totalWt / totalCnt;
+    }
+  }
+  if (!Number.isFinite(avgWeight) || avgWeight <= 0) return '';
+  return (pieces * avgWeight).toFixed(3);
+}
+
 /**
  * Aggregate lots by name, cullah and supplier and sum numeric fields.
  * Keeps first-seen values for non-numeric fields.

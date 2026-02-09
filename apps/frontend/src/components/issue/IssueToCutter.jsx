@@ -5,6 +5,7 @@ import { formatKg, todayISO, formatDateDDMMYYYY } from '../../utils';
 import { Search, QrCode } from 'lucide-react';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToCutter() {
     const { db, createIssueToMachine, refreshing, loading } = useInventory();
@@ -20,6 +21,14 @@ export function IssueToCutter() {
     const [barcodeScan, setBarcodeScan] = useState('');
     const [scanLoading, setScanLoading] = useState(false);
     const [issuing, setIssuing] = useState(false);
+    const [scanDialogOpen, setScanDialogOpen] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState(null);
+
+    useEffect(() => {
+        if (!scanFeedback) return;
+        const t = setTimeout(() => setScanFeedback(null), 2000);
+        return () => clearTimeout(t);
+    }, [scanFeedback]);
 
     // Filtered Lots
     const lots = db?.lots || [];
@@ -37,7 +46,7 @@ export function IssueToCutter() {
     const availablePieces = useMemo(() => {
         if (!lotNo) return [];
         return inboundItems
-            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && ii.status === 'available')
+            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && ii.status === 'available' && Number(ii.dispatchedWeight || 0) <= 0)
             .sort((a, b) => a.seq - b.seq);
     }, [inboundItems, lotNo, itemId]);
 
@@ -51,26 +60,35 @@ export function IssueToCutter() {
     }, [issueToCutterRows, lotNo]);
 
     // Handlers
-    async function handleScan(e) {
-        e.preventDefault();
-        if (!barcodeScan.trim()) return;
+    async function addBarcode(raw) {
+        const barcode = String(raw || '').trim().toUpperCase();
+        if (!barcode) return;
         setScanLoading(true);
         try {
-            const piece = await api.getInboundByBarcode(barcodeScan.trim());
+            const piece = await api.getInboundByBarcode(barcode);
             if (!piece) throw new Error('Barcode not found');
             if (piece.status !== 'available') throw new Error('Piece is not available');
+            if (Number(piece.dispatchedWeight || 0) > 0) {
+                throw new Error('Piece has been partially dispatched and cannot be issued to cutter');
+            }
 
             // Auto-select context
             if (itemId !== piece.itemId) setItemId(piece.itemId);
             if (lotNo !== piece.lotNo) setLotNo(piece.lotNo);
 
             setSelected(prev => prev.includes(piece.id) ? prev : [...prev, piece.id]);
+            setScanFeedback(`Added ${barcode}`);
         } catch (err) {
             alert(err.message);
         } finally {
             setScanLoading(false);
             setBarcodeScan('');
         }
+    }
+
+    async function handleScan(e) {
+        e.preventDefault();
+        return await addBarcode(barcodeScan);
     }
 
     async function handleIssue() {
@@ -222,7 +240,7 @@ export function IssueToCutter() {
                         <CardHeader className="pb-3">
                             <CardTitle className="text-base flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                                 <span>Select Pieces</span>
-                                <form onSubmit={handleScan} className="flex gap-2 w-full sm:w-64">
+                                <form onSubmit={handleScan} className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-64">
                                     <div className="relative flex-1">
                                         <QrCode className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                                         <Input
@@ -234,10 +252,22 @@ export function IssueToCutter() {
                                         />
                                     </div>
                                     <Button size="sm" type="submit" disabled={scanLoading}>Add</Button>
+                                    <Button
+                                        size="sm"
+                                        type="button"
+                                        className="md:hidden"
+                                        disabled={scanLoading}
+                                        onClick={() => setScanDialogOpen(true)}
+                                    >
+                                        Scan
+                                    </Button>
                                 </form>
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
+                            {scanFeedback && (
+                                <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
+                            )}
                             <div className="flex justify-between items-center mb-2">
                                 <div className="text-xs text-muted-foreground">
                                     {selected.length} selected / {availablePieces.length} available
@@ -319,6 +349,16 @@ export function IssueToCutter() {
                     </Card>
                 </div>
             </div>
+
+            <BarcodeScanDialog
+                open={scanDialogOpen}
+                onOpenChange={setScanDialogOpen}
+                onScanned={async (code) => {
+                    setScanDialogOpen(false);
+                    setBarcodeScan(code);
+                    await addBarcode(code);
+                }}
+            />
         </div>
     );
 }

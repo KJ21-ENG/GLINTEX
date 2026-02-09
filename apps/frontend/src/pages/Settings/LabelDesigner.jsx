@@ -1532,12 +1532,12 @@ const LabelDesigner = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <Button variant="ghost" size="sm" onClick={() => navigate('/app/settings')} className="px-2">
           <ArrowLeft className="w-4 h-4 mr-1" /> Back to Settings
         </Button>
         <h1 className="text-xl font-semibold">Label Designer</h1>
-        <Badge variant="outline" className="ml-auto">Silent printing via local service</Badge>
+        <Badge variant="outline" className="sm:ml-auto">Silent printing via local service</Badge>
       </div>
 
       <Card className="shadow-sm">
@@ -1847,7 +1847,7 @@ const LabelDesigner = () => {
                         {isBarcode ? (
                           <div className="space-y-2 text-xs text-muted-foreground">
                             <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
-                            <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
                                 <Label className="text-xs">Height (mm)</Label>
                                 <Input
@@ -1923,7 +1923,7 @@ const LabelDesigner = () => {
                           </div>
                         ) : isLine ? (
                           <div className="space-y-2 text-xs text-muted-foreground">
-                            <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
                                 <Label className="text-xs">Length (mm)</Label>
                                 <Input

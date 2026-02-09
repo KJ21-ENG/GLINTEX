@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { Camera, CameraOff, RefreshCw } from 'lucide-react';
 import { Button } from '../ui';
 import { cn } from '../../lib/utils';
@@ -7,19 +7,78 @@ import { cn } from '../../lib/utils';
 /**
  * BarcodeScanner component using html5-qrcode library
  * Provides camera-based barcode scanning for mobile devices
+ * 
+ * Features:
+ * - Restricted to Code 128/Code 39 formats (GLINTEX barcodes)
+ * - Pattern validation for known barcode formats
+ * - Multi-read confirmation for accuracy
+ * - Haptic feedback on successful scan
+ * - Native BarcodeDetector API when available
  */
-export function BarcodeScanner({ onScan, className, disabled = false }) {
+
+// ============ FIX #1: Restrict to GLINTEX barcode formats ============
+const SUPPORTED_FORMATS = [
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+];
+
+// ============ FIX #2: Known GLINTEX barcode patterns ============
+const VALID_BARCODE_PATTERNS = [
+    // NOTE: Lot numbers can be numeric (e.g. 001), opening-stock (OP-1064), or cutter-purchase (CP-001).
+    // Keep patterns strict to GLINTEX formats while allowing these lot prefixes.
+    /^INB-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Inbound
+    /^ICU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Cutter Issue
+    /^RCU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}-C\d{3}$/,   // Cutter Receive
+    /^IHO-\d{1,4}$/,                   // Holo Issue (1-4 digits)
+    /^RHO-\d{1,4}-C\d{3}$/,            // Holo Receive
+    /^RHO-OP-\d{1,4}-C\d{3}$/,         // Legacy Holo Opening Stock
+    /^ICO-\d{1,4}$/,                   // Coning Issue
+    /^RCO-\d{1,4}-C\d{3}$/,            // Coning Receive
+    /^RCO-OP-\d{1,4}-C\d{3}$/,         // Legacy Coning Opening Stock
+];
+
+function isValidBarcodeFormat(barcode) {
+    if (!barcode) return false;
+    return VALID_BARCODE_PATTERNS.some(pattern => pattern.test(barcode));
+}
+
+// ============ FIX #8: Haptic feedback ============
+function triggerScanFeedback() {
+    if (navigator.vibrate) {
+        navigator.vibrate(100);
+    }
+}
+
+export function BarcodeScanner({ onScan, onInvalidScan, className, disabled = false, containerId = null }) {
     const [isScanning, setIsScanning] = useState(false);
     const [error, setError] = useState(null);
     const [lastScanned, setLastScanned] = useState(null);
+    const [invalidBarcode, setInvalidBarcode] = useState(null); // P2 Fix: Visual feedback for rejected barcodes
     const lastScannedRef = useRef(null); // Ref for debounce check (avoids stale closure)
     const onScanRef = useRef(onScan);
+    const onInvalidScanRef = useRef(onInvalidScan);
     const scannerRef = useRef(null);
     const containerRef = useRef(null);
+    const containerIdRef = useRef(null);
+
+    // Use a per-instance container id so multiple scanners never conflict.
+    // html5-qrcode expects an element id.
+    if (!containerIdRef.current) {
+        if (typeof containerId === 'string' && containerId.trim()) {
+            containerIdRef.current = containerId.trim();
+        } else {
+            const rand = Math.random().toString(36).slice(2, 10);
+            containerIdRef.current = `barcode-scanner-${Date.now()}-${rand}`;
+        }
+    }
+
+    // ============ FIX #3: Multi-read confirmation ============
+    const confirmationRef = useRef({ barcode: null, count: 0 });
 
     useEffect(() => {
         onScanRef.current = onScan;
-    }, [onScan]);
+        onInvalidScanRef.current = onInvalidScan;
+    }, [onScan, onInvalidScan]);
 
     const startScanner = async () => {
         if (!containerRef.current || disabled) return;
@@ -28,7 +87,7 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
             setError(null);
 
             // Create scanner instance
-            const scanner = new Html5Qrcode('barcode-scanner-container');
+            const scanner = new Html5Qrcode(containerIdRef.current);
             scannerRef.current = scanner;
 
             // Get available cameras
@@ -45,22 +104,69 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
             );
             const cameraId = backCamera ? backCamera.id : devices[0].id;
 
-            // Start scanning
+            // Start scanning with enhanced configuration
             await scanner.start(
                 cameraId,
                 {
-                    fps: 10,
-                    qrbox: { width: 250, height: 150 },
+                    // ============ FIX #4: Lower FPS for better accuracy ============
+                    fps: 5,
+                    // ============ FIX #5: Responsive QRBox sizing ============
+                    qrbox: (viewfinderWidth, viewfinderHeight) => {
+                        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                        return {
+                            width: Math.floor(minEdge * 0.8),
+                            height: Math.floor(minEdge * 0.5),
+                        };
+                    },
                     aspectRatio: 1.0,
+                    // ============ FIX #1: Format restriction ============
+                    formatsToSupport: SUPPORTED_FORMATS,
+                    // ============ FIX #6: Native BarcodeDetector API ============
+                    experimentalFeatures: {
+                        useBarCodeDetectorIfSupported: true,
+                    },
                 },
                 (decodedText) => {
-                    // Debounce: don't scan same barcode within 2 seconds
-                    // Use ref to avoid stale closure issue
-                    if (lastScannedRef.current === decodedText) return;
+                    const normalized = decodedText.trim().toUpperCase();
 
-                    lastScannedRef.current = decodedText;
-                    setLastScanned(decodedText); // Also update state for UI display
-                    onScanRef.current?.(decodedText);
+                    // ============ FIX #2: Pattern validation ============
+                    if (!isValidBarcodeFormat(normalized)) {
+                        console.warn('Invalid barcode format rejected:', normalized);
+                        confirmationRef.current = { barcode: null, count: 0 };
+
+                        // P2 Fix: Show visual feedback for rejected barcode
+                        setInvalidBarcode(normalized);
+                        setTimeout(() => setInvalidBarcode(null), 1500);
+
+                        onInvalidScanRef.current?.(normalized);
+                        return;
+                    }
+
+                    // ============ FIX #3: Multi-read confirmation ============
+                    // Require same barcode to be decoded 2 consecutive times
+                    if (confirmationRef.current.barcode === normalized) {
+                        confirmationRef.current.count++;
+                    } else {
+                        confirmationRef.current = { barcode: normalized, count: 1 };
+                    }
+
+                    if (confirmationRef.current.count < 2) {
+                        return; // Wait for confirmation read
+                    }
+
+                    // Reset confirmation after successful double-read
+                    confirmationRef.current = { barcode: null, count: 0 };
+
+                    // Debounce: don't scan same barcode within 2 seconds
+                    if (lastScannedRef.current === normalized) return;
+
+                    lastScannedRef.current = normalized;
+                    setLastScanned(normalized);
+
+                    // ============ FIX #8: Haptic feedback ============
+                    triggerScanFeedback();
+
+                    onScanRef.current?.(normalized);
 
                     // Reset after 2 seconds to allow re-scanning
                     setTimeout(() => {
@@ -98,6 +204,8 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
     useEffect(() => {
         if (!disabled) {
             startScanner();
+        } else {
+            stopScanner();
         }
 
         return () => {
@@ -113,7 +221,7 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
         <div className={cn("relative w-full h-full bg-black rounded-lg overflow-hidden", className)}>
             {/* Scanner container */}
             <div
-                id="barcode-scanner-container"
+                id={containerIdRef.current}
                 ref={containerRef}
                 className="w-full h-full"
             />
@@ -171,6 +279,15 @@ export function BarcodeScanner({ onScan, className, disabled = false }) {
                 <div className="absolute top-4 left-0 right-0 text-center">
                     <span className="bg-green-500 text-white px-4 py-2 rounded-full text-sm font-medium animate-pulse">
                         ✓ Scanned: {lastScanned}
+                    </span>
+                </div>
+            )}
+
+            {/* P2 Fix: Invalid barcode indicator */}
+            {invalidBarcode && (
+                <div className="absolute top-4 left-0 right-0 text-center">
+                    <span className="bg-red-500 text-white px-4 py-2 rounded-full text-sm font-medium">
+                        ✕ Invalid format
                     </span>
                 </div>
             )}

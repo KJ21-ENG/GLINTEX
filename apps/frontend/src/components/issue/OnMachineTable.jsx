@@ -178,16 +178,8 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.receive_from_cutter_machine_piece_totals]);
 
-    const holoPieceTotals = useMemo(() => {
-        const map = new Map();
-        (db.receive_from_holo_machine_piece_totals || []).forEach(pt => {
-            map.set(pt.pieceId, {
-                totalNetWeight: pt.totalNetWeight || 0,
-                wastageNetWeight: pt.wastageNetWeight || 0,
-            });
-        });
-        return map;
-    }, [db.receive_from_holo_machine_piece_totals]);
+    // Note: holoPieceTotals removed - we now calculate received weight directly from receive rows
+    // linked by issueId to fix the bug where all issues sharing a piece would disappear
 
     const coningPieceTotals = useMemo(() => {
         const map = new Map();
@@ -266,13 +258,25 @@ export function OnMachineTable({ db, process }) {
                     pieceIds = [`${issue.lotNo}-1`];
                 }
 
+                // FIX: Calculate received weight from receive rows directly linked to THIS issue
+                // instead of using shared piece totals (which caused all issues sharing a piece to disappear)
                 let totalReceived = 0;
                 let totalWastage = 0;
-                pieceIds.forEach((pieceId) => {
-                    const totals = holoPieceTotals.get(pieceId);
-                    if (totals) {
-                        totalReceived += totals.totalNetWeight || 0;
-                        totalWastage += totals.wastageNetWeight || 0;
+                const holoReceiveRows = db.receive_from_holo_machine_rows || [];
+                holoReceiveRows.forEach(row => {
+                    if (row.issueId === issue.id && !row.isDeleted) {
+                        // Calculate net weight for this row
+                        const netWeight = Number.isFinite(row.rollWeight)
+                            ? Number(row.rollWeight)
+                            : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
+                        // Check if this is a wastage row (rollType with 'wastage' in name or specific flag)
+                        const rollType = db.roll_types?.find(rt => rt.id === row.rollTypeId);
+                        const isWastage = rollType?.name?.toLowerCase().includes('wastage');
+                        if (isWastage) {
+                            totalWastage += netWeight;
+                        } else {
+                            totalReceived += netWeight;
+                        }
                     }
                 });
 
@@ -398,7 +402,7 @@ export function OnMachineTable({ db, process }) {
 
             return true;
         });
-    }, [db, process, cutterPieceTotals, holoPieceTotals, coningPieceTotals, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
+    }, [db, process, cutterPieceTotals, coningPieceTotals, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
 
     const handleGoToReceive = (entry) => {
         // Navigate to receive page with barcode param for auto-scan

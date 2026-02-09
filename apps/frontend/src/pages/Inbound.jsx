@@ -4,7 +4,7 @@ import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, uid, todayISO, formatDateDDMMYYYY } from '../utils';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
+import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { Trash2, Plus, Save, ArrowUpDown, Search, Printer, Download, Edit2 } from 'lucide-react';
 import { exportHistoryToExcel } from '../services';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
@@ -325,8 +325,46 @@ export function Inbound() {
                     machineNo: row.machineId ? (getMachine(row.machineId)?.name || '') : null,
                 })),
             };
-            await api.createCutterPurchaseInbound(payload);
+            // Capture item name before async call (db state may be stale after refreshDb)
+            const itemName = db.items?.find(i => i.id === itemId)?.name;
+            const result = await api.createCutterPurchaseInbound(payload);
             await refreshDb();
+
+            // Print stickers using actual lotNo and barcodes from API response (like Raw Inbound)
+            const lotNo = result?.lotNo;
+            const rows = result?.rows || [];
+            if (rows.length > 0) {
+                const cutterTemplate = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+                if (cutterTemplate) {
+                    const confirmPrint = window.confirm(`Print ${rows.length} sticker(s) for lot ${lotNo}?`);
+                    if (confirmPrint) {
+                        const batchData = rows.map((row, idx) => {
+                            const cartRow = cutterCart[idx];
+                            return {
+                                lotNo,
+                                itemName,
+                                pieceId: result.pieceId,
+                                barcode: row.barcode,
+                                netWeight: cartRow?.netWeight,
+                                grossWeight: cartRow?.grossWeight,
+                                tareWeight: cartRow?.tareWeight,
+                                bobbinQty: cartRow?.bobbinQuantity,
+                                bobbinName: getBobbin(cartRow?.bobbinId)?.name,
+                                boxName: getBox(cartRow?.boxId)?.name,
+                                cut: getCut(cartRow?.cutId)?.name,
+                                cutName: getCut(cartRow?.cutId)?.name,
+                                operatorName: getOperator(cartRow?.operatorId)?.name,
+                                helperName: getHelper(cartRow?.helperId)?.name,
+                                shift: cartRow?.shift,
+                                machineName: cartRow?.machineId ? getMachine(cartRow.machineId)?.name : null,
+                                date,
+                            };
+                        });
+                        await printStageTemplatesBatch(LABEL_STAGE_KEYS.CUTTER_RECEIVE, batchData, { template: cutterTemplate });
+                    }
+                }
+            }
+
             setCutterCart([]);
             setCutterEntry(EMPTY_CUTTER_ENTRY);
             setDate(todayISO());
@@ -340,6 +378,7 @@ export function Inbound() {
             setSaving(false);
         }
     };
+
 
     if (!canRead) {
         return (
@@ -651,44 +690,44 @@ export function Inbound() {
                         <div className="mt-6">
                             <div className="hidden sm:block rounded-md border overflow-x-auto">
                                 <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Bobbin</TableHead>
-                                        <TableHead>Qty</TableHead>
-                                        <TableHead>Box</TableHead>
-                                        <TableHead>Gross</TableHead>
-                                        <TableHead>Net</TableHead>
-                                        <TableHead>Cut</TableHead>
-                                        <TableHead>Operator</TableHead>
-                                        <TableHead className="">Action</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {cutterCart.length === 0 ? (
+                                    <TableHeader>
                                         <TableRow>
-                                            <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                                                No crates added.
-                                            </TableCell>
+                                            <TableHead>Bobbin</TableHead>
+                                            <TableHead>Qty</TableHead>
+                                            <TableHead>Box</TableHead>
+                                            <TableHead>Gross</TableHead>
+                                            <TableHead>Net</TableHead>
+                                            <TableHead>Cut</TableHead>
+                                            <TableHead>Operator</TableHead>
+                                            <TableHead className="">Action</TableHead>
                                         </TableRow>
-                                    ) : (
-                                        cutterCart.map((row) => (
-                                            <TableRow key={row.id}>
-                                                <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                                                <TableCell>{row.bobbinQuantity}</TableCell>
-                                                <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
-                                                <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                                                <TableCell>{formatKg(row.netWeight)}</TableCell>
-                                                <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
-                                                <TableCell>{row.operatorId ? getOperator(row.operatorId)?.name || '—' : '—'}</TableCell>
-                                                <TableCell className="">
-                                                    <Button variant="ghost" size="icon" onClick={() => removeCutterCrate(row.id)} disabled={purchaseReadOnly} className="h-8 w-8 text-destructive">
-                                                        <Trash2 className="w-4 h-4" />
-                                                    </Button>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {cutterCart.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                                    No crates added.
                                                 </TableCell>
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
+                                        ) : (
+                                            cutterCart.map((row) => (
+                                                <TableRow key={row.id}>
+                                                    <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
+                                                    <TableCell>{row.bobbinQuantity}</TableCell>
+                                                    <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
+                                                    <TableCell>{formatKg(row.grossWeight)}</TableCell>
+                                                    <TableCell>{formatKg(row.netWeight)}</TableCell>
+                                                    <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
+                                                    <TableCell>{row.operatorId ? getOperator(row.operatorId)?.name || '—' : '—'}</TableCell>
+                                                    <TableCell className="">
+                                                        <Button variant="ghost" size="icon" onClick={() => removeCutterCrate(row.id)} disabled={purchaseReadOnly} className="h-8 w-8 text-destructive">
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
                                 </Table>
                             </div>
 

@@ -9,13 +9,14 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
-    const { db, refreshDb } = useInventory();
+    const { db, patchDb } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
     const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    const [template, setTemplate] = useState(null);
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -29,6 +30,16 @@ export function HoloReceiveForm() {
         shift: '',
         pieceId: '',
     });
+
+    // Preload template once to avoid a network fetch on every receive save.
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            const tpl = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
+            if (alive) setTemplate(tpl || null);
+        })();
+        return () => { alive = false; };
+    }, []);
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
     useEffect(() => {
@@ -133,13 +144,15 @@ export function HoloReceiveForm() {
         }
         setSubmitting(true);
         try {
+            const rollCountNum = Number(form.rollCount);
+            const grossWeightNum = Number(form.grossWeight);
             const result = await api.manualReceiveFromHoloMachine({
                 issueId: issue.id,
                 pieceId: form.pieceId,
-                rollCount: Number(form.rollCount),
+                rollCount: rollCountNum,
                 rollTypeId: form.rollTypeId,
                 boxId: form.boxId,
-                grossWeight: Number(form.grossWeight),
+                grossWeight: grossWeightNum,
                 crateTareWeight: 0, // Handled in net calculation implicitly by backend usually, but we send what we have
                 date: form.date,
                 machineNo: db.machines.find(m => m.id === form.machineId)?.name,
@@ -147,8 +160,44 @@ export function HoloReceiveForm() {
                 shift: form.shift,
                 notes: form.notes
             });
-            const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
-            if (template && result?.row) {
+
+            // Patch local DB so UI is ready for the next entry immediately.
+            // Full refresh of the process module is expensive (it runs heavy backend aggregation),
+            // so we avoid doing it on every receive save.
+            if (result?.row?.id) {
+                const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+                const nextRows = [result.row, ...existingRows.filter(r => r?.id !== result.row.id)];
+
+                const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+                const netInc = Number(netWeight || 0);
+                const totalsIdx = existingTotals.findIndex(t => t?.pieceId === form.pieceId);
+                const nextTotals = totalsIdx >= 0
+                    ? existingTotals.map((t, idx) => {
+                        if (idx !== totalsIdx) return t;
+                        return {
+                            ...t,
+                            totalRolls: Number(t.totalRolls || 0) + (Number.isFinite(rollCountNum) ? rollCountNum : 0),
+                            totalNetWeight: Number(t.totalNetWeight || 0) + (Number.isFinite(netInc) ? netInc : 0),
+                        };
+                    })
+                    : [
+                        {
+                            pieceId: form.pieceId,
+                            totalRolls: Number.isFinite(rollCountNum) ? rollCountNum : 0,
+                            totalNetWeight: Number.isFinite(netInc) ? netInc : 0,
+                            wastageNetWeight: 0,
+                        },
+                        ...existingTotals,
+                    ];
+
+                patchDb({
+                    receive_from_holo_machine_rows: nextRows,
+                    receive_from_holo_machine_piece_totals: nextTotals,
+                });
+            }
+
+            const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE));
+            if (tpl && result?.row) {
                 const confirmPrint = window.confirm('Print sticker for this receive?');
                 if (confirmPrint) {
                     const rollTypeName = db?.rollTypes?.find((r) => r.id === form.rollTypeId)?.name;
@@ -185,11 +234,10 @@ export function HoloReceiveForm() {
                             shift: form.shift,
                             date: form.date,
                         },
-                        { template },
+                        { template: tpl },
                     );
                 }
             }
-            await refreshDb();
             alert('Received successfully');
 
             // Reset partial form

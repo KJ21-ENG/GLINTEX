@@ -9,7 +9,7 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToConing() {
-    const { db, refreshDb } = useInventory();
+    const { db, refreshProcessData } = useInventory();
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
@@ -291,7 +291,8 @@ export function IssueToConing() {
                     );
                 }
             }
-            await refreshDb();
+            // Avoid full bootstrap refresh; coning process module covers issues/receives involved here.
+            await refreshProcessData('coning');
             setCrates([]);
             alert('Issued to Coning successfully');
         } catch (e) {

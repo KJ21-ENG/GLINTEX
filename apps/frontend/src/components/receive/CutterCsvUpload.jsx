@@ -147,7 +147,7 @@ function SummaryCard({ title, summary, actions }) {
 }
 
 export function CutterCsvUpload() {
-  const { db, refreshDb } = useInventory();
+  const { db, refreshProcessData } = useInventory();
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewData, setPreviewData] = useState(null);
@@ -248,7 +248,8 @@ export function CutterCsvUpload() {
       setImportResult(result || null);
       setPreviewData(null);
       clearSelection();
-      await refreshDb();
+      // CSV import affects cutter receives; refresh only the cutter process module.
+      await refreshProcessData('cutter');
     } catch (err) {
       const issues = Array.isArray(err.details?.issues) ? err.details.issues : [];
       const duplicates = Array.isArray(err.details?.duplicates) ? err.details.duplicates : [];

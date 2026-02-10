@@ -50,7 +50,7 @@ function buildStockGroupKey(lot) {
 }
 
 export function Stock() {
-  const { db, brand, createIssueToMachine, refreshing, refreshDb, process, ensureModuleData } = useInventory();
+  const { db, brand, createIssueToMachine, refreshing, refreshProcessData, process, ensureModuleData } = useInventory();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -570,7 +570,7 @@ export function Stock() {
     setDeletingPieces(prev => new Set(prev).add(pieceId));
     try {
       await api.deleteInboundItem(pieceId);
-      await refreshDb();
+      await refreshProcessData(processId);
     } catch (err) {
       alert(err.message || 'Failed to delete piece');
     } finally {
@@ -609,7 +609,7 @@ export function Stock() {
     if (!confirm('Delete lot ' + lotNo + '? This will remove all pieces and history for this lot.')) return;
     try {
       await api.deleteLot(lotNo);
-      await refreshDb();
+      await refreshProcessData(processId);
     } catch (err) {
       alert(err.message || 'Failed to delete lot');
     }
@@ -1003,7 +1003,7 @@ export function Stock() {
                                         p={p}
                                         selected={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                         onToggle={() => togglePiece(l.lotNo, p.id)}
-                                        onSaved={refreshDb}
+                                        onSaved={() => refreshProcessData(processId)}
                                         pendingWeight={p.pendingWeight}
                                         wastageWeight={p.wastageWeight}
                                         totalUnits={p.totalUnits}

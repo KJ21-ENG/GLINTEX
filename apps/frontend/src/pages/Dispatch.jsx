@@ -26,7 +26,7 @@ const STAGES = [
 ];
 
 export function Dispatch() {
-    const { refreshDb, db } = useInventory();
+    const { db, patchDb, refreshProcessData, refreshModuleData } = useInventory();
     const { canRead, canWrite, canDelete } = usePermission('dispatch');
     const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
@@ -78,6 +78,19 @@ export function Dispatch() {
     const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
     const [newCustomerForm, setNewCustomerForm] = useState({ name: '', phone: '', address: '' });
     const [savingCustomer, setSavingCustomer] = useState(false);
+
+    const refreshAfterDispatch = async (stage) => {
+        if (stage === 'inbound') {
+            await refreshModuleData('inbound');
+            return;
+        }
+        if (stage === 'cutter' || stage === 'holo' || stage === 'coning') {
+            await refreshProcessData(stage);
+            return;
+        }
+        // Safe fallback: inbound basics are included in all process modules, but inbound is the lightest.
+        await refreshModuleData('inbound');
+    };
 
     // Load customers
     useEffect(() => {
@@ -436,7 +449,7 @@ export function Dispatch() {
             // Refresh available items regardless of print choice
             const availRes = await api.getDispatchAvailable(selectedStage);
             setAvailableItems(availRes.items || []);
-            await refreshDb();
+            await refreshAfterDispatch(selectedStage);
 
         } catch (err) {
             alert(err.message || 'Failed to create dispatch');
@@ -508,7 +521,7 @@ export function Dispatch() {
 
             const availRes = await api.getDispatchAvailable(selectedStage);
             setAvailableItems(availRes.items || []);
-            await refreshDb();
+            await refreshAfterDispatch(selectedStage);
         } catch (err) {
             alert(err.message || 'Failed to create bulk dispatch');
         } finally {
@@ -521,10 +534,12 @@ export function Dispatch() {
         if (!confirm('Are you sure you want to cancel this challan? All items will be restored.')) return;
 
         try {
+            const target = (dispatches || []).find(d => d?.challanNo === challanNo);
+            const stageToRefresh = target?.stage || selectedStage;
             await api.deleteDispatchChallan(challanNo);
             const res = await api.listDispatches();
             setDispatches(res.dispatches || []);
-            await refreshDb();
+            await refreshAfterDispatch(stageToRefresh);
         } catch (err) {
             alert(err.message || 'Failed to delete dispatch');
         }
@@ -549,7 +564,9 @@ export function Dispatch() {
             setDispatchForm(prev => ({ ...prev, customerId: res.customer.id }));
             setNewCustomerModalOpen(false);
             setNewCustomerForm({ name: '', phone: '', address: '' });
-            await refreshDb();
+            const existing = Array.isArray(db.customers) ? db.customers : [];
+            const next = [...existing.filter(c => c?.id !== res.customer.id), res.customer].sort((a, b) => (a?.name || '').localeCompare(b?.name || ''));
+            patchDb({ customers: next });
         } catch (err) {
             alert(err.message || 'Failed to create customer');
         } finally {
@@ -584,7 +601,7 @@ export function Dispatch() {
 
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
-        await refreshDb();
+        await refreshAfterDispatch(dispatchData?.stage || selectedStage);
         return res.dispatch;
     }
 
@@ -593,7 +610,7 @@ export function Dispatch() {
         const res = await api.createDispatchBulk(dispatchData);
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
-        await refreshDb();
+        await refreshAfterDispatch(dispatchData?.stage || selectedStage);
         return res;
     }
 
@@ -602,7 +619,9 @@ export function Dispatch() {
         if (readOnly) return null;
         const res = await api.createCustomer(customerData);
         setCustomers(prev => [...prev, res.customer].sort((a, b) => a.name.localeCompare(b.name)));
-        await refreshDb();
+        const existing = Array.isArray(db.customers) ? db.customers : [];
+        const next = [...existing.filter(c => c?.id !== res.customer.id), res.customer].sort((a, b) => (a?.name || '').localeCompare(b?.name || ''));
+        patchDb({ customers: next });
         return res.customer;
     }
 

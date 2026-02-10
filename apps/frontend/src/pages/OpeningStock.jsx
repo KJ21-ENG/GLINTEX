@@ -50,7 +50,7 @@ const round3 = (val) => {
 };
 
 export function OpeningStock() {
-  const { db, refreshDb, ensureModuleData } = useInventory();
+  const { db, refreshModuleData, ensureModuleData } = useInventory();
   const { canRead, canWrite, canDelete } = usePermission('opening_stock');
   const isReadOnly = canRead && !canWrite;
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
@@ -181,7 +181,7 @@ export function OpeningStock() {
             ? `Uploaded successfully! Created ${res.lotsCreated} Lots: ${res.lotNos.join(', ')} (Total: ${res.totalCount} entries)`
             : `Uploaded successfully! Lot: ${res.lotNos?.[0] || res.lotNo}, Count: ${res.totalCount || res.count}`;
           alert(message);
-          await refreshDb();
+          await refreshModuleData('opening_stock');
           await fetchOpeningPreview();
         } catch (err) {
           console.error(err);
@@ -765,7 +765,7 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningInbound(payload);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
       setInboundCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -789,7 +789,7 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteInboundItem(pieceId);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
     } catch (err) {
       alert(err.message || 'Failed to delete opening piece');
     } finally {
@@ -806,7 +806,7 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningCutterReceiveRow(rowId);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
     } catch (err) {
       alert(err.message || 'Failed to delete opening cutter row');
     } finally {
@@ -823,7 +823,7 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningHoloReceiveRow(rowId);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
     } catch (err) {
       alert(err.message || 'Failed to delete opening holo row');
     } finally {
@@ -840,7 +840,7 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningConingReceiveRow(rowId);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
     } catch (err) {
       alert(err.message || 'Failed to delete opening coning row');
     } finally {
@@ -875,7 +875,7 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningCutterReceive(payload);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
       setCutterCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -914,7 +914,7 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
       setHoloCart([]);
       setOpeningHoloSeries(null);
       holoCrateSeqRef.current = 0;
@@ -955,7 +955,7 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
-      await refreshDb();
+      await refreshModuleData('opening_stock');
       setConingCart([]);
       setOpeningConingSeries(null);
       coningCrateSeqRef.current = 0;

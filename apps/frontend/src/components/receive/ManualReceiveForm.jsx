@@ -5,7 +5,7 @@ import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 
 export function ManualReceiveForm() {
-    const { db, refreshDb } = useInventory();
+    const { db, refreshProcessData } = useInventory();
     const [lotNo, setLotNo] = useState('');
     const [pieceId, setPieceId] = useState('');
     const [bobbinId, setBobbinId] = useState('');
@@ -83,7 +83,8 @@ export function ManualReceiveForm() {
                     receiveDate: entry.receiveDate
                 });
             }
-            await refreshDb();
+            // Manual receive here maps to cutter receive; refresh only the cutter process module.
+            await refreshProcessData('cutter');
             setCart([]);
             alert('Received successfully');
         } catch (e) {

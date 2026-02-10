@@ -7,7 +7,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToHolo() {
-    const { db, refreshDb } = useInventory();
+    const { db, refreshProcessData } = useInventory();
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -223,7 +223,8 @@ export function IssueToHolo() {
                     );
                 }
             }
-            await refreshDb();
+            // Avoid full bootstrap refresh; issue + cutter rows are covered by the holo process module.
+            await refreshProcessData('holo');
             setCrates([]);
             setForm(prev => ({ ...prev, yarnKg: '', note: '' }));
             alert('Issued successfully');

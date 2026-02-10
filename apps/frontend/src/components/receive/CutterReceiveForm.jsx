@@ -10,11 +10,12 @@ import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function CutterReceiveForm() {
-    const { db, refreshDb } = useInventory();
+    const { db, refreshProcessData } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
     const [barcode, setBarcode] = useState('');
     const [loading, setLoading] = useState(false);
+    const [template, setTemplate] = useState(null);
 
     // Form State
     const [issueRecord, setIssueRecord] = useState(null);
@@ -38,6 +39,16 @@ export function CutterReceiveForm() {
     // Focus barcode input on mount
     useEffect(() => {
         barcodeInputRef.current?.focus();
+    }, []);
+
+    // Preload template once to avoid a network fetch on each add/print.
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            const tpl = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+            if (alive) setTemplate(tpl || null);
+        })();
+        return () => { alive = false; };
     }, []);
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button)
@@ -347,8 +358,8 @@ export function CutterReceiveForm() {
             boxName: selectedBox?.name
         }]);
 
-        const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
-        if (template && receiveBarcode) {
+        const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE));
+        if (tpl && receiveBarcode) {
             const confirmPrint = window.confirm('Print sticker for this crate?');
             if (confirmPrint) {
                 const itemName = db.items.find(i => i.id === issueRecord.itemId)?.name;
@@ -376,7 +387,7 @@ export function CutterReceiveForm() {
                         shift,
                         date: receiveDate,
                     },
-                    { template },
+                    { template: tpl },
                 );
             }
         }
@@ -407,7 +418,8 @@ export function CutterReceiveForm() {
             }));
 
             const res = await api.createCutterReceiveChallan({ entries });
-            await refreshDb();
+            // Avoid full bootstrap refresh; cutter receives are covered by the cutter process module.
+            await refreshProcessData('cutter');
             setCart([]);
             setIssueRecord(null);
             setBarcode('');

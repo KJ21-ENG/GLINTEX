@@ -63,7 +63,7 @@ const EMPTY_CUTTER_ENTRY = {
 
 
 export function Inbound() {
-    const { db, createLot, refreshing, ensureModuleData, refreshDb } = useInventory();
+    const { db, createLot, refreshing, ensureModuleData, refreshProcessData } = useInventory();
     const { canRead, canWrite } = usePermission('inbound');
     const { canRead: canReadCutter, canWrite: canWriteCutter } = useStagePermission('receive', 'cutter');
     const readOnly = canRead && !canWrite;
@@ -385,7 +385,8 @@ export function Inbound() {
                 })),
             };
             await api.createCutterPurchaseInbound(payload);
-            await refreshDb();
+            // Avoid full bootstrap refresh; cutter purchase affects cutter process data (and includes inbound basics).
+            await refreshProcessData('cutter');
 
             // Stickers already printed per-crate during addCutterCrate, no batch print needed
 
@@ -817,7 +818,7 @@ export function Inbound() {
 
 // Sub-component for Recent Lots
 function RecentLotsTable({ db }) {
-    const { refreshDb } = useInventory();
+    const { refreshProcessData } = useInventory();
     const { canEdit: canEditInbound, canDelete: canDeleteInbound } = usePermission('inbound');
     const { canEdit: canEditCutter, canDelete: canDeleteCutter } = useStagePermission('receive', 'cutter');
     const canEditCutterPurchase = canEditInbound && canEditCutter;
@@ -1191,7 +1192,7 @@ function RecentLotsTable({ db }) {
                 })),
             };
             await api.updateCutterPurchaseLot(cutterEditorLotNo, payload);
-            await refreshDb();
+            await refreshProcessData('cutter');
             closeCutterPurchaseEditor();
         } catch (err) {
             alert(err.message || 'Failed to update cutter purchase');
@@ -1208,7 +1209,7 @@ function RecentLotsTable({ db }) {
         if (!confirmDelete) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            await refreshDb();
+            await refreshProcessData('cutter');
             if (expandedLot === lotNo) setExpandedLot(null);
         } catch (err) {
             alert(err.message || 'Failed to delete cutter purchase');

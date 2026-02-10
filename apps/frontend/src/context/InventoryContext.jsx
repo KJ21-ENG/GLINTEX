@@ -318,13 +318,27 @@ export const InventoryProvider = ({ children }) => {
   const actions = useMemo(() => ({
     createLot: async (payload) => {
       const res = await api.createLot(payload);
-      const normalized = await refreshDb();
+      // Lot creation changes inbound basics; avoid full bootstrap refresh.
+      const normalized = await refreshModuleData('inbound');
       return { res, db: normalized };
     },
-    deleteLot: async (lotNo) => { await api.deleteLot(lotNo); await refreshDb(); },
+    deleteLot: async (lotNo) => {
+      await api.deleteLot(lotNo);
+      // Lot deletion changes inbound basics; avoid full bootstrap refresh.
+      await refreshModuleData('inbound');
+    },
 
-    createIssueToMachine: async (payload) => { const res = await api.createIssueToMachine(payload); await refreshDb(); return res; },
-    deleteIssueToMachine: async (id) => { await api.deleteIssueToMachine(id); await refreshDb(); },
+    createIssueToMachine: async (payload) => {
+      const res = await api.createIssueToMachine(payload);
+      // This action is cutter-only; avoid full bootstrap refresh.
+      await refreshProcessData('cutter');
+      return res;
+    },
+    deleteIssueToMachine: async (id) => {
+      await api.deleteIssueToMachine(id);
+      // This action is cutter-only; avoid full bootstrap refresh.
+      await refreshProcessData('cutter');
+    },
 
     // Masters - Items
     createItem: async (name) => { await api.createItem(name); await refreshDb(); },
@@ -417,7 +431,7 @@ export const InventoryProvider = ({ children }) => {
       }
       await refreshDb();
     },
-  }), [refreshDb]);
+  }), [refreshDb, refreshProcessData, refreshModuleData]);
 
   const value = useMemo(() => ({
     db,

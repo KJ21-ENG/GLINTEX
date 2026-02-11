@@ -41,14 +41,24 @@ export async function generateHoloReceivePdf(data) {
     y = drawOverview(doc, { y, metrics, pageWidth });
 
     // Prepare table data
+    // Sort details by machine name
+    if (data.details && data.details.length > 0) {
+        data.details.sort((a, b) => {
+            const nameA = a.machineName || '';
+            const nameB = b.machineName || '';
+            return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    }
+
+    // Prepare table data
     const headers = [
         { text: 'S.No', align: 'center' },
         { text: 'Machine', align: 'left' },
-        { text: 'Item', align: 'left' },
         { text: 'Lot No', align: 'left' },
+        { text: 'Yarn', align: 'left' },
+        { text: 'Item', align: 'left' },
         { text: 'Cut', align: 'left' },
         { text: 'Twist', align: 'left' },
-        { text: 'Yarn', align: 'left' },
         { text: 'Operator', align: 'left' },
         { text: 'Box', align: 'left' },
         { text: 'Rolls', align: 'right' },
@@ -56,7 +66,7 @@ export async function generateHoloReceivePdf(data) {
     ];
 
     // Column widths for landscape A4 (297mm - 30mm margins = 267mm total)
-    const colWidths = [10, 25, 32, 22, 22, 22, 25, 30, 22, 20, 27];
+    const colWidths = [10, 25, 22, 25, 32, 22, 22, 30, 22, 20, 27];
 
     const rows = [];
     let totalRolls = 0;
@@ -73,11 +83,11 @@ export async function generateHoloReceivePdf(data) {
                 cells: [
                     { text: String(idx + 1), align: 'center' },
                     { text: item.machineName || '-', align: 'left' },
-                    { text: item.itemName || '-', align: 'left' },
                     { text: item.lotNo || '-', align: 'left' },
+                    { text: item.yarnName || '-', align: 'left' },
+                    { text: item.itemName || '-', align: 'left' },
                     { text: item.cutName || '-', align: 'left' },
                     { text: item.twistName || '-', align: 'left' },
-                    { text: item.yarnName || '-', align: 'left' },
                     { text: item.operatorName || '-', align: 'left' },
                     { text: item.boxName || '-', align: 'left' },
                     { text: formatNumber(rolls), align: 'right' },

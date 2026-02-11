@@ -10,6 +10,7 @@ import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { UserBadge } from '../components/common/UserBadge';
+import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
 
 export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const { process, patchIssueRecord, refreshProcessData } = useInventory();
@@ -17,6 +18,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [sheetFilters, setSheetFilters] = useState({});
+  const [openFilterId, setOpenFilterId] = useState(null);
   const [editingIssue, setEditingIssue] = useState(null);
   const [issueDraft, setIssueDraft] = useState(null);
   const [issueScanInput, setIssueScanInput] = useState('');
@@ -858,7 +861,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     return resolveCutterIssueDetails(row);
   };
 
-  const issues = useMemo(() => {
+  const issuesBase = useMemo(() => {
     let rows = [];
     if (process === 'holo') {
       rows = (db.issue_to_holo_machine || []).filter(r => !r.isDeleted);
@@ -911,6 +914,75 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     // Sort by createdAt timestamp descending (latest first, considering time)
     return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
   }, [db, process, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
+
+  const filterColumns = useMemo(() => {
+    const common = [
+      { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
+      { id: 'item', label: 'Item', kind: 'values', getValue: (r) => itemNameById.get(r.itemId) || '' },
+      { id: 'lotOrPiece', label: 'Piece/Lot', kind: 'text', getValue: (r) => (process === 'cutter' ? (r.pieceIds || '') : (lotLabelFor(r) || '')) },
+      { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).cutName || '') },
+      { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).yarnName || '') },
+      { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).twistName || '') },
+      { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => machineNameById.get(r.machineId) || '' },
+      { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => operatorNameById.get(r.operatorId) || '' },
+      { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
+      { id: 'note', label: 'Note', kind: 'text', getValue: (r) => r.note || '' },
+      { id: 'addedBy', label: 'Added By', kind: 'values', getValue: (r) => r.createdByUser?.username || r.createdByUser?.name || '' },
+    ];
+    if (process === 'cutter') {
+      return [
+        ...common,
+        { id: 'qty', label: 'Qty', kind: 'number', getValue: (r) => r.count || 0 },
+        { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.totalWeight || 0 },
+      ];
+    }
+    if (process === 'holo') {
+      return [
+        ...common,
+        { id: 'metallicBobbins', label: 'Metallic Bobbins', kind: 'number', getValue: (r) => r.metallicBobbins || 0 },
+        { id: 'metallicBobbinsWeight', label: 'Met. Bob. Wt (kg)', kind: 'number', getValue: (r) => r.metallicBobbinsWeight || 0 },
+        { id: 'yarnKg', label: 'Yarn Wt (kg)', kind: 'number', getValue: (r) => r.yarnKg || 0 },
+        { id: 'rollsProducedEstimate', label: 'Rolls Prod. Est.', kind: 'number', getValue: (r) => r.rollsProducedEstimate || 0 },
+      ];
+    }
+    return [
+      ...common,
+      { id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => resolveConingConeTypeName(r) || '' },
+      { id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => r.requiredPerConeNetWeight || 0 },
+      { id: 'rollsIssued', label: 'Rolls Issued', kind: 'number', getValue: (r) => (r.count || r.rollsIssued || 0) },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [process, itemNameById, operatorNameById, machineNameById, db, traceContext, holoTraceContext]);
+
+  const issues = useMemo(() => {
+    return applySheetFilters(issuesBase, filterColumns, sheetFilters);
+  }, [issuesBase, filterColumns, sheetFilters]);
+
+  const totals = useMemo(() => {
+    const t = {
+      qty: 0,
+      weight: 0,
+      metallicBobbins: 0,
+      metallicBobbinsWeight: 0,
+      yarnKg: 0,
+      rollsProducedEstimate: 0,
+      rollsIssued: 0,
+    };
+    for (const r of issues || []) {
+      if (process === 'cutter') {
+        t.qty += Number(r.count || 0);
+        t.weight += Number(r.totalWeight || 0);
+      } else if (process === 'holo') {
+        t.metallicBobbins += Number(r.metallicBobbins || 0);
+        t.metallicBobbinsWeight += Number(r.metallicBobbinsWeight || 0);
+        t.yarnKg += Number(r.yarnKg || 0);
+        t.rollsProducedEstimate += Number(r.rollsProducedEstimate || 0);
+      } else if (process === 'coning') {
+        t.rollsIssued += Number(r.count || r.rollsIssued || 0);
+      }
+    }
+    return t;
+  }, [issues, process]);
 
   const getActions = (row) => {
     const actions = [
@@ -1146,10 +1218,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             setSearchTerm('');
             setStartDate('');
             setEndDate('');
+            setSheetFilters({});
+            setOpenFilterId(null);
           }}
           className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
         >
-          Clear
+          Clear all
         </button>
         <button
           onClick={handleExport}
@@ -1166,58 +1240,268 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             <TableRow>
               {process === 'cutter' && (
                 <>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Piece</TableHead>
-                  <TableHead>Cut</TableHead>
-                  <TableHead>Yarn</TableHead>
-                  <TableHead>Twist</TableHead>
-                  <TableHead>Machine</TableHead>
-                  <TableHead>Operator</TableHead>
-                  <TableHead>Qty</TableHead>
-                  <TableHead>Weight (kg)</TableHead>
-                  <TableHead>Barcode</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Added By</TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Date</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Item</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Piece</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Cut</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Yarn</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Twist</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Machine</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Operator</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Qty</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'qty')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Weight (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'weight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Barcode</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Note</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Added By</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
               {process === 'holo' && (
                 <>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Lot</TableHead>
-                  <TableHead>Cut</TableHead>
-                  <TableHead>Yarn</TableHead>
-                  <TableHead>Twist</TableHead>
-                  <TableHead>Machine</TableHead>
-                  <TableHead>Operator</TableHead>
-                  <TableHead>Metallic Bobbins</TableHead>
-                  <TableHead>Met. Bob. Wt (kg)</TableHead>
-                  <TableHead>Yarn Wt (kg)</TableHead>
-                  <TableHead>Rolls Prod. Est.</TableHead>
-                  <TableHead>Barcode</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Added By</TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Date</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Item</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Lot</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Cut</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Yarn</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Twist</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Machine</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Operator</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Metallic Bobbins</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'metallicBobbins')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Met. Bob. Wt (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'metallicBobbinsWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Yarn Wt (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarnKg')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Rolls Prod. Est.</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'rollsProducedEstimate')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Barcode</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Note</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Added By</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
               {process === 'coning' && (
                 <>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Lot</TableHead>
-                  <TableHead>Cut</TableHead>
-                  <TableHead>Yarn</TableHead>
-                  <TableHead>Twist</TableHead>
-                  <TableHead>Machine</TableHead>
-                  <TableHead>Operator</TableHead>
-                  <TableHead>Cone Type</TableHead>
-                  <TableHead>Per Cone (g)</TableHead>
-                  <TableHead>Rolls Issued</TableHead>
-                  <TableHead>Barcode</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Added By</TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Date</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Item</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Lot</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Cut</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Yarn</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Twist</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Machine</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Operator</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Cone Type</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'coneType')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Per Cone (g)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'perCone')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Rolls Issued</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'rollsIssued')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Barcode</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Note</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Added By</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
                 </>
               )}
@@ -1227,7 +1511,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             {issues.length === 0 ? (
               <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No issue records found for {process}.</TableCell></TableRow>
             ) : (
-              issues.map((r) => {
+              <>
+                {issues.map((r) => {
                 const resolved = resolveIssueTraceNames(r);
                 return (
                   <TableRow key={r.id}>
@@ -1296,7 +1581,35 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     </TableCell>
                   </TableRow>
                 );
-              })
+                })}
+                <TableRow className="bg-muted/40">
+                  {process === 'cutter' && (
+                    <>
+                      <TableCell colSpan={8} className="font-semibold">Grand Total (filtered)</TableCell>
+                      <TableCell className="text-right font-semibold">{totals.qty}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatKg(totals.weight)}</TableCell>
+                      <TableCell colSpan={4} />
+                    </>
+                  )}
+                  {process === 'holo' && (
+                    <>
+                      <TableCell colSpan={8} className="font-semibold">Grand Total (filtered)</TableCell>
+                      <TableCell className="text-right font-semibold">{totals.metallicBobbins}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatKg(totals.metallicBobbinsWeight)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatKg(totals.yarnKg)}</TableCell>
+                      <TableCell className="text-right font-semibold">{Math.round(totals.rollsProducedEstimate) || 0}</TableCell>
+                      <TableCell colSpan={4} />
+                    </>
+                  )}
+                  {process === 'coning' && (
+                    <>
+                      <TableCell colSpan={10} className="font-semibold">Grand Total (filtered)</TableCell>
+                      <TableCell className="text-right font-semibold">{totals.rollsIssued}</TableCell>
+                      <TableCell colSpan={4} />
+                    </>
+                  )}
+                </TableRow>
+              </>
             )}
           </TableBody>
         </Table>

@@ -3,8 +3,9 @@ import { useInventory } from '../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { Trash2, Printer, Download, Edit2, Plus } from 'lucide-react';
+import { Trash2, Printer, Download, Edit2, Plus, Search, X } from 'lucide-react';
 import * as api from '../api';
+import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
@@ -16,8 +17,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const { process, patchIssueRecord, refreshProcessData } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [sheetFilters, setSheetFilters] = useState({});
   const [openFilterId, setOpenFilterId] = useState(null);
   const [editingIssue, setEditingIssue] = useState(null);
@@ -871,49 +870,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       rows = (db.issue_to_cutter_machine || []).filter(r => !r.isDeleted);
     }
 
-    // Filter based on search and date
-    let filtered = rows.filter(r => {
-      // Date filter - use simple string comparison on ISO dates (YYYY-MM-DD)
-      if (startDate || endDate) {
-        const itemDateStr = (r.date || r.createdAt || '').substring(0, 10);
-        if (startDate && itemDateStr < startDate) return false;
-        if (endDate && itemDateStr > endDate) return false;
-      }
-
-      // Search filter
-      if (searchTerm) {
-        const term = searchTerm.toLowerCase();
-        const itemName = itemNameById.get(r.itemId)?.toLowerCase() || '';
-        const operatorName = operatorNameById.get(r.operatorId)?.toLowerCase() || '';
-        const machineName = machineNameById.get(r.machineId)?.toLowerCase() || '';
-        const lotSearch = [lotLabelFor(r), ...(Array.isArray(r.lotNos) ? r.lotNos : [])].join(' ').toLowerCase();
-        const barcode = (r.barcode || '').toLowerCase();
-        const note = (r.note || '').toLowerCase();
-
-        // Handle pieceIds which can be array or string
-        let pieceIdsStr = '';
-        if (Array.isArray(r.pieceIds)) {
-          pieceIdsStr = r.pieceIds.join(' ');
-        } else {
-          pieceIdsStr = r.pieceIds || '';
-        }
-        pieceIdsStr = pieceIdsStr.toLowerCase();
-
-        return itemName.includes(term) ||
-          operatorName.includes(term) ||
-          machineName.includes(term) ||
-          lotSearch.includes(term) ||
-          barcode.includes(term) ||
-          pieceIdsStr.includes(term) ||
-          note.includes(term);
-      }
-
-      return true;
-    });
+    let filtered = rows;
 
     // Sort by createdAt timestamp descending (latest first, considering time)
     return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-  }, [db, process, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
+  }, [db, process]);
 
   const filterColumns = useMemo(() => {
     const common = [
@@ -921,8 +882,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       { id: 'item', label: 'Item', kind: 'values', getValue: (r) => itemNameById.get(r.itemId) || '' },
       { id: 'lotOrPiece', label: 'Piece/Lot', kind: 'text', getValue: (r) => (process === 'cutter' ? (r.pieceIds || '') : (lotLabelFor(r) || '')) },
       { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).cutName || '') },
-      { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).yarnName || '') },
-      { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).twistName || '') },
+      ...(process !== 'cutter' ? [
+        { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).yarnName || '') },
+        { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).twistName || '') },
+      ] : []),
       { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => machineNameById.get(r.machineId) || '' },
       { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => operatorNameById.get(r.operatorId) || '' },
       { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
@@ -955,8 +918,21 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   }, [process, itemNameById, operatorNameById, machineNameById, db, traceContext, holoTraceContext]);
 
   const issues = useMemo(() => {
-    return applySheetFilters(issuesBase, filterColumns, sheetFilters);
-  }, [issuesBase, filterColumns, sheetFilters]);
+    let rows = applySheetFilters(issuesBase, filterColumns, sheetFilters);
+
+    // Search across all filterColumns
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      rows = rows.filter(r =>
+        filterColumns.some(col => {
+          const val = col.getValue(r);
+          return String(val).toLowerCase().includes(term);
+        })
+      );
+    }
+
+    return rows;
+  }, [issuesBase, filterColumns, sheetFilters, searchTerm]);
 
   const totals = useMemo(() => {
     const t = {
@@ -1131,7 +1107,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
 
-  const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 16 : 15;
+  const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 16 : 15;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1182,49 +1158,25 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+      <div className="flex flex-col items-stretch sm:flex-row sm:items-center gap-3 bg-muted/30 p-3 rounded-lg border">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
             type="text"
-            placeholder="Search by lot, item, barcode, operator..."
-            className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder="Search across all columns..."
+            className="w-full h-9 rounded-md border border-input bg-background pl-9 pr-8 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
-        <div className="flex gap-2">
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
-            <input
-              type="date"
-              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
-            <input
-              type="date"
-              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
-        </div>
-        <button
-          onClick={() => {
-            setSearchTerm('');
-            setStartDate('');
-            setEndDate('');
-            setSheetFilters({});
-            setOpenFilterId(null);
-          }}
-          className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
-        >
-          Clear all
-        </button>
         <button
           onClick={handleExport}
           className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -1264,18 +1216,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
-                  <TableHead>
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Yarn</span>
-                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                    </div>
-                  </TableHead>
-                  <TableHead>
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Twist</span>
-                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                    </div>
-                  </TableHead>
+
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Machine</span>
@@ -1513,106 +1454,99 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             ) : (
               <>
                 {issues.map((r) => {
-                const resolved = resolveIssueTraceNames(r);
-                return (
-                  <TableRow key={r.id}>
-                    {process === 'cutter' && (
-                      <>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                        <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}>{r.pieceIds || '—'}</TableCell>
-                        <TableCell>{resolved.cutName || '—'}</TableCell>
-                        <TableCell>{resolved.yarnName || '—'}</TableCell>
-                        <TableCell>{resolved.twistName || '—'}</TableCell>
-                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                        <TableCell>{r.count}</TableCell>
-                        <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                        <TableCell>
-                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                        </TableCell>
-                      </>
-                    )}
-                    {process === 'holo' && (
-                      <>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                        <TableCell>{resolved.cutName || '—'}</TableCell>
-                        <TableCell>{resolved.yarnName || '—'}</TableCell>
-                        <TableCell>{resolved.twistName || '—'}</TableCell>
-                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                        <TableCell>{r.metallicBobbins || 0}</TableCell>
-                        <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
-                        <TableCell>{formatKg(r.yarnKg)}</TableCell>
-                        <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                        <TableCell>
-                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                        </TableCell>
-                      </>
-                    )}
-                    {process === 'coning' && (
-                      <>
-                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</TableCell>
-                        <TableCell>{itemNameById.get(r.itemId)}</TableCell>
-                        <TableCell>{lotLabelFor(r) || '—'}</TableCell>
-                        <TableCell>{resolved.cutName || '—'}</TableCell>
-                        <TableCell>{resolved.yarnName || '—'}</TableCell>
-                        <TableCell>{resolved.twistName || '—'}</TableCell>
-                        <TableCell>{machineNameById.get(r.machineId)}</TableCell>
-                        <TableCell>{operatorNameById.get(r.operatorId)}</TableCell>
-                        <TableCell>{resolveConingConeTypeName(r) || '—'}</TableCell>
-                        <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
-                        <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.barcode || r.id.substring(0, 8)}</TableCell>
-                        <TableCell className="max-w-[200px] truncate" title={r.note || ''}>{r.note || "—"}</TableCell>
-                        <TableCell>
-                          <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                        </TableCell>
-                      </>
-                    )}
-                    <TableCell>
-                      <ActionMenu actions={getActions(r)} />
-                    </TableCell>
-                  </TableRow>
-                );
+                  const resolved = resolveIssueTraceNames(r);
+                  return (
+                    <TableRow key={r.id}>
+                      {process === 'cutter' && (
+                        <>
+                          <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={itemNameById.get(r.itemId)} query={searchTerm} /></TableCell>
+                          <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}><HighlightMatch text={r.pieceIds || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
+                          <TableCell>{r.count}</TableCell>
+                          <TableCell>{formatKg(r.totalWeight)}</TableCell>
+                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
+                          <TableCell>
+                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                          </TableCell>
+                        </>
+                      )}
+                      {process === 'holo' && (
+                        <>
+                          <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={itemNameById.get(r.itemId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
+                          <TableCell>{r.metallicBobbins || 0}</TableCell>
+                          <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
+                          <TableCell>{formatKg(r.yarnKg)}</TableCell>
+                          <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
+                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
+                          <TableCell>
+                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                          </TableCell>
+                        </>
+                      )}
+                      {process === 'coning' && (
+                        <>
+                          <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={itemNameById.get(r.itemId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={resolveConingConeTypeName(r) || '—'} query={searchTerm} /></TableCell>
+                          <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
+                          <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
+                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
+                          <TableCell>
+                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                          </TableCell>
+                        </>
+                      )}
+                      <TableCell>
+                        <ActionMenu actions={getActions(r)} />
+                      </TableCell>
+                    </TableRow>
+                  );
                 })}
-                <TableRow className="bg-muted/40">
-                  {process === 'cutter' && (
-                    <>
-                      <TableCell colSpan={8} className="font-semibold">Grand Total (filtered)</TableCell>
-                      <TableCell className="text-right font-semibold">{totals.qty}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatKg(totals.weight)}</TableCell>
-                      <TableCell colSpan={4} />
-                    </>
-                  )}
-                  {process === 'holo' && (
-                    <>
-                      <TableCell colSpan={8} className="font-semibold">Grand Total (filtered)</TableCell>
-                      <TableCell className="text-right font-semibold">{totals.metallicBobbins}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatKg(totals.metallicBobbinsWeight)}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatKg(totals.yarnKg)}</TableCell>
-                      <TableCell className="text-right font-semibold">{Math.round(totals.rollsProducedEstimate) || 0}</TableCell>
-                      <TableCell colSpan={4} />
-                    </>
-                  )}
-                  {process === 'coning' && (
-                    <>
-                      <TableCell colSpan={10} className="font-semibold">Grand Total (filtered)</TableCell>
-                      <TableCell className="text-right font-semibold">{totals.rollsIssued}</TableCell>
-                      <TableCell colSpan={4} />
-                    </>
-                  )}
-                </TableRow>
               </>
             )}
           </TableBody>
         </Table>
+      </div>
+      <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+        <span className="text-sm font-semibold">Grand Total (filtered)</span>
+        <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
+          {process === 'cutter' && (
+            <>
+              <span className="font-medium">Qty: {totals.qty}</span>
+              <span className="font-medium">Weight: {formatKg(totals.weight)}</span>
+            </>
+          )}
+          {process === 'holo' && (
+            <>
+              <span className="font-medium">Metallic Bobbins: {totals.metallicBobbins}</span>
+              <span className="font-medium">Met. Bob. Wt: {formatKg(totals.metallicBobbinsWeight)}</span>
+              <span className="font-medium">Yarn Wt: {formatKg(totals.yarnKg)}</span>
+              <span className="font-medium">Rolls Prod. Est.: {Math.round(totals.rollsProducedEstimate) || 0}</span>
+            </>
+          )}
+          {process === 'coning' && (
+            <span className="font-medium">Rolls Issued: {totals.rollsIssued}</span>
+          )}
+        </div>
       </div>
 
       {/* Mobile Card View */}
@@ -1637,7 +1571,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       {formatDateDDMMYYYY(r.date)} • {itemNameById.get(r.itemId)}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Cut: {resolved.cutName || '—'} • Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}
+                      Cut: {resolved.cutName || '—'}{process !== 'cutter' && (<> • Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</>)}
                     </p>
                     {process === 'coning' && (
                       <p className="text-xs text-muted-foreground mt-1">

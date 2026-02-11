@@ -3,8 +3,9 @@ import { useInventory } from '../../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, CardHeader, CardTitle, CardContent, ActionMenu, Button, Input, Select } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
-import { Printer, Edit2, Trash2, Download, History, RotateCcw } from 'lucide-react';
+import { Printer, Edit2, Trash2, Download, History, RotateCcw, Search, X } from 'lucide-react';
 import * as api from '../../api';
+import { HighlightMatch } from '../common/HighlightMatch';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
@@ -31,8 +32,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const [pieceOptionsOverride, setPieceOptionsOverride] = useState(null);
     const [logChallan, setLogChallan] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
 
@@ -118,39 +117,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 }
             }
             return { ...r, pieceIdsList };
-        }).filter(r => {
-            // Date filter
-            if (startDate || endDate) {
-                const itemDate = new Date(r.date || r.createdAt);
-                if (startDate && itemDate < new Date(startDate)) return false;
-                if (endDate) {
-                    const end = new Date(endDate);
-                    end.setHours(23, 59, 59, 999);
-                    if (itemDate > end) return false;
-                }
-            }
-
-            // Search filter
-            if (searchTerm) {
-                const term = searchTerm.toLowerCase();
-                const barcode = (r.barcode || '').toLowerCase();
-                const machine = (r.machineNo || '').toLowerCase();
-                const operator = (r.operator?.name || '').toLowerCase();
-                const notes = (r.note || r.notes || '').toLowerCase();
-                const lot = [r.lotNo || '', r.issue?.lotLabel || r.issue?.lotNo || '', ...(Array.isArray(r.issue?.lotNos) ? r.issue.lotNos : [])].join(' ').toLowerCase();
-                const pieces = (r.pieceIdsList || []).join(' ').toLowerCase();
-
-                return barcode.includes(term) ||
-                    machine.includes(term) ||
-                    operator.includes(term) ||
-                    notes.includes(term) ||
-                    lot.includes(term) ||
-                    pieces.includes(term);
-            }
-
-            return true;
         });
-    }, [db, process, searchTerm, startDate, endDate]);
+    }, [db, process]);
 
     // Helper for Coning Machine Lookup
     const getConingMachineName = (row) => {
@@ -236,16 +204,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             .slice()
             .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
-        // Filter based on search and date
+        // Filter based on search
         return sorted.filter(c => {
-            // Date filter - simple string comparison
-            if (startDate || endDate) {
-                const itemDateStr = (c.date || c.createdAt || '').substring(0, 10);
-                if (startDate && itemDateStr < startDate) return false;
-                if (endDate && itemDateStr > endDate) return false;
-            }
-
-            // Search filter
             if (searchTerm) {
                 const term = searchTerm.toLowerCase();
                 const challanNo = (c.challanNo || '').toLowerCase();
@@ -254,17 +214,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 const itemName = (meta.itemName || '').toLowerCase();
                 const operatorName = (meta.operatorName || '').toLowerCase();
                 const note = (c.wastageNote || '').toLowerCase();
+                const dateStr = formatDateDDMMYYYY(c.date || c.createdAt)?.toLowerCase() || '';
 
                 return challanNo.includes(term) ||
                     lot.includes(term) ||
                     itemName.includes(term) ||
                     operatorName.includes(term) ||
-                    note.includes(term);
+                    note.includes(term) ||
+                    dateStr.includes(term);
             }
 
             return true;
         });
-    }, [db, process, searchTerm, startDate, endDate]);
+    }, [db, process, searchTerm]);
 
     const getChallanEntriesLocal = (challanId) => (db.receive_from_cutter_machine_rows || [])
         .filter(row => !row.isDeleted && row.challanId === challanId)
@@ -365,30 +327,24 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 { id: 'netWt', label: 'Net Wt (kg)', kind: 'number', getValue: (r) => r.netWt || 0 },
                 { id: 'bobbinQty', label: 'Bobbin Qty', kind: 'number', getValue: (r) => r.bobbinQuantity || 0 },
                 { id: 'bobbin', label: 'Bobbin', kind: 'values', getValue: (r) => r.bobbin?.name || r.pcsTypeName || '' },
-                { id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
-                    const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                    const item = db.items?.find(i => i.id === piece?.itemId);
-                    return item?.name || '';
-                }},
-                { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
-                    const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                    const cutVal = piece?.cut;
-                    return piece?.cutName
-                        || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
-                        || piece?.cutMaster?.name
-                        || (piece?.cutId ? db.cuts?.find(c => c.id === piece.cutId)?.name : '')
-                        || '';
-                }},
-                { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
-                    const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                    const yarnVal = piece?.yarn;
-                    return piece?.yarnName || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name) || '';
-                }},
-                { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
-                    const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                    const twistVal = piece?.twist;
-                    return piece?.twistName || (typeof twistVal === 'string' ? twistVal : twistVal?.name) || '';
-                }},
+                {
+                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
+                        const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                        const item = db.items?.find(i => i.id === piece?.itemId);
+                        return item?.name || '';
+                    }
+                },
+                {
+                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
+                        const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                        const cutVal = piece?.cut;
+                        return piece?.cutName
+                            || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
+                            || piece?.cutMaster?.name
+                            || (piece?.cutId ? db.cuts?.find(c => c.id === piece.cutId)?.name : '')
+                            || '';
+                    }
+                },
             ];
         }
 
@@ -401,78 +357,113 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || '' },
                 { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
                 { id: 'helper', label: 'Helper', kind: 'values', getValue: (r) => r.helper?.name || '' },
-                { id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                    const itemId = issue?.itemId;
-                    return db.items?.find(i => i.id === itemId)?.name || '';
-                }},
-                { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '' };
-                    return resolved.cutName || '';
-                }},
-                { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { yarnName: '' };
-                    return resolved.yarnName || '';
-                }},
-                { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { twistName: '' };
-                    return resolved.twistName || '';
-                }},
+                {
+                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
+                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
+                        const itemId = issue?.itemId;
+                        return db.items?.find(i => i.id === itemId)?.name || '';
+                    }
+                },
+                {
+                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
+                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
+                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '' };
+                        return resolved.cutName || '';
+                    }
+                },
+                {
+                    id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
+                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
+                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { yarnName: '' };
+                        return resolved.yarnName || '';
+                    }
+                },
+                {
+                    id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
+                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
+                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { twistName: '' };
+                        return resolved.twistName || '';
+                    }
+                },
             ];
         }
 
         return [
             ...base,
             { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : '') },
-            { id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                const coneType = resolveConingConeType(issue);
-                return coneType?.name || '';
-            }},
-            { id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                return issue?.requiredPerConeNetWeight || 0;
-            }},
-            { id: 'actualG', label: 'Actual (g)', kind: 'number', getValue: (r) => {
-                const cones = Number(r.coneCount || 0);
-                const net = Number(r.netWeight || 0);
-                if (!cones || cones <= 0) return 0;
-                return (net * 1000) / cones;
-            }},
+            {
+                id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    const coneType = resolveConingConeType(issue);
+                    return coneType?.name || '';
+                }
+            },
+            {
+                id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    return issue?.requiredPerConeNetWeight || 0;
+                }
+            },
+            {
+                id: 'actualG', label: 'Actual (g)', kind: 'number', getValue: (r) => {
+                    const cones = Number(r.coneCount || 0);
+                    const net = Number(r.netWeight || 0);
+                    if (!cones || cones <= 0) return 0;
+                    return (net * 1000) / cones;
+                }
+            },
             { id: 'box', label: 'Box', kind: 'values', getValue: (r) => r.box?.name || '' },
             { id: 'cones', label: 'Cones', kind: 'number', getValue: (r) => r.coneCount || 0 },
             { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.netWeight || 0 },
             { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => getConingMachineName(r) || '' },
             { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
-            { id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                const itemId = issue?.itemId;
-                return db.items?.find(i => i.id === itemId)?.name || '';
-            }},
-            { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '' };
-                return resolved.cutName || '';
-            }},
-            { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                const resolved = issue ? resolveConingTrace(issue, traceContext) : { yarnName: '' };
-                return resolved.yarnName || '';
-            }},
-            { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
-                const issue = resolveConingIssue(r);
-                const resolved = issue ? resolveConingTrace(issue, traceContext) : { twistName: '' };
-                return resolved.twistName || '';
-            }},
+            {
+                id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    const itemId = issue?.itemId;
+                    return db.items?.find(i => i.id === itemId)?.name || '';
+                }
+            },
+            {
+                id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '' };
+                    return resolved.cutName || '';
+                }
+            },
+            {
+                id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { yarnName: '' };
+                    return resolved.yarnName || '';
+                }
+            },
+            {
+                id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
+                    const issue = resolveConingIssue(r);
+                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { twistName: '' };
+                    return resolved.twistName || '';
+                }
+            },
         ];
     }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue]);
 
     const filteredHistory = useMemo(() => {
-        return applySheetFilters(history, filterColumns, sheetFilters);
-    }, [history, filterColumns, sheetFilters]);
+        let rows = applySheetFilters(history, filterColumns, sheetFilters);
+
+        // Search across all filterColumns
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase();
+            rows = rows.filter(r =>
+                filterColumns.some(col => {
+                    const val = col.getValue(r);
+                    return String(val).toLowerCase().includes(term);
+                })
+            );
+        }
+
+        return rows;
+    }, [history, filterColumns, sheetFilters, searchTerm]);
 
     const totals = useMemo(() => {
         const t = { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
@@ -491,7 +482,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         return t;
     }, [filteredHistory, process]);
 
-    const resolveConingConeType = (issue) => {
+    function resolveConingConeType(issue) {
         if (!issue?.receivedRowRefs) return null;
         try {
             const refs = typeof issue.receivedRowRefs === 'string'
@@ -504,7 +495,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         } catch {
             return null;
         }
-    };
+    }
 
     const formatPerConeNet = (value) => {
         const num = Number(value);
@@ -2059,49 +2050,25 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 )}
             </CardHeader>
             <CardContent className="space-y-4">
-                <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
-                    <div className="flex-1 space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+                <div className="flex flex-col items-stretch sm:flex-row sm:items-center gap-3 bg-muted/30 p-3 rounded-lg border">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                         <input
                             type="text"
-                            placeholder="Search by lot, barcode, operator, note..."
-                            className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            placeholder="Search across all columns..."
+                            className="w-full h-9 rounded-md border border-input bg-background pl-9 pr-8 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
+                        {searchTerm && (
+                            <button
+                                onClick={() => setSearchTerm('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        )}
                     </div>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                        <div className="space-y-1">
-                            <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
-                            <input
-                                type="date"
-                                className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
-                            <input
-                                type="date"
-                                className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <button
-                        onClick={() => {
-                            setSearchTerm('');
-                            setStartDate('');
-                            setEndDate('');
-                            setSheetFilters({});
-                            setOpenFilterId(null);
-                        }}
-                        className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
-                    >
-                        Clear all
-                    </button>
                     <button
                         onClick={showChallans ? handleExportChallans : handleExportHistory}
                         className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -2143,18 +2110,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
-                                                <TableHead>
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Yarn</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                                                    </div>
-                                                </TableHead>
-                                                <TableHead>
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Twist</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                                                    </div>
-                                                </TableHead>
+
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
@@ -2404,144 +2360,139 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                     ) : (
                                         <>
                                             {filteredHistory.map(r => {
-                                            if (process === 'cutter') {
-                                                const infoItems = getCutterReceiveInfo(r);
-                                                const piece = db.inbound_items?.find(p => p.id === r.pieceId);
-                                                const item = db.items?.find(i => i.id === piece?.itemId);
-                                                const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
-                                                const resolvedYarn = resolvePieceYarnName(piece) || '—';
-                                                const resolvedTwist = resolvePieceTwistName(piece) || '—';
-                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                                return (
-                                                    <TableRow key={r.id}>
-                                                        <TableCell className="whitespace-nowrap">{dateDisplay}</TableCell>
-                                                        <TableCell>{item?.name || '—'}</TableCell>
-                                                        <TableCell className="font-mono text-xs">{r.pieceId}</TableCell>
-                                                        <TableCell>{resolvedCut}</TableCell>
-                                                        <TableCell>{resolvedYarn}</TableCell>
-                                                        <TableCell>{resolvedTwist}</TableCell>
-                                                        <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                                        <TableCell>{r.machineNo || '—'}</TableCell>
-                                                        <TableCell>{r.operator?.name || r.employee || '—'}</TableCell>
-                                                        <TableCell className="text-right font-medium">
-                                                            <div className="flex items-center justify-end gap-1">
-                                                                {formatKg(r.netWt)}
-                                                                <InfoPopover
-                                                                    title="Receive Details"
-                                                                    items={infoItems}
-                                                                    renderItem={(item) => (
-                                                                        <div className="flex justify-between text-xs">
-                                                                            <span className="text-muted-foreground">{item.label}:</span>
-                                                                            <span className="font-medium">{item.value}</span>
-                                                                        </div>
-                                                                    )}
-                                                                    widthClassName="w-56"
-                                                                    buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
-                                                                />
-                                                            </div>
-                                                        </TableCell>
-                                                        <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
-                                                        <TableCell>{r.bobbin?.name || r.pcsTypeName || '—'}</TableCell>
-                                                        <TableCell>
-                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                                                        </TableCell>
-                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                    </TableRow>
-                                                );
-                                            } else if (process === 'holo') {
-                                                const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-                                                const item = db.items?.find(i => i.id === issue?.itemId);
-                                                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
-                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                                return (
-                                                    <TableRow key={r.id}>
-                                                        <TableCell>{dateDisplay}</TableCell>
-                                                        <TableCell>{item?.name || '—'}</TableCell>
-                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
-                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
-                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
-                                                        <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                            {(r.pieceIdsList || []).join(', ') || '—'}
-                                                        </TableCell>
-                                                        <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
-                                                        <TableCell className="text-right">{r.rollCount || 1}</TableCell>
-                                                        <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
-                                                        <TableCell>{r.machineNo || r.machine?.name || '—'}</TableCell>
-                                                        <TableCell>{r.operator?.name || '—'}</TableCell>
-                                                        <TableCell>{r.helper?.name || '—'}</TableCell>
-                                                        <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}>{r.note || r.notes || '—'}</TableCell>
-                                                        <TableCell>
-                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                                                        </TableCell>
-                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                    </TableRow>
-                                                );
-                                            } else if (process === 'coning') {
-                                                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-                                                const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                                                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
-                                                const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
-                                                const perConeNet = coningIssue?.requiredPerConeNetWeight;
-                                                const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
-                                                const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
-                                                return (
-                                                    <TableRow key={r.id}>
-                                                        <TableCell>{dateDisplay}</TableCell>
-                                                        <TableCell>{item?.name || '—'}</TableCell>
-                                                        <TableCell>{resolved.cutName || '—'}</TableCell>
-                                                        <TableCell>{resolved.yarnName || '—'}</TableCell>
-                                                        <TableCell>{resolved.twistName || '—'}</TableCell>
-                                                        <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                            {(r.pieceIdsList || []).join(', ') || '—'}
-                                                        </TableCell>
-                                                        <TableCell className="font-mono text-xs">{r.barcode || '—'}</TableCell>
-                                                        <TableCell>{coneType?.name || '—'}</TableCell>
-                                                        <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
-                                                        <TableCell className="text-right">{actualPerCone}</TableCell>
-                                                        <TableCell>{r.box?.name || '—'}</TableCell>
-                                                        <TableCell className="text-right">{r.coneCount}</TableCell>
-                                                        <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
-                                                        <TableCell>{getConingMachineName(r)}</TableCell>
-                                                        <TableCell>{r.operator?.name || '—'}</TableCell>
-                                                        <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}>{r.notes || '—'}</TableCell>
-                                                        <TableCell>
-                                                            <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
-                                                        </TableCell>
-                                                        <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
-                                                    </TableRow>
-                                                );
-                                            }
+                                                if (process === 'cutter') {
+                                                    const infoItems = getCutterReceiveInfo(r);
+                                                    const piece = db.inbound_items?.find(p => p.id === r.pieceId);
+                                                    const item = db.items?.find(i => i.id === piece?.itemId);
+                                                    const resolvedCut = r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || resolvePieceCutName(piece) || '—';
+                                                    const resolvedYarn = resolvePieceYarnName(piece) || '—';
+                                                    const resolvedTwist = resolvePieceTwistName(piece) || '—';
+                                                    const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                    return (
+                                                        <TableRow key={r.id}>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.pieceId} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolvedCut} query={searchTerm} /></TableCell>
+                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.machineNo || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.operator?.name || r.employee || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right font-medium">
+                                                                <div className="flex items-center justify-end gap-1">
+                                                                    {formatKg(r.netWt)}
+                                                                    <InfoPopover
+                                                                        title="Receive Details"
+                                                                        items={infoItems}
+                                                                        renderItem={(item) => (
+                                                                            <div className="flex justify-between text-xs">
+                                                                                <span className="text-muted-foreground">{item.label}:</span>
+                                                                                <span className="font-medium">{item.value}</span>
+                                                                            </div>
+                                                                        )}
+                                                                        widthClassName="w-56"
+                                                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
+                                                                    />
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
+                                                            <TableCell><HighlightMatch text={r.bobbin?.name || r.pcsTypeName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell>
+                                                                <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                            </TableCell>
+                                                            <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                        </TableRow>
+                                                    );
+                                                } else if (process === 'holo') {
+                                                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
+                                                    const item = db.items?.find(i => i.id === issue?.itemId);
+                                                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                    const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                    return (
+                                                        <TableRow key={r.id}>
+                                                            <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                                <HighlightMatch text={(r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            </TableCell>
+                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right">{r.rollCount || 1}</TableCell>
+                                                            <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
+                                                            <TableCell><HighlightMatch text={r.machineNo || r.machine?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.operator?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.helper?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}><HighlightMatch text={r.note || r.notes || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell>
+                                                                <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                            </TableCell>
+                                                            <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                        </TableRow>
+                                                    );
+                                                } else if (process === 'coning') {
+                                                    const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
+                                                    const item = db.items?.find(i => i.id === coningIssue?.itemId);
+                                                    const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                    const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
+                                                    const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                                    const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
+                                                    const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
+                                                    return (
+                                                        <TableRow key={r.id}>
+                                                            <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
+                                                                <HighlightMatch text={(r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            </TableCell>
+                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={coneType?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
+                                                            <TableCell className="text-right">{actualPerCone}</TableCell>
+                                                            <TableCell><HighlightMatch text={r.box?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right">{r.coneCount}</TableCell>
+                                                            <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
+                                                            <TableCell><HighlightMatch text={getConingMachineName(r)} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.operator?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}><HighlightMatch text={r.notes || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell>
+                                                                <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
+                                                            </TableCell>
+                                                            <TableCell><ActionMenu actions={getActions(r)} /></TableCell>
+                                                        </TableRow>
+                                                    );
+                                                }
                                             })}
-                                            <TableRow className="bg-muted/40">
-                                                {process === 'cutter' && (
-                                                    <>
-                                                        <TableCell colSpan={9} className="font-semibold">Grand Total (filtered)</TableCell>
-                                                        <TableCell className="text-right font-semibold">{formatKg(totals.netWt)}</TableCell>
-                                                        <TableCell className="text-right font-semibold">{totals.bobbinQty}</TableCell>
-                                                        <TableCell colSpan={3} />
-                                                    </>
-                                                )}
-                                                {process === 'holo' && (
-                                                    <>
-                                                        <TableCell colSpan={7} className="font-semibold">Grand Total (filtered)</TableCell>
-                                                        <TableCell className="text-right font-semibold">{totals.rolls}</TableCell>
-                                                        <TableCell className="text-right font-semibold">{formatKg(totals.weight)}</TableCell>
-                                                        <TableCell colSpan={6} />
-                                                    </>
-                                                )}
-                                                {process === 'coning' && (
-                                                    <>
-                                                        <TableCell colSpan={11} className="font-semibold">Grand Total (filtered)</TableCell>
-                                                        <TableCell className="text-right font-semibold">{totals.cones}</TableCell>
-                                                        <TableCell className="text-right font-semibold">{formatKg(totals.weight)}</TableCell>
-                                                        <TableCell colSpan={5} />
-                                                    </>
-                                                )}
-                                            </TableRow>
                                         </>
                                     )}
                                 </TableBody>
                             </Table>
+                        </div>
+                        <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+                            <span className="text-sm font-semibold">Grand Total (filtered)</span>
+                            <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
+                                {process === 'cutter' && (
+                                    <>
+                                        <span className="font-medium">Net Wt: {formatKg(totals.netWt)}</span>
+                                        <span className="font-medium">Bobbin Qty: {totals.bobbinQty}</span>
+                                    </>
+                                )}
+                                {process === 'holo' && (
+                                    <>
+                                        <span className="font-medium">Rolls: {totals.rolls}</span>
+                                        <span className="font-medium">Weight: {formatKg(totals.weight)}</span>
+                                    </>
+                                )}
+                                {process === 'coning' && (
+                                    <>
+                                        <span className="font-medium">Cones: {totals.cones}</span>
+                                        <span className="font-medium">Weight: {formatKg(totals.weight)}</span>
+                                    </>
+                                )}
+                            </div>
                         </div>
 
                         {/* Mobile Card View for Receive History */}
@@ -2702,17 +2653,17 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                             const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
                                             return (
                                                 <TableRow key={challan.id}>
-                                                    <TableCell className="font-mono text-xs">{challan.challanNo}</TableCell>
-                                                    <TableCell>{dateDisplay}</TableCell>
-                                                    <TableCell>{challan.lotNo || '—'}</TableCell>
-                                                    <TableCell>{meta.itemName}</TableCell>
+                                                    <TableCell className="font-mono text-xs"><HighlightMatch text={challan.challanNo} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={challan.lotNo || '—'} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={meta.itemName} query={searchTerm} /></TableCell>
                                                     <TableCell className="text-right font-medium">{formatKg(challan.totalNetWeight)}</TableCell>
                                                     <TableCell className="text-right">{challan.totalBobbinQty || 0}</TableCell>
-                                                    <TableCell>{meta.operatorName}</TableCell>
-                                                    <TableCell>{meta.cutName}</TableCell>
-                                                    <TableCell>{meta.helperName}</TableCell>
+                                                    <TableCell><HighlightMatch text={meta.operatorName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={meta.cutName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={meta.helperName} query={searchTerm} /></TableCell>
                                                     <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]" title={challan.wastageNote || ''}>
-                                                        {challan.wastageNote || '—'}
+                                                        <HighlightMatch text={challan.wastageNote || '—'} query={searchTerm} />
                                                     </TableCell>
                                                     <TableCell><ActionMenu actions={getChallanActions(challan)} /></TableCell>
                                                 </TableRow>
@@ -2736,10 +2687,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                             <div className="p-4">
                                                 <div className="flex justify-between items-start gap-2">
                                                     <div className="min-w-0 flex-1">
-                                                        <p className="font-mono text-xs text-primary">{challan.challanNo}</p>
-                                                        <p className="font-medium mt-1">{meta.itemName}</p>
+                                                        <p className="font-mono text-xs text-primary"><HighlightMatch text={challan.challanNo} query={searchTerm} /></p>
+                                                        <p className="font-medium mt-1"><HighlightMatch text={meta.itemName} query={searchTerm} /></p>
                                                         <p className="text-xs text-muted-foreground mt-1">
-                                                            {dateDisplay} • Lot: {challan.lotNo || '—'}
+                                                            <HighlightMatch text={dateDisplay} query={searchTerm} /> • Lot: <HighlightMatch text={challan.lotNo || '—'} query={searchTerm} />
                                                         </p>
                                                     </div>
                                                     <div className="text-right">
@@ -2748,7 +2699,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                     </div>
                                                 </div>
                                                 <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                    <span>Op: {meta.operatorName} • Cut: {meta.cutName}</span>
+                                                    <span>Op: <HighlightMatch text={meta.operatorName} query={searchTerm} /> • Cut: <HighlightMatch text={meta.cutName} query={searchTerm} /></span>
                                                 </div>
                                             </div>
                                             <div className="border-t bg-muted/30 px-4 py-2 flex justify-end">

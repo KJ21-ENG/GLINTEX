@@ -2,12 +2,13 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
-import { ArrowRight, Download } from 'lucide-react';
+import { ArrowRight, Download, Search, X } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { KeyValueGrid } from '../common/KeyValueGrid';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
+import { HighlightMatch } from '../common/HighlightMatch';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -18,8 +19,6 @@ import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilte
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
     const [searchTerm, setSearchTerm] = useState('');
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
     const [expandedIds, setExpandedIds] = useState(() => new Set());
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
@@ -367,45 +366,8 @@ export function OnMachineTable({ db, process }) {
         // Sort by date descending (most recent first)
         let sorted = entries.sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
 
-        // Filter based on search and date
-        return sorted.filter(e => {
-            // Date filter - string comparison
-            if (startDate || endDate) {
-                const itemDateStr = (e.date || e.createdAt || '').substring(0, 10);
-                if (startDate && itemDateStr < startDate) return false;
-                if (endDate && itemDateStr > endDate) return false;
-            }
-
-            // Search filter
-            if (searchTerm) {
-                const term = searchTerm.toLowerCase();
-                const lot = [e.lotLabel || e.lotNo || '', ...(Array.isArray(e.lotNos) ? e.lotNos : [])].join(' ').toLowerCase();
-                const barcode = (e.barcode || '').toLowerCase();
-                const itemName = itemNameById.get(e.itemId)?.toLowerCase() || '';
-                const operatorName = operatorNameById.get(e.operatorId)?.toLowerCase() || '';
-                const machineName = machineNameById.get(e.machineId)?.toLowerCase() || '';
-
-                // Handle pieceIds which could be array or string
-                let pieceIdsStr = '';
-                if (Array.isArray(e.pieceIds)) {
-                    pieceIdsStr = e.pieceIds.join(' ');
-                } else {
-                    pieceIdsStr = e.pieceIds || '';
-                }
-                pieceIdsStr = pieceIdsStr.toLowerCase();
-
-                return lot.includes(term) ||
-                    barcode.includes(term) ||
-                    pieceIdsStr.includes(term) ||
-                    itemName.includes(term) ||
-                    operatorName.includes(term) ||
-                    machineName.includes(term) ||
-                    (e.pieceIdsList && e.pieceIdsList.join(' ').toLowerCase().includes(term));
-            }
-
-            return true;
-        });
-    }, [db, process, cutterPieceTotals, coningPieceTotals, searchTerm, startDate, endDate, itemNameById, operatorNameById, machineNameById]);
+        return sorted;
+    }, [db, process, cutterPieceTotals, coningPieceTotals]);
 
     const filterColumns = useMemo(() => {
         const common = [
@@ -413,8 +375,10 @@ export function OnMachineTable({ db, process }) {
             { id: 'item', label: 'Item', kind: 'values', getValue: (r) => itemNameById.get(r.itemId) || '' },
             { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceIds || '')) },
             { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveEntryNames(r).cutName || '') },
-            { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveEntryNames(r).yarnName || '') },
-            { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveEntryNames(r).twistName || '') },
+            ...(process !== 'cutter' ? [
+                { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveEntryNames(r).yarnName || '') },
+                { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveEntryNames(r).twistName || '') },
+            ] : []),
             { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => machineNameById.get(r.machineId) || '' },
             { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => operatorNameById.get(r.operatorId) || '' },
             { id: 'issuedWeight', label: 'Issued (kg)', kind: 'number', getValue: (r) => r.issuedWeight },
@@ -436,8 +400,21 @@ export function OnMachineTable({ db, process }) {
     }, [process, itemNameById, machineNameById, operatorNameById, db, traceContext, holoTraceContext]);
 
     const filteredEntries = useMemo(() => {
-        return applySheetFilters(onMachineEntries, filterColumns, sheetFilters);
-    }, [onMachineEntries, filterColumns, sheetFilters]);
+        let rows = applySheetFilters(onMachineEntries, filterColumns, sheetFilters);
+
+        // Search across all filterColumns
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase();
+            rows = rows.filter(r =>
+                filterColumns.some(col => {
+                    const val = col.getValue(r);
+                    return String(val).toLowerCase().includes(term);
+                })
+            );
+        }
+
+        return rows;
+    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm]);
 
     const totals = useMemo(() => {
         const base = {
@@ -529,8 +506,10 @@ export function OnMachineTable({ db, process }) {
         ];
         if (process === 'cutter' || process === 'holo' || process === 'coning') {
             columns.push({ key: 'cut', header: 'Cut' });
-            columns.push({ key: 'yarn', header: 'Yarn' });
-            columns.push({ key: 'twist', header: 'Twist' });
+            if (process !== 'cutter') {
+                columns.push({ key: 'yarn', header: 'Yarn' });
+                columns.push({ key: 'twist', header: 'Twist' });
+            }
         }
         if (process === 'coning') {
             columns.push({ key: 'rollsIssued', header: 'Rolls Issued' });
@@ -548,56 +527,32 @@ export function OnMachineTable({ db, process }) {
         ]);
 
         const today = new Date().toISOString().split('T')[0];
-            exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
+        exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 14 : 17;
+    const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 14 : 17;
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-col items-stretch sm:flex-row sm:items-end gap-4 bg-muted/30 p-4 rounded-lg border">
-                <div className="flex-1 space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground uppercase">Search</label>
+            <div className="flex flex-col items-stretch sm:flex-row sm:items-center gap-3 bg-muted/30 p-3 rounded-lg border">
+                <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     <input
                         type="text"
-                        placeholder="Search by lot, piece, barcode, machine..."
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        placeholder="Search across all columns..."
+                        className="w-full h-9 rounded-md border border-input bg-background pl-9 pr-8 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                     />
+                    {searchTerm && (
+                        <button
+                            onClick={() => setSearchTerm('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    )}
                 </div>
-                <div className="flex flex-col sm:flex-row gap-2">
-                    <div className="space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground uppercase">From Date</label>
-                        <input
-                            type="date"
-                            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            value={startDate}
-                            onChange={(e) => setStartDate(e.target.value)}
-                        />
-                    </div>
-                    <div className="space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground uppercase">To Date</label>
-                        <input
-                            type="date"
-                            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            value={endDate}
-                            onChange={(e) => setEndDate(e.target.value)}
-                        />
-                    </div>
-                </div>
-                <button
-                    onClick={() => {
-                        setSearchTerm('');
-                        setStartDate('');
-                        setEndDate('');
-                        setSheetFilters({});
-                        setOpenFilterId(null);
-                    }}
-                    className="h-9 px-3 rounded-md border border-input bg-background text-xs hover:bg-muted font-medium"
-                >
-                    Clear all
-                </button>
                 <button
                     onClick={handleExport}
                     className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -637,18 +592,7 @@ export function OnMachineTable({ db, process }) {
                                             <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
-                                    <TableHead>
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span>Yarn</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                                        </div>
-                                    </TableHead>
-                                    <TableHead>
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span>Twist</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
-                                        </div>
-                                    </TableHead>
+
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Machine</span>
@@ -875,88 +819,73 @@ export function OnMachineTable({ db, process }) {
                         ) : (
                             <>
                                 {filteredEntries.map((entry) => {
-                                const progressPercent = getProgressPercent(entry);
-                                const resolvedNames = resolveEntryNames(entry);
-                                return (
-                                    <TableRow key={entry.id}>
-                                        <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(entry.date)}</TableCell>
-                                        <TableCell>{itemNameById.get(entry.itemId)}</TableCell>
-                                        <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
-                                            {(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')}
-                                        </TableCell>
-                                        {process === 'cutter' && (
-                                            <>
-                                                <TableCell>{resolvedNames.cutName}</TableCell>
-                                                <TableCell>{resolvedNames.yarnName}</TableCell>
-                                                <TableCell>{resolvedNames.twistName}</TableCell>
-                                            </>
-                                        )}
-                                        {process === 'holo' && (
-                                            <>
-                                                <TableCell>{resolvedNames.cutName}</TableCell>
-                                                <TableCell>{resolvedNames.yarnName}</TableCell>
-                                                <TableCell>{resolvedNames.twistName}</TableCell>
-                                            </>
-                                        )}
-                                        {process === 'coning' && (
-                                            <>
-                                                <TableCell>{resolvedNames.cutName}</TableCell>
-                                                <TableCell>{resolvedNames.yarnName}</TableCell>
-                                                <TableCell>{resolvedNames.twistName}</TableCell>
-                                                <TableCell>{entry.rollsIssued || 0}</TableCell>
-                                                <TableCell>{resolveConingConeTypeName(entry)}</TableCell>
-                                                <TableCell>{formatPerConeNet(entry.requiredPerConeNetWeight)}</TableCell>
-                                            </>
-                                        )}
-                                        <TableCell>{machineNameById.get(entry.machineId)}</TableCell>
-                                        <TableCell>{operatorNameById.get(entry.operatorId)}</TableCell>
-                                        <TableCell>{formatKg(entry.issuedWeight)}</TableCell>
-                                        <TableCell className="text-green-600">{formatKg(entry.receivedWeight)}</TableCell>
-                                        <TableCell className="font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
-                                        <TableCell>
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-                                                    <div
-                                                        className="h-full bg-primary rounded-full transition-all"
-                                                        style={{ width: `${progressPercent}%` }}
-                                                    />
+                                    const progressPercent = getProgressPercent(entry);
+                                    const resolvedNames = resolveEntryNames(entry);
+                                    return (
+                                        <TableRow key={entry.id}>
+                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(entry.date)} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={itemNameById.get(entry.itemId)} query={searchTerm} /></TableCell>
+                                            <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
+                                                <HighlightMatch text={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')} query={searchTerm} />
+                                            </TableCell>
+                                            {process === 'cutter' && (
+                                                <TableCell><HighlightMatch text={resolvedNames.cutName} query={searchTerm} /></TableCell>
+                                            )}
+                                            {process === 'holo' && (
+                                                <>
+                                                    <TableCell><HighlightMatch text={resolvedNames.cutName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={resolvedNames.twistName} query={searchTerm} /></TableCell>
+                                                </>
+                                            )}
+                                            {process === 'coning' && (
+                                                <>
+                                                    <TableCell><HighlightMatch text={resolvedNames.cutName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
+                                                    <TableCell><HighlightMatch text={resolvedNames.twistName} query={searchTerm} /></TableCell>
+                                                    <TableCell>{entry.rollsIssued || 0}</TableCell>
+                                                    <TableCell><HighlightMatch text={resolveConingConeTypeName(entry)} query={searchTerm} /></TableCell>
+                                                    <TableCell>{formatPerConeNet(entry.requiredPerConeNetWeight)}</TableCell>
+                                                </>
+                                            )}
+                                            <TableCell><HighlightMatch text={machineNameById.get(entry.machineId)} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={operatorNameById.get(entry.operatorId)} query={searchTerm} /></TableCell>
+                                            <TableCell>{formatKg(entry.issuedWeight)}</TableCell>
+                                            <TableCell className="text-green-600">{formatKg(entry.receivedWeight)}</TableCell>
+                                            <TableCell className="font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
+                                            <TableCell>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
+                                                        <div
+                                                            className="h-full bg-primary rounded-full transition-all"
+                                                            style={{ width: `${progressPercent}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-xs text-muted-foreground">{progressPercent}%</span>
                                                 </div>
-                                                <span className="text-xs text-muted-foreground">{progressPercent}%</span>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="font-mono text-xs">{entry.barcode || entry.id.substring(0, 8)}</TableCell>
-                                        <TableCell>
-                                            <ActionMenu actions={getActions(entry)} />
-                                        </TableCell>
-                                    </TableRow>
-                                );
+                                            </TableCell>
+                                            <TableCell className="font-mono text-xs"><HighlightMatch text={entry.barcode || entry.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                                            <TableCell>
+                                                <ActionMenu actions={getActions(entry)} />
+                                            </TableCell>
+                                        </TableRow>
+                                    );
                                 })}
-                                <TableRow className="bg-muted/40">
-                                    {/* Totals row aligns with each process column layout */}
-                                    {process !== 'coning' ? (
-                                        <>
-                                            <TableCell colSpan={8} className="font-semibold">Grand Total (filtered)</TableCell>
-                                            <TableCell className="text-right font-semibold">{formatKg(totals.issuedWeight)}</TableCell>
-                                            <TableCell className="text-right font-semibold text-green-600">{formatKg(totals.receivedWeight)}</TableCell>
-                                            <TableCell className="text-right font-semibold text-blue-600">{formatKg(totals.pendingWeight)}</TableCell>
-                                            <TableCell colSpan={3} />
-                                        </>
-                                    ) : (
-                                        <>
-                                            <TableCell colSpan={6} className="font-semibold">Grand Total (filtered)</TableCell>
-                                            <TableCell className="text-right font-semibold">{totals.rollsIssued || 0}</TableCell>
-                                            <TableCell colSpan={4} />
-                                            <TableCell className="text-right font-semibold">{formatKg(totals.issuedWeight)}</TableCell>
-                                            <TableCell className="text-right font-semibold text-green-600">{formatKg(totals.receivedWeight)}</TableCell>
-                                            <TableCell className="text-right font-semibold text-blue-600">{formatKg(totals.pendingWeight)}</TableCell>
-                                            <TableCell colSpan={3} />
-                                        </>
-                                    )}
-                                </TableRow>
                             </>
                         )}
                     </TableBody>
                 </Table>
+            </div>
+            <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+                <span className="text-sm font-semibold">Grand Total (filtered)</span>
+                <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
+                    {process === 'coning' && (
+                        <span className="font-medium">Rolls Issued: {totals.rollsIssued || 0}</span>
+                    )}
+                    <span className="font-medium">Issued: {formatKg(totals.issuedWeight)}</span>
+                    <span className="font-medium text-green-600">Received: {formatKg(totals.receivedWeight)}</span>
+                    <span className="font-medium text-blue-600">Pending: {formatKg(totals.pendingWeight)}</span>
+                </div>
             </div>
 
             {/* Mobile Card View - shown on small screens only */}
@@ -992,19 +921,21 @@ export function OnMachineTable({ db, process }) {
                                 <div className="mt-3">
                                     <KeyValueGrid
                                         items={[
-                                            { label: 'Machine', value: machineNameById.get(entry.machineId) },
-                                            { label: 'Operator', value: operatorNameById.get(entry.operatorId) },
-                                            { label: 'Cut', value: resolvedNames.cutName },
-                                            { label: 'Yarn', value: resolvedNames.yarnName },
-                                            { label: 'Twist', value: resolvedNames.twistName },
+                                            { label: 'Machine', value: <HighlightMatch text={machineNameById.get(entry.machineId)} query={searchTerm} /> },
+                                            { label: 'Operator', value: <HighlightMatch text={operatorNameById.get(entry.operatorId)} query={searchTerm} /> },
+                                            { label: 'Cut', value: <HighlightMatch text={resolvedNames.cutName} query={searchTerm} /> },
+                                            ...(process !== 'cutter' ? [
+                                                { label: 'Yarn', value: <HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /> },
+                                                { label: 'Twist', value: <HighlightMatch text={resolvedNames.twistName} query={searchTerm} /> },
+                                            ] : []),
                                             ...(process === 'coning'
                                                 ? [
                                                     { label: 'Rolls', value: String(entry.rollsIssued || 0) },
-                                                    { label: 'Cone Type', value: resolveConingConeTypeName(entry) },
+                                                    { label: 'Cone Type', value: <HighlightMatch text={resolveConingConeTypeName(entry)} query={searchTerm} /> },
                                                     { label: 'Per Cone', value: formatPerConeNet(entry.requiredPerConeNetWeight) },
                                                 ]
                                                 : []),
-                                            { label: 'Barcode', value: entry.barcode || entry.id?.substring?.(0, 8) || '—', mono: true },
+                                            { label: 'Barcode', value: <HighlightMatch text={entry.barcode || entry.id?.substring?.(0, 8) || '—'} query={searchTerm} />, mono: true },
                                         ]}
                                     />
                                 </div>

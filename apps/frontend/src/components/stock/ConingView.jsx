@@ -4,6 +4,7 @@ import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calc
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
+import { cn } from '../../lib/utils';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 const buildGroupKey = (lot) => ([
@@ -140,7 +141,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         yarnNames: new Set(),
         totalCones: 0,
         totalWeight: 0,
-        rows: []
+        rows: [],
+        barcodes: [],
       };
       existing.rows.push(row);
       existing.totalCones += row.availableCones;
@@ -151,6 +153,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       if (row.yarnName && row.yarnName !== '—') {
         row.yarnName.split(',').map(v => v.trim()).filter(Boolean).forEach(v => existing.yarnNames.add(v));
       }
+      if (row.barcode) existing.barcodes.push(row.barcode);
       map.set(lotNo, existing);
     });
     return Array.from(map.values()).map((lot) => ({
@@ -159,6 +162,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       date: lot.rows?.[0]?.date || '',
       cutName: lot.cutNames?.size ? Array.from(lot.cutNames).join(', ') : '—',
       yarnName: lot.yarnNames?.size ? Array.from(lot.yarnNames).join(', ') : '—',
+      barcodeStr: (lot.barcodes || []).join(' '),
     }));
   }, [coningRows]);
 
@@ -169,7 +173,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'itemName', 'firmName', 'supplierName', 'machineName', 'operatorName', 'coneType', 'boxName',
-          'totalCones', 'totalWeight'
+          'totalCones', 'totalWeight', 'barcodeStr'
         ];
         const tempItem = {
           ...l,
@@ -181,11 +185,15 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       } else {
         score = 1;
       }
-      return { ...l, searchScore: score };
+      // Check for direct barcode hit
+      const searchLower = search ? search.trim().toLowerCase() : '';
+      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      return { ...l, searchScore: score, hasBarcodeHit };
     });
 
     if (search) {
-      list = list.filter(l => l.searchScore > 0);
+      const minScore = search.trim().length >= 8 ? 40 : 1;
+      list = list.filter(l => l.searchScore >= minScore || l.hasBarcodeHit);
     }
 
     return list.filter(l => {
@@ -279,7 +287,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
             ) : (
               displayLots.map((lot, idx) => {
                 const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
-                const isExpanded = !groupBy && expandedLot === (lot.lotKey || lot.lotNo);
+                const hasBarcodeHit = !!lot.hasBarcodeHit;
+                const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
@@ -333,19 +342,22 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {lot.rows.map((row) => (
-                                  <TableRow key={row.id}>
-                                    <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                                    <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
-                                    <TableCell>{row.boxName}</TableCell>
-                                    <TableCell>{row.coneType}</TableCell>
-                                    <TableCell className="">{row.availableCones}</TableCell>
-                                    <TableCell className="">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
-                                    <TableCell>{row.machineName}</TableCell>
-                                    <TableCell>{row.operatorName}</TableCell>
-                                    <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
-                                  </TableRow>
-                                ))}
+                                {lot.rows.map((row) => {
+                                  const rowMatch = search && search.trim().length >= 6 && String(row.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                                  return (
+                                    <TableRow key={row.id} className={rowMatch ? 'bg-primary/10' : ''}>
+                                      <TableCell className="font-mono text-xs"><HighlightMatch text={row.barcode || '—'} query={search} /></TableCell>
+                                      <TableCell>{formatDateDDMMYYYY(row.date) || '—'}</TableCell>
+                                      <TableCell>{row.boxName}</TableCell>
+                                      <TableCell>{row.coneType}</TableCell>
+                                      <TableCell className="">{row.availableCones}</TableCell>
+                                      <TableCell className="">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
+                                      <TableCell>{row.machineName}</TableCell>
+                                      <TableCell>{row.operatorName}</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </div>
@@ -382,7 +394,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         ) : (
           displayLots.map((lot, idx) => {
             const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
-            const isExpanded = !groupBy && expandedLot === (lot.lotKey || lot.lotNo);
+            const hasBarcodeHit = !!lot.hasBarcodeHit;
+            const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
@@ -417,18 +430,21 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                 {isExpanded && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Box Details</p>
-                    {lot.rows.map(r => (
-                      <div key={r.id} className="bg-background border rounded p-2 space-y-1">
-                        <div className="flex justify-between font-mono text-xs">
-                          <span className="font-semibold text-primary">{r.barcode}</span>
-                          <span>{formatKg(r.availableWeight)}</span>
+                    {lot.rows.map(r => {
+                      const rowMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                      return (
+                        <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", rowMatch && "bg-primary/10")}>
+                          <div className="flex justify-between font-mono text-xs">
+                            <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
+                            <span>{formatKg(r.availableWeight)}</span>
+                          </div>
+                          <div className="flex justify-between text-[11px] text-muted-foreground">
+                            <span>{r.boxName} • Cones: {r.availableCones}</span>
+                            <span>Mac: {r.machineName}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>{r.boxName} • Cones: {r.availableCones}</span>
-                          <span>Mac: {r.machineName}</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

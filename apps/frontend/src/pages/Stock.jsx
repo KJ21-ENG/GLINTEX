@@ -223,6 +223,7 @@ export function Stock() {
         wastagePercent: 0,
         cutNames: new Set(),
         yarnNames: new Set(),
+        barcodes: [],
       };
     }
     const inbound = db.inbound_items || [];
@@ -256,6 +257,10 @@ export function Stock() {
       const issuedLabel = issueMeta
         ? `Issued${issueMeta.machineName ? `: ${issueMeta.machineName}` : ''}${issueMeta.issueDate ? ` • ${issueMeta.issueDate}` : ''}`
         : '';
+      // Collect barcode for lot-level search
+      const pieceBarcode = piece.barcode || '';
+      if (pieceBarcode) m[piece.lotNo].barcodes.push(pieceBarcode);
+
       const pieceEntry = {
         ...piece,
         pendingWeight: pendingForPiece,
@@ -290,6 +295,7 @@ export function Stock() {
       lot.statusType = lotStatus(lot);
       lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
       lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
+      lot.barcodeStr = (lot.barcodes || []).join(' ');
     });
     return m;
   }, [db, receiveTotalsMap, cutterIssueByPieceId]);
@@ -305,7 +311,7 @@ export function Stock() {
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'itemName', 'firmName', 'supplierName', 'statusType',
-          'totalWeight', 'pendingWeight', 'availableCount', 'totalPieces'
+          'totalWeight', 'pendingWeight', 'availableCount', 'totalPieces', 'barcodeStr'
         ];
         const tempItem = {
           ...l,
@@ -319,11 +325,16 @@ export function Stock() {
       } else {
         score = 1; // Default score when no search
       }
-      return { ...l, searchScore: score };
+      // Check for direct barcode hit
+      const searchLower = search ? search.trim().toLowerCase() : '';
+      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      return { ...l, searchScore: score, hasBarcodeHit };
     });
 
     if (search) {
-      list = list.filter(l => l.searchScore > 0);
+      // For long search terms (likely barcodes), require at least a substring match (score >= 40)
+      const minScore = search.trim().length >= 8 ? 40 : 1;
+      list = list.filter(l => l.searchScore >= minScore || l.hasBarcodeHit);
     }
 
     return list.filter(l => {
@@ -783,7 +794,7 @@ export function Stock() {
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Lot No, Item Name..."
+                  placeholder="Lot No, Item, Barcode..."
                   className="pl-8 bg-background"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
@@ -894,7 +905,8 @@ export function Stock() {
                   <TableRow><TableCell colSpan={(groupByItem ? 10 : 11) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
                 ) : (
                   displayedLots.map((l, idx) => {
-                    const isExpanded = !groupByItem && expandedLot === l.lotNo;
+                    const hasBarcodeHit = !!l.hasBarcodeHit;
+                    const isExpanded = !groupByItem && (expandedLot === l.lotNo || hasBarcodeHit);
                     const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
                     return (
                       <React.Fragment key={rowKey}>
@@ -1023,6 +1035,7 @@ export function Stock() {
                                         canEdit={canInboundEdit}
                                         canDelete={canInboundDelete}
                                         selectDisabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
+                                        search={search}
                                       />
                                     ))}
                                   </TableBody>
@@ -1063,7 +1076,8 @@ export function Stock() {
               <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No lots found.</div>
             ) : (
               displayedLots.map((l, idx) => {
-                const isExpanded = !groupByItem && expandedLot === l.lotNo;
+                const hasBarcodeHit = !!l.hasBarcodeHit;
+                const isExpanded = !groupByItem && (expandedLot === l.lotNo || hasBarcodeHit);
                 const available = l.availableCount ?? countAvailablePieces(l.pieces || []);
                 const total = l.totalPieces ?? (l.pieces || []).length;
                 const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
@@ -1128,29 +1142,32 @@ export function Stock() {
                         </div>
 
                         <div className="space-y-2">
-                          {(l.pieces || []).sort((a, b) => a.seq - b.seq).map(p => (
-                            <div key={p.id} className="bg-background border rounded p-2 text-sm">
-                              <div className="flex justify-between items-start">
-                                <div className="flex flex-col">
-                                  <span className="font-mono text-xs">{p.barcode || p.id.substring(0, 8)}</span>
-                                  <span className="text-xs text-muted-foreground">Seq: {p.seq || '—'}</span>
-                                  {p.issuedLabel ? (
-                                    <span className="text-[10px] text-muted-foreground">({p.issuedLabel})</span>
-                                  ) : null}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{formatKg(p.pendingWeight)}</span>
-                                  <input
-                                    type="checkbox"
-                                    checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
-                                    onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
-                                    className="h-4 w-4 rounded border-gray-300 text-primary"
-                                    disabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
-                                  />
+                          {(l.pieces || []).sort((a, b) => a.seq - b.seq).map(p => {
+                            const barcodeMatch = search && search.trim().length >= 6 && String(p.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                            return (
+                              <div key={p.id} className={cn("bg-background border rounded p-2 text-sm", barcodeMatch && "bg-primary/10")}>
+                                <div className="flex justify-between items-start">
+                                  <div className="flex flex-col">
+                                    <span className="font-mono text-xs"><HighlightMatch text={p.barcode || p.id.substring(0, 8)} query={search} /></span>
+                                    <span className="text-xs text-muted-foreground">Seq: {p.seq || '—'}</span>
+                                    {p.issuedLabel ? (
+                                      <span className="text-[10px] text-muted-foreground">({p.issuedLabel})</span>
+                                    ) : null}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{formatKg(p.pendingWeight)}</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={(selectedByLot[l.lotNo] || []).includes(p.id)}
+                                      onChange={(e) => { e.stopPropagation(); togglePiece(l.lotNo, p.id); }}
+                                      className="h-4 w-4 rounded border-gray-300 text-primary"
+                                      disabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
+                                    />
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
 
                         {(selectedByLot[l.lotNo] || []).length > 0 && (
@@ -1164,7 +1181,8 @@ export function Stock() {
                           </Button>
                         )}
                       </div>
-                    )}
+                    )
+                    }
                   </div>
                 );
               })
@@ -1186,7 +1204,8 @@ export function Stock() {
             )}
           </div>
         </>
-      )}
+      )
+      }
 
       {/* Issue Modal */}
       <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>
@@ -1233,6 +1252,6 @@ export function Stock() {
         </DialogContent>
       </Dialog>
 
-    </div>
+    </div >
   );
 }

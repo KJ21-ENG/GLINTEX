@@ -4,6 +4,7 @@ import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calc
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
+import { cn } from '../../lib/utils';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -128,6 +129,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         issuedWeight: 0,
         availableWeight: 0,
         crates: [],
+        barcodes: [],
       };
 
       existing.crates.push(crate);
@@ -138,12 +140,14 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       existing.issuedWeight += crate.issuedWeight;
       existing.availableWeight += crate.availableWeight;
       if (crate.cutName && crate.cutName !== '—') existing.cutNames.add(crate.cutName);
+      if (crate.barcode) existing.barcodes.push(crate.barcode);
 
       map.set(lotNo, existing);
     });
     return Array.from(map.values()).map(l => ({
       ...l,
-      cutName: l.cutNames.size > 1 ? 'Mixed' : Array.from(l.cutNames)[0] || '—'
+      cutName: l.cutNames.size > 1 ? 'Mixed' : Array.from(l.cutNames)[0] || '—',
+      barcodeStr: (l.barcodes || []).join(' '),
     }));
   }, [bobbinCrates]);
 
@@ -155,7 +159,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'itemName', 'cutName', 'firmName', 'supplierName', 'bobbinName',
-          'totalBobbins', 'availableBobbins', 'totalWeight', 'availableWeight'
+          'totalBobbins', 'availableBobbins', 'totalWeight', 'availableWeight', 'barcodeStr'
         ];
         const tempItem = {
           ...l,
@@ -169,11 +173,16 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       } else {
         score = 1;
       }
-      return { ...l, searchScore: score };
+      // Also check for direct barcode hit (substring match)
+      const searchLower = search ? search.trim().toLowerCase() : '';
+      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      return { ...l, searchScore: score, hasBarcodeHit };
     });
 
     if (search) {
-      list = list.filter(l => l.searchScore > 0);
+      // For long search terms (likely barcodes), require at least a substring match (score >= 40)
+      const minScore = search.trim().length >= 8 ? 40 : 1;
+      list = list.filter(l => l.searchScore >= minScore || l.hasBarcodeHit);
     }
 
     return list.filter(l => {
@@ -279,7 +288,8 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
               <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
             ) : (
               displayData.map((l, idx) => {
-                const isExpanded = !groupBy && expandedLot === l.lotNo;
+                const hasBarcodeHit = !!l.hasBarcodeHit;
+                const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
                 return (
                   <React.Fragment key={rowKey}>
@@ -330,17 +340,20 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {l.crates.map(c => (
-                                  <TableRow key={c.id}>
-                                    <TableCell className="font-mono text-xs">{c.barcode}</TableCell>
-                                    <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
-                                    <TableCell>{c.cutName || '—'}</TableCell>
-                                    <TableCell>{c.bobbinName}</TableCell>
-                                    <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
-                                    <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
-                                    <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
-                                  </TableRow>
-                                ))}
+                                {l.crates.map(c => {
+                                  const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                                  return (
+                                    <TableRow key={c.id} className={crateMatch ? 'bg-primary/10' : ''}>
+                                      <TableCell className="font-mono text-xs"><HighlightMatch text={c.barcode || ''} query={search} /></TableCell>
+                                      <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
+                                      <TableCell>{c.cutName || '—'}</TableCell>
+                                      <TableCell>{c.bobbinName}</TableCell>
+                                      <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
+                                      <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
+                                      <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </div>
@@ -376,7 +389,8 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No bobbin stock found.</div>
         ) : (
           displayData.map((l, idx) => {
-            const isExpanded = !groupBy && expandedLot === l.lotNo;
+            const hasBarcodeHit = !!l.hasBarcodeHit;
+            const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
 
             return (
@@ -413,18 +427,21 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                 {isExpanded && !groupBy && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Crate Details</p>
-                    {l.crates.map(c => (
-                      <div key={c.id} className="bg-background border rounded p-2 space-y-1">
-                        <div className="flex justify-between font-mono text-xs">
-                          <span className="font-semibold text-primary">{c.barcode}</span>
-                          <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
+                    {l.crates.map(c => {
+                      const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                      return (
+                        <div key={c.id} className={cn("bg-background border rounded p-2 space-y-1", crateMatch && "bg-primary/10")}>
+                          <div className="flex justify-between font-mono text-xs">
+                            <span className="font-semibold text-primary"><HighlightMatch text={c.barcode} query={search} /></span>
+                            <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
+                          </div>
+                          <div className="flex justify-between text-[11px] text-muted-foreground">
+                            <span>{c.bobbinName} • Qty: {c.availableBobbins}</span>
+                            <span>Op: {c.operator?.name || '—'}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>{c.bobbinName} • Qty: {c.availableBobbins}</span>
-                          <span>Op: {c.operator?.name || '—'}</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

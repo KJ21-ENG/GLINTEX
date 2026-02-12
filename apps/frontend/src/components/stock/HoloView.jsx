@@ -150,7 +150,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         steamedRolls: 0,
         steamedWeight: 0,
         lotNos: new Set(),
-        rows: []
+        rows: [],
+        barcodes: [],
       };
 
       existing.rows.push(row);
@@ -158,6 +159,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.totalWeight += row.availableWeight;
       existing.cutNames.add(row.cutName || '—');
       (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
+      if (row.barcode) existing.barcodes.push(row.barcode);
       // Track steamed status
       if (row.isSteamed) {
         existing.steamedRolls += row.availableRolls;
@@ -180,6 +182,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         cutNames: lot.cutNames,
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
+        barcodeStr: (lot.barcodes || []).join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
         steamedStatusType,
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
@@ -195,7 +198,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'lotSearch', 'itemName', 'cutName', 'yarnName', 'twistName', 'firmName', 'supplierName',
-          'totalRolls', 'totalWeight'
+          'totalRolls', 'totalWeight', 'barcodeStr'
         ];
         const tempItem = {
           ...l,
@@ -207,11 +210,15 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       } else {
         score = 1;
       }
-      return { ...l, searchScore: score };
+      // Check for direct barcode hit
+      const searchLower = search ? search.trim().toLowerCase() : '';
+      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      return { ...l, searchScore: score, hasBarcodeHit };
     });
 
     if (search) {
-      list = list.filter(l => l.searchScore > 0);
+      const minScore = search.trim().length >= 8 ? 40 : 1;
+      list = list.filter(l => l.searchScore >= minScore || l.hasBarcodeHit);
     }
 
     return list.filter(l => {
@@ -323,7 +330,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 // Keys must be unique and stable. Using only lotNo/twistName collides when the same lot is present
                 // with multiple yarns/cuts, which can cause stale rows to remain visible after filtering.
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
-                const isExpanded = !groupBy && expandedLot === l.lotKey;
+                const hasBarcodeHit = !!l.hasBarcodeHit;
+                const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
@@ -395,27 +403,30 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {l.rows.map(r => (
-                                  <TableRow key={r.id} className={r.isSteamed ? 'bg-green-500/5' : ''}>
-                                    <TableCell className="font-mono text-xs">{r.barcode}</TableCell>
-                                    <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
-                                    <TableCell>{r.rollType?.name || '—'}</TableCell>
-                                    <TableCell className="">{r.availableRolls}</TableCell>
-                                    <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
-                                    <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
-                                    <TableCell>{r.machineNo}</TableCell>
-                                    <TableCell>
-                                      {r.isSteamed ? (
-                                        <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/50">
-                                          <Flame className="w-3 h-3 mr-1" />
-                                          Steamed
-                                        </Badge>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">—</span>
-                                      )}
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
+                                {l.rows.map(r => {
+                                  const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                                  return (
+                                    <TableRow key={r.id} className={cn(r.isSteamed ? 'bg-green-500/5' : '', rollMatch && 'bg-primary/10')}>
+                                      <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || ''} query={search} /></TableCell>
+                                      <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
+                                      <TableCell>{r.rollType?.name || '—'}</TableCell>
+                                      <TableCell className="">{r.availableRolls}</TableCell>
+                                      <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
+                                      <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
+                                      <TableCell>{r.machineNo}</TableCell>
+                                      <TableCell>
+                                        {r.isSteamed ? (
+                                          <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/50">
+                                            <Flame className="w-3 h-3 mr-1" />
+                                            Steamed
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-xs text-muted-foreground">—</span>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </div>
@@ -453,7 +464,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         ) : (
           displayLots.map((l, idx) => {
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
-            const isExpanded = !groupBy && expandedLot === l.lotKey;
+            const hasBarcodeHit = !!l.hasBarcodeHit;
+            const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
@@ -501,21 +513,24 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 {isExpanded && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Roll Details</p>
-                    {l.rows.map(r => (
-                      <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30")}>
-                        <div className="flex justify-between font-mono text-xs">
-                          <span className="font-semibold text-primary">{r.barcode}</span>
-                          <span>{formatKg(r.availableWeight)}</span>
+                    {l.rows.map(r => {
+                      const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                      return (
+                        <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30", rollMatch && "bg-primary/10")}>
+                          <div className="flex justify-between font-mono text-xs">
+                            <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
+                            <span>{formatKg(r.availableWeight)}</span>
+                          </div>
+                          <div className="flex justify-between text-[11px] text-muted-foreground">
+                            <span>{r.rollType?.name} • Rolls: {r.availableRolls}</span>
+                            <span className="flex items-center gap-1">
+                              {r.isSteamed && <Flame className="w-3 h-3 text-green-600" />}
+                              Mac: {r.machineNo}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>{r.rollType?.name} • Rolls: {r.availableRolls}</span>
-                          <span className="flex items-center gap-1">
-                            {r.isSteamed && <Flame className="w-3 h-3 text-green-600" />}
-                            Mac: {r.machineNo}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

@@ -34,6 +34,19 @@ export function OnMachineTable({ db, process }) {
     const [takeBackSaving, setTakeBackSaving] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+    const roundTakeBackWeight = (value) => {
+        const num = Number(value || 0);
+        if (!Number.isFinite(num) || num <= 0) return 0;
+        return Math.round(num * 1000) / 1000;
+    };
+    const calcAutoTakeBackWeight = (line, countValue) => {
+        const count = Math.max(0, Number(countValue || 0));
+        const maxCount = Math.max(0, Number(line?.maxCount || 0));
+        const maxWeight = Math.max(0, Number(line?.maxWeight || 0));
+        if (maxCount <= 0 || maxWeight <= 0 || count <= 0) return 0;
+        const proportional = (count / maxCount) * maxWeight;
+        return roundTakeBackWeight(Math.min(maxWeight, proportional));
+    };
 
     // Build lookup maps
     const itemNameById = useMemo(() => {
@@ -382,7 +395,7 @@ export function OnMachineTable({ db, process }) {
                 maxCount: line.maxCount,
                 maxWeight: line.maxWeight,
                 count: process === 'cutter' ? 0 : line.maxCount,
-                weight: line.maxWeight,
+                weight: process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, line.maxCount),
             })),
         );
         setTakeBackModalOpen(true);
@@ -1361,8 +1374,17 @@ export function OnMachineTable({ db, process }) {
                                                             max={line.maxCount || 0}
                                                             value={line.count}
                                                             onChange={(e) => {
-                                                                const value = Math.max(0, Number(e.target.value || 0));
-                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, count: value } : l));
+                                                                const raw = Number(e.target.value || 0);
+                                                                const maxCount = Math.max(0, Number(line.maxCount || 0));
+                                                                const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    return {
+                                                                        ...l,
+                                                                        count: nextCount,
+                                                                        weight: calcAutoTakeBackWeight(l, nextCount),
+                                                                    };
+                                                                }));
                                                             }}
                                                             className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
                                                         />
@@ -1377,7 +1399,9 @@ export function OnMachineTable({ db, process }) {
                                                         max={line.maxWeight || 0}
                                                         value={line.weight}
                                                         onChange={(e) => {
-                                                            const value = Math.max(0, Number(e.target.value || 0));
+                                                            const raw = Number(e.target.value || 0);
+                                                            const maxWeight = Math.max(0, Number(line.maxWeight || 0));
+                                                            const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
                                                             setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
                                                         }}
                                                         className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"

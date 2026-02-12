@@ -5,6 +5,7 @@ import * as api from '../../api';
 import { Check, X, Edit2, AlertTriangle, MoreVertical, Trash2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DisabledWithTooltip } from '../common/DisabledWithTooltip';
+import { HighlightMatch } from '../../components/common/HighlightMatch';
 
 export function PieceRow({
   p,
@@ -21,7 +22,8 @@ export function PieceRow({
   hidePending = false,
   canEdit = false,
   canDelete = false,
-  selectDisabled = false
+  selectDisabled = false,
+  search = ''
 }) {
   const EPSILON = 1e-9;
   const [editing, setEditing] = useState(false);
@@ -66,11 +68,13 @@ export function PieceRow({
 
   const allowEdit = !!canEdit && !isWastageMarked && !isIssued;
   const allowDelete = !!canDelete && !isWastageMarked && !isIssued && p.status !== 'consumed';
+  const barcodeMatch = search && search.trim().length >= 6 && String(p.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
 
   return (
     <tr className={cn(
       "border-t transition-colors hover:bg-muted/50",
-      isWastageMarked && "opacity-50 bg-muted"
+      isWastageMarked && "opacity-50 bg-muted",
+      barcodeMatch && "bg-primary/10"
     )}>
       <td className="py-2 pr-2 pl-4">
         <input
@@ -92,7 +96,7 @@ export function PieceRow({
       <td className="py-2 pr-2 font-mono text-xs">
         {p.barcode ? (
           <a href={api.barcodeImageUrl(p.barcode)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-            {p.barcode}
+            <HighlightMatch text={p.barcode} query={search} />
           </a>
         ) : '—'}
       </td>

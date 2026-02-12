@@ -170,14 +170,6 @@ export function HoloReceiveForm() {
             alert('Select a piece for this receive');
             return;
         }
-        if (issueMetrics.pending <= 0.001) {
-            alert('This issue has no pending net-issued weight remaining.');
-            return;
-        }
-        if (netWeight > issueMetrics.pending + 0.001) {
-            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds pending issue weight (${issueMetrics.pending.toFixed(3)} kg).`);
-            return;
-        }
         setSubmitting(true);
         try {
             const rollCountNum = Number(form.rollCount);
@@ -464,7 +456,7 @@ export function HoloReceiveForm() {
                             <div className="text-sm">
                                 Tare: {formatKg(tareWeight)} | <span className="font-bold">Net: {formatKg(netWeight)}</span>
                             </div>
-                            <Button onClick={handleSubmit} disabled={submitting || !netWeight || issueMetrics.pending <= 0.001} className="w-full sm:w-auto">Save Receive</Button>
+                            <Button onClick={handleSubmit} disabled={submitting || !netWeight} className="w-full sm:w-auto">Save Receive</Button>
                         </div>
                     </CardContent>
                 )}

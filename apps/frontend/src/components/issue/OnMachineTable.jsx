@@ -34,6 +34,24 @@ export function OnMachineTable({ db, process }) {
     const [takeBackSaving, setTakeBackSaving] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+    const boxById = useMemo(() => {
+        const map = new Map();
+        (db.boxes || []).forEach((box) => {
+            const id = String(box?.id || '').trim();
+            if (!id) return;
+            map.set(id, box);
+        });
+        return map;
+    }, [db.boxes]);
+    const bobbinById = useMemo(() => {
+        const map = new Map();
+        (db.bobbins || []).forEach((bobbin) => {
+            const id = String(bobbin?.id || '').trim();
+            if (!id) return;
+            map.set(id, bobbin);
+        });
+        return map;
+    }, [db.bobbins]);
     const roundTakeBackWeight = (value) => {
         const num = Number(value || 0);
         if (!Number.isFinite(num) || num <= 0) return 0;
@@ -46,6 +64,17 @@ export function OnMachineTable({ db, process }) {
         if (maxCount <= 0 || maxWeight <= 0 || count <= 0) return 0;
         const proportional = (count / maxCount) * maxWeight;
         return roundTakeBackWeight(Math.min(maxWeight, proportional));
+    };
+    const calcHoloTakeBackNetWeight = (line, nextCount, grossWeightInput, nextBoxId) => {
+        const count = Math.max(0, Number(nextCount || 0));
+        const gross = Number(grossWeightInput || 0);
+        if (!Number.isFinite(gross) || gross <= 0 || count <= 0) return 0;
+        const bobbinWeight = Number(line?.pieceUnitWeight || 0);
+        const boxWeight = Number(boxById.get(nextBoxId)?.weight || 0);
+        if (!Number.isFinite(bobbinWeight) || bobbinWeight <= 0) return 0;
+        if (!Number.isFinite(boxWeight) || boxWeight < 0) return 0;
+        const net = gross - ((count * bobbinWeight) + boxWeight);
+        return roundTakeBackWeight(Math.max(0, net));
     };
 
     // Build lookup maps
@@ -372,11 +401,17 @@ export function OnMachineTable({ db, process }) {
             const maxCount = Math.max(0, originalCount - Number(active.count || 0));
             const maxWeight = Math.max(0, originalWeight - Number(active.weight || 0));
             if (maxWeight <= 0.0001) return;
+            const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
+            const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
             sourceMap.set(sourceId, {
                 sourceId,
                 label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
                 maxCount,
                 maxWeight,
+                sourceBoxId: process === 'holo' ? String(cutterRow?.boxId || '').trim() : '',
+                pieceTypeId: process === 'holo' ? String(cutterRow?.bobbinId || '').trim() : '',
+                pieceTypeName: process === 'holo' ? (bobbin?.name || '—') : '',
+                pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
             });
         });
         return Array.from(sourceMap.values());
@@ -389,14 +424,32 @@ export function OnMachineTable({ db, process }) {
         setTakeBackReason('');
         setTakeBackNote('');
         setTakeBackLinesDraft(
-            sources.map((line) => ({
-                sourceId: line.sourceId,
-                sourceBarcode: line.label,
-                maxCount: line.maxCount,
-                maxWeight: line.maxWeight,
-                count: process === 'cutter' ? 0 : line.maxCount,
-                weight: process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, line.maxCount),
-            })),
+            sources.map((line) => {
+                const count = process === 'cutter' ? 0 : line.maxCount;
+                const boxId = process === 'holo' ? (line.sourceBoxId || '') : '';
+                const tareEstimate = process === 'holo'
+                    ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
+                    : 0;
+                const grossWeight = process === 'holo'
+                    ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
+                    : 0;
+                const weight = process === 'holo'
+                    ? calcHoloTakeBackNetWeight(line, count, grossWeight, boxId)
+                    : (process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, count));
+                return {
+                    sourceId: line.sourceId,
+                    sourceBarcode: line.label,
+                    maxCount: line.maxCount,
+                    maxWeight: line.maxWeight,
+                    count,
+                    weight,
+                    boxId,
+                    grossWeight,
+                    pieceTypeId: line.pieceTypeId || '',
+                    pieceTypeName: line.pieceTypeName || '',
+                    pieceUnitWeight: Number(line.pieceUnitWeight || 0),
+                };
+            }),
         );
         setTakeBackModalOpen(true);
     };
@@ -415,6 +468,23 @@ export function OnMachineTable({ db, process }) {
                 weight: Math.max(0, Number(line.weight || 0)),
             }))
             .filter((line) => line.weight > 0.0001 && (process === 'cutter' || line.count > 0));
+        if (process === 'holo') {
+            const invalidGross = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && (!Number.isFinite(Number(line.grossWeight)) || Number(line.grossWeight) <= 0));
+            if (invalidGross) {
+                alert(`Enter valid gross weight for source ${invalidGross.sourceBarcode || invalidGross.sourceId}`);
+                return;
+            }
+            const invalidBox = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && !String(line.boxId || '').trim());
+            if (invalidBox) {
+                alert(`Select box for source ${invalidBox.sourceBarcode || invalidBox.sourceId}`);
+                return;
+            }
+            const exceedsMax = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.weight || 0) - Number(line.maxWeight || 0) > 0.001);
+            if (exceedsMax) {
+                alert(`Net weight exceeds max for source ${exceedsMax.sourceBarcode || exceedsMax.sourceId}`);
+                return;
+            }
+        }
         if (lines.length === 0) {
             alert('Enter at least one valid line');
             return;
@@ -1351,14 +1421,17 @@ export function OnMachineTable({ db, process }) {
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead>Source</TableHead>
+                                        {process === 'holo' && <TableHead>Piece Type</TableHead>}
                                         {process !== 'cutter' && <TableHead className="text-right">Count</TableHead>}
+                                        {process === 'holo' && <TableHead>Box</TableHead>}
+                                        {process === 'holo' && <TableHead className="text-right">Gross (kg)</TableHead>}
                                         <TableHead className="text-right">Weight (kg)</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {takeBackLinesDraft.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={process === 'cutter' ? 2 : 3} className="text-center py-6 text-muted-foreground">
+                                            <TableCell colSpan={process === 'cutter' ? 2 : (process === 'holo' ? 6 : 3)} className="text-center py-6 text-muted-foreground">
                                                 No take-back eligible lines.
                                             </TableCell>
                                         </TableRow>
@@ -1366,6 +1439,11 @@ export function OnMachineTable({ db, process }) {
                                         takeBackLinesDraft.map((line, idx) => (
                                             <TableRow key={line.sourceId}>
                                                 <TableCell className="font-mono text-xs">{line.sourceBarcode || line.sourceId}</TableCell>
+                                                {process === 'holo' && (
+                                                    <TableCell className="text-xs">
+                                                        <div>{line.pieceTypeName || '—'}</div>
+                                                    </TableCell>
+                                                )}
                                                 {process !== 'cutter' && (
                                                     <TableCell className="text-right">
                                                         <input
@@ -1379,16 +1457,66 @@ export function OnMachineTable({ db, process }) {
                                                                 const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
                                                                 setTakeBackLinesDraft((prev) => prev.map((l, i) => {
                                                                     if (i !== idx) return l;
+                                                                    const nextWeight = process === 'holo'
+                                                                        ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
+                                                                        : calcAutoTakeBackWeight(l, nextCount);
                                                                     return {
                                                                         ...l,
                                                                         count: nextCount,
-                                                                        weight: calcAutoTakeBackWeight(l, nextCount),
+                                                                        weight: nextWeight,
                                                                     };
                                                                 }));
                                                             }}
                                                             className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
                                                         />
                                                         <div className="text-[10px] text-muted-foreground mt-1">max {line.maxCount || 0}</div>
+                                                    </TableCell>
+                                                )}
+                                                {process === 'holo' && (
+                                                    <TableCell>
+                                                        <select
+                                                            value={line.boxId || ''}
+                                                            onChange={(e) => {
+                                                                const nextBoxId = String(e.target.value || '');
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    return {
+                                                                        ...l,
+                                                                        boxId: nextBoxId,
+                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
+                                                                    };
+                                                                }));
+                                                            }}
+                                                            className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
+                                                        >
+                                                            <option value="">Select Box</option>
+                                                            {(db.boxes || []).map((box) => (
+                                                                <option key={box.id} value={box.id}>{box.name}</option>
+                                                            ))}
+                                                        </select>
+                                                    </TableCell>
+                                                )}
+                                                {process === 'holo' && (
+                                                    <TableCell className="text-right">
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            step="0.001"
+                                                            value={line.grossWeight || ''}
+                                                            onChange={(e) => {
+                                                                const raw = Number(e.target.value || 0);
+                                                                const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    return {
+                                                                        ...l,
+                                                                        grossWeight,
+                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
+                                                                    };
+                                                                }));
+                                                            }}
+                                                            className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                        />
                                                     </TableCell>
                                                 )}
                                                 <TableCell className="text-right">
@@ -1405,6 +1533,7 @@ export function OnMachineTable({ db, process }) {
                                                             setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
                                                         }}
                                                         className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                        readOnly={process === 'holo'}
                                                     />
                                                     <div className="text-[10px] text-muted-foreground mt-1">max {Number(line.maxWeight || 0).toFixed(3)}</div>
                                                 </TableCell>

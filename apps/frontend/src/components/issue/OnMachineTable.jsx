@@ -1382,7 +1382,7 @@ export function OnMachineTable({ db, process }) {
                 <DialogContent
                     title={`Take Back${takeBackTarget?.barcode ? ` • ${takeBackTarget.barcode}` : ''}`}
                     onOpenChange={setTakeBackModalOpen}
-                    className="max-w-3xl"
+                    className="max-w-5xl"
                 >
                     <div className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1437,107 +1437,105 @@ export function OnMachineTable({ db, process }) {
                                         </TableRow>
                                     ) : (
                                         takeBackLinesDraft.map((line, idx) => (
-                                            <TableRow key={line.sourceId}>
-                                                <TableCell className="font-mono text-xs">{line.sourceBarcode || line.sourceId}</TableCell>
-                                                {process === 'holo' && (
-                                                    <TableCell className="text-xs">
-                                                        <div>{line.pieceTypeName || '—'}</div>
-                                                    </TableCell>
-                                                )}
-                                                {process !== 'cutter' && (
-                                                    <TableCell className="text-right">
-                                                        <input
-                                                            type="number"
-                                                            min={0}
-                                                            max={line.maxCount || 0}
-                                                            value={line.count}
-                                                            onChange={(e) => {
-                                                                const raw = Number(e.target.value || 0);
-                                                                const maxCount = Math.max(0, Number(line.maxCount || 0));
-                                                                const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
-                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                    if (i !== idx) return l;
-                                                                    const nextWeight = process === 'holo'
-                                                                        ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
-                                                                        : calcAutoTakeBackWeight(l, nextCount);
-                                                                    return {
-                                                                        ...l,
-                                                                        count: nextCount,
-                                                                        weight: nextWeight,
-                                                                    };
-                                                                }));
-                                                            }}
-                                                            className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                        />
-                                                        <div className="text-[10px] text-muted-foreground mt-1">max {line.maxCount || 0}</div>
-                                                    </TableCell>
-                                                )}
-                                                {process === 'holo' && (
-                                                    <TableCell>
-                                                        <select
-                                                            value={line.boxId || ''}
-                                                            onChange={(e) => {
-                                                                const nextBoxId = String(e.target.value || '');
-                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                    if (i !== idx) return l;
-                                                                    return {
-                                                                        ...l,
-                                                                        boxId: nextBoxId,
-                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
-                                                                    };
-                                                                }));
-                                                            }}
-                                                            className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
-                                                        >
-                                                            <option value="">Select Box</option>
-                                                            {(db.boxes || []).map((box) => (
-                                                                <option key={box.id} value={box.id}>{box.name}</option>
-                                                            ))}
-                                                        </select>
-                                                    </TableCell>
-                                                )}
-                                                {process === 'holo' && (
-                                                    <TableCell className="text-right">
+                                                <TableRow key={line.sourceId}>
+                                                    <TableCell className="font-mono text-xs align-middle whitespace-nowrap">{line.sourceBarcode || line.sourceId}</TableCell>
+                                                    {process === 'holo' && (
+                                                        <TableCell className="text-xs align-middle whitespace-nowrap">
+                                                            <div>{line.pieceTypeName || '—'}</div>
+                                                        </TableCell>
+                                                    )}
+                                                    {process !== 'cutter' && (
+                                                        <TableCell className="text-right align-middle">
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                max={line.maxCount || 0}
+                                                                value={line.count}
+                                                                onChange={(e) => {
+                                                                    const raw = Number(e.target.value || 0);
+                                                                    const maxCount = Math.max(0, Number(line.maxCount || 0));
+                                                                    const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
+                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                        if (i !== idx) return l;
+                                                                        const nextWeight = process === 'holo'
+                                                                            ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
+                                                                            : calcAutoTakeBackWeight(l, nextCount);
+                                                                        return {
+                                                                            ...l,
+                                                                            count: nextCount,
+                                                                            weight: nextWeight,
+                                                                        };
+                                                                    }));
+                                                                }}
+                                                                className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                            />
+                                                        </TableCell>
+                                                    )}
+                                                    {process === 'holo' && (
+                                                        <TableCell className="align-middle">
+                                                            <select
+                                                                value={line.boxId || ''}
+                                                                onChange={(e) => {
+                                                                    const nextBoxId = String(e.target.value || '');
+                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                        if (i !== idx) return l;
+                                                                        return {
+                                                                            ...l,
+                                                                            boxId: nextBoxId,
+                                                                            weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
+                                                                        };
+                                                                    }));
+                                                                }}
+                                                                className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
+                                                            >
+                                                                <option value="">Select Box</option>
+                                                                {(db.boxes || []).map((box) => (
+                                                                    <option key={box.id} value={box.id}>{box.name}</option>
+                                                                ))}
+                                                            </select>
+                                                        </TableCell>
+                                                    )}
+                                                    {process === 'holo' && (
+                                                        <TableCell className="text-right align-middle">
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                step="0.001"
+                                                                value={line.grossWeight || ''}
+                                                                onChange={(e) => {
+                                                                    const raw = Number(e.target.value || 0);
+                                                                    const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
+                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                        if (i !== idx) return l;
+                                                                        return {
+                                                                            ...l,
+                                                                            grossWeight,
+                                                                            weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
+                                                                        };
+                                                                    }));
+                                                                }}
+                                                                className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                            />
+                                                        </TableCell>
+                                                    )}
+                                                    <TableCell className="text-right align-middle">
                                                         <input
                                                             type="number"
                                                             min={0}
                                                             step="0.001"
-                                                            value={line.grossWeight || ''}
+                                                            max={line.maxWeight || 0}
+                                                            value={line.weight}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value || 0);
-                                                                const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
-                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                    if (i !== idx) return l;
-                                                                    return {
-                                                                        ...l,
-                                                                        grossWeight,
-                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
-                                                                    };
-                                                                }));
+                                                                const maxWeight = Math.max(0, Number(line.maxWeight || 0));
+                                                                const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
                                                             }}
                                                             className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                            readOnly={process === 'holo'}
                                                         />
                                                     </TableCell>
-                                                )}
-                                                <TableCell className="text-right">
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        step="0.001"
-                                                        max={line.maxWeight || 0}
-                                                        value={line.weight}
-                                                        onChange={(e) => {
-                                                            const raw = Number(e.target.value || 0);
-                                                            const maxWeight = Math.max(0, Number(line.maxWeight || 0));
-                                                            const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
-                                                            setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
-                                                        }}
-                                                        className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                        readOnly={process === 'holo'}
-                                                    />
-                                                    <div className="text-[10px] text-muted-foreground mt-1">max {Number(line.maxWeight || 0).toFixed(3)}</div>
-                                                </TableCell>
-                                            </TableRow>
+                                                </TableRow>
                                         ))
                                     )}
                                 </TableBody>

@@ -136,6 +136,23 @@ export async function createCutterPurchaseInbound(payload) {
 }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function createIssueTakeBack(process, issueId, payload) {
+  const stage = String(process || '').toLowerCase();
+  const encodedId = encodeURIComponent(issueId);
+  if (stage === 'holo') return await request(`/api/issue_to_holo_machine/${encodedId}/take_back`, { method: 'POST', body: payload });
+  if (stage === 'coning') return await request(`/api/issue_to_coning_machine/${encodedId}/take_back`, { method: 'POST', body: payload });
+  return await request(`/api/issue_to_cutter_machine/${encodedId}/take_back`, { method: 'POST', body: payload });
+}
+export async function reverseIssueTakeBack(takeBackId, payload = {}) {
+  return await request(`/api/issue_take_backs/${encodeURIComponent(takeBackId)}/reverse`, { method: 'POST', body: payload });
+}
+export async function getIssueTakeBacks(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.stage) qs.set('stage', params.stage);
+  if (params.issueId) qs.set('issueId', params.issueId);
+  const suffix = qs.toString();
+  return await request(`/api/issue_take_backs${suffix ? `?${suffix}` : ''}`);
+}
 export async function updateIssueToCutterMachine(id, payload) {
   return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'PUT', body: payload });
 }
@@ -375,6 +392,9 @@ export default {
   resetAdminUserPassword,
   createLot,
   createIssueToMachine,
+  createIssueTakeBack,
+  reverseIssueTakeBack,
+  getIssueTakeBacks,
   createIssueToCutterMachine,
   createIssueToHoloMachine,
   createIssueToConingMachine,

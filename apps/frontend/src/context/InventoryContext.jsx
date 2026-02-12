@@ -50,8 +50,11 @@ const buildRawFromDb = (db) => ({
   cone_types: db?.cone_types || [],
   wrappers: db?.wrappers || [],
   issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
+  issue_to_cutter_machine_lines: db?.issue_to_cutter_machine_lines || [],
   issue_to_holo_machine: db?.issue_to_holo_machine || [],
   issue_to_coning_machine: db?.issue_to_coning_machine || [],
+  issue_take_backs: db?.issue_take_backs || [],
+  issue_balances: db?.issue_balances || {},
   settings: db?.settings || [],
   receive_from_cutter_machine_uploads: db?.receive_from_cutter_machine_uploads || [],
   receive_from_cutter_machine_rows: db?.receive_from_cutter_machine_rows || [],
@@ -105,6 +108,12 @@ export const InventoryProvider = ({ children }) => {
   const applyDbUpdate = useCallback((rawUpdate = {}, { clearKeys = [] } = {}) => {
     const baseRaw = buildRawFromDb(dbRef.current || {});
     const nextRaw = { ...baseRaw, ...rawUpdate };
+    if (Object.prototype.hasOwnProperty.call(rawUpdate || {}, 'issue_balances')) {
+      nextRaw.issue_balances = {
+        ...(baseRaw.issue_balances || {}),
+        ...((rawUpdate && rawUpdate.issue_balances) || {}),
+      };
+    }
     clearKeys.forEach((key) => {
       nextRaw[key] = [];
     });
@@ -334,6 +343,22 @@ export const InventoryProvider = ({ children }) => {
       await refreshProcessData('cutter');
       return res;
     },
+    createIssueTakeBack: async (process, issueId, payload) => {
+      const stage = process || 'cutter';
+      const res = await api.createIssueTakeBack(stage, issueId, payload);
+      await refreshProcessData(stage);
+      return res;
+    },
+    reverseIssueTakeBack: async (takeBackId, payload = {}) => {
+      const res = await api.reverseIssueTakeBack(takeBackId, payload);
+      const stage = res?.issue_take_back?.stage || payload?.stage || process;
+      if (stage) {
+        await refreshProcessData(stage);
+      } else {
+        await refreshDb();
+      }
+      return res;
+    },
     deleteIssueToMachine: async (id) => {
       await api.deleteIssueToMachine(id);
       // This action is cutter-only; avoid full bootstrap refresh.
@@ -431,7 +456,7 @@ export const InventoryProvider = ({ children }) => {
       }
       await refreshDb();
     },
-  }), [refreshDb, refreshProcessData, refreshModuleData]);
+  }), [refreshDb, refreshProcessData, refreshModuleData, process]);
 
   const value = useMemo(() => ({
     db,

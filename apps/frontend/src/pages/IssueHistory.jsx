@@ -14,8 +14,9 @@ import { UserBadge } from '../components/common/UserBadge';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
 
 export function IssueHistory({ db, canEdit = false, canDelete = false }) {
-  const { process, patchIssueRecord, refreshProcessData } = useInventory();
+  const { process, patchIssueRecord, refreshProcessData, reverseIssueTakeBack } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
+  const [reversingTakeBackId, setReversingTakeBackId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sheetFilters, setSheetFilters] = useState({});
   const [openFilterId, setOpenFilterId] = useState(null);
@@ -42,6 +43,37 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return [];
     }
   };
+  const toTimeMs = (value) => {
+    const ms = new Date(value || 0).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const cutterIssueTimelineByPiece = useMemo(() => {
+    const map = new Map();
+    (db.issue_to_cutter_machine || [])
+      .filter((issue) => !issue?.isDeleted && issue?.id)
+      .forEach((issue) => {
+        const issueCreatedAtMs = toTimeMs(issue.createdAt);
+        const pieceIds = Array.isArray(issue.pieceIds)
+          ? issue.pieceIds
+          : (issue.pieceIds || '').split(',').map((s) => s.trim()).filter(Boolean);
+        pieceIds.forEach((pieceId) => {
+          if (!pieceId) return;
+          const rows = map.get(pieceId) || [];
+          rows.push({ issueId: issue.id, createdAtMs: issueCreatedAtMs });
+          map.set(pieceId, rows);
+        });
+      });
+    map.forEach((rows, pieceId) => {
+      rows.sort((a, b) => {
+        const aMs = a.createdAtMs == null ? Number.MAX_SAFE_INTEGER : a.createdAtMs;
+        const bMs = b.createdAtMs == null ? Number.MAX_SAFE_INTEGER : b.createdAtMs;
+        if (aMs !== bMs) return aMs - bMs;
+        return String(a.issueId).localeCompare(String(b.issueId));
+      });
+      map.set(pieceId, rows);
+    });
+    return map;
+  }, [db.issue_to_cutter_machine]);
 
   const resolveConingConeTypeName = (issue) => {
     const refs = parseIssueRefs(issue);
@@ -79,8 +111,21 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!row) return false;
     if (process === 'cutter') {
       const pieceIds = parseIssuePieceIds(row);
+      const issueCreatedAtMs = toTimeMs(row.createdAt);
       return (db.receive_from_cutter_machine_rows || [])
-        .some(r => !r.isDeleted && pieceIds.includes(r.pieceId));
+        .some((r) => {
+          if (r.isDeleted) return false;
+          if (r.issueId) return r.issueId === row.id;
+          if (!pieceIds.includes(r.pieceId)) return false;
+          const rowCreatedAtMs = toTimeMs(r.createdAt || r.date);
+          if (issueCreatedAtMs != null && (rowCreatedAtMs == null || rowCreatedAtMs < issueCreatedAtMs)) return false;
+          if (rowCreatedAtMs == null) return false;
+          const timeline = cutterIssueTimelineByPiece.get(r.pieceId) || [];
+          const assignedIssue = [...timeline]
+            .reverse()
+            .find((entry) => entry.createdAtMs != null && entry.createdAtMs <= rowCreatedAtMs);
+          return assignedIssue?.issueId === row.id;
+        });
     }
     if (process === 'holo') {
       return (db.receive_from_holo_machine_rows || [])
@@ -860,6 +905,45 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     return resolveCutterIssueDetails(row);
   };
 
+  const stageTakeBacks = useMemo(() => {
+    return (db.issue_take_backs || [])
+      .filter((tb) => tb.stage === process)
+      .slice()
+      .sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
+  }, [db.issue_take_backs, process]);
+
+  const takeBackTotalsByIssue = useMemo(() => {
+    const map = new Map();
+    stageTakeBacks
+      .filter((tb) => !tb.isReverse && !tb.isReversed)
+      .forEach((tb) => {
+        const prev = map.get(tb.issueId) || { count: 0, weight: 0 };
+        prev.count += Number(tb.totalCount || 0);
+        prev.weight += Number(tb.totalWeight || 0);
+        map.set(tb.issueId, prev);
+      });
+    return map;
+  }, [stageTakeBacks]);
+
+  const handleReverseTakeBack = async (takeBack) => {
+    if (!takeBack || takeBack.isReverse || takeBack.isReversed) return;
+    const confirmed = window.confirm('Reverse this take-back entry?');
+    if (!confirmed) return;
+    setReversingTakeBackId(takeBack.id);
+    try {
+      await reverseIssueTakeBack(takeBack.id, {
+        date: new Date().toISOString().slice(0, 10),
+        reason: 'reverse',
+        note: 'Reversed from Issue History',
+        stage: process,
+      });
+    } catch (err) {
+      alert(err.message || 'Failed to reverse take-back');
+    } finally {
+      setReversingTakeBackId(null);
+    }
+  };
+
   const issuesBase = useMemo(() => {
     let rows = [];
     if (process === 'holo') {
@@ -870,11 +954,29 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       rows = (db.issue_to_cutter_machine || []).filter(r => !r.isDeleted);
     }
 
-    let filtered = rows;
+    const filtered = rows.map((row) => {
+      const takeBackTotals = takeBackTotalsByIssue.get(row.id) || { count: 0, weight: 0 };
+      const balance = row.issueBalance || db.issue_balances?.[row.id] || null;
+      const originalIssuedWeight = Number(balance?.originalWeight ?? (process === 'cutter'
+        ? row.totalWeight
+        : process === 'holo'
+          ? row.metallicBobbinsWeight
+          : 0));
+      const takenBackWeight = Number(balance?.takeBackWeight ?? takeBackTotals.weight ?? 0);
+      const netIssuedWeight = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takenBackWeight));
+      const takenBackCount = Number(takeBackTotals.count || 0);
+      return {
+        ...row,
+        takenBackWeight,
+        takenBackCount,
+        originalIssuedWeight,
+        netIssuedWeight,
+      };
+    });
 
     // Sort by createdAt timestamp descending (latest first, considering time)
     return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-  }, [db, process]);
+  }, [db, process, takeBackTotalsByIssue]);
 
   const filterColumns = useMemo(() => {
     const common = [
@@ -897,6 +999,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         ...common,
         { id: 'qty', label: 'Qty', kind: 'number', getValue: (r) => r.count || 0 },
         { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.totalWeight || 0 },
+        { id: 'takenBackWeight', label: 'Taken Back (kg)', kind: 'number', getValue: (r) => r.takenBackWeight || 0 },
+        { id: 'netIssuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.netIssuedWeight ?? 0 },
       ];
     }
     if (process === 'holo') {
@@ -904,6 +1008,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         ...common,
         { id: 'metallicBobbins', label: 'Metallic Bobbins', kind: 'number', getValue: (r) => r.metallicBobbins || 0 },
         { id: 'metallicBobbinsWeight', label: 'Met. Bob. Wt (kg)', kind: 'number', getValue: (r) => r.metallicBobbinsWeight || 0 },
+        { id: 'takenBackWeight', label: 'Taken Back (kg)', kind: 'number', getValue: (r) => r.takenBackWeight || 0 },
+        { id: 'netIssuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.netIssuedWeight ?? 0 },
         { id: 'yarnKg', label: 'Yarn Wt (kg)', kind: 'number', getValue: (r) => r.yarnKg || 0 },
         { id: 'rollsProducedEstimate', label: 'Rolls Prod. Est.', kind: 'number', getValue: (r) => r.rollsProducedEstimate || 0 },
       ];
@@ -913,6 +1019,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       { id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => resolveConingConeTypeName(r) || '' },
       { id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => r.requiredPerConeNetWeight || 0 },
       { id: 'rollsIssued', label: 'Rolls Issued', kind: 'number', getValue: (r) => (r.count || r.rollsIssued || 0) },
+      { id: 'takenBackWeight', label: 'Taken Back (kg)', kind: 'number', getValue: (r) => r.takenBackWeight || 0 },
+      { id: 'netIssuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.netIssuedWeight ?? 0 },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [process, itemNameById, operatorNameById, machineNameById, db, traceContext, holoTraceContext]);
@@ -943,22 +1051,39 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       yarnKg: 0,
       rollsProducedEstimate: 0,
       rollsIssued: 0,
+      takenBackWeight: 0,
+      netIssuedWeight: 0,
     };
     for (const r of issues || []) {
       if (process === 'cutter') {
         t.qty += Number(r.count || 0);
         t.weight += Number(r.totalWeight || 0);
+        t.takenBackWeight += Number(r.takenBackWeight || 0);
+        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
       } else if (process === 'holo') {
         t.metallicBobbins += Number(r.metallicBobbins || 0);
         t.metallicBobbinsWeight += Number(r.metallicBobbinsWeight || 0);
+        t.takenBackWeight += Number(r.takenBackWeight || 0);
+        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
         t.yarnKg += Number(r.yarnKg || 0);
         t.rollsProducedEstimate += Number(r.rollsProducedEstimate || 0);
       } else if (process === 'coning') {
         t.rollsIssued += Number(r.count || r.rollsIssued || 0);
+        t.takenBackWeight += Number(r.takenBackWeight || 0);
+        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
       }
     }
     return t;
   }, [issues, process]);
+
+  const issueById = useMemo(() => {
+    const rows = process === 'holo'
+      ? (db.issue_to_holo_machine || [])
+      : process === 'coning'
+        ? (db.issue_to_coning_machine || [])
+        : (db.issue_to_cutter_machine || []);
+    return new Map(rows.map((row) => [row.id, row]));
+  }, [db, process]);
 
   const getActions = (row) => {
     const actions = [
@@ -1009,6 +1134,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         operatorName: operatorNameById.get(r.operatorId) || '—',
         barcode: r.barcode || r.id.substring(0, 8),
         note: r.note || '',
+        takenBackWeight: formatKg(r.takenBackWeight || 0),
+        netIssuedWeight: formatKg(r.netIssuedWeight ?? 0),
       };
 
       if (process === 'cutter') {
@@ -1065,6 +1192,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         { key: 'operatorName', header: 'Operator' },
         { key: 'qty', header: 'Qty' },
         { key: 'weight', header: 'Weight (kg)' },
+        { key: 'takenBackWeight', header: 'Taken Back (kg)' },
+        { key: 'netIssuedWeight', header: 'Net Issued (kg)' },
         { key: 'barcode', header: 'Barcode' },
         { key: 'note', header: 'Note' },
       ];
@@ -1080,6 +1209,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         { key: 'operatorName', header: 'Operator' },
         { key: 'metallicBobbins', header: 'Metallic Bobbins' },
         { key: 'metallicBobbinsWeight', header: 'Met. Bob. Wt (kg)' },
+        { key: 'takenBackWeight', header: 'Taken Back (kg)' },
+        { key: 'netIssuedWeight', header: 'Net Issued (kg)' },
         { key: 'yarnKg', header: 'Yarn Wt (kg)' },
         { key: 'rollsEst', header: 'Rolls Est.' },
         { key: 'barcode', header: 'Barcode' },
@@ -1098,6 +1229,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         { key: 'machineName', header: 'Machine' },
         { key: 'operatorName', header: 'Operator' },
         { key: 'rollsIssued', header: 'Rolls Issued' },
+        { key: 'takenBackWeight', header: 'Taken Back (kg)' },
+        { key: 'netIssuedWeight', header: 'Net Issued (kg)' },
         { key: 'barcode', header: 'Barcode' },
         { key: 'note', header: 'Note' },
       ];
@@ -1107,7 +1240,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
 
-  const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 16 : 15;
+  const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 18 : 17;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1241,6 +1374,18 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       <SheetColumnFilter column={filterColumns.find(c => c.id === 'weight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Taken Back (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Net Issued (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Barcode</span>
@@ -1322,6 +1467,18 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="flex items-center justify-between gap-2">
                       <span>Met. Bob. Wt (kg)</span>
                       <SheetColumnFilter column={filterColumns.find(c => c.id === 'metallicBobbinsWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Taken Back (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Net Issued (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
@@ -1425,6 +1582,18 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       <SheetColumnFilter column={filterColumns.find(c => c.id === 'rollsIssued')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Taken Back (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Net Issued (kg)</span>
+                      <SheetColumnFilter column={filterColumns.find(c => c.id === 'netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Barcode</span>
@@ -1467,6 +1636,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
                           <TableCell>{r.count}</TableCell>
                           <TableCell>{formatKg(r.totalWeight)}</TableCell>
+                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell>{formatKg(r.netIssuedWeight ?? r.totalWeight ?? 0)}</TableCell>
                           <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
@@ -1486,6 +1657,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
                           <TableCell>{r.metallicBobbins || 0}</TableCell>
                           <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
+                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell>{formatKg(r.netIssuedWeight ?? r.metallicBobbinsWeight ?? 0)}</TableCell>
                           <TableCell>{formatKg(r.yarnKg)}</TableCell>
                           <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
                           <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
@@ -1508,6 +1681,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           <TableCell><HighlightMatch text={resolveConingConeTypeName(r) || '—'} query={searchTerm} /></TableCell>
                           <TableCell>{formatPerConeNet(r.requiredPerConeNetWeight)}</TableCell>
                           <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
+                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell>{formatKg(r.netIssuedWeight ?? 0)}</TableCell>
                           <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
@@ -1533,18 +1708,26 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             <>
               <span className="font-medium">Qty: {totals.qty}</span>
               <span className="font-medium">Weight: {formatKg(totals.weight)}</span>
+              <span className="font-medium text-amber-600">Taken Back: {formatKg(totals.takenBackWeight)}</span>
+              <span className="font-medium">Net Issued: {formatKg(totals.netIssuedWeight)}</span>
             </>
           )}
           {process === 'holo' && (
             <>
               <span className="font-medium">Metallic Bobbins: {totals.metallicBobbins}</span>
               <span className="font-medium">Met. Bob. Wt: {formatKg(totals.metallicBobbinsWeight)}</span>
+              <span className="font-medium text-amber-600">Taken Back: {formatKg(totals.takenBackWeight)}</span>
+              <span className="font-medium">Net Issued: {formatKg(totals.netIssuedWeight)}</span>
               <span className="font-medium">Yarn Wt: {formatKg(totals.yarnKg)}</span>
               <span className="font-medium">Rolls Prod. Est.: {Math.round(totals.rollsProducedEstimate) || 0}</span>
             </>
           )}
           {process === 'coning' && (
-            <span className="font-medium">Rolls Issued: {totals.rollsIssued}</span>
+            <>
+              <span className="font-medium">Rolls Issued: {totals.rollsIssued}</span>
+              <span className="font-medium text-amber-600">Taken Back: {formatKg(totals.takenBackWeight)}</span>
+              <span className="font-medium">Net Issued: {formatKg(totals.netIssuedWeight)}</span>
+            </>
           )}
         </div>
       </div>
@@ -1578,6 +1761,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         Cone: {resolveConingConeTypeName(r) || '—'} • Per Cone: {formatPerConeNet(r.requiredPerConeNetWeight)}
                       </p>
                     )}
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Taken Back: {formatKg(r.takenBackWeight || 0)} • Net Issued: {formatKg(r.netIssuedWeight ?? (process === 'cutter' ? r.totalWeight : process === 'holo' ? r.metallicBobbinsWeight : 0))}
+                    </p>
                   </div>
                   <Badge variant="outline" className="whitespace-nowrap">
                     {process === 'cutter' ? formatKg(r.totalWeight) : (r.count || r.rollsIssued || r.metallicBobbins || 0)}
@@ -1591,6 +1777,78 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             );
           })
         )}
+      </div>
+
+      <div className="rounded-md border">
+        <div className="px-3 py-2 border-b bg-muted/30 text-sm font-semibold">Take-Back Ledger</div>
+        <div className="max-h-[260px] overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Issue</TableHead>
+                <TableHead>Lot</TableHead>
+                <TableHead>Item</TableHead>
+                <TableHead className="text-right">Count</TableHead>
+                <TableHead className="text-right">Weight (kg)</TableHead>
+                <TableHead>Reason</TableHead>
+                <TableHead>Note</TableHead>
+                <TableHead>Added By</TableHead>
+                <TableHead className="w-[80px]">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {stageTakeBacks.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="text-center py-6 text-muted-foreground">
+                    No take-back entries for {process}.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                stageTakeBacks.map((tb) => {
+                  const issue = issueById.get(tb.issueId) || null;
+                  const isActiveOriginal = !tb.isReverse && !tb.isReversed;
+                  const typeLabel = tb.isReverse ? 'Reverse' : (tb.isReversed ? 'Take Back (Reversed)' : 'Take Back');
+                  return (
+                    <TableRow key={tb.id}>
+                      <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(tb.date || tb.createdAt)}</TableCell>
+                      <TableCell>
+                        <Badge variant={tb.isReverse ? 'secondary' : tb.isReversed ? 'outline' : 'default'}>
+                          {typeLabel}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{issue?.barcode || tb.issueId}</TableCell>
+                      <TableCell>{lotLabelFor(issue) || '—'}</TableCell>
+                      <TableCell>{itemNameById.get(issue?.itemId) || '—'}</TableCell>
+                      <TableCell className="text-right">{Number(tb.totalCount || 0)}</TableCell>
+                      <TableCell className="text-right">{formatKg(tb.totalWeight || 0)}</TableCell>
+                      <TableCell className="max-w-[180px] truncate" title={tb.reason || ''}>{tb.reason || '—'}</TableCell>
+                      <TableCell className="max-w-[220px] truncate" title={tb.note || ''}>{tb.note || '—'}</TableCell>
+                      <TableCell>
+                        <UserBadge user={tb.createdByUser} timestamp={tb.createdAt} />
+                      </TableCell>
+                      <TableCell>
+                        {isActiveOriginal ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleReverseTakeBack(tb)}
+                            disabled={!canDelete || reversingTakeBackId === tb.id}
+                          >
+                            {reversingTakeBackId === tb.id ? '...' : 'Reverse'}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
 
       <Dialog open={Boolean(editingIssue)} onOpenChange={(open) => { if (!open) closeIssueEditor(); }}>

@@ -2,13 +2,15 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
-import { ArrowRight, Download, Search, X } from 'lucide-react';
+import { ArrowRight, Download, RotateCcw, Search, X } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { KeyValueGrid } from '../common/KeyValueGrid';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { Dialog, DialogContent } from '../ui/Dialog';
+import { useInventory } from '../../context/InventoryContext';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -18,10 +20,18 @@ import { HighlightMatch } from '../common/HighlightMatch';
  */
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
+    const { createIssueTakeBack, reverseIssueTakeBack } = useInventory();
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedIds, setExpandedIds] = useState(() => new Set());
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
+    const [takeBackModalOpen, setTakeBackModalOpen] = useState(false);
+    const [takeBackTarget, setTakeBackTarget] = useState(null);
+    const [takeBackDate, setTakeBackDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [takeBackReason, setTakeBackReason] = useState('');
+    const [takeBackNote, setTakeBackNote] = useState('');
+    const [takeBackLinesDraft, setTakeBackLinesDraft] = useState([]);
+    const [takeBackSaving, setTakeBackSaving] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
@@ -194,6 +204,244 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.receive_from_coning_machine_piece_totals]);
 
+    const inboundBarcodeById = useMemo(() => {
+        const map = new Map();
+        (db.inbound_items || []).forEach((item) => {
+            const id = String(item?.id || '').trim();
+            if (!id) return;
+            const barcode = String(item?.barcode || '').trim();
+            if (barcode) map.set(id, barcode);
+        });
+        return map;
+    }, [db.inbound_items]);
+
+    const cutterReceiveById = useMemo(() => {
+        const map = new Map();
+        (db.receive_from_cutter_machine_rows || []).forEach((row) => {
+            const id = String(row?.id || '').trim();
+            if (!id) return;
+            map.set(id, row);
+        });
+        return map;
+    }, [db.receive_from_cutter_machine_rows]);
+
+    const holoReceiveById = useMemo(() => {
+        const map = new Map();
+        (db.receive_from_holo_machine_rows || []).forEach((row) => {
+            const id = String(row?.id || '').trim();
+            if (!id) return;
+            map.set(id, row);
+        });
+        return map;
+    }, [db.receive_from_holo_machine_rows]);
+
+    const resolveTakeBackSourceLabel = (stage, sourceId, fallback = '') => {
+        if (stage === 'cutter') {
+            return inboundBarcodeById.get(sourceId) || fallback || sourceId;
+        }
+        if (stage === 'holo') {
+            const row = cutterReceiveById.get(sourceId);
+            const rowBarcode = String(row?.barcode || row?.vchNo || '').trim();
+            if (rowBarcode) return rowBarcode;
+            const pieceBarcode = inboundBarcodeById.get(String(row?.pieceId || '').trim());
+            return pieceBarcode || fallback || sourceId;
+        }
+        if (stage === 'coning') {
+            const row = holoReceiveById.get(sourceId);
+            const rowBarcode = String(row?.barcode || '').trim();
+            if (rowBarcode) return rowBarcode;
+            return fallback || sourceId;
+        }
+        return fallback || sourceId;
+    };
+
+    const activeTakeBacksByIssue = useMemo(() => {
+        const map = new Map();
+        (db.issue_take_backs || [])
+            .filter((tb) => !tb.isReverse && !tb.isReversed)
+            .forEach((tb) => {
+                const arr = map.get(tb.issueId) || [];
+                arr.push(tb);
+                map.set(tb.issueId, arr);
+            });
+        return map;
+    }, [db.issue_take_backs]);
+
+    const latestReversibleTakeBackByIssue = useMemo(() => {
+        const map = new Map();
+        (db.issue_take_backs || [])
+            .filter((tb) => !tb.isReverse && !tb.isReversed)
+            .forEach((tb) => {
+                const existing = map.get(tb.issueId);
+                if (!existing) {
+                    map.set(tb.issueId, tb);
+                    return;
+                }
+                const existingTs = new Date(existing.createdAt || existing.date || 0).getTime();
+                const nextTs = new Date(tb.createdAt || tb.date || 0).getTime();
+                if (nextTs >= existingTs) {
+                    map.set(tb.issueId, tb);
+                }
+            });
+        return map;
+    }, [db.issue_take_backs]);
+
+    const buildTakeBackSources = (entry) => {
+        if (!entry) return [];
+
+        const activeTakeBacks = activeTakeBacksByIssue.get(entry.id) || [];
+        const activeBySource = new Map();
+        activeTakeBacks.forEach((tb) => {
+            const lines = Array.isArray(tb.lines) ? tb.lines : [];
+            lines.forEach((line) => {
+                const sourceId = String(line?.sourceId || '').trim();
+                if (!sourceId) return;
+                const current = activeBySource.get(sourceId) || { count: 0, weight: 0 };
+                current.count += Number(line?.count || 0);
+                current.weight += Number(line?.weight || 0);
+                activeBySource.set(sourceId, current);
+            });
+        });
+
+        if (process === 'cutter') {
+            const issueLines = (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === entry.id);
+            const linkedRows = (db.receive_from_cutter_machine_rows || [])
+                .filter((row) => !row?.isDeleted && row.issueId === entry.id);
+            const receivedBySource = new Map();
+            linkedRows.forEach((row) => {
+                const sourceId = String(row?.pieceId || '').trim();
+                if (!sourceId) return;
+                const current = receivedBySource.get(sourceId) || 0;
+                receivedBySource.set(sourceId, current + Number(row?.netWt || 0));
+            });
+
+            const stagePendingWeight = Math.max(
+                0,
+                Number(entry?.issueBalance?.pendingWeight ?? Number.POSITIVE_INFINITY),
+            );
+            let pendingPool = stagePendingWeight;
+            return issueLines.map((line) => {
+                const active = activeBySource.get(line.pieceId) || { count: 0, weight: 0 };
+                const originalWeight = Number(line.issuedWeight || 0);
+                const receivedWeight = Number(receivedBySource.get(line.pieceId) || 0);
+                const lineNetRemaining = Math.max(0, originalWeight - Number(active.weight || 0) - receivedWeight);
+                const maxWeight = Number.isFinite(pendingPool)
+                    ? Math.max(0, Math.min(lineNetRemaining, pendingPool))
+                    : lineNetRemaining;
+                if (Number.isFinite(pendingPool)) {
+                    pendingPool = Math.max(0, pendingPool - maxWeight);
+                }
+                return {
+                    sourceId: line.pieceId,
+                    label: resolveTakeBackSourceLabel('cutter', line.pieceId),
+                    maxCount: 0,
+                    maxWeight,
+                };
+            }).filter((line) => line.maxWeight > 0.0001);
+        }
+
+        let refs = entry.receivedRowRefs;
+        if (typeof refs === 'string') {
+            try { refs = JSON.parse(refs || '[]'); } catch { refs = []; }
+        }
+        const refRows = Array.isArray(refs) ? refs : [];
+        const sourceMap = new Map();
+        refRows.forEach((ref) => {
+            const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+            if (!sourceId) return;
+            const originalCount = process === 'holo'
+                ? Number(ref?.issuedBobbins || 0)
+                : Number(ref?.issueRolls || 0);
+            const originalWeight = process === 'holo'
+                ? Number(ref?.issuedBobbinWeight || 0)
+                : Number(ref?.issueWeight || 0);
+            const active = activeBySource.get(sourceId) || { count: 0, weight: 0 };
+            const maxCount = Math.max(0, originalCount - Number(active.count || 0));
+            const maxWeight = Math.max(0, originalWeight - Number(active.weight || 0));
+            if (maxWeight <= 0.0001) return;
+            sourceMap.set(sourceId, {
+                sourceId,
+                label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
+                maxCount,
+                maxWeight,
+            });
+        });
+        return Array.from(sourceMap.values());
+    };
+
+    const openTakeBackModal = (entry) => {
+        const sources = buildTakeBackSources(entry);
+        setTakeBackTarget(entry);
+        setTakeBackDate(new Date().toISOString().slice(0, 10));
+        setTakeBackReason('');
+        setTakeBackNote('');
+        setTakeBackLinesDraft(
+            sources.map((line) => ({
+                sourceId: line.sourceId,
+                sourceBarcode: line.label,
+                maxCount: line.maxCount,
+                maxWeight: line.maxWeight,
+                count: process === 'cutter' ? 0 : line.maxCount,
+                weight: line.maxWeight,
+            })),
+        );
+        setTakeBackModalOpen(true);
+    };
+
+    const submitTakeBack = async () => {
+        if (!takeBackTarget) return;
+        if (!takeBackDate || !takeBackReason.trim()) {
+            alert('Date and reason are required');
+            return;
+        }
+        const lines = (takeBackLinesDraft || [])
+            .map((line) => ({
+                sourceId: line.sourceId,
+                sourceBarcode: line.sourceBarcode || null,
+                count: Math.max(0, Number(line.count || 0)),
+                weight: Math.max(0, Number(line.weight || 0)),
+            }))
+            .filter((line) => line.weight > 0.0001 && (process === 'cutter' || line.count > 0));
+        if (lines.length === 0) {
+            alert('Enter at least one valid line');
+            return;
+        }
+        setTakeBackSaving(true);
+        try {
+            await createIssueTakeBack(process, takeBackTarget.id, {
+                date: takeBackDate,
+                reason: takeBackReason.trim(),
+                note: takeBackNote.trim() || null,
+                lines,
+            });
+            setTakeBackModalOpen(false);
+        } catch (err) {
+            alert(err.message || 'Failed to create take-back');
+        } finally {
+            setTakeBackSaving(false);
+        }
+    };
+
+    const handleReverseLatestTakeBack = async (entry) => {
+        const latest = latestReversibleTakeBackByIssue.get(entry.id);
+        if (!latest) {
+            alert('No reversible take-back found for this issue');
+            return;
+        }
+        const confirmed = window.confirm('Reverse the latest take-back for this issue?');
+        if (!confirmed) return;
+        try {
+            await reverseIssueTakeBack(latest.id, {
+                date: new Date().toISOString().slice(0, 10),
+                reason: 'reverse',
+                note: 'Reversed from On Machine',
+                stage: process,
+            });
+        } catch (err) {
+            alert(err.message || 'Failed to reverse take-back');
+        }
+    };
+
     // Compute on-machine entries based on process
     const onMachineEntries = useMemo(() => {
         let entries = [];
@@ -220,15 +468,22 @@ export function OnMachineTable({ db, process }) {
                     }
                 });
 
-                const issuedWeight = issue.totalWeight || 0;
-                const accountedWeight = totalReceived + totalWastage;
-                const pendingWeight = issuedWeight - accountedWeight;
+                const balance = issue.issueBalance || {};
+                const originalIssuedWeight = Number(balance.originalWeight ?? issue.totalWeight ?? 0);
+                const takeBackWeight = Number(balance.takeBackWeight || 0);
+                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
+                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
+                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
+                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
 
                 return {
                     ...issue,
-                    issuedWeight,
-                    receivedWeight: totalReceived,
-                    wastageWeight: totalWastage,
+                    originalIssuedWeight,
+                    takeBackWeight,
+                    netIssuedWeight,
+                    issuedWeight: netIssuedWeight,
+                    receivedWeight,
+                    wastageWeight,
                     pendingWeight: Math.max(0, pendingWeight),
                     pieceIdsList: pieceIds,
                 };
@@ -282,15 +537,22 @@ export function OnMachineTable({ db, process }) {
                     }
                 });
 
-                const issuedWeight = issue.metallicBobbinsWeight || 0;
-                const accountedWeight = totalReceived + totalWastage;
-                const pendingWeight = issuedWeight - accountedWeight;
+                const balance = issue.issueBalance || {};
+                const originalIssuedWeight = Number(balance.originalWeight ?? issue.metallicBobbinsWeight ?? 0);
+                const takeBackWeight = Number(balance.takeBackWeight || 0);
+                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
+                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
+                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
+                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
 
                 return {
                     ...issue,
-                    issuedWeight,
-                    receivedWeight: totalReceived,
-                    wastageWeight: totalWastage,
+                    originalIssuedWeight,
+                    takeBackWeight,
+                    netIssuedWeight,
+                    issuedWeight: netIssuedWeight,
+                    receivedWeight,
+                    wastageWeight,
                     pendingWeight: Math.max(0, pendingWeight),
                     pieceIdsList: pieceIds,
                 };
@@ -348,15 +610,23 @@ export function OnMachineTable({ db, process }) {
                     pieceIds = [];
                 }
 
-                const accountedWeight = totalReceived + totalWastage;
-                const pendingWeight = issuedWeight - accountedWeight;
+                const balance = issue.issueBalance || {};
+                const originalIssuedWeight = Number(balance.originalWeight ?? issuedWeight);
+                const takeBackWeight = Number(balance.takeBackWeight || 0);
+                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
+                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
+                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
+                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
 
                 return {
                     ...issue,
-                    issuedWeight,
+                    originalIssuedWeight,
+                    takeBackWeight,
+                    netIssuedWeight,
+                    issuedWeight: netIssuedWeight,
                     rollsIssued,
-                    receivedWeight: totalReceived,
-                    wastageWeight: totalWastage,
+                    receivedWeight,
+                    wastageWeight,
                     pendingWeight: Math.max(0, pendingWeight),
                     pieceIdsList: pieceIds,
                 };
@@ -381,7 +651,7 @@ export function OnMachineTable({ db, process }) {
             ] : []),
             { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => machineNameById.get(r.machineId) || '' },
             { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => operatorNameById.get(r.operatorId) || '' },
-            { id: 'issuedWeight', label: 'Issued (kg)', kind: 'number', getValue: (r) => r.issuedWeight },
+            { id: 'issuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.issuedWeight },
             { id: 'receivedWeight', label: 'Received (kg)', kind: 'number', getValue: (r) => r.receivedWeight },
             { id: 'pendingWeight', label: 'Pending (kg)', kind: 'number', getValue: (r) => r.pendingWeight },
             { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
@@ -418,12 +688,18 @@ export function OnMachineTable({ db, process }) {
 
     const totals = useMemo(() => {
         const base = {
+            originalIssuedWeight: 0,
+            takeBackWeight: 0,
+            netIssuedWeight: 0,
             issuedWeight: 0,
             receivedWeight: 0,
             pendingWeight: 0,
             rollsIssued: 0,
         };
         for (const r of filteredEntries || []) {
+            base.originalIssuedWeight += Number(r.originalIssuedWeight || r.issuedWeight || 0);
+            base.takeBackWeight += Number(r.takeBackWeight || 0);
+            base.netIssuedWeight += Number(r.netIssuedWeight ?? r.issuedWeight ?? 0);
             base.issuedWeight += Number(r.issuedWeight || 0);
             base.receivedWeight += Number(r.receivedWeight || 0);
             base.pendingWeight += Number(r.pendingWeight || 0);
@@ -437,13 +713,31 @@ export function OnMachineTable({ db, process }) {
         navigate(`/app/receive?barcode=${encodeURIComponent(entry.barcode)}`);
     };
 
-    const getActions = (entry) => [
-        {
-            label: 'Go to Receive',
-            icon: <ArrowRight className="w-4 h-4" />,
-            onClick: () => handleGoToReceive(entry),
-        },
-    ];
+    const getActions = (entry) => {
+        const activeTakeBackCount = (activeTakeBacksByIssue.get(entry.id) || []).length;
+        const takeBackSources = buildTakeBackSources(entry);
+        return [
+            {
+                label: 'Go to Receive',
+                icon: <ArrowRight className="w-4 h-4" />,
+                onClick: () => handleGoToReceive(entry),
+            },
+            {
+                label: 'Take Back',
+                icon: <RotateCcw className="w-4 h-4" />,
+                onClick: () => openTakeBackModal(entry),
+                disabled: takeBackSources.length === 0,
+                disabledReason: 'No take-back-eligible lines available.',
+            },
+            {
+                label: 'Reverse Last Take Back',
+                icon: <RotateCcw className="w-4 h-4" />,
+                onClick: () => handleReverseLatestTakeBack(entry),
+                disabled: activeTakeBackCount <= 0,
+                disabledReason: 'No active take-back found.',
+            },
+        ];
+    };
 
     // Calculate progress percentage - cap at 99% if there's still pending weight
     const getProgressPercent = (entry) => {
@@ -469,7 +763,9 @@ export function OnMachineTable({ db, process }) {
                 itemName: itemNameById.get(entry.itemId) || '—',
                 machineName: machineNameById.get(entry.machineId) || '—',
                 operatorName: operatorNameById.get(entry.operatorId) || '—',
-                issuedWeight: formatKg(entry.issuedWeight),
+                originalIssuedWeight: formatKg(entry.originalIssuedWeight || entry.issuedWeight),
+                takeBackWeight: formatKg(entry.takeBackWeight || 0),
+                netIssuedWeight: formatKg(entry.netIssuedWeight ?? entry.issuedWeight),
                 receivedWeight: formatKg(entry.receivedWeight),
                 pendingWeight: formatKg(entry.pendingWeight),
                 progress: `${progressPercent}%`,
@@ -519,7 +815,9 @@ export function OnMachineTable({ db, process }) {
         columns = columns.concat([
             { key: 'machineName', header: 'Machine' },
             { key: 'operatorName', header: 'Operator' },
-            { key: 'issuedWeight', header: 'Issued (kg)' },
+            { key: 'originalIssuedWeight', header: 'Issued Original (kg)' },
+            { key: 'takeBackWeight', header: 'Taken Back (kg)' },
+            { key: 'netIssuedWeight', header: 'Net Issued (kg)' },
             { key: 'receivedWeight', header: 'Received (kg)' },
             { key: 'pendingWeight', header: 'Pending (kg)' },
             { key: 'progress', header: 'Progress' },
@@ -607,7 +905,7 @@ export function OnMachineTable({ db, process }) {
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Issued (kg)</span>
+                                            <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -685,7 +983,7 @@ export function OnMachineTable({ db, process }) {
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Issued (kg)</span>
+                                            <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -781,7 +1079,7 @@ export function OnMachineTable({ db, process }) {
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Issued (kg)</span>
+                                            <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -850,7 +1148,13 @@ export function OnMachineTable({ db, process }) {
                                             )}
                                             <TableCell><HighlightMatch text={machineNameById.get(entry.machineId)} query={searchTerm} /></TableCell>
                                             <TableCell><HighlightMatch text={operatorNameById.get(entry.operatorId)} query={searchTerm} /></TableCell>
-                                            <TableCell>{formatKg(entry.issuedWeight)}</TableCell>
+                                            <TableCell>
+                                                <div className="space-y-0.5 leading-tight">
+                                                    <div className="text-[11px] text-muted-foreground">O: {formatKg(entry.originalIssuedWeight || entry.issuedWeight)}</div>
+                                                    <div className="text-[11px] text-amber-600">TB: {formatKg(entry.takeBackWeight || 0)}</div>
+                                                    <div className="text-[11px] font-medium">N: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</div>
+                                                </div>
+                                            </TableCell>
                                             <TableCell className="text-green-600">{formatKg(entry.receivedWeight)}</TableCell>
                                             <TableCell className="font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
                                             <TableCell>
@@ -882,7 +1186,9 @@ export function OnMachineTable({ db, process }) {
                     {process === 'coning' && (
                         <span className="font-medium">Rolls Issued: {totals.rollsIssued || 0}</span>
                     )}
-                    <span className="font-medium">Issued: {formatKg(totals.issuedWeight)}</span>
+                    <span className="font-medium">Issued (Original): {formatKg(totals.originalIssuedWeight)}</span>
+                    <span className="font-medium text-amber-600">Taken Back: {formatKg(totals.takeBackWeight)}</span>
+                    <span className="font-medium">Net Issued: {formatKg(totals.netIssuedWeight)}</span>
                     <span className="font-medium text-green-600">Received: {formatKg(totals.receivedWeight)}</span>
                     <span className="font-medium text-blue-600">Pending: {formatKg(totals.pendingWeight)}</span>
                 </div>
@@ -964,9 +1270,10 @@ export function OnMachineTable({ db, process }) {
                                 ) : null}
 
                                 <div className="mt-3 flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                        <span>Issued: {formatKg(entry.issuedWeight)}</span>
-                                        <span>→</span>
+                                    <div className="flex flex-col gap-0.5 text-xs">
+                                        <span className="text-muted-foreground">Orig: {formatKg(entry.originalIssuedWeight || entry.issuedWeight)}</span>
+                                        <span className="text-amber-600">Taken Back: {formatKg(entry.takeBackWeight || 0)}</span>
+                                        <span className="text-muted-foreground">Net: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</span>
                                         <span className="text-green-600">Rcvd: {formatKg(entry.receivedWeight)}</span>
                                     </div>
                                     <div className="flex items-center gap-2">
@@ -987,6 +1294,123 @@ export function OnMachineTable({ db, process }) {
                     })
                 )}
             </div>
+
+            <Dialog open={takeBackModalOpen} onOpenChange={setTakeBackModalOpen}>
+                <DialogContent
+                    title={`Take Back${takeBackTarget?.barcode ? ` • ${takeBackTarget.barcode}` : ''}`}
+                    onOpenChange={setTakeBackModalOpen}
+                    className="max-w-3xl"
+                >
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                                <label className="text-sm font-medium">Date</label>
+                                <input
+                                    type="date"
+                                    value={takeBackDate}
+                                    onChange={(e) => setTakeBackDate(e.target.value)}
+                                    className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-sm font-medium">Reason</label>
+                                <input
+                                    type="text"
+                                    value={takeBackReason}
+                                    onChange={(e) => setTakeBackReason(e.target.value)}
+                                    placeholder="Required"
+                                    className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Note</label>
+                            <input
+                                type="text"
+                                value={takeBackNote}
+                                onChange={(e) => setTakeBackNote(e.target.value)}
+                                placeholder="Optional"
+                                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                            />
+                        </div>
+                        <div className="rounded-md border overflow-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Source</TableHead>
+                                        {process !== 'cutter' && <TableHead className="text-right">Count</TableHead>}
+                                        <TableHead className="text-right">Weight (kg)</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {takeBackLinesDraft.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={process === 'cutter' ? 2 : 3} className="text-center py-6 text-muted-foreground">
+                                                No take-back eligible lines.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        takeBackLinesDraft.map((line, idx) => (
+                                            <TableRow key={line.sourceId}>
+                                                <TableCell className="font-mono text-xs">{line.sourceBarcode || line.sourceId}</TableCell>
+                                                {process !== 'cutter' && (
+                                                    <TableCell className="text-right">
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            max={line.maxCount || 0}
+                                                            value={line.count}
+                                                            onChange={(e) => {
+                                                                const value = Math.max(0, Number(e.target.value || 0));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, count: value } : l));
+                                                            }}
+                                                            className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                        />
+                                                        <div className="text-[10px] text-muted-foreground mt-1">max {line.maxCount || 0}</div>
+                                                    </TableCell>
+                                                )}
+                                                <TableCell className="text-right">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step="0.001"
+                                                        max={line.maxWeight || 0}
+                                                        value={line.weight}
+                                                        onChange={(e) => {
+                                                            const value = Math.max(0, Number(e.target.value || 0));
+                                                            setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
+                                                        }}
+                                                        className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                    />
+                                                    <div className="text-[10px] text-muted-foreground mt-1">max {Number(line.maxWeight || 0).toFixed(3)}</div>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                        <div className="flex items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                className="h-9 px-3 rounded-md border text-sm"
+                                onClick={() => setTakeBackModalOpen(false)}
+                                disabled={takeBackSaving}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
+                                onClick={submitTakeBack}
+                                disabled={takeBackSaving}
+                            >
+                                {takeBackSaving ? 'Saving...' : 'Create Take Back'}
+                            </button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

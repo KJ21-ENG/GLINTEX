@@ -23,10 +23,16 @@ import { usePermission, useStagePermission } from '../hooks/usePermission';
 const EPSILON = 1e-9;
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
+const getPieceIssueableWeight = (piece) => {
+  const gross = Number(piece?.weight || 0);
+  const dispatched = Number(piece?.dispatchedWeight || 0);
+  const issuedToCutterWeight = Number(piece?.issuedToCutterWeight || 0);
+  return Math.max(0, gross - dispatched - issuedToCutterWeight);
+};
+
 const isPieceAvailableForIssue = (piece) => (
-  piece?.status === 'available'
-  && Number(piece.pendingWeight || 0) > EPSILON
-  && Number(piece.dispatchedWeight || 0) <= EPSILON
+  getPieceIssueableWeight(piece) > EPSILON
+  && Number(piece?.dispatchedWeight || 0) <= EPSILON
 );
 
 const countAvailablePieces = (pieces = []) => pieces.filter(isPieceAvailableForIssue).length;
@@ -224,6 +230,8 @@ export function Stock() {
       if (!m[piece.lotNo]) continue;
       const inboundWeight = Number(piece.weight || 0);
       const dispatchedWeight = Number(piece.dispatchedWeight || 0);
+      const issuedToCutterWeight = Number(piece.issuedToCutterWeight || 0);
+      const issueableWeight = Math.max(0, inboundWeight - dispatchedWeight - issuedToCutterWeight);
       const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalUnits: 0 };
       const receivedWeight = totals.received || 0;
       const wastageWeight = totals.wastage || 0;
@@ -254,6 +262,7 @@ export function Stock() {
         receivedWeight,
         wastageWeight,
         totalUnits: pieceTotalUnits,
+        issueableWeight,
         cutName,
         yarnName,
         issuedLabel

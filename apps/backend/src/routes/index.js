@@ -26,6 +26,8 @@ const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
 const PERM_READ = ACCESS_LEVELS.READ;
 const PERM_WRITE = ACCESS_LEVELS.WRITE;
+const TAKE_BACK_EPSILON = 1e-6;
+const TAKE_BACK_STAGES = ['cutter', 'holo', 'coning'];
 
 let bootstrapToken = null;
 
@@ -184,6 +186,624 @@ function roundTo3Decimals(val) {
   const num = Number(val);
   if (!Number.isFinite(num)) return 0;
   return Math.round(num * 1000) / 1000;
+}
+
+function normalizeTakeBackStage(stage) {
+  const normalized = String(stage || '').trim().toLowerCase();
+  return TAKE_BACK_STAGES.includes(normalized) ? normalized : null;
+}
+
+function parseJsonArraySafe(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function clampZero(val) {
+  const num = Number(val || 0);
+  if (!Number.isFinite(num)) return 0;
+  return num <= TAKE_BACK_EPSILON ? 0 : num;
+}
+
+function toStrictPositiveWeight(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return roundTo3Decimals(num);
+}
+
+function toNonNegativeInt(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.floor(num));
+}
+
+function getIssueModelByStage(stage) {
+  if (stage === 'holo') return 'issueToHoloMachine';
+  if (stage === 'coning') return 'issueToConingMachine';
+  return 'issueToCutterMachine';
+}
+
+function getIssuePermissionKeyByStage(stage) {
+  if (stage === 'holo') return 'issue.holo';
+  if (stage === 'coning') return 'issue.coning';
+  return 'issue.cutter';
+}
+
+function normalizeTakeBackLines(lines = []) {
+  if (!Array.isArray(lines)) return [];
+  return lines
+    .map((line) => ({
+      sourceId: typeof line?.sourceId === 'string' ? line.sourceId.trim() : '',
+      sourceBarcode: typeof line?.sourceBarcode === 'string' ? line.sourceBarcode.trim() : '',
+      count: toNonNegativeInt(line?.count),
+      weight: toStrictPositiveWeight(line?.weight) || 0,
+      meta: line?.meta && typeof line.meta === 'object' ? line.meta : {},
+    }))
+    .filter((line) => line.sourceId);
+}
+
+function aggregateTakeBackLinesBySource(lines = []) {
+  const aggregated = new Map();
+  for (const line of lines) {
+    const sourceId = String(line?.sourceId || '').trim();
+    if (!sourceId) continue;
+    const current = aggregated.get(sourceId) || {
+      sourceId,
+      sourceBarcode: line?.sourceBarcode || '',
+      count: 0,
+      weight: 0,
+    };
+    if (!current.sourceBarcode && line?.sourceBarcode) {
+      current.sourceBarcode = line.sourceBarcode;
+    }
+    current.count += Number(line?.count || 0);
+    current.weight += Number(line?.weight || 0);
+    aggregated.set(sourceId, current);
+  }
+  return Array.from(aggregated.values()).map((line) => ({
+    ...line,
+    count: toNonNegativeInt(line.count),
+    weight: roundTo3Decimals(line.weight),
+  }));
+}
+
+async function listIssueTakeBacksForStage(client, stage, issueId = null) {
+  const where = {
+    stage,
+    ...(issueId ? { issueId } : {}),
+  };
+  return await client.issueTakeBack.findMany({
+    where,
+    include: { lines: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+async function getIssueTakeBackSnapshot(client, stage, issueId) {
+  const rows = await listIssueTakeBacksForStage(client, stage, issueId);
+  const activeBySource = new Map();
+  const effectiveBySource = new Map();
+  let activeCount = 0;
+  let activeWeight = 0;
+  let effectiveCount = 0;
+  let effectiveWeight = 0;
+
+  rows.forEach((row) => {
+    const sign = row.isReverse ? -1 : 1;
+    const rowCount = Number(row.totalCount || 0);
+    const rowWeight = Number(row.totalWeight || 0);
+    effectiveCount += sign * rowCount;
+    effectiveWeight += sign * rowWeight;
+
+    if (!row.isReverse && !row.isReversed) {
+      activeCount += rowCount;
+      activeWeight += rowWeight;
+      (Array.isArray(row.lines) ? row.lines : []).forEach((line) => {
+        const current = activeBySource.get(line.sourceId) || { count: 0, weight: 0 };
+        current.count += Number(line.count || 0);
+        current.weight += Number(line.weight || 0);
+        activeBySource.set(line.sourceId, current);
+      });
+    }
+
+    (Array.isArray(row.lines) ? row.lines : []).forEach((line) => {
+      const current = effectiveBySource.get(line.sourceId) || { count: 0, weight: 0 };
+      current.count += sign * Number(line.count || 0);
+      current.weight += sign * Number(line.weight || 0);
+      effectiveBySource.set(line.sourceId, current);
+    });
+  });
+
+  return {
+    rows,
+    activeCount: clampZero(activeCount),
+    activeWeight: clampZero(activeWeight),
+    effectiveCount: clampZero(effectiveCount),
+    effectiveWeight: clampZero(effectiveWeight),
+    activeBySource,
+    effectiveBySource,
+  };
+}
+
+async function getIssueOriginalIssued(client, stage, issue) {
+  const sourceMap = new Map();
+  let totalCount = 0;
+  let totalWeight = 0;
+
+  if (!issue) {
+    return { totalCount: 0, totalWeight: 0, sourceMap };
+  }
+
+  if (stage === 'cutter') {
+    const lines = Array.isArray(issue.lines) && issue.lines.length > 0
+      ? issue.lines
+      : await client.issueToCutterMachineLine.findMany({
+        where: { issueId: issue.id },
+        select: { pieceId: true, issuedWeight: true },
+      });
+
+    if (lines.length > 0) {
+      lines.forEach((line) => {
+        const sourceId = String(line.pieceId || '').trim();
+        if (!sourceId) return;
+        const issuedWeight = Number(line.issuedWeight || 0);
+        const current = sourceMap.get(sourceId) || { count: 0, weight: 0, sourceBarcode: null };
+        current.count += 1;
+        current.weight += issuedWeight;
+        sourceMap.set(sourceId, current);
+        totalWeight += issuedWeight;
+      });
+      totalCount = Number(issue.count || 0) || Array.from(sourceMap.values()).reduce((sum, line) => sum + Number(line.count || 0), 0);
+    } else {
+      const pieceIds = parsePieceIdsCsv(issue.pieceIds);
+      const pieces = pieceIds.length
+        ? await client.inboundItem.findMany({
+          where: { id: { in: pieceIds } },
+          select: { id: true, weight: true, barcode: true },
+        })
+        : [];
+      const byId = new Map(pieces.map((piece) => [piece.id, piece]));
+      pieceIds.forEach((pieceId) => {
+        const piece = byId.get(pieceId);
+        const current = sourceMap.get(pieceId) || { count: 0, weight: 0, sourceBarcode: piece?.barcode || null };
+        current.count += 1;
+        current.weight += Number(piece?.weight || 0);
+        sourceMap.set(pieceId, current);
+      });
+      totalCount = Number(issue.count || 0) || pieceIds.length;
+      totalWeight = Number(issue.totalWeight || 0) || Array.from(sourceMap.values()).reduce((sum, line) => sum + Number(line.weight || 0), 0);
+    }
+    return {
+      totalCount: clampZero(totalCount),
+      totalWeight: clampZero(totalWeight),
+      sourceMap,
+    };
+  }
+
+  if (stage === 'holo') {
+    const refs = parseJsonArraySafe(issue.receivedRowRefs);
+    refs.forEach((ref) => {
+      const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+      if (!sourceId) return;
+      const count = Number(ref?.issuedBobbins || 0);
+      const weight = Number(ref?.issuedBobbinWeight || 0);
+      const current = sourceMap.get(sourceId) || { count: 0, weight: 0, sourceBarcode: typeof ref?.barcode === 'string' ? ref.barcode : null };
+      current.count += count;
+      current.weight += weight;
+      sourceMap.set(sourceId, current);
+      totalCount += count;
+      totalWeight += weight;
+    });
+    totalCount = totalCount > 0 ? totalCount : Number(issue.metallicBobbins || 0);
+    totalWeight = totalWeight > 0 ? totalWeight : Number(issue.metallicBobbinsWeight || 0);
+    return {
+      totalCount: clampZero(totalCount),
+      totalWeight: clampZero(totalWeight),
+      sourceMap,
+    };
+  }
+
+  const refs = parseJsonArraySafe(issue.receivedRowRefs);
+  refs.forEach((ref) => {
+    const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+    if (!sourceId) return;
+    const count = Number(ref?.issueRolls || 0);
+    const weight = Number(ref?.issueWeight || 0);
+    const current = sourceMap.get(sourceId) || { count: 0, weight: 0, sourceBarcode: typeof ref?.barcode === 'string' ? ref.barcode : null };
+    current.count += count;
+    current.weight += weight;
+    sourceMap.set(sourceId, current);
+    totalCount += count;
+    totalWeight += weight;
+  });
+  totalCount = totalCount > 0 ? totalCount : Number(issue.rollsIssued || 0);
+  return {
+    totalCount: clampZero(totalCount),
+    totalWeight: clampZero(totalWeight),
+    sourceMap,
+  };
+}
+
+async function getIssueReceivedAndWastage(client, stage, issue) {
+  const receivedBySource = new Map();
+  const wastageBySource = new Map();
+  let receivedCount = 0;
+  let receivedWeight = 0;
+  let wastageCount = 0;
+  let wastageWeight = 0;
+
+  if (!issue) {
+    return { receivedCount, receivedWeight, wastageCount, wastageWeight, receivedBySource, wastageBySource };
+  }
+
+  if (stage === 'cutter') {
+    const linkedRows = await client.receiveFromCutterMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      select: { pieceId: true, bobbinQuantity: true, netWt: true },
+    });
+
+    let fallbackRows = [];
+    const pieceIds = parsePieceIdsCsv(issue.pieceIds);
+    if (pieceIds.length > 0) {
+      fallbackRows = await client.receiveFromCutterMachineRow.findMany({
+        where: {
+          issueId: null,
+          pieceId: { in: pieceIds },
+          isDeleted: false,
+          createdAt: { gte: issue.createdAt },
+        },
+        select: { pieceId: true, bobbinQuantity: true, netWt: true },
+      });
+    }
+    const rows = [...linkedRows, ...fallbackRows];
+
+    rows.forEach((row) => {
+      const sourceId = String(row.pieceId || '').trim();
+      if (!sourceId) return;
+      const rowCount = Number(row.bobbinQuantity || 0);
+      const rowWeight = Number(row.netWt || 0);
+      receivedCount += rowCount;
+      receivedWeight += rowWeight;
+      const current = receivedBySource.get(sourceId) || { count: 0, weight: 0 };
+      current.count += rowCount;
+      current.weight += rowWeight;
+      receivedBySource.set(sourceId, current);
+    });
+
+    if (pieceIds.length > 0) {
+      const issueLinesForPieces = await client.issueToCutterMachineLine.findMany({
+        where: {
+          pieceId: { in: pieceIds },
+          issue: { isDeleted: false },
+        },
+        select: {
+          pieceId: true,
+          issueId: true,
+          issue: { select: { createdAt: true } },
+        },
+      });
+      const issuesByPiece = new Map();
+      issueLinesForPieces.forEach((line) => {
+        const sourceId = String(line.pieceId || '').trim();
+        if (!sourceId) return;
+        const createdAtMs = Number.isFinite(new Date(line.issue?.createdAt || 0).getTime())
+          ? new Date(line.issue?.createdAt || 0).getTime()
+          : 0;
+        const list = issuesByPiece.get(sourceId) || [];
+        list.push({ issueId: line.issueId, createdAtMs });
+        issuesByPiece.set(sourceId, list);
+      });
+      issuesByPiece.forEach((list, sourceId) => {
+        const dedup = Array.from(new Map(list.map((entry) => [entry.issueId, entry])).values());
+        dedup.sort((a, b) => a.createdAtMs - b.createdAtMs || String(a.issueId).localeCompare(String(b.issueId)));
+        issuesByPiece.set(sourceId, dedup);
+      });
+
+      const wastageRows = await client.receiveFromCutterMachineChallan.findMany({
+        where: {
+          pieceId: { in: pieceIds },
+          isDeleted: false,
+          createdAt: { gte: issue.createdAt },
+        },
+        select: {
+          pieceId: true,
+          wastageNetWeight: true,
+          createdAt: true,
+        },
+      });
+
+      wastageRows.forEach((row) => {
+        const sourceId = String(row.pieceId || '').trim();
+        if (!sourceId) return;
+        const challanAtMs = Number.isFinite(new Date(row.createdAt || 0).getTime())
+          ? new Date(row.createdAt || 0).getTime()
+          : Number.MAX_SAFE_INTEGER;
+        const issueCandidates = issuesByPiece.get(sourceId) || [];
+        // Deterministically attribute each challan wastage to exactly one issue for a piece
+        // (latest issue created on or before challan time) to avoid multi-issue double-counting.
+        const assigned = [...issueCandidates]
+          .reverse()
+          .find((candidate) => candidate.createdAtMs <= challanAtMs);
+        if (!assigned || assigned.issueId !== issue.id) return;
+        const rowWastageWeight = Number(row.wastageNetWeight || 0);
+        if (rowWastageWeight <= 0) return;
+        wastageWeight += rowWastageWeight;
+        const current = wastageBySource.get(sourceId) || { count: 0, weight: 0 };
+        current.weight += rowWastageWeight;
+        wastageBySource.set(sourceId, current);
+      });
+    }
+
+    return {
+      receivedCount: clampZero(receivedCount),
+      receivedWeight: clampZero(receivedWeight),
+      wastageCount: clampZero(wastageCount),
+      wastageWeight: clampZero(wastageWeight),
+      receivedBySource,
+      wastageBySource,
+    };
+  }
+
+  if (stage === 'holo') {
+    const rows = await client.receiveFromHoloMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      select: {
+        rollCount: true,
+        rollWeight: true,
+        grossWeight: true,
+        tareWeight: true,
+        rollType: { select: { name: true } },
+      },
+    });
+
+    rows.forEach((row) => {
+      const count = Number(row.rollCount || 0);
+      const weight = Number.isFinite(Number(row.rollWeight))
+        ? Number(row.rollWeight)
+        : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
+      const isWastage = String(row.rollType?.name || '').toLowerCase().includes('wastage');
+      if (isWastage) {
+        wastageCount += count;
+        wastageWeight += weight;
+      } else {
+        receivedCount += count;
+        receivedWeight += weight;
+      }
+    });
+
+    return {
+      receivedCount: clampZero(receivedCount),
+      receivedWeight: clampZero(receivedWeight),
+      wastageCount: clampZero(wastageCount),
+      wastageWeight: clampZero(wastageWeight),
+      receivedBySource,
+      wastageBySource,
+    };
+  }
+
+  const rows = await client.receiveFromConingMachineRow.findMany({
+    where: { issueId: issue.id, isDeleted: false },
+    select: { coneCount: true, netWeight: true },
+  });
+  rows.forEach((row) => {
+    // Coning receives are recorded in cone units, while issue/take-back counts are in roll units.
+    // Keep count math unit-consistent by not mapping cones into receivedCount.
+    receivedWeight += Number(row.netWeight || 0);
+  });
+  const totalRow = await client.receiveFromConingMachinePieceTotal.findUnique({
+    where: { pieceId: issue.id },
+    select: { wastageNetWeight: true },
+  });
+  wastageWeight = Number(totalRow?.wastageNetWeight || 0);
+
+  return {
+    receivedCount: clampZero(receivedCount),
+    receivedWeight: clampZero(receivedWeight),
+    wastageCount: 0,
+    wastageWeight: clampZero(wastageWeight),
+    receivedBySource,
+    wastageBySource,
+  };
+}
+
+async function getIssuePending(client, stage, issue) {
+  const original = await getIssueOriginalIssued(client, stage, issue);
+  const takeBack = await getIssueTakeBackSnapshot(client, stage, issue?.id);
+  const received = await getIssueReceivedAndWastage(client, stage, issue);
+
+  const netIssuedCount = clampZero(original.totalCount - takeBack.activeCount);
+  const netIssuedWeight = clampZero(original.totalWeight - takeBack.activeWeight);
+  const accountedCount = clampZero(received.receivedCount + received.wastageCount);
+  const accountedWeight = clampZero(received.receivedWeight + received.wastageWeight);
+
+  return {
+    original,
+    takeBack,
+    received,
+    netIssuedCount,
+    netIssuedWeight,
+    pendingCount: clampZero(netIssuedCount - accountedCount),
+    pendingWeight: clampZero(netIssuedWeight - accountedWeight),
+  };
+}
+
+function getCutterPiecePending(issuePending, pieceId) {
+  const sourceId = String(pieceId || '').trim();
+  if (!sourceId || !issuePending) return null;
+  const originalLine = issuePending.original?.sourceMap?.get(sourceId);
+  if (!originalLine) {
+    return { pendingCount: 0, pendingWeight: 0 };
+  }
+  const takenBackLine = issuePending.takeBack?.activeBySource?.get(sourceId) || { count: 0, weight: 0 };
+  const receivedLine = issuePending.received?.receivedBySource?.get(sourceId) || { count: 0, weight: 0 };
+  const wastageLine = issuePending.received?.wastageBySource?.get(sourceId) || { count: 0, weight: 0 };
+  return {
+    pendingCount: clampZero(
+      Number(originalLine.count || 0)
+      - Number(takenBackLine.count || 0)
+      - Number(receivedLine.count || 0),
+    ),
+    pendingWeight: clampZero(
+      Number(originalLine.weight || 0)
+      - Number(takenBackLine.weight || 0)
+      - Number(receivedLine.weight || 0)
+      - Number(wastageLine.weight || 0),
+    ),
+  };
+}
+
+function buildTakeBackConsumedBySource(stage, pending) {
+  const consumedBySource = new Map();
+  if (!pending) return consumedBySource;
+
+  const receivedBySource = pending.received?.receivedBySource || new Map();
+  const wastageBySource = pending.received?.wastageBySource || new Map();
+
+  if (stage === 'cutter') {
+    for (const [sourceId, received] of receivedBySource.entries()) {
+      const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+      current.count += Number(received?.count || 0);
+      current.weight += Number(received?.weight || 0);
+      consumedBySource.set(sourceId, current);
+    }
+    for (const [sourceId, wastage] of wastageBySource.entries()) {
+      const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+      current.count += Number(wastage?.count || 0);
+      current.weight += Number(wastage?.weight || 0);
+      consumedBySource.set(sourceId, current);
+    }
+    return consumedBySource;
+  }
+
+  // Holo/coning receives are tracked issue-level (not source-row-level). Allocate consumed
+  // issue quantity to source rows deterministically so per-source take-back validation
+  // cannot exceed net remaining on any source row.
+  const originalMap = pending.original?.sourceMap || new Map();
+  const takeBackBySource = pending.takeBack?.activeBySource || new Map();
+  let remainingCountToAllocate = clampZero(
+    Number(pending.received?.receivedCount || 0) + Number(pending.received?.wastageCount || 0),
+  );
+  let remainingWeightToAllocate = clampZero(
+    Number(pending.received?.receivedWeight || 0) + Number(pending.received?.wastageWeight || 0),
+  );
+
+  const orderedSourceIds = Array.from(originalMap.keys());
+
+  // Allocate counts and weights independently so mixed source ratios cannot
+  // over-consume one dimension on a source when only the other dimension is used.
+  for (const sourceId of orderedSourceIds) {
+    if (remainingCountToAllocate <= TAKE_BACK_EPSILON) break;
+    const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
+    const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetCount = clampZero(Number(originalLine?.count || 0) - Number(takenBackLine?.count || 0));
+    if (sourceNetCount <= TAKE_BACK_EPSILON) continue;
+    const allocatedCount = Math.min(sourceNetCount, remainingCountToAllocate);
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.count = clampZero(allocatedCount);
+    consumedBySource.set(sourceId, current);
+    remainingCountToAllocate = clampZero(remainingCountToAllocate - allocatedCount);
+  }
+
+  for (const sourceId of orderedSourceIds) {
+    if (remainingWeightToAllocate <= TAKE_BACK_EPSILON) break;
+    const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
+    const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetWeight = clampZero(Number(originalLine?.weight || 0) - Number(takenBackLine?.weight || 0));
+    if (sourceNetWeight <= TAKE_BACK_EPSILON) continue;
+    const allocatedWeight = Math.min(sourceNetWeight, remainingWeightToAllocate);
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.weight = clampZero(allocatedWeight);
+    consumedBySource.set(sourceId, current);
+    remainingWeightToAllocate = clampZero(remainingWeightToAllocate - allocatedWeight);
+  }
+
+  return consumedBySource;
+}
+
+async function buildIssueBalancesByStage(client, stage, issues = []) {
+  const map = {};
+  for (const issue of issues) {
+    const pending = await getIssuePending(client, stage, issue);
+    map[issue.id] = {
+      stage,
+      issueId: issue.id,
+      originalCount: pending.original.totalCount,
+      originalWeight: pending.original.totalWeight,
+      takeBackCount: pending.takeBack.activeCount,
+      takeBackWeight: pending.takeBack.activeWeight,
+      netIssuedCount: pending.netIssuedCount,
+      netIssuedWeight: pending.netIssuedWeight,
+      receivedCount: pending.received.receivedCount,
+      receivedWeight: pending.received.receivedWeight,
+      wastageCount: pending.received.wastageCount,
+      wastageWeight: pending.received.wastageWeight,
+      pendingCount: pending.pendingCount,
+      pendingWeight: pending.pendingWeight,
+    };
+  }
+  return map;
+}
+
+async function resolveOpenCutterIssueIdForPiece(client, pieceId, requiredWeight = null) {
+  const pieceKey = String(pieceId || '').trim();
+  if (!pieceKey) return null;
+  const openCandidates = await listOpenCutterIssueAllocationsForPiece(client, pieceKey);
+  if (openCandidates.length === 0) return null;
+  const reqWeight = Number(requiredWeight);
+  if (Number.isFinite(reqWeight) && reqWeight > TAKE_BACK_EPSILON) {
+    const matched = openCandidates.find((entry) => Number(entry.remainingWeight || 0) - reqWeight > -TAKE_BACK_EPSILON);
+    return matched?.issueId || null;
+  }
+  return openCandidates[0].issueId;
+}
+
+async function listOpenCutterIssueAllocationsForPiece(client, pieceId) {
+  const pieceKey = String(pieceId || '').trim();
+  if (!pieceKey) return [];
+  const candidateLines = await client.issueToCutterMachineLine.findMany({
+    where: {
+      pieceId: pieceKey,
+      issue: { isDeleted: false },
+    },
+    select: { issueId: true },
+  });
+  const issueIds = Array.from(new Set(candidateLines.map((line) => line.issueId).filter(Boolean)));
+  if (issueIds.length === 0) return [];
+
+  const openCandidates = [];
+  for (const issueId of issueIds) {
+    const issue = await loadIssueForTakeBack(client, 'cutter', issueId);
+    if (!issue) continue;
+    const pending = await getIssuePending(client, 'cutter', issue);
+    const piecePending = getCutterPiecePending(pending, pieceKey);
+    if (piecePending && piecePending.pendingWeight > TAKE_BACK_EPSILON) {
+      const createdAtMs = Number.isFinite(new Date(issue.createdAt || 0).getTime())
+        ? new Date(issue.createdAt || 0).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      openCandidates.push({
+        issueId,
+        remainingWeight: piecePending.pendingWeight,
+        createdAtMs,
+        issueDate: String(issue.date || ''),
+      });
+    }
+  }
+  if (openCandidates.length === 0) return [];
+
+  // Deterministic allocator for auto-linked receives:
+  // prefer the oldest open issue for this piece, so consumption closes earlier allocations first.
+  openCandidates.sort((a, b) => {
+    if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
+    const dateCmp = a.issueDate.localeCompare(b.issueDate);
+    if (dateCmp !== 0) return dateCmp;
+    return String(a.issueId).localeCompare(String(b.issueId));
+  });
+  return openCandidates;
 }
 
 function calcAvailableCountFromWeight({ totalCount, issuedCount, dispatchedCount, totalWeight, availableWeight }) {
@@ -1539,6 +2159,11 @@ function hasReadPermission(req, key) {
   return Number(req.user?.permissions?.[key] || 0) >= PERM_READ;
 }
 
+function hasPermissionLevel(req, key, level) {
+  if (req.user?.isAdmin) return true;
+  return Number(req.user?.permissions?.[key] || 0) >= Number(level || 0);
+}
+
 function hasAnyReadPermission(req, keys = []) {
   if (req.user?.isAdmin) return true;
   return keys.some(key => Number(req.user?.permissions?.[key] || 0) >= PERM_READ);
@@ -1644,7 +2269,8 @@ function buildIssueToHoloMachine(issueRaw = [], cutterRowPieceMap, inbound_items
 async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
   const uniqueIds = Array.from(new Set((holoRowIds || []).filter(Boolean)));
   if (uniqueIds.length === 0) return new Map();
-  const rows = await client.$queryRaw`
+  const [rows, takeBackRows] = await Promise.all([
+    client.$queryRaw`
     SELECT
       elem->>'rowId' AS row_id,
       SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
@@ -1654,7 +2280,26 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
     WHERE i."isDeleted" = false
       AND elem->>'rowId' = ANY (${uniqueIds}::text[])
     GROUP BY row_id
-  `;
+  `,
+    client.issueTakeBackLine.findMany({
+      where: {
+        sourceId: { in: uniqueIds },
+        takeBack: {
+          stage: 'coning',
+        },
+      },
+      select: {
+        sourceId: true,
+        count: true,
+        weight: true,
+        takeBack: {
+          select: {
+            isReverse: true,
+          },
+        },
+      },
+    }),
+  ]);
   const map = new Map();
   (rows || []).forEach((row) => {
     const rowId = row.row_id || row.rowId;
@@ -1666,6 +2311,17 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
       issuedWeight: Number.isFinite(issuedWeight) ? issuedWeight : 0,
     });
   });
+
+  (takeBackRows || []).forEach((line) => {
+    const rowId = line.sourceId;
+    if (!rowId) return;
+    const current = map.get(rowId) || { issuedRolls: 0, issuedWeight: 0 };
+    const sign = line.takeBack?.isReverse ? 1 : -1;
+    current.issuedRolls = clampZero(Number(current.issuedRolls || 0) + (sign * Number(line.count || 0)));
+    current.issuedWeight = clampZero(Number(current.issuedWeight || 0) + (sign * Number(line.weight || 0)));
+    map.set(rowId, current);
+  });
+
   return map;
 }
 
@@ -1857,17 +2513,34 @@ async function buildProcessData(process, options = {}) {
   const issue_to_coning_machine_raw = process === 'coning'
     ? await prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
     : [];
+  const issue_take_backs_raw = await prisma.issueTakeBack.findMany({
+    where: { stage: process },
+    include: { lines: true },
+    orderBy: { createdAt: 'desc' },
+  });
 
   const cutterData = await fetchCutterReceiveData({ includeAll });
   const cutterRowPieceMap = new Map(cutterData.receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
+  const issue_take_backs = await resolveUserFields(issue_take_backs_raw);
 
   if (process === 'cutter') {
     // Resolve user fields on cutter issues
     const issue_to_cutter_machine = await resolveUserFields(issue_to_cutter_machine_raw);
+    const cutterIssueIds = issue_to_cutter_machine.map((issue) => issue.id).filter(Boolean);
+    const issue_to_cutter_machine_lines = cutterIssueIds.length > 0
+      ? await prisma.issueToCutterMachineLine.findMany({
+        where: { issueId: { in: cutterIssueIds } },
+        orderBy: { createdAt: 'desc' },
+      })
+      : [];
+    const issue_balances = await buildIssueBalancesByStage(prisma, 'cutter', issue_to_cutter_machine);
     return {
       lots,
       inbound_items,
       issue_to_cutter_machine,
+      issue_to_cutter_machine_lines,
+      issue_take_backs,
+      issue_balances,
       ...cutterData,
     };
   }
@@ -1881,10 +2554,13 @@ async function buildProcessData(process, options = {}) {
   const receive_from_holo_machine_rows = await resolveUserFields(holoData.receive_from_holo_machine_rows);
 
   if (process === 'holo') {
+    const issue_balances = await buildIssueBalancesByStage(prisma, 'holo', issue_to_holo_machine);
     return {
       lots,
       inbound_items,
       issue_to_holo_machine,
+      issue_take_backs,
+      issue_balances,
       receive_from_holo_machine_rows,
       receive_from_holo_machine_piece_totals: holoData.receive_from_holo_machine_piece_totals,
       receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
@@ -1894,6 +2570,7 @@ async function buildProcessData(process, options = {}) {
   // Resolve user fields on coning issues
   const issue_to_coning_machine = await resolveUserFields(issue_to_coning_machine_raw);
   const coningData = await fetchConingReceiveData({ receive_from_holo_machine_rows_raw: holoData.receive_from_holo_machine_rows_raw, includeAll });
+  const issue_balances = await buildIssueBalancesByStage(prisma, 'coning', issue_to_coning_machine);
 
   // Resolve user fields on coning receive rows
   const receive_from_coning_machine_rows = await resolveUserFields(coningData.receive_from_coning_machine_rows);
@@ -1903,6 +2580,8 @@ async function buildProcessData(process, options = {}) {
     inbound_items,
     issue_to_holo_machine,
     issue_to_coning_machine,
+    issue_take_backs,
+    issue_balances,
     receive_from_cutter_machine_rows: cutterData.receive_from_cutter_machine_rows,
     receive_from_holo_machine_rows,
     receive_from_coning_machine_rows,
@@ -2164,6 +2843,452 @@ router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', 
     res.status(500).json({ error: 'Failed to lookup barcode' });
   }
 });
+
+function getTakeBackEventName(stage, action) {
+  const suffix = action === 'reversed' ? 'reversed' : 'created';
+  return `issue_to_${stage}_machine_takeback_${suffix}`;
+}
+
+async function buildIssueTakeBackNotificationPayload(issue, takeBack, client = prisma) {
+  const itemRec = issue?.itemId ? await client.item.findUnique({ where: { id: issue.itemId }, select: { name: true } }) : null;
+  const machineRec = issue?.machineId ? await client.machine.findUnique({ where: { id: issue.machineId }, select: { name: true } }) : null;
+  const operatorRec = issue?.operatorId ? await client.operator.findUnique({ where: { id: issue.operatorId }, select: { name: true } }) : null;
+  return {
+    issueId: issue?.id || null,
+    issueBarcode: issue?.barcode || null,
+    takeBackId: takeBack?.id || null,
+    itemName: itemRec?.name || '',
+    lotNo: issue?.lotNo || '',
+    date: takeBack?.date || '',
+    totalCount: Number(takeBack?.totalCount || 0),
+    totalWeight: Number(takeBack?.totalWeight || 0),
+    reason: takeBack?.reason || '',
+    note: takeBack?.note || '',
+    machineName: machineRec?.name || '',
+    operatorName: operatorRec?.name || '',
+    createdByUserId: takeBack?.createdByUserId || null,
+  };
+}
+
+async function loadIssueForTakeBack(client, stage, issueId) {
+  const modelKey = getIssueModelByStage(stage);
+  const issue = await client[modelKey].findFirst({
+    where: { id: issueId, isDeleted: false },
+  });
+  if (!issue) return null;
+  if (stage === 'cutter') {
+    const lines = await client.issueToCutterMachineLine.findMany({
+      where: { issueId: issue.id },
+      select: { pieceId: true, issuedWeight: true },
+    });
+    return { ...issue, lines };
+  }
+  return issue;
+}
+
+async function applyCutterTakeBackReturn(tx, lines, actorUserId, multiplier = -1) {
+  for (const line of lines) {
+    const piece = await tx.inboundItem.findUnique({
+      where: { id: line.sourceId },
+      select: { id: true, weight: true, dispatchedWeight: true, issuedToCutterWeight: true },
+    });
+    if (!piece) {
+      throw new Error(`Inbound piece ${line.sourceId} not found`);
+    }
+
+    const currentIssued = Number(piece.issuedToCutterWeight || 0);
+    const maxIssueable = Math.max(0, Number(piece.weight || 0) - Number(piece.dispatchedWeight || 0));
+    const nextIssuedRaw = roundTo3Decimals(currentIssued + (multiplier * Number(line.weight || 0)));
+    if (nextIssuedRaw < -TAKE_BACK_EPSILON) {
+      throw new Error(`Cannot reduce issued weight below zero for piece ${line.sourceId}`);
+    }
+    if (nextIssuedRaw - maxIssueable > TAKE_BACK_EPSILON) {
+      throw new Error(`Cannot restore issued weight beyond available capacity for piece ${line.sourceId}`);
+    }
+    const nextIssued = clampZero(nextIssuedRaw);
+    const nextAvailable = Math.max(0, maxIssueable - nextIssued);
+    const nextStatus = nextAvailable > TAKE_BACK_EPSILON ? 'available' : 'consumed';
+
+    await tx.inboundItem.update({
+      where: { id: line.sourceId },
+      data: {
+        issuedToCutterWeight: nextIssued,
+        status: nextStatus,
+        ...actorUpdateFields(actorUserId),
+      },
+    });
+  }
+}
+
+async function applyHoloTakeBackReturn(tx, lines, actorUserId, multiplier = -1) {
+  for (const line of lines) {
+    const sourceRow = await tx.receiveFromCutterMachineRow.findUnique({
+      where: { id: line.sourceId },
+      select: {
+        id: true,
+        bobbinQuantity: true,
+        netWt: true,
+        issuedBobbins: true,
+        issuedBobbinWeight: true,
+        dispatchedCount: true,
+        dispatchedWeight: true,
+      },
+    });
+    if (!sourceRow) {
+      throw new Error(`Source cutter row ${line.sourceId} not found`);
+    }
+
+    const currentCount = Number(sourceRow.issuedBobbins || 0);
+    const currentWeight = Number(sourceRow.issuedBobbinWeight || 0);
+    const nextCountRaw = currentCount + (multiplier * Number(line.count || 0));
+    const nextWeightRaw = currentWeight + (multiplier * Number(line.weight || 0));
+    if (nextCountRaw < -TAKE_BACK_EPSILON || nextWeightRaw < -TAKE_BACK_EPSILON) {
+      throw new Error(`Cannot reduce issued counters below zero for row ${line.sourceId}`);
+    }
+
+    const maxCount = Math.max(0, Number(sourceRow.bobbinQuantity || 0) - Number(sourceRow.dispatchedCount || 0));
+    const maxWeight = Math.max(0, Number(sourceRow.netWt || 0) - Number(sourceRow.dispatchedWeight || 0));
+    if (nextCountRaw - maxCount > TAKE_BACK_EPSILON || nextWeightRaw - maxWeight > TAKE_BACK_EPSILON) {
+      throw new Error(`Source cutter row ${line.sourceId} does not have enough capacity`);
+    }
+
+    await tx.receiveFromCutterMachineRow.update({
+      where: { id: line.sourceId },
+      data: {
+        issuedBobbins: clampZero(nextCountRaw),
+        issuedBobbinWeight: clampZero(nextWeightRaw),
+        ...actorUpdateFields(actorUserId),
+      },
+    });
+  }
+}
+
+async function ensureConingTakeBackReverseCapacity(tx, lines) {
+  const sourceIds = Array.from(new Set(lines.map((line) => line.sourceId).filter(Boolean)));
+  if (sourceIds.length === 0) return;
+  const sourceRows = await tx.receiveFromHoloMachineRow.findMany({
+    where: { id: { in: sourceIds }, isDeleted: false },
+    select: { id: true, rollCount: true, rollWeight: true, grossWeight: true, tareWeight: true, dispatchedCount: true, dispatchedWeight: true },
+  });
+  const sourceMap = new Map(sourceRows.map((row) => [row.id, row]));
+  const issuedMap = await buildHoloIssuedToConingMap(tx, sourceIds);
+
+  for (const line of lines) {
+    const row = sourceMap.get(line.sourceId);
+    if (!row) {
+      throw new Error(`Source holo row ${line.sourceId} not found`);
+    }
+    const issued = issuedMap.get(line.sourceId) || { issuedRolls: 0, issuedWeight: 0 };
+    const netWeight = Number.isFinite(Number(row.rollWeight))
+      ? Number(row.rollWeight)
+      : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
+    const maxCount = Math.max(0, Number(row.rollCount || 0) - Number(row.dispatchedCount || 0));
+    const maxWeight = Math.max(0, netWeight - Number(row.dispatchedWeight || 0));
+    const nextCount = Number(issued.issuedRolls || 0) + Number(line.count || 0);
+    const nextWeight = Number(issued.issuedWeight || 0) + Number(line.weight || 0);
+    if (nextCount - maxCount > TAKE_BACK_EPSILON || nextWeight - maxWeight > TAKE_BACK_EPSILON) {
+      throw new Error(`Source holo row ${line.sourceId} does not have enough capacity`);
+    }
+  }
+}
+
+async function createIssueTakeBackForStage(req, res, stage) {
+  try {
+    const actorUserId = req.user?.id;
+    const issueId = String(req.params.id || '').trim();
+    const date = String(req.body?.date || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    const note = req.body?.note ? String(req.body.note).trim() : null;
+    const normalizedLines = normalizeTakeBackLines(req.body?.lines || []);
+
+    if (!issueId) return res.status(400).json({ error: 'Missing issue id' });
+    if (!date) return res.status(400).json({ error: 'date is required' });
+    if (!reason) return res.status(400).json({ error: 'reason is required' });
+    if (normalizedLines.length === 0) return res.status(400).json({ error: 'lines must be a non-empty array' });
+
+    if (stage === 'cutter') {
+      const badLine = normalizedLines.find((line) => line.weight <= 0);
+      if (badLine) return res.status(400).json({ error: `Invalid weight for source ${badLine.sourceId}` });
+    } else {
+      const badCount = normalizedLines.find((line) => line.count <= 0);
+      if (badCount) return res.status(400).json({ error: `Invalid count for source ${badCount.sourceId}` });
+      const badWeight = normalizedLines.find((line) => line.weight <= 0);
+      if (badWeight) return res.status(400).json({ error: `Invalid weight for source ${badWeight.sourceId}` });
+    }
+
+    const txResult = await prisma.$transaction(async (tx) => {
+      const issue = await loadIssueForTakeBack(tx, stage, issueId);
+      if (!issue) {
+        throw new Error('Issue not found');
+      }
+
+      const pending = await getIssuePending(tx, stage, issue);
+      const originalMap = pending.original.sourceMap || new Map();
+      const activeTakeBackBySource = pending.takeBack.activeBySource || new Map();
+      const consumedBySource = buildTakeBackConsumedBySource(stage, pending);
+      const requestedBySource = aggregateTakeBackLinesBySource(normalizedLines);
+
+      let totalCount = 0;
+      let totalWeight = 0;
+      for (const line of requestedBySource) {
+        const originalLine = originalMap.get(line.sourceId);
+        if (!originalLine) {
+          throw new Error(`Source ${line.sourceId} does not belong to issue ${issueId}`);
+        }
+        const takenBackLine = activeTakeBackBySource.get(line.sourceId) || { count: 0, weight: 0 };
+        const consumedLine = consumedBySource.get(line.sourceId) || { count: 0, weight: 0 };
+
+        const lineRemainingWeight = clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
+        const lineRemainingCount = clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
+
+        if (line.weight - lineRemainingWeight > TAKE_BACK_EPSILON) {
+          throw new Error(`Requested weight exceeds remaining allocation for source ${line.sourceId}`);
+        }
+        if (stage !== 'cutter' && (line.count - lineRemainingCount > TAKE_BACK_EPSILON)) {
+          throw new Error(`Requested count exceeds remaining allocation for source ${line.sourceId}`);
+        }
+        totalCount += Number(line.count || 0);
+        totalWeight += Number(line.weight || 0);
+      }
+
+      totalCount = clampZero(totalCount);
+      totalWeight = clampZero(totalWeight);
+      if (totalWeight - pending.pendingWeight > TAKE_BACK_EPSILON) {
+        throw new Error('Take-back exceeds issue pending weight');
+      }
+      if (stage !== 'cutter' && totalCount - pending.pendingCount > TAKE_BACK_EPSILON) {
+        throw new Error('Take-back exceeds issue pending count');
+      }
+
+      const created = await tx.issueTakeBack.create({
+        data: {
+          stage,
+          issueId: issue.id,
+          date,
+          reason,
+          note,
+          totalCount: toNonNegativeInt(totalCount),
+          totalWeight: roundTo3Decimals(totalWeight),
+          isReverse: false,
+          isReversed: false,
+          ...actorCreateFields(actorUserId),
+          lines: {
+            create: normalizedLines.map((line) => ({
+              sourceId: line.sourceId,
+              sourceBarcode: line.sourceBarcode || (originalMap.get(line.sourceId)?.sourceBarcode || null),
+              count: toNonNegativeInt(line.count),
+              weight: roundTo3Decimals(line.weight),
+              meta: line.meta || {},
+              ...actorCreateFields(actorUserId),
+            })),
+          },
+        },
+        include: { lines: true },
+      });
+
+      if (stage === 'cutter') {
+        await applyCutterTakeBackReturn(tx, normalizedLines, actorUserId, -1);
+      } else if (stage === 'holo') {
+        await applyHoloTakeBackReturn(tx, normalizedLines, actorUserId, -1);
+      }
+
+      await logCrudWithActor(req, {
+        entityType: 'issue_take_back',
+        entityId: created.id,
+        action: 'create',
+        payload: {
+          stage,
+          issueId: issue.id,
+          totalCount: created.totalCount,
+          totalWeight: created.totalWeight,
+          reason: created.reason,
+          note: created.note,
+        },
+        client: tx,
+      });
+
+      return { issue, created };
+    });
+
+    const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.created);
+    sendNotification(getTakeBackEventName(stage, 'created'), payload);
+
+    const issuePending = await getIssuePending(prisma, stage, txResult.issue);
+    return res.json({
+      ok: true,
+      issue_take_back: txResult.created,
+      issue_balance: {
+        issueId: txResult.issue.id,
+        stage,
+        originalCount: issuePending.original.totalCount,
+        originalWeight: issuePending.original.totalWeight,
+        takeBackCount: issuePending.takeBack.activeCount,
+        takeBackWeight: issuePending.takeBack.activeWeight,
+        netIssuedCount: issuePending.netIssuedCount,
+        netIssuedWeight: issuePending.netIssuedWeight,
+        receivedCount: issuePending.received.receivedCount,
+        receivedWeight: issuePending.received.receivedWeight,
+        wastageWeight: issuePending.received.wastageWeight,
+        pendingCount: issuePending.pendingCount,
+        pendingWeight: issuePending.pendingWeight,
+      },
+    });
+  } catch (err) {
+    console.error(`Failed to create ${stage} take-back`, err);
+    return res.status(400).json({ error: err.message || 'Failed to create take-back' });
+  }
+}
+
+async function reverseIssueTakeBack(req, res) {
+  try {
+    const actorUserId = req.user?.id;
+    const takeBackId = String(req.params.id || '').trim();
+    const date = String(req.body?.date || '').trim() || new Date().toISOString().slice(0, 10);
+    const reason = String(req.body?.reason || '').trim() || 'reverse';
+    const note = req.body?.note ? String(req.body.note).trim() : null;
+
+    if (!takeBackId) return res.status(400).json({ error: 'Missing take-back id' });
+
+    const baseRecord = await prisma.issueTakeBack.findUnique({
+      where: { id: takeBackId },
+      select: { stage: true },
+    });
+    if (!baseRecord) return res.status(404).json({ error: 'Take-back not found' });
+    const stage = normalizeTakeBackStage(baseRecord.stage);
+    if (!stage) return res.status(400).json({ error: 'Invalid take-back stage' });
+    const permissionKey = getIssuePermissionKeyByStage(stage);
+    if (!hasPermissionLevel(req, permissionKey, PERM_READ) || !hasPermissionLevel(req, `${permissionKey}.delete`, PERM_READ)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+
+    const txResult = await prisma.$transaction(async (tx) => {
+      const original = await tx.issueTakeBack.findUnique({
+        where: { id: takeBackId },
+        include: { lines: true },
+      });
+      if (!original) throw new Error('Take-back not found');
+      if (original.isReverse) throw new Error('Reverse records cannot be reversed');
+      if (original.isReversed) throw new Error('Take-back is already reversed');
+
+      const issue = await loadIssueForTakeBack(tx, stage, original.issueId);
+      if (!issue) throw new Error('Issue not found');
+
+      const lines = (original.lines || []).map((line) => ({
+        sourceId: line.sourceId,
+        sourceBarcode: line.sourceBarcode || null,
+        count: toNonNegativeInt(line.count),
+        weight: roundTo3Decimals(Number(line.weight || 0)),
+        meta: line.meta && typeof line.meta === 'object' ? line.meta : {},
+      }));
+
+      if (stage === 'cutter') {
+        await applyCutterTakeBackReturn(tx, lines, actorUserId, 1);
+      } else if (stage === 'holo') {
+        await applyHoloTakeBackReturn(tx, lines, actorUserId, 1);
+      } else if (stage === 'coning') {
+        await ensureConingTakeBackReverseCapacity(tx, lines);
+      }
+
+      const reversed = await tx.issueTakeBack.create({
+        data: {
+          stage,
+          issueId: original.issueId,
+          date,
+          reason,
+          note,
+          totalCount: original.totalCount,
+          totalWeight: original.totalWeight,
+          isReverse: true,
+          isReversed: false,
+          ...actorCreateFields(actorUserId),
+          lines: {
+            create: lines.map((line) => ({
+              sourceId: line.sourceId,
+              sourceBarcode: line.sourceBarcode || null,
+              count: line.count,
+              weight: line.weight,
+              meta: line.meta || {},
+              ...actorCreateFields(actorUserId),
+            })),
+          },
+        },
+        include: { lines: true },
+      });
+
+      await tx.issueTakeBack.update({
+        where: { id: original.id },
+        data: {
+          isReversed: true,
+          reversedById: reversed.id,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+
+      await logCrudWithActor(req, {
+        entityType: 'issue_take_back',
+        entityId: reversed.id,
+        action: 'reverse',
+        payload: {
+          stage,
+          issueId: original.issueId,
+          reversedTakeBackId: original.id,
+          totalCount: reversed.totalCount,
+          totalWeight: reversed.totalWeight,
+        },
+        client: tx,
+      });
+
+      return { issue, reversed };
+    });
+
+    const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.reversed);
+    sendNotification(getTakeBackEventName(stage, 'reversed'), payload);
+    return res.json({ ok: true, issue_take_back: txResult.reversed });
+  } catch (err) {
+    console.error('Failed to reverse take-back', err);
+    return res.status(400).json({ error: err.message || 'Failed to reverse take-back' });
+  }
+}
+
+router.get('/api/issue_take_backs', requireAuth, async (req, res) => {
+  try {
+    const stage = req.query?.stage ? normalizeTakeBackStage(req.query.stage) : null;
+    const issueId = req.query?.issueId ? String(req.query.issueId).trim() : null;
+    const allStages = ['cutter', 'holo', 'coning'];
+    const readableStages = allStages.filter((s) => hasPermissionLevel(req, getIssuePermissionKeyByStage(s), PERM_READ));
+
+    if (req.query?.stage && !stage) {
+      return res.status(400).json({ error: 'Invalid stage. Use cutter, holo, or coning' });
+    }
+
+    if (readableStages.length === 0) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (stage && !readableStages.includes(stage)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+
+    const where = {
+      ...(stage ? { stage } : { stage: { in: readableStages } }),
+      ...(issueId ? { issueId } : {}),
+    };
+    const takeBacksRaw = await prisma.issueTakeBack.findMany({
+      where,
+      include: { lines: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const issue_take_backs = await resolveUserFields(takeBacksRaw);
+    return res.json({ issue_take_backs });
+  } catch (err) {
+    console.error('Failed to fetch issue take-backs', err);
+    return res.status(500).json({ error: err.message || 'Failed to fetch take-back history' });
+  }
+});
+
+router.post('/api/issue_take_backs/:id/reverse', requireAuth, reverseIssueTakeBack);
+router.post('/api/issue_to_cutter_machine/:id/take_back', requirePermission('issue.cutter', PERM_WRITE), async (req, res) => createIssueTakeBackForStage(req, res, 'cutter'));
+router.post('/api/issue_to_holo_machine/:id/take_back', requirePermission('issue.holo', PERM_WRITE), async (req, res) => createIssueTakeBackForStage(req, res, 'holo'));
+router.post('/api/issue_to_coning_machine/:id/take_back', requirePermission('issue.coning', PERM_WRITE), async (req, res) => createIssueTakeBackForStage(req, res, 'coning'));
 
 router.get('/api/barcodes/render', async (req, res) => {
   try {
@@ -5463,58 +6588,88 @@ router.delete(
 router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
-    const { date, itemId, lotNo, pieceIds, note, machineId, operatorId, cutId } = req.body;
+    const { date, itemId, lotNo, pieceIds, pieceLines, note, machineId, operatorId, cutId } = req.body;
     if (!date || !itemId || !lotNo) {
       return res.status(400).json({ error: 'Missing required issue_to_cutter_machine fields' });
-    }
-    if (!Array.isArray(pieceIds) || pieceIds.length === 0) {
-      return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
     }
     if (!cutId) {
       return res.status(400).json({ error: 'cutId is required' });
     }
 
+    const rawPieceLines = Array.isArray(pieceLines) ? pieceLines : [];
+    const explicitPieceLines = rawPieceLines
+      .map((line) => ({
+        pieceId: typeof line?.pieceId === 'string' ? line.pieceId.trim() : '',
+        issuedWeight: toStrictPositiveWeight(line?.issuedWeight),
+        count: toNonNegativeInt(line?.count) || 0,
+      }))
+      .filter((line) => line.pieceId);
+
+    const fallbackPieceIds = Array.isArray(pieceIds)
+      ? pieceIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+
+    if (explicitPieceLines.length === 0 && fallbackPieceIds.length === 0) {
+      return res.status(400).json({ error: 'Provide pieceLines or pieceIds' });
+    }
+
     const itemRecord = await prisma.item.findUnique({ where: { id: itemId } });
     if (!itemRecord) return res.status(404).json({ error: 'Item not found' });
-    const materialCode = deriveMaterialCodeFromItem(itemRecord);
 
     const cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
     if (!cutRecord) return res.status(404).json({ error: 'Cut not found' });
 
-    const { issueRecord } = await prisma.$transaction(async (tx) => {
+    const { issueRecord, issueLines } = await prisma.$transaction(async (tx) => {
+      const sourceLines = explicitPieceLines.length > 0
+        ? explicitPieceLines
+        : fallbackPieceIds.map((pieceId) => ({ pieceId, issuedWeight: null, count: 1 }));
+      const uniquePieceIds = Array.from(new Set(sourceLines.map((line) => line.pieceId).filter(Boolean)));
       const pieces = await tx.inboundItem.findMany({
-        where: { id: { in: pieceIds } },
+        where: { id: { in: uniquePieceIds } },
         orderBy: { seq: 'asc' },
       });
 
-      if (pieces.length !== pieceIds.length) {
+      if (pieces.length !== uniquePieceIds.length) {
         throw new Error('One or more pieces do not exist');
       }
+      const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
 
-      for (const piece of pieces) {
-        if (piece.status !== 'available') {
-          throw new Error(`Piece ${piece.id} is not available`);
-        }
-        if (Number(piece.dispatchedWeight || 0) > 0) {
-          throw new Error(`Piece ${piece.id} has been partially dispatched and cannot be issued to cutter`);
-        }
+      const normalizedLines = sourceLines.map((line) => {
+        const piece = pieceMap.get(line.pieceId);
+        if (!piece) throw new Error(`Piece ${line.pieceId} does not exist`);
         if (piece.lotNo !== lotNo) {
           throw new Error(`Piece ${piece.id} does not belong to lot ${lotNo}`);
         }
         if (piece.itemId !== itemId) {
           throw new Error(`Piece ${piece.id} does not match item ${itemId}`);
         }
-      }
+        const availableWeight = Math.max(
+          0,
+          Number(piece.weight || 0) - Number(piece.dispatchedWeight || 0) - Number(piece.issuedToCutterWeight || 0),
+        );
+        if (availableWeight <= TAKE_BACK_EPSILON) {
+          throw new Error(`Piece ${piece.id} has no available weight`);
+        }
+        const requestedWeight = line.issuedWeight == null ? availableWeight : Number(line.issuedWeight);
+        if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
+          throw new Error(`Invalid issued weight for piece ${piece.id}`);
+        }
+        if (requestedWeight - availableWeight > TAKE_BACK_EPSILON) {
+          throw new Error(`Issued weight exceeds available weight for piece ${piece.id}`);
+        }
 
-      const totalWeight = pieces.reduce((sum, piece) => sum + piece.weight, 0);
-      const pieceIdsCsv = pieceIds.join(',');
-
-      await tx.inboundItem.updateMany({
-        where: { id: { in: pieceIds } },
-        data: { status: 'consumed', ...actorUpdateFields(actorUserId) },
+        return {
+          sourceId: piece.id,
+          weight: roundTo3Decimals(requestedWeight),
+          count: line.count > 0 ? line.count : 1,
+        };
       });
 
+      const totalWeight = roundTo3Decimals(normalizedLines.reduce((sum, line) => sum + Number(line.weight || 0), 0));
+      const totalCount = normalizedLines.reduce((sum, line) => sum + (Number(line.count || 0) > 0 ? Number(line.count) : 1), 0);
+      const pieceIdsCsv = uniquePieceIds.join(',');
       const firstSeq = pieces[0]?.seq ?? 0;
+
       const issueRow = await tx.issueToCutterMachine.create({
         data: {
           id: randomUUID(),
@@ -5522,7 +6677,7 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
           itemId,
           lotNo,
           cutId,
-          count: pieceIds.length,
+          count: toNonNegativeInt(totalCount),
           totalWeight,
           pieceIds: pieceIdsCsv,
           reason: 'internal',
@@ -5534,7 +6689,27 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
         },
       });
 
-      return { issueRecord: issueRow };
+      const createdLines = [];
+      for (const line of normalizedLines) {
+        const createdLine = await tx.issueToCutterMachineLine.create({
+          data: {
+            issueId: issueRow.id,
+            pieceId: line.sourceId,
+            issuedWeight: line.weight,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        createdLines.push(createdLine);
+      }
+
+      await applyCutterTakeBackReturn(
+        tx,
+        normalizedLines.map((line) => ({ sourceId: line.sourceId, weight: line.weight })),
+        actorUserId,
+        1,
+      );
+
+      return { issueRecord: issueRow, issueLines: createdLines };
     });
 
     await logCrudWithActor(req, {
@@ -5548,7 +6723,8 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
         cutId: issueRecord.cutId,
         count: issueRecord.count,
         totalWeight: issueRecord.totalWeight,
-        pieceIds: issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [],
+        pieceIds: issueLines.map((line) => line.pieceId),
+        pieceLines: issueLines.map((line) => ({ pieceId: line.pieceId, issuedWeight: line.issuedWeight })),
         machineId: issueRecord.machineId,
         operatorId: issueRecord.operatorId,
       },
@@ -5672,13 +6848,36 @@ router.post('/api/receive_from_cutter_machine/import', requirePermission('receiv
         },
       });
 
-      const createPayload = rows.map(row => ({
-        ...row,
-        uploadId: createdUpload.id,
-        bobbinQuantity: row.bobbinQuantity,
-        bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
-        ...actorCreateFields(actorUserId),
-      }));
+      const uniquePieceIds = Array.from(new Set(rows.map((row) => row.pieceId).filter(Boolean)));
+      const pieceAllocations = new Map();
+      for (const pid of uniquePieceIds) {
+        const allocations = await listOpenCutterIssueAllocationsForPiece(tx, pid);
+        pieceAllocations.set(pid, allocations.map((entry) => ({ ...entry })));
+      }
+
+      const createPayload = [];
+      for (const row of rows) {
+        const allocations = pieceAllocations.get(row.pieceId) || [];
+        const rowNetWeight = Number(row.netWt || 0);
+        let resolvedIssueId = null;
+        if (Number.isFinite(rowNetWeight) && rowNetWeight > TAKE_BACK_EPSILON) {
+          const matched = allocations.find((entry) => Number(entry.remainingWeight || 0) - rowNetWeight > -TAKE_BACK_EPSILON);
+          if (!matched) {
+            throw new Error(`Unable to allocate imported row ${row.vchNo || ''} for piece ${row.pieceId || ''} to an open issue`);
+          }
+          matched.remainingWeight = clampZero(Number(matched.remainingWeight || 0) - rowNetWeight);
+          resolvedIssueId = matched.issueId || null;
+        }
+
+        createPayload.push({
+          issueId: resolvedIssueId,
+          ...row,
+          uploadId: createdUpload.id,
+          bobbinQuantity: row.bobbinQuantity,
+          bobbinId: bobbinIdMap.get(row.pcsTypeName) || bobbinIdMap.get(null) || bobbinIdMap.get(''),
+          ...actorCreateFields(actorUserId),
+        });
+      }
 
       if (createPayload.length > 0) {
         await tx.receiveFromCutterMachineRow.createMany({ data: createPayload });
@@ -5741,18 +6940,28 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
     if (!inbound) return res.status(404).json({ error: 'Piece not found' });
 
     // Verify piece was issued to machine at least once
-    const issuedCount = await prisma.issueToCutterMachine.count({
-      where: { pieceIds: { contains: pieceId }, isDeleted: false },
+    const issuedCount = await prisma.issueToCutterMachineLine.count({
+      where: {
+        pieceId,
+        issue: { isDeleted: false },
+      },
     });
     if (issuedCount === 0) return res.status(400).json({ error: 'Piece was not issued to machine' });
 
-    // Fetch current received and wastage totals
     const currentTotal = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
-    const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
-    const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
+    const trackedWastageWeight = Number(currentTotal?.wastageNetWeight || 0);
+    const challanWastageAgg = await prisma.receiveFromCutterMachineChallan.aggregate({
+      where: { pieceId, isDeleted: false },
+      _sum: { wastageNetWeight: true },
+    });
+    const challanWastageWeight = Number(challanWastageAgg?._sum?.wastageNetWeight || 0);
+    const unattributedWastageWeight = Math.max(0, trackedWastageWeight - challanWastageWeight);
 
-    const inboundWeight = Number(inbound.weight || 0);
-    const remaining = Math.max(0, inboundWeight - received - existingWastage);
+    // Mark only still-issued pending allocation (never full inbound balance).
+    const openAllocations = await listOpenCutterIssueAllocationsForPiece(prisma, pieceId);
+    const remaining = clampZero(roundTo3Decimals(
+      openAllocations.reduce((sum, entry) => sum + Number(entry.remainingWeight || 0), 0) - unattributedWastageWeight,
+    ));
     if (remaining <= 0) return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
 
     // Upsert wastage increment inside transaction
@@ -5820,6 +7029,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
 
     const piece = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
     if (!piece) return res.status(404).json({ error: 'Piece not found' });
+    const issueAllocations = (await listOpenCutterIssueAllocationsForPiece(prisma, pieceId)).map((entry) => ({ ...entry }));
     const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
     const itemName = itemRec ? itemRec.name || '' : '';
     const machineByPieceId = await buildCutterIssueMachineMap([pieceId]);
@@ -5876,11 +7086,16 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
 
     const receiveDateStr = toOptionalString(normalizedEntries[0]?.receiveDate) || new Date().toISOString().slice(0, 10);
 
-    const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
     const inboundWeight = Number(piece.weight || 0);
-    const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
-    const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
-    let pendingRemaining = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+    let pendingRemaining = roundTo3Decimals(
+      issueAllocations.reduce((sum, entry) => sum + Number(entry.remainingWeight || 0), 0),
+    );
+    if (pendingRemaining <= TAKE_BACK_EPSILON) {
+      const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
+      const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
+      const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
+      pendingRemaining = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+    }
 
     if (pendingRemaining <= 0 && receiveEntries.length > 0) {
       return res.status(400).json({ error: 'Piece has no pending weight remaining' });
@@ -5947,12 +7162,23 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         return res.status(400).json({ error: 'Net weight exceeds pending weight' });
       }
 
+      let rowIssueId = null;
+      if (issueAllocations.length > 0) {
+        const matched = issueAllocations.find((entry) => Number(entry.remainingWeight || 0) - net > -TAKE_BACK_EPSILON);
+        if (!matched) {
+          return res.status(400).json({ error: 'Net weight exceeds pending weight' });
+        }
+        rowIssueId = matched.issueId || null;
+        matched.remainingWeight = clampZero(Number(matched.remainingWeight || 0) - net);
+      }
+
       pendingRemaining = roundTo3Decimals(pendingRemaining - net);
       totalNetWeight = roundTo3Decimals(totalNetWeight + net);
       totalBobbinQty += bobbinQty;
       crateIndex += 1;
 
       rowsToCreate.push({
+        issueId: rowIssueId,
         pieceId,
         vchNo: `MAN-${randomUUID().slice(0, 8)}`,
         date: receiveDateStr,
@@ -6142,6 +7368,7 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
 
     const normalizedIssueCode = issueBarcode ? normalizeBarcodeInput(issueBarcode) : '';
     let issueMachineName = null;
+    let resolvedIssueId = null;
     let resolvedPieceId = pieceId;
     let resolvedLotNo = lotNo;
     if (normalizedIssueCode) {
@@ -6155,6 +7382,7 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
       }
       resolvedPieceId = pieceIds[0];
       resolvedLotNo = issue.lotNo;
+      resolvedIssueId = issue.id;
       if (issue.machineId) {
         const machineRec = await prisma.machine.findUnique({ where: { id: issue.machineId } });
         issueMachineName = machineRec ? machineRec.name : null;
@@ -6165,6 +7393,9 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
 
     const piece = await prisma.inboundItem.findUnique({ where: { id: resolvedPieceId } });
     if (!piece) return res.status(404).json({ error: 'Piece not found' });
+    const openAllocations = resolvedIssueId
+      ? []
+      : await listOpenCutterIssueAllocationsForPiece(prisma, resolvedPieceId);
     if (resolvedLotNo && piece.lotNo !== resolvedLotNo) return res.status(400).json({ error: 'Piece does not belong to the scanned issue' });
     const itemRec = piece.itemId ? await prisma.item.findUnique({ where: { id: piece.itemId } }) : null;
     const itemName = itemRec ? itemRec.name || '' : '';
@@ -6216,11 +7447,36 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
       return res.status(400).json({ error: 'Computed net weight must be positive. Check weights and quantity.' });
     }
 
+    let pendingBefore = null;
+    if (resolvedIssueId) {
+      const issueForPending = await loadIssueForTakeBack(prisma, 'cutter', resolvedIssueId);
+      if (issueForPending) {
+        const issuePending = await getIssuePending(prisma, 'cutter', issueForPending);
+        const piecePending = getCutterPiecePending(issuePending, resolvedPieceId);
+        pendingBefore = piecePending ? piecePending.pendingWeight : 0;
+      }
+    }
     const inboundWeight = Number(piece.weight || 0);
-    const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
-    const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
-    const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
-    const pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+    if (pendingBefore == null) {
+      const currentTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+      const alreadyReceived = currentTotals ? Number(currentTotals.totalNetWeight || 0) : 0;
+      const existingWastage = currentTotals ? Number(currentTotals.wastageNetWeight || 0) : 0;
+      pendingBefore = Math.max(0, inboundWeight - alreadyReceived - existingWastage);
+    }
+    if (!resolvedIssueId) {
+      resolvedIssueId = await resolveOpenCutterIssueIdForPiece(prisma, resolvedPieceId, net);
+      if (resolvedIssueId) {
+        const issueForPending = await loadIssueForTakeBack(prisma, 'cutter', resolvedIssueId);
+        if (issueForPending) {
+          const issuePending = await getIssuePending(prisma, 'cutter', issueForPending);
+          const piecePending = getCutterPiecePending(issuePending, resolvedPieceId);
+          pendingBefore = piecePending ? piecePending.pendingWeight : pendingBefore;
+        }
+      }
+      if (!resolvedIssueId && openAllocations.length > 0) {
+        return res.status(400).json({ error: 'Net weight exceeds pending weight' });
+      }
+    }
     if (pendingBefore <= 0) {
       return res.status(400).json({ error: 'Piece has no pending weight remaining' });
     }
@@ -6258,6 +7514,7 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
       const createdRow = await tx.receiveFromCutterMachineRow.create({
         data: {
           uploadId: upload.id,
+          issueId: resolvedIssueId || null,
           pieceId: resolvedPieceId,
           vchNo,
           date: receiveDateStr,
@@ -6323,11 +7580,21 @@ router.post('/api/receive_from_cutter_machine/manual', requirePermission('receiv
       return res.status(500).json({ error: 'Failed to load manual entry' });
     }
 
-    const updatedTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
-    const pendingAfter = Math.max(
-      0,
-      inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0)
-    );
+    let pendingAfter = null;
+    if (resolvedIssueId) {
+      const issueForPending = await loadIssueForTakeBack(prisma, 'cutter', resolvedIssueId);
+      if (issueForPending) {
+        const issuePending = await getIssuePending(prisma, 'cutter', issueForPending);
+        pendingAfter = issuePending.pendingWeight;
+      }
+    }
+    if (pendingAfter == null) {
+      const updatedTotals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: resolvedPieceId } });
+      pendingAfter = Math.max(
+        0,
+        inboundWeight - Number(updatedTotals?.totalNetWeight || 0) - Number(updatedTotals?.wastageNetWeight || 0),
+      );
+    }
 
     res.json({
       ok: true,
@@ -7794,6 +9061,20 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         )
       `;
     }
+    const coningTakeBackLines = rowIdsToCheck.length > 0
+      ? await prisma.issueTakeBackLine.findMany({
+        where: {
+          sourceId: { in: rowIdsToCheck },
+          takeBack: { stage: 'coning' },
+        },
+        select: {
+          sourceId: true,
+          count: true,
+          weight: true,
+          takeBack: { select: { isReverse: true } },
+        },
+      })
+      : [];
 
     const previouslyIssuedByRowId = new Map();
     const previouslyIssuedWeightByRowId = new Map();
@@ -7808,6 +9089,15 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         previouslyIssuedWeightByRowId.set(rid, weightAlready + (Number(ref.issueWeight) || 0));
       }
     }
+    coningTakeBackLines.forEach((line) => {
+      const rid = line.sourceId;
+      if (!rid) return;
+      const sign = line.takeBack?.isReverse ? 1 : -1;
+      const existingCount = previouslyIssuedByRowId.get(rid) || 0;
+      const existingWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
+      previouslyIssuedByRowId.set(rid, Math.max(0, existingCount + (sign * Number(line.count || 0))));
+      previouslyIssuedWeightByRowId.set(rid, Math.max(0, existingWeight + (sign * Number(line.weight || 0))));
+    });
 
     const issueTracker = new Map();
     const issueWeightTracker = new Map();
@@ -9433,44 +10723,36 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    const existingPieceIds = issueRecord.pieceIds
-      ? issueRecord.pieceIds.split(',').map(s => s.trim()).filter(Boolean)
-      : [];
-    const receiveCount = existingPieceIds.length > 0
-      ? await prisma.receiveFromCutterMachineRow.count({
-        where: { pieceId: { in: existingPieceIds }, isDeleted: false },
-      })
-      : 0;
+    const existingIssueLines = await prisma.issueToCutterMachineLine.findMany({
+      where: { issueId: id },
+      select: { pieceId: true, issuedWeight: true },
+    });
+    const existingPieceIds = Array.from(new Set(existingIssueLines.map((line) => line.pieceId).filter(Boolean)));
+    const receiveCount = await prisma.receiveFromCutterMachineRow.count({
+      where: {
+        isDeleted: false,
+        OR: [
+          { issueId: id },
+          ...(existingPieceIds.length > 0 ? [{ issueId: null, pieceId: { in: existingPieceIds }, createdAt: { gte: issueRecord.createdAt } }] : []),
+        ],
+      },
+    });
 
-    let nextPieceIds = null;
-    if (rawPieceIds !== undefined) {
-      if (Array.isArray(rawPieceIds)) {
-        nextPieceIds = rawPieceIds;
-      } else if (typeof rawPieceIds === 'string') {
-        nextPieceIds = rawPieceIds.split(',');
-      } else {
-        return res.status(400).json({ error: 'pieceIds must be an array' });
-      }
-      nextPieceIds = nextPieceIds.map(p => String(p).trim()).filter(Boolean);
-      if (nextPieceIds.length === 0) {
-        return res.status(400).json({ error: 'pieceIds must be a non-empty array' });
-      }
-      const unique = new Set(nextPieceIds);
-      if (unique.size !== nextPieceIds.length) {
-        return res.status(400).json({ error: 'Duplicate piece IDs are not allowed' });
-      }
-    }
+    const rawPieceLines = Array.isArray(req.body?.pieceLines) ? req.body.pieceLines : [];
+    const hasPieceLinesInput = rawPieceLines.length > 0;
+    const hasPieceIdsInput = rawPieceIds !== undefined;
+    const wantsQuantityEdit = hasPieceLinesInput || hasPieceIdsInput;
 
-    const sameSet = (a, b) => {
-      if (a.length !== b.length) return false;
-      const setA = new Set(a);
-      if (setA.size !== b.length) return false;
-      return b.every((item) => setA.has(item));
-    };
-
-    const isPieceChange = Array.isArray(nextPieceIds) && !sameSet(nextPieceIds, existingPieceIds);
-    if (isPieceChange && receiveCount > 0) {
-      return res.status(400).json({ error: 'Cannot change pieces: receive records exist for this issue' });
+    if (wantsQuantityEdit) {
+      const activeTakeBackCount = await prisma.issueTakeBack.count({
+        where: { stage: 'cutter', issueId: id, isReverse: false, isReversed: false },
+      });
+      if (activeTakeBackCount > 0) {
+        return res.status(400).json({ error: 'Cannot edit issue quantities while active take-backs exist' });
+      }
+      if (receiveCount > 0) {
+        return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
+      }
     }
 
     let updatedIssue = issueRecord;
@@ -9488,63 +10770,127 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
       if (operatorId !== undefined) data.operatorId = operatorId || null;
       if (cutId !== undefined) data.cutId = cutId || null;
 
-      if (isPieceChange) {
+      if (wantsQuantityEdit) {
+        const normalizedInputLines = hasPieceLinesInput
+          ? rawPieceLines
+            .map((line) => ({
+              pieceId: typeof line?.pieceId === 'string' ? line.pieceId.trim() : '',
+              issuedWeight: toStrictPositiveWeight(line?.issuedWeight),
+              count: toNonNegativeInt(line?.count) || 0,
+            }))
+            .filter((line) => line.pieceId)
+          : (Array.isArray(rawPieceIds)
+            ? rawPieceIds
+              .map((pieceId) => String(pieceId || '').trim())
+              .filter(Boolean)
+              .map((pieceId) => ({ pieceId, issuedWeight: null, count: 1 }))
+            : String(rawPieceIds || '')
+              .split(',')
+              .map((pieceId) => String(pieceId || '').trim())
+              .filter(Boolean)
+              .map((pieceId) => ({ pieceId, issuedWeight: null, count: 1 })));
+
+        if (normalizedInputLines.length === 0) {
+          throw new Error('pieceLines/pieceIds must be non-empty');
+        }
+
+        const uniquePieceIds = Array.from(new Set(normalizedInputLines.map((line) => line.pieceId)));
         const pieces = await tx.inboundItem.findMany({
-          where: { id: { in: nextPieceIds } },
+          where: { id: { in: uniquePieceIds } },
           orderBy: { seq: 'asc' },
         });
-        if (pieces.length !== nextPieceIds.length) {
+        if (pieces.length !== uniquePieceIds.length) {
           throw new Error('One or more pieces do not exist');
         }
 
-        const itemIds = new Set(pieces.map(p => p.itemId));
-        const lotNos = new Set(pieces.map(p => p.lotNo));
+        const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
+        const oldAllocationMap = new Map();
+        existingIssueLines.forEach((line) => {
+          const prev = oldAllocationMap.get(line.pieceId) || 0;
+          oldAllocationMap.set(line.pieceId, prev + Number(line.issuedWeight || 0));
+        });
+
+        const nextLines = normalizedInputLines.map((line) => {
+          const piece = pieceMap.get(line.pieceId);
+          if (!piece) throw new Error(`Piece ${line.pieceId} not found`);
+          const oldAlloc = Number(oldAllocationMap.get(line.pieceId) || 0);
+          const baseIssued = Math.max(0, Number(piece.issuedToCutterWeight || 0) - oldAlloc);
+          const maxIssueable = Math.max(0, Number(piece.weight || 0) - Number(piece.dispatchedWeight || 0));
+          const availableForThisIssue = Math.max(0, maxIssueable - baseIssued);
+          const requestedWeight = line.issuedWeight == null ? availableForThisIssue : Number(line.issuedWeight);
+          if (!Number.isFinite(requestedWeight) || requestedWeight <= 0) {
+            throw new Error(`Invalid issued weight for piece ${line.pieceId}`);
+          }
+          if (requestedWeight - availableForThisIssue > TAKE_BACK_EPSILON) {
+            throw new Error(`Issued weight exceeds available weight for piece ${line.pieceId}`);
+          }
+          return {
+            pieceId: line.pieceId,
+            issuedWeight: roundTo3Decimals(requestedWeight),
+            count: line.count > 0 ? line.count : 1,
+          };
+        });
+
+        const itemIds = new Set(pieces.map((piece) => piece.itemId));
+        const lotNos = new Set(pieces.map((piece) => piece.lotNo));
         if (itemIds.size !== 1) throw new Error('Pieces must belong to a single item');
         if (lotNos.size !== 1) throw new Error('Pieces must belong to a single lot');
 
-        const existingSet = new Set(existingPieceIds);
-        for (const piece of pieces) {
-          if (piece.status !== 'available' && !existingSet.has(piece.id)) {
-            throw new Error(`Piece ${piece.id} is not available`);
-          }
-        }
-
-        const overlapIssue = await tx.issueToCutterMachine.findFirst({
-          where: {
-            isDeleted: false,
-            id: { not: id },
-            OR: nextPieceIds.map(pid => ({ pieceIds: { contains: pid } })),
-          },
-          select: { id: true },
+        const allPieceIdsToAdjust = Array.from(new Set([...existingPieceIds, ...uniquePieceIds]));
+        const nextWeightByPiece = new Map();
+        nextLines.forEach((line) => {
+          const prev = nextWeightByPiece.get(line.pieceId) || 0;
+          nextWeightByPiece.set(line.pieceId, prev + Number(line.issuedWeight || 0));
         });
-        if (overlapIssue) {
-          throw new Error('One or more selected pieces are already issued');
+
+        for (const pieceId of allPieceIdsToAdjust) {
+          const piece = pieceMap.get(pieceId) || await tx.inboundItem.findUnique({
+            where: { id: pieceId },
+            select: { id: true, weight: true, dispatchedWeight: true, issuedToCutterWeight: true },
+          });
+          if (!piece) continue;
+
+          const oldAlloc = Number(oldAllocationMap.get(pieceId) || 0);
+          const baseIssued = Math.max(0, Number(piece.issuedToCutterWeight || 0) - oldAlloc);
+          const nextAlloc = Number(nextWeightByPiece.get(pieceId) || 0);
+          const maxIssueable = Math.max(0, Number(piece.weight || 0) - Number(piece.dispatchedWeight || 0));
+          const nextIssuedRaw = baseIssued + nextAlloc;
+          if (nextIssuedRaw - maxIssueable > TAKE_BACK_EPSILON) {
+            throw new Error(`Insufficient capacity for piece ${pieceId}`);
+          }
+          const nextIssued = clampZero(nextIssuedRaw);
+          const nextAvailable = Math.max(0, maxIssueable - nextIssued);
+          const nextStatus = nextAvailable > TAKE_BACK_EPSILON ? 'available' : 'consumed';
+
+          await tx.inboundItem.update({
+            where: { id: pieceId },
+            data: {
+              issuedToCutterWeight: nextIssued,
+              status: nextStatus,
+              ...actorUpdateFields(actorUserId),
+            },
+          });
         }
 
-        const totalWeight = pieces.reduce((sum, piece) => sum + Number(piece.weight || 0), 0);
+        await tx.issueToCutterMachineLine.deleteMany({ where: { issueId: id } });
+        for (const line of nextLines) {
+          await tx.issueToCutterMachineLine.create({
+            data: {
+              issueId: id,
+              pieceId: line.pieceId,
+              issuedWeight: line.issuedWeight,
+              ...actorCreateFields(actorUserId),
+            },
+          });
+        }
 
+        const totalWeight = roundTo3Decimals(nextLines.reduce((sum, line) => sum + Number(line.issuedWeight || 0), 0));
+        const totalCount = nextLines.reduce((sum, line) => sum + Number(line.count || 0), 0);
         data.itemId = pieces[0].itemId;
         data.lotNo = pieces[0].lotNo;
-        data.count = nextPieceIds.length;
+        data.count = toNonNegativeInt(totalCount);
         data.totalWeight = totalWeight;
-        data.pieceIds = nextPieceIds.join(',');
-
-        const nextSet = new Set(nextPieceIds);
-        const removed = existingPieceIds.filter(pid => !nextSet.has(pid));
-        const added = nextPieceIds.filter(pid => !existingSet.has(pid));
-
-        if (removed.length > 0) {
-          await tx.inboundItem.updateMany({
-            where: { id: { in: removed } },
-            data: { status: 'available', ...actorUpdateFields(actorUserId) },
-          });
-        }
-        if (added.length > 0) {
-          await tx.inboundItem.updateMany({
-            where: { id: { in: added } },
-            data: { status: 'consumed', ...actorUpdateFields(actorUserId) },
-          });
-        }
+        data.pieceIds = uniquePieceIds.join(',');
       }
 
       if (Object.keys(data).length > 0) {
@@ -9562,7 +10908,7 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
       before: issueRecord,
       after: updatedIssue,
       payload: {
-        pieceIdsChanged: isPieceChange,
+        quantityEdited: wantsQuantityEdit,
       },
     });
 
@@ -9608,9 +10954,17 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
       ? crates
       : (Array.isArray(receivedRowRefs) ? receivedRowRefs : undefined);
     const wantsCrateUpdate = cratesInput !== undefined;
+    const activeTakeBackCount = wantsCrateUpdate
+      ? await prisma.issueTakeBack.count({
+        where: { stage: 'holo', issueId: id, isReverse: false, isReversed: false },
+      })
+      : 0;
 
     if (hasReceives && wantsCrateUpdate) {
       return res.status(400).json({ error: 'Cannot change crates: receive records exist for this issue' });
+    }
+    if (wantsCrateUpdate && activeTakeBackCount > 0) {
+      return res.status(400).json({ error: 'Cannot change issue quantities while active take-backs exist' });
     }
 
     let updatedIssue = issueRecord;
@@ -9847,9 +11201,18 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       : (Array.isArray(receivedRowRefs) ? receivedRowRefs : undefined);
     const wantsCrateUpdate = cratesInput !== undefined;
     const wantsMetaUpdate = coneTypeId !== undefined || wrapperId !== undefined || boxId !== undefined;
+    const wantsQuantityUpdate = wantsCrateUpdate || reqPerConeWt !== undefined;
+    const activeTakeBackCount = wantsQuantityUpdate
+      ? await prisma.issueTakeBack.count({
+        where: { stage: 'coning', issueId: id, isReverse: false, isReversed: false },
+      })
+      : 0;
 
     if (hasReceives && (wantsCrateUpdate || reqPerConeWt !== undefined)) {
       return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
+    }
+    if (wantsQuantityUpdate && activeTakeBackCount > 0) {
+      return res.status(400).json({ error: 'Cannot change issue quantities while active take-backs exist' });
     }
 
     let updatedIssue = issueRecord;
@@ -10082,8 +11445,23 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
               )
           `;
         }
+        const coningTakeBackLines = rowIdsToCheck.length > 0
+          ? await tx.issueTakeBackLine.findMany({
+            where: {
+              sourceId: { in: rowIdsToCheck },
+              takeBack: { stage: 'coning' },
+            },
+            select: {
+              sourceId: true,
+              count: true,
+              weight: true,
+              takeBack: { select: { isReverse: true } },
+            },
+          })
+          : [];
 
         const previouslyIssuedByRowId = new Map();
+        const previouslyIssuedWeightByRowId = new Map();
         for (const issue of existingRowRefs) {
           const refs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
           for (const ref of refs) {
@@ -10091,29 +11469,50 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
             if (!rid) continue;
             const already = previouslyIssuedByRowId.get(rid) || 0;
             previouslyIssuedByRowId.set(rid, already + (Number(ref.issueRolls) || 0));
+            const weightAlready = previouslyIssuedWeightByRowId.get(rid) || 0;
+            previouslyIssuedWeightByRowId.set(rid, weightAlready + (Number(ref.issueWeight) || 0));
           }
         }
+        coningTakeBackLines.forEach((line) => {
+          const rid = line.sourceId;
+          if (!rid) return;
+          const sign = line.takeBack?.isReverse ? 1 : -1;
+          const existingCount = previouslyIssuedByRowId.get(rid) || 0;
+          const existingWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
+          previouslyIssuedByRowId.set(rid, Math.max(0, existingCount + (sign * Number(line.count || 0))));
+          previouslyIssuedWeightByRowId.set(rid, Math.max(0, existingWeight + (sign * Number(line.weight || 0))));
+        });
 
         const issueTracker = new Map();
+        const issueWeightTracker = new Map();
         const overIssuedCrates = [];
         for (const crate of preparedCrates) {
           const rid = crate.rowId || (crate.barcode ? normalizeBarcodeInput(crate.barcode) : null);
           if (!rid) continue;
           const baseRolls = Number(crate.baseRolls) || 0;
+          const baseWeight = Number(crate.baseWeight) || 0;
           const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
+          const existingIssuedWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
           const alreadyPlanned = issueTracker.get(rid) || 0;
+          const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
           const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
+          const totalWeightAfter = existingIssuedWeight + alreadyPlannedWeight + (Number(crate.issueWeight) || 0);
 
-          if (baseRolls > 0 && totalAfterRequest > baseRolls) {
+          const exceedsRolls = baseRolls > 0 && totalAfterRequest > baseRolls;
+          const exceedsWeight = baseWeight > 0 && totalWeightAfter > baseWeight + 1e-6;
+          if (exceedsRolls || exceedsWeight) {
             overIssuedCrates.push({
               rowId: rid,
               barcode: crate.barcode,
               requestedRolls: crate.issueRolls,
               availableRolls: Math.max(baseRolls - existingIssued - alreadyPlanned, 0),
+              requestedWeight: roundTo3Decimals(crate.issueWeight),
+              availableWeight: roundTo3Decimals(Math.max(baseWeight - existingIssuedWeight - alreadyPlannedWeight, 0)),
             });
           }
 
           issueTracker.set(rid, alreadyPlanned + (Number(crate.issueRolls) || 0));
+          issueWeightTracker.set(rid, alreadyPlannedWeight + (Number(crate.issueWeight) || 0));
         }
 
         if (overIssuedCrates.length) {
@@ -10209,14 +11608,29 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    // Get the piece IDs from the issue_to_cutter_machine record
-    const pieceIds = issueRecord.pieceIds ? issueRecord.pieceIds.split(',') : [];
-    const cleanPieceIds = pieceIds.map(p => String(p).trim()).filter(Boolean);
-    if (cleanPieceIds.length > 0) {
-      const receiveCount = await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: { in: cleanPieceIds }, isDeleted: false } });
-      if (receiveCount > 0) {
-        return res.status(400).json({ error: 'Cannot delete issue: receive records exist for one or more pieces' });
-      }
+    const hasTakeBack = await prisma.issueTakeBack.count({
+      where: { stage: 'cutter', issueId: id, isReverse: false },
+    });
+    if (hasTakeBack > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: take-back records exist for this issue' });
+    }
+
+    const issueLines = await prisma.issueToCutterMachineLine.findMany({
+      where: { issueId: id },
+      select: { pieceId: true, issuedWeight: true },
+    });
+    const cleanPieceIds = Array.from(new Set(issueLines.map((line) => line.pieceId).filter(Boolean)));
+    const receiveCount = await prisma.receiveFromCutterMachineRow.count({
+      where: {
+        isDeleted: false,
+        OR: [
+          { issueId: id },
+          ...(cleanPieceIds.length > 0 ? [{ issueId: null, pieceId: { in: cleanPieceIds }, createdAt: { gte: issueRecord.createdAt } }] : []),
+        ],
+      },
+    });
+    if (receiveCount > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: receive records exist for this issue' });
     }
 
     // Use transaction to ensure atomicity
@@ -10232,12 +11646,13 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
         },
       });
 
-      // Mark pieces as available again
-      if (cleanPieceIds.length > 0) {
-        await tx.inboundItem.updateMany({
-          where: { id: { in: cleanPieceIds } },
-          data: { status: 'available', ...actorUpdateFields(actorUserId) },
-        });
+      if (issueLines.length > 0) {
+        await applyCutterTakeBackReturn(
+          tx,
+          issueLines.map((line) => ({ sourceId: line.pieceId, weight: Number(line.issuedWeight || 0) })),
+          actorUserId,
+          -1,
+        );
       }
 
       await logCrudWithActor(req, {
@@ -10282,6 +11697,13 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
     });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to Holo machine record not found' });
+    }
+
+    const hasTakeBack = await prisma.issueTakeBack.count({
+      where: { stage: 'holo', issueId: id, isReverse: false },
+    });
+    if (hasTakeBack > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: take-back records exist for this issue' });
     }
 
     // Check if any receives exist for this issue
@@ -10380,6 +11802,13 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
       return res.status(404).json({ error: 'Issue to Coning machine record not found' });
     }
 
+    const hasTakeBack = await prisma.issueTakeBack.count({
+      where: { stage: 'coning', issueId: id, isReverse: false },
+    });
+    if (hasTakeBack > 0) {
+      return res.status(400).json({ error: 'Cannot delete issue: take-back records exist for this issue' });
+    }
+
     // Check if any receives exist for this issue
     const receiveCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId: id, isDeleted: false } });
     if (receiveCount > 0) {
@@ -10449,8 +11878,11 @@ router.delete('/api/inbound_items/:id', requireDeletePermission('inbound'), asyn
       return res.status(400).json({ error: 'Cannot delete piece with dispatched weight' });
     }
 
-    const issuedCount = await prisma.issueToCutterMachine.count({
-      where: { pieceIds: { contains: existing.id }, isDeleted: false },
+    const issuedCount = await prisma.issueToCutterMachineLine.count({
+      where: {
+        pieceId: existing.id,
+        issue: { isDeleted: false },
+      },
     });
     if (issuedCount > 0) {
       return res.status(400).json({ error: 'Cannot delete piece that was issued to cutter' });
@@ -11028,7 +12460,8 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
           lotNo: item.lotNo,
           weight: item.weight,
           dispatchedWeight: item.dispatchedWeight || 0,
-          availableWeight: Math.max(0, item.weight - (item.dispatchedWeight || 0)),
+          issuedToCutterWeight: item.issuedToCutterWeight || 0,
+          availableWeight: Math.max(0, item.weight - (item.dispatchedWeight || 0) - (item.issuedToCutterWeight || 0)),
           stage: 'inbound',
         }))
         .filter(item => item.availableWeight > 0);
@@ -11312,7 +12745,7 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
         sourceItem = await tx.inboundItem.findUnique({ where: { id: stageItemId } });
         if (!sourceItem) throw new Error('Inbound item not found');
         stageBarcode = sourceItem.barcode;
-        availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0);
+        availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0) - (sourceItem.issuedToCutterWeight || 0);
         // Inbound doesn't support partial count dispatch (it's 1 piece)
       } else if (stage === 'cutter') {
         sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
@@ -11509,7 +12942,7 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
           sourceItem = await tx.inboundItem.findUnique({ where: { id: stageItemId } });
           if (!sourceItem) throw new Error('Inbound item not found');
           stageBarcode = sourceItem.barcode;
-          availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0);
+          availableWeight = sourceItem.weight - (sourceItem.dispatchedWeight || 0) - (sourceItem.issuedToCutterWeight || 0);
         } else if (stage === 'cutter') {
           sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
           if (!sourceItem || sourceItem.isDeleted) throw new Error('Cutter receive row not found');
@@ -11526,10 +12959,18 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
           if (!sourceItem || sourceItem.isDeleted) throw new Error('Holo receive row not found');
           stageBarcode = sourceItem.barcode || '';
           const netWeight = sourceItem.rollWeight ? sourceItem.rollWeight : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
-          availableWeight = netWeight - (sourceItem.dispatchedWeight || 0);
+          const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
+          const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
+          availableWeight = netWeight - (sourceItem.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0);
           const totalCount = sourceItem.rollCount || 0;
           const dispatchedCount = sourceItem.dispatchedCount || 0;
-          availableCount = Math.max(0, totalCount - dispatchedCount);
+          availableCount = calcAvailableCountFromWeight({
+            totalCount,
+            issuedCount: issuedToConing.issuedRolls || 0,
+            dispatchedCount,
+            totalWeight: netWeight,
+            availableWeight,
+          }) || 0;
           avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
         } else if (stage === 'coning') {
           sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });

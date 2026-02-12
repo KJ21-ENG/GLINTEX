@@ -31,6 +31,14 @@ export function HoloReceiveForm() {
         pieceId: '',
     });
 
+    const enrichIssueWithBalance = (rawIssue) => {
+        if (!rawIssue?.id) return rawIssue;
+        return {
+            ...rawIssue,
+            issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+        };
+    };
+
     // Preload template once to avoid a network fetch on every receive save.
     useEffect(() => {
         let alive = true;
@@ -49,14 +57,15 @@ export function HoloReceiveForm() {
             api.getIssueByHoloBarcode(barcodeFromUrl)
                 .then(result => {
                     if (result && result.id) {
-                        setIssue(result);
+                        const enriched = enrichIssueWithBalance(result);
+                        setIssue(enriched);
                         // Pre-fill defaults from issue if available
                         setForm(p => ({
                             ...p,
-                            machineId: result.machineId || '',
-                            operatorId: result.operatorId || '',
-                            shift: result.shift || '',
-                            pieceId: Array.isArray(result.pieceIds) && result.pieceIds.length > 0 ? result.pieceIds[0] : '',
+                            machineId: enriched.machineId || '',
+                            operatorId: enriched.operatorId || '',
+                            shift: enriched.shift || '',
+                            pieceId: Array.isArray(enriched.pieceIds) && enriched.pieceIds.length > 0 ? enriched.pieceIds[0] : '',
                         }));
                     } else {
                         alert('Barcode not found or invalid');
@@ -113,20 +122,39 @@ export function HoloReceiveForm() {
         return resolved.cutName === '—' ? '' : resolved.cutName;
     }, [issue, traceContext]);
 
+    const issueMetrics = useMemo(() => {
+        const balance = issue?.issueBalance || (issue?.id ? db?.issue_balances?.[issue.id] : null) || null;
+        const originalIssued = Number(balance?.originalWeight ?? issue?.metallicBobbinsWeight ?? 0);
+        const takenBack = Number(balance?.takeBackWeight || 0);
+        const netIssued = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssued - takenBack));
+        const received = Number(balance?.receivedWeight || 0);
+        const wastage = Number(balance?.wastageWeight || 0);
+        const pending = Number(balance?.pendingWeight ?? Math.max(0, netIssued - received - wastage));
+        return {
+            originalIssued: Math.max(0, originalIssued),
+            takenBack: Math.max(0, takenBack),
+            netIssued: Math.max(0, netIssued),
+            received: Math.max(0, received),
+            wastage: Math.max(0, wastage),
+            pending: Math.max(0, pending),
+        };
+    }, [issue, db?.issue_balances]);
+
     // --- Handlers ---
     async function handleScan() {
         if (!scanInput.trim()) return;
         try {
             const result = await api.getIssueByHoloBarcode(scanInput.trim());
-            setIssue(result);
+            const enriched = enrichIssueWithBalance(result);
+            setIssue(enriched);
 
             // Pre-fill defaults from issue if available
             setForm(p => ({
                 ...p,
-                machineId: result.machineId || '',
-                operatorId: result.operatorId || '',
-                shift: result.shift || '',
-                pieceId: Array.isArray(result.pieceIds) && result.pieceIds.length > 0 ? result.pieceIds[0] : '',
+                machineId: enriched.machineId || '',
+                operatorId: enriched.operatorId || '',
+                shift: enriched.shift || '',
+                pieceId: Array.isArray(enriched.pieceIds) && enriched.pieceIds.length > 0 ? enriched.pieceIds[0] : '',
             }));
         } catch (e) {
             alert(e.message);
@@ -140,6 +168,14 @@ export function HoloReceiveForm() {
         if (!issue) return;
         if (!form.pieceId) {
             alert('Select a piece for this receive');
+            return;
+        }
+        if (issueMetrics.pending <= 0.001) {
+            alert('This issue has no pending net-issued weight remaining.');
+            return;
+        }
+        if (netWeight > issueMetrics.pending + 0.001) {
+            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds pending issue weight (${issueMetrics.pending.toFixed(3)} kg).`);
             return;
         }
         setSubmitting(true);
@@ -165,8 +201,14 @@ export function HoloReceiveForm() {
             // Full refresh of the process module is expensive (it runs heavy backend aggregation),
             // so we avoid doing it on every receive save.
             if (result?.row?.id) {
+                const savedRollTypeId = result?.row?.rollTypeId || form.rollTypeId || '';
+                const savedRollTypeName = (db?.rollTypes || []).find((r) => r.id === savedRollTypeId)?.name || '';
+                const isWastageRow = String(savedRollTypeName || '').toLowerCase().includes('wastage');
                 const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-                const nextRows = [result.row, ...existingRows.filter(r => r?.id !== result.row.id)];
+                const nextRows = [
+                    { ...result.row, rollType: savedRollTypeId ? { id: savedRollTypeId, name: savedRollTypeName } : (result.row.rollType || null) },
+                    ...existingRows.filter(r => r?.id !== result.row.id),
+                ];
 
                 const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
                 const netInc = Number(netWeight || 0);
@@ -177,15 +219,16 @@ export function HoloReceiveForm() {
                         return {
                             ...t,
                             totalRolls: Number(t.totalRolls || 0) + (Number.isFinite(rollCountNum) ? rollCountNum : 0),
-                            totalNetWeight: Number(t.totalNetWeight || 0) + (Number.isFinite(netInc) ? netInc : 0),
+                            totalNetWeight: Number(t.totalNetWeight || 0) + (isWastageRow ? 0 : (Number.isFinite(netInc) ? netInc : 0)),
+                            wastageNetWeight: Number(t.wastageNetWeight || 0) + (isWastageRow && Number.isFinite(netInc) ? netInc : 0),
                         };
                     })
                     : [
                         {
                             pieceId: form.pieceId,
                             totalRolls: Number.isFinite(rollCountNum) ? rollCountNum : 0,
-                            totalNetWeight: Number.isFinite(netInc) ? netInc : 0,
-                            wastageNetWeight: 0,
+                            totalNetWeight: isWastageRow ? 0 : (Number.isFinite(netInc) ? netInc : 0),
+                            wastageNetWeight: isWastageRow && Number.isFinite(netInc) ? netInc : 0,
                         },
                         ...existingTotals,
                     ];
@@ -193,6 +236,42 @@ export function HoloReceiveForm() {
                 patchDb({
                     receive_from_holo_machine_rows: nextRows,
                     receive_from_holo_machine_piece_totals: nextTotals,
+                    issue_balances: (() => {
+                        const map = { ...(db.issue_balances || {}) };
+                        const prevBalance = map[issue.id] || issue?.issueBalance;
+                        if (prevBalance) {
+                            const incValue = Number.isFinite(netInc) ? netInc : 0;
+                            const nextReceived = Number(prevBalance.receivedWeight || 0) + (isWastageRow ? 0 : incValue);
+                            const nextWastage = Number(prevBalance.wastageWeight || 0) + (isWastageRow ? incValue : 0);
+                            const nextPending = Math.max(0, Number(prevBalance.pendingWeight || 0) - (Number.isFinite(netInc) ? netInc : 0));
+                            map[issue.id] = {
+                                ...prevBalance,
+                                receivedWeight: nextReceived,
+                                wastageWeight: nextWastage,
+                                pendingWeight: nextPending,
+                            };
+                        }
+                        return map;
+                    })(),
+                });
+
+                setIssue((prev) => {
+                    if (!prev) return prev;
+                    const prevBalance = prev.issueBalance || db?.issue_balances?.[prev.id];
+                    if (!prevBalance) return prev;
+                    const incValue = Number.isFinite(netInc) ? netInc : 0;
+                    const nextReceived = Number(prevBalance.receivedWeight || 0) + (isWastageRow ? 0 : incValue);
+                    const nextWastage = Number(prevBalance.wastageWeight || 0) + (isWastageRow ? incValue : 0);
+                    const nextPending = Math.max(0, Number(prevBalance.pendingWeight || 0) - (Number.isFinite(netInc) ? netInc : 0));
+                    return {
+                        ...prev,
+                        issueBalance: {
+                            ...prevBalance,
+                            receivedWeight: nextReceived,
+                            wastageWeight: nextWastage,
+                            pendingWeight: nextPending,
+                        },
+                    };
                 });
             }
 
@@ -273,6 +352,13 @@ export function HoloReceiveForm() {
                             <div><strong>Cut:</strong> {cutName || '—'}</div>
                             <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'}</div>
                             <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name || '—'}</div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/50 rounded-md text-sm">
+                            <div><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
+                            <div><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
+                            <div><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
+                            <div><strong>Received:</strong> {formatKg(issueMetrics.received)}</div>
+                            <div><strong>Pending:</strong> {formatKg(issueMetrics.pending)}</div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -378,7 +464,7 @@ export function HoloReceiveForm() {
                             <div className="text-sm">
                                 Tare: {formatKg(tareWeight)} | <span className="font-bold">Net: {formatKg(netWeight)}</span>
                             </div>
-                            <Button onClick={handleSubmit} disabled={submitting || !netWeight} className="w-full sm:w-auto">Save Receive</Button>
+                            <Button onClick={handleSubmit} disabled={submitting || !netWeight || issueMetrics.pending <= 0.001} className="w-full sm:w-auto">Save Receive</Button>
                         </div>
                     </CardContent>
                 )}

@@ -64,6 +64,96 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'yarnName', label: 'Yarn Name' },
         ]
     },
+    issue_to_cutter_machine_takeback_created: {
+        note: 'Triggered when issued material is taken back from a Cutter machine issue.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Taken Back Count' },
+            { key: 'totalWeight', label: 'Taken Back Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_holo_machine_takeback_created: {
+        note: 'Triggered when issued material is taken back from a Holo machine issue.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Taken Back Count' },
+            { key: 'totalWeight', label: 'Taken Back Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_coning_machine_takeback_created: {
+        note: 'Triggered when issued material is taken back from a Coning machine issue.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Taken Back Count' },
+            { key: 'totalWeight', label: 'Taken Back Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_cutter_machine_takeback_reversed: {
+        note: 'Triggered when a Cutter machine take-back entry is reversed.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Reversed Count' },
+            { key: 'totalWeight', label: 'Reversed Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_holo_machine_takeback_reversed: {
+        note: 'Triggered when a Holo machine take-back entry is reversed.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Reversed Count' },
+            { key: 'totalWeight', label: 'Reversed Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
+    issue_to_coning_machine_takeback_reversed: {
+        note: 'Triggered when a Coning machine take-back entry is reversed.',
+        variables: [
+            { key: 'itemName', label: 'Item Name' },
+            { key: 'lotNo', label: 'Lot No' },
+            { key: 'issueBarcode', label: 'Issue Barcode' },
+            { key: 'date', label: 'Date' },
+            { key: 'totalCount', label: 'Reversed Count' },
+            { key: 'totalWeight', label: 'Reversed Weight' },
+            { key: 'reason', label: 'Reason' },
+            { key: 'note', label: 'Note' },
+            { key: 'machineName', label: 'Machine' },
+            { key: 'operatorName', label: 'Operator' },
+        ]
+    },
     receive_from_cutter_machine_created: {
         note: 'Triggered when a piece is received from a Cutter machine (Manual or Bulk).',
         variables: [

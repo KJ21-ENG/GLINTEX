@@ -104,6 +104,7 @@ model InboundItem {
   consumptionDate String?
   isOpeningStock  Boolean  @default(false)
   dispatchedWeight Float   @default(0)
+  issuedToCutterWeight Float @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -370,6 +371,24 @@ model IssueToCutterMachine {
   cut         Cut?      @relation(fields: [cutId], references: [id])
   machine     Machine?  @relation(fields: [machineId], references: [id])
   operator    Operator? @relation(fields: [operatorId], references: [id])
+  lines       IssueToCutterMachineLine[]
+  receiveRows ReceiveFromCutterMachineRow[]
+}
+
+model IssueToCutterMachineLine {
+  id              String               @id @default(cuid())
+  issueId          String
+  pieceId          String
+  issuedWeight     Float               @default(0)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @default(now()) @updatedAt
+  createdByUserId  String?
+  updatedByUserId  String?
+  issue            IssueToCutterMachine @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+  @@index([pieceId])
+  @@unique([issueId, pieceId])
 }
 
 model ReceiveFromCutterMachineUpload {
@@ -387,6 +406,7 @@ model ReceiveFromCutterMachineUpload {
 model ReceiveFromCutterMachineRow {
   id            String                              @id @default(cuid())
   uploadId      String
+  issueId       String?
   pieceId       String
   vchNo         String                              @unique
   narration     String?
@@ -437,6 +457,7 @@ model ReceiveFromCutterMachineRow {
   helper        Operator?                            @relation("HelperReceiveRows", fields: [helperId], references: [id])
   cutId         String?
   cutMaster     Cut?                                 @relation(fields: [cutId], references: [id])
+  issue         IssueToCutterMachine?                @relation(fields: [issueId], references: [id])
   dispatchedWeight Float                             @default(0)
   dispatchedCount  Int                               @default(0)
 }
@@ -703,6 +724,49 @@ model BoxTransfer {
   updatedAt         DateTime      @default(now()) @updatedAt
   createdByUserId   String?
   updatedByUserId   String?
+}
+
+model IssueTakeBack {
+  id              String            @id @default(cuid())
+  stage           String
+  issueId         String
+  date            String
+  reason          String
+  note            String?
+  totalCount      Int               @default(0)
+  totalWeight     Float             @default(0)
+  isReverse       Boolean           @default(false)
+  isReversed      Boolean           @default(false)
+  reversedById    String?           @unique
+  reversedBy      IssueTakeBack?    @relation("ReverseIssueTakeBack", fields: [reversedById], references: [id])
+  reversesTakeBack IssueTakeBack?   @relation("ReverseIssueTakeBack")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  lines           IssueTakeBackLine[]
+
+  @@index([stage])
+  @@index([issueId])
+  @@index([stage, issueId])
+}
+
+model IssueTakeBackLine {
+  id              String         @id @default(cuid())
+  takeBackId      String
+  sourceId        String
+  sourceBarcode   String?
+  count           Int            @default(0)
+  weight          Float          @default(0)
+  meta            Json           @default("{}")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  takeBack        IssueTakeBack  @relation(fields: [takeBackId], references: [id], onDelete: Cascade)
+
+  @@index([takeBackId])
+  @@index([sourceId])
 }
 
 // ========== BOILER (STEAMING) FEATURE ==========

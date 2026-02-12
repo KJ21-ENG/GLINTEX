@@ -20,6 +20,13 @@ export function ConingReceiveForm() {
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [isWastage, setIsWastage] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+    const enrichIssueWithBalance = (rawIssue) => {
+        if (!rawIssue?.id) return rawIssue;
+        return {
+            ...rawIssue,
+            issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+        };
+    };
 
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
     useEffect(() => {
@@ -31,7 +38,7 @@ export function ConingReceiveForm() {
             );
 
             if (found) {
-                setIssue(found);
+                setIssue(enrichIssueWithBalance(found));
                 setCart([]);
             } else {
                 alert('Coning issue not found for barcode');
@@ -56,7 +63,7 @@ export function ConingReceiveForm() {
         }
     }, [issue?.receivedRowRefs]);
 
-    const totalIssuedWeight = useMemo(() => {
+    const fallbackIssuedWeight = useMemo(() => {
         const sumFromRefs = issueRefs.reduce((sum, ref) => sum + (Number(ref?.issueWeight) || 0), 0);
         if (sumFromRefs > 0) return sumFromRefs;
         // Fallback: sum referenced holo receive row weights (if issueWeight not stamped)
@@ -71,14 +78,31 @@ export function ConingReceiveForm() {
         return (db.receive_from_coning_machine_piece_totals || []).find((t) => t.pieceId === issue.id) || null;
     }, [db.receive_from_coning_machine_piece_totals, issue?.id]);
 
+    const issueMetrics = useMemo(() => {
+        const balance = issue?.issueBalance || (issue?.id ? db?.issue_balances?.[issue.id] : null) || null;
+        const originalIssued = Number(balance?.originalWeight ?? fallbackIssuedWeight ?? 0);
+        const takenBack = Number(balance?.takeBackWeight || 0);
+        const netIssued = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssued - takenBack));
+        const received = Number(balance?.receivedWeight ?? coningPieceTotals?.totalNetWeight ?? 0);
+        const wastage = Number(balance?.wastageWeight ?? coningPieceTotals?.wastageNetWeight ?? 0);
+        const pending = Number(balance?.pendingWeight ?? Math.max(0, netIssued - received - wastage));
+        return {
+            originalIssued: Math.max(0, originalIssued),
+            takenBack: Math.max(0, takenBack),
+            netIssued: Math.max(0, netIssued),
+            received: Math.max(0, received),
+            wastage: Math.max(0, wastage),
+            pending: Math.max(0, pending),
+        };
+    }, [issue, db?.issue_balances, fallbackIssuedWeight, coningPieceTotals]);
+
     // Wastage status for closing the issue
     const wastageStatus = useMemo(() => {
-        const existingWastage = Number(coningPieceTotals?.wastageNetWeight || 0);
-        const receivedWeight = Number(coningPieceTotals?.totalNetWeight || 0);
         // Include cart items in pending calculation
         const cartReceivedWeight = cart.filter(r => !r.isWastage).reduce((sum, r) => sum + (calcRowNet(r) || 0), 0);
         const cartWastage = cart.filter(r => r.isWastage).reduce((sum, r) => sum + Number(r.netWeight || 0), 0);
-        const pendingWeight = Math.max(0, totalIssuedWeight - receivedWeight - existingWastage - cartReceivedWeight - cartWastage);
+        const existingWastage = Number(issueMetrics.wastage || 0);
+        const pendingWeight = Math.max(0, Number(issueMetrics.pending || 0) - cartReceivedWeight - cartWastage);
         const hasWastageInDb = existingWastage > 0;
         const hasWastageInCart = cartWastage > 0;
         const isWastageClosed = pendingWeight <= 0 && hasWastageInDb;
@@ -90,7 +114,7 @@ export function ConingReceiveForm() {
             hasWastageInCart,
             isWastageClosed,
         };
-    }, [totalIssuedWeight, coningPieceTotals, cart]);
+    }, [issueMetrics, cart]);
 
     // Receiving is blocked if wastage is in cart or already marked
     const receivingBlocked = wastageStatus.hasWastageInCart || wastageStatus.isWastageClosed;
@@ -110,7 +134,7 @@ export function ConingReceiveForm() {
             const found = db.issue_to_coning_machine.find(i => (i.barcode || '').toUpperCase() === scanInput.trim().toUpperCase());
 
             if (found) {
-                setIssue(found);
+                setIssue(enrichIssueWithBalance(found));
                 setCart([]);
             } else {
                 alert('Issue not found');
@@ -185,10 +209,10 @@ export function ConingReceiveForm() {
         return { totalNetWeight, totalCones };
     }, [cart, db.boxes, db.cone_types, issueRefs]);
 
-    const totalReceivedWeight = Number(coningPieceTotals?.totalNetWeight || 0) + cartTotals.totalNetWeight;
+    const totalReceivedWeight = Number(issueMetrics.received || 0) + cartTotals.totalNetWeight;
     const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
-    const isReceivedOverIssued = totalIssuedWeight > 0 && totalReceivedWeight > totalIssuedWeight + 0.001;
+    const isReceivedOverIssued = issueMetrics.netIssued > 0 && totalReceivedWeight > issueMetrics.netIssued + 0.001;
 
     const issueDetails = useMemo(() => {
         if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
@@ -220,6 +244,12 @@ export function ConingReceiveForm() {
             // Separate receive entries from wastage entries
             const receiveEntries = cart.filter(r => !r.isWastage);
             const wastageEntries = cart.filter(r => r.isWastage);
+            const receiveNetWeight = receiveEntries.reduce((sum, row) => sum + (calcRowNet(row) || 0), 0);
+            if (receiveNetWeight > Number(issueMetrics.pending || 0) + 0.001) {
+                alert(`Receive net weight (${receiveNetWeight.toFixed(3)} kg) exceeds pending issue weight (${Number(issueMetrics.pending || 0).toFixed(3)} kg).`);
+                setSubmitting(false);
+                return;
+            }
 
             const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
             const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;
@@ -366,9 +396,32 @@ export function ConingReceiveForm() {
                     ...existingTotals.filter(t => t.pieceId !== pieceId),
                 ];
 
+                const nextIssueBalances = { ...(db.issue_balances || {}) };
+                const prevBalance = nextIssueBalances[issue.id] || issue?.issueBalance;
+                const fallbackNetIssued = Number(issueMetrics.netIssued || 0);
+                if (prevBalance) {
+                    const prevReceived = Number(prevBalance.receivedWeight || 0);
+                    const nextReceived = Number(nextTotal.totalNetWeight || prevReceived);
+                    const nextWastage = Number(nextTotal.wastageNetWeight || 0);
+                    nextIssueBalances[issue.id] = {
+                        ...prevBalance,
+                        receivedWeight: nextReceived,
+                        wastageWeight: nextWastage,
+                        pendingWeight: Math.max(0, fallbackNetIssued - nextReceived - nextWastage),
+                    };
+                }
+
                 patchDb({
                     receive_from_coning_machine_rows: nextRows,
                     receive_from_coning_machine_piece_totals: nextTotals,
+                    issue_balances: nextIssueBalances,
+                });
+
+                setIssue((prev) => {
+                    if (!prev) return prev;
+                    const updatedBalance = nextIssueBalances[prev.id];
+                    if (!updatedBalance) return prev;
+                    return { ...prev, issueBalance: updatedBalance };
                 });
             }
 
@@ -410,11 +463,12 @@ export function ConingReceiveForm() {
                                 <div><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
                             </div>
                             <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                                <div><strong>Issued Wt:</strong> {formatKg(totalIssuedWeight)}</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
+                                <div><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
+                                <div><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
+                                <div><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
                                 <div><strong>Expected Cones:</strong> {totalExpected}</div>
                                 <div><strong>Target:</strong> {perConeWeight} g/cone</div>
-                                <div className="hidden md:block" />
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
                                 <div className="flex items-center gap-2">

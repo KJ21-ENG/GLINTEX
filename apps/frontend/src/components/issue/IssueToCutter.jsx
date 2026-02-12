@@ -2,10 +2,20 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../../utils';
-import { Search, QrCode } from 'lucide-react';
+import { QrCode } from 'lucide-react';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
+
+const EPSILON = 1e-6;
+const clampWeight = (value, maxValue) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (!Number.isFinite(maxValue)) return Math.max(0, numeric);
+    return Math.max(0, Math.min(numeric, maxValue));
+};
+
+const to3 = (value) => Math.round(Number(value || 0) * 1000) / 1000;
 
 export function IssueToCutter() {
     const { db, createIssueToMachine, refreshing, loading } = useInventory();
@@ -17,7 +27,7 @@ export function IssueToCutter() {
     const [operatorId, setOperatorId] = useState("");
     const [cutId, setCutId] = useState("");
     const [note, setNote] = useState("");
-    const [selected, setSelected] = useState([]);
+    const [selectedLines, setSelectedLines] = useState([]);
     const [barcodeScan, setBarcodeScan] = useState('');
     const [scanLoading, setScanLoading] = useState(false);
     const [issuing, setIssuing] = useState(false);
@@ -34,6 +44,12 @@ export function IssueToCutter() {
     const lots = db?.lots || [];
     const inboundItems = db?.inbound_items || [];
     const issueToCutterRows = db?.issue_to_cutter_machine || [];
+    const getIssueableWeight = (piece) => {
+        const gross = Number(piece?.weight || 0);
+        const dispatched = Number(piece?.dispatchedWeight || 0);
+        const issued = Number(piece?.issuedToCutterWeight || 0);
+        return Math.max(0, gross - dispatched - issued);
+    };
 
     const candidateLots = useMemo(() => {
         if (!itemId) return [];
@@ -46,9 +62,63 @@ export function IssueToCutter() {
     const availablePieces = useMemo(() => {
         if (!lotNo) return [];
         return inboundItems
-            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && ii.status === 'available' && Number(ii.dispatchedWeight || 0) <= 0)
+            .filter(ii => ii.lotNo === lotNo && ii.itemId === itemId && Number(ii.dispatchedWeight || 0) <= 0)
+            .map((ii) => ({
+                ...ii,
+                issueableWeight: getIssueableWeight(ii),
+            }))
+            .filter((ii) => ii.issueableWeight > EPSILON)
             .sort((a, b) => a.seq - b.seq);
     }, [inboundItems, lotNo, itemId]);
+
+    const selectedLineByPieceId = useMemo(() => {
+        const map = new Map();
+        (selectedLines || []).forEach((line) => {
+            map.set(line.pieceId, line);
+        });
+        return map;
+    }, [selectedLines]);
+
+    const selectedWeightTotal = useMemo(() => {
+        return (selectedLines || []).reduce((sum, line) => sum + Number(line.issuedWeight || 0), 0);
+    }, [selectedLines]);
+
+    const hasInvalidSelectedWeights = useMemo(() => {
+        return (selectedLines || []).some((line) => Number(line.issuedWeight || 0) <= EPSILON);
+    }, [selectedLines]);
+
+    useEffect(() => {
+        if (!availablePieces?.length) {
+            setSelectedLines([]);
+            return;
+        }
+        const maxByPieceId = new Map(availablePieces.map((piece) => [piece.id, Number(piece.issueableWeight || 0)]));
+        setSelectedLines((prev) => (
+            (prev || [])
+                .filter((line) => maxByPieceId.has(line.pieceId))
+                .map((line) => {
+                    const max = maxByPieceId.get(line.pieceId);
+                    return {
+                        pieceId: line.pieceId,
+                        issuedWeight: to3(clampWeight(line.issuedWeight, max)),
+                    };
+                })
+        ));
+    }, [availablePieces]);
+
+    const addPieceLine = (pieceId, issuedWeight = null) => {
+        const piece = availablePieces.find((entry) => entry.id === pieceId)
+            || (inboundItems || []).find((entry) => entry.id === pieceId);
+        if (!piece) return;
+        const maxWeight = Number(piece.issueableWeight ?? getIssueableWeight(piece));
+        if (maxWeight <= EPSILON) return;
+        const nextWeight = issuedWeight == null ? maxWeight : clampWeight(issuedWeight, maxWeight);
+        setSelectedLines((prev) => {
+            const exists = (prev || []).some((line) => line.pieceId === piece.id);
+            if (exists) return prev;
+            return [...(prev || []), { pieceId: piece.id, issuedWeight: to3(nextWeight) }];
+        });
+    };
 
     // Last Issue Info
     const lastIssueForLot = useMemo(() => {
@@ -67,17 +137,20 @@ export function IssueToCutter() {
         try {
             const piece = await api.getInboundByBarcode(barcode);
             if (!piece) throw new Error('Barcode not found');
-            if (piece.status !== 'available') throw new Error('Piece is not available');
+            if (piece.status !== 'available' && piece.status !== 'consumed') throw new Error('Piece is not available');
             if (Number(piece.dispatchedWeight || 0) > 0) {
                 throw new Error('Piece has been partially dispatched and cannot be issued to cutter');
+            }
+            const issueableWeight = getIssueableWeight(piece);
+            if (issueableWeight <= EPSILON) {
+                throw new Error('Piece has no available issue weight');
             }
 
             // Auto-select context
             if (itemId !== piece.itemId) setItemId(piece.itemId);
             if (lotNo !== piece.lotNo) setLotNo(piece.lotNo);
-
-            setSelected(prev => prev.includes(piece.id) ? prev : [...prev, piece.id]);
-            setScanFeedback(`Added ${barcode}`);
+            addPieceLine(piece.id, issueableWeight);
+            setScanFeedback(`Added ${barcode} (${formatKg(issueableWeight)})`);
         } catch (err) {
             alert(err.message);
         } finally {
@@ -92,10 +165,16 @@ export function IssueToCutter() {
     }
 
     async function handleIssue() {
-        if (!date || !itemId || !lotNo || !machineId || !operatorId || !cutId || selected.length === 0) return;
+        if (!date || !itemId || !lotNo || !machineId || !operatorId || !cutId || selectedLines.length === 0) return;
         setIssuing(true);
         try {
-            const payload = { date, itemId, lotNo, pieceIds: selected, note, machineId, operatorId, cutId };
+            const pieceIds = selectedLines.map((line) => line.pieceId);
+            const pieceLines = selectedLines.map((line) => ({
+                pieceId: line.pieceId,
+                issuedWeight: to3(Number(line.issuedWeight || 0)),
+                count: 1,
+            }));
+            const payload = { date, itemId, lotNo, pieceIds, pieceLines, note, machineId, operatorId, cutId };
             const result = await createIssueToMachine(payload);
             const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
             const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
@@ -107,10 +186,10 @@ export function IssueToCutter() {
                     const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
                     const inboundDate = candidateLots.find((l) => l.lotNo === lotNo)?.date || '';
                     const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
-                    const selectedPieces = (inboundItems || []).filter((p) => selected.includes(p.id));
+                    const selectedPieces = (inboundItems || []).filter((p) => pieceIds.includes(p.id));
                     const primaryPiece =
                         selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
-                    const pieceId = primaryPiece?.id || selected[0] || '';
+                    const pieceId = primaryPiece?.id || pieceIds[0] || '';
                     const seq = primaryPiece?.seq ?? '';
                     await printStageTemplate(
                         LABEL_STAGE_KEYS.CUTTER_ISSUE,
@@ -120,9 +199,9 @@ export function IssueToCutter() {
                             pieceId,
                             seq,
                             barcode: issueRecord.barcode,
-                            count: issueRecord.count || selected.length,
+                            count: issueRecord.count || pieceIds.length,
                             totalWeight: issueRecord.totalWeight,
-                            pieceIds: selected,
+                            pieceIds,
                             machineName,
                             operatorName,
                             inboundDate,
@@ -133,10 +212,10 @@ export function IssueToCutter() {
                     );
                 }
             }
-            setSelected([]);
+            setSelectedLines([]);
             setCutId("");
             setNote("");
-            alert(`Issued ${selected.length} pieces successfully.`);
+            alert(`Issued ${pieceIds.length} pieces successfully.`);
         } catch (e) {
             alert(e.message);
         } finally {
@@ -145,7 +224,26 @@ export function IssueToCutter() {
     }
 
     function toggle(id) {
-        setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+        const existing = selectedLineByPieceId.get(id);
+        if (existing) {
+            setSelectedLines((prev) => (prev || []).filter((line) => line.pieceId !== id));
+            return;
+        }
+        addPieceLine(id);
+    }
+
+    function updateLineWeight(pieceId, rawValue) {
+        const piece = availablePieces.find((entry) => entry.id === pieceId);
+        if (!piece) return;
+        const maxWeight = Number(piece.issueableWeight || 0);
+        const nextWeight = to3(clampWeight(rawValue, maxWeight));
+        setSelectedLines((prev) => (
+            (prev || []).map((line) => (
+                line.pieceId === pieceId
+                    ? { ...line, issuedWeight: nextWeight }
+                    : line
+            ))
+        ));
     }
 
     if (loading || !db) {
@@ -266,15 +364,21 @@ export function IssueToCutter() {
                         </CardHeader>
                         <CardContent>
                             {scanFeedback && (
-                                <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
+                            <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
                             )}
                             <div className="flex justify-between items-center mb-2">
                                 <div className="text-xs text-muted-foreground">
-                                    {selected.length} selected / {availablePieces.length} available
+                                    {selectedLines.length} selected / {availablePieces.length} available • {formatKg(selectedWeightTotal)} issue weight
                                 </div>
                                 <div className="flex gap-2">
-                                    <Button size="sm" variant="ghost" onClick={() => setSelected(availablePieces.map(p => p.id))}>All</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => setSelected([])}>None</Button>
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setSelectedLines(availablePieces.map((piece) => ({ pieceId: piece.id, issuedWeight: to3(piece.issueableWeight) })))}
+                                    >
+                                        All
+                                    </Button>
+                                    <Button size="sm" variant="ghost" onClick={() => setSelectedLines([])}>None</Button>
                                 </div>
                             </div>
                             <div className="max-h-[400px] overflow-auto border rounded-md">
@@ -283,27 +387,44 @@ export function IssueToCutter() {
                                         <TableRow>
                                             <TableHead className="w-[40px]"></TableHead>
                                             <TableHead>ID</TableHead>
-                                            <TableHead className="">Weight</TableHead>
+                                            <TableHead className="">Available (kg)</TableHead>
+                                            <TableHead className="">Issue Wt (kg)</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {availablePieces.length === 0 ? (
-                                            <TableRow><TableCell colSpan={3} className="text-center py-8 text-muted-foreground">No pieces available in this lot.</TableCell></TableRow>
+                                            <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">No pieces available in this lot.</TableCell></TableRow>
                                         ) : availablePieces.map(p => (
                                             <TableRow key={p.id} onClick={() => toggle(p.id)} className="cursor-pointer hover:bg-muted/50">
                                                 <TableCell>
-                                                    <input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} className="rounded border-gray-300 text-primary focus:ring-primary" />
+                                                    <input type="checkbox" checked={selectedLineByPieceId.has(p.id)} onChange={() => toggle(p.id)} className="rounded border-gray-300 text-primary focus:ring-primary" />
                                                 </TableCell>
                                                 <TableCell className="font-mono">{p.id}</TableCell>
-                                                <TableCell className="">{formatKg(p.weight)}</TableCell>
+                                                <TableCell className="">{formatKg(p.issueableWeight)}</TableCell>
+                                                <TableCell className="w-[150px]">
+                                                    {selectedLineByPieceId.has(p.id) ? (
+                                                        <Input
+                                                            type="number"
+                                                            min={0}
+                                                            max={p.issueableWeight}
+                                                            step="0.001"
+                                                            value={selectedLineByPieceId.get(p.id)?.issuedWeight ?? ''}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            onChange={(e) => updateLineWeight(p.id, e.target.value)}
+                                                            className="h-8"
+                                                        />
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground">—</span>
+                                                    )}
+                                                </TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>
                                 </Table>
                             </div>
                             <div className="mt-4 flex justify-end">
-                                <Button onClick={handleIssue} disabled={issuing || selected.length === 0 || refreshing}>
-                                    {issuing ? 'Issuing...' : `Issue ${selected.length} Pieces`}
+                                <Button onClick={handleIssue} disabled={issuing || selectedLines.length === 0 || refreshing || hasInvalidSelectedWeights}>
+                                    {issuing ? 'Issuing...' : `Issue ${selectedLines.length} Pieces`}
                                 </Button>
                             </div>
                         </CardContent>

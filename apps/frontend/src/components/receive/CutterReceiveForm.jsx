@@ -35,6 +35,44 @@ export function CutterReceiveForm() {
     const [saving, setSaving] = useState(false);
 
     const barcodeInputRef = useRef(null);
+    const enrichIssueWithBalance = (rawIssue) => {
+        if (!rawIssue?.id) return rawIssue;
+        return {
+            ...rawIssue,
+            issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+        };
+    };
+    const toTimeMs = (value) => {
+        const ms = new Date(value || 0).getTime();
+        return Number.isFinite(ms) ? ms : null;
+    };
+    const cutterIssueTimelineByPiece = useMemo(() => {
+        const map = new Map();
+        (db.issue_to_cutter_machine || [])
+            .filter((issue) => !issue?.isDeleted && issue?.id)
+            .forEach((issue) => {
+                const issueCreatedAtMs = toTimeMs(issue.createdAt);
+                const pieceIds = Array.isArray(issue.pieceIds)
+                    ? issue.pieceIds
+                    : String(issue.pieceIds || '').split(',').map((s) => s.trim()).filter(Boolean);
+                pieceIds.forEach((pieceId) => {
+                    if (!pieceId) return;
+                    const rows = map.get(pieceId) || [];
+                    rows.push({ issueId: issue.id, createdAtMs: issueCreatedAtMs });
+                    map.set(pieceId, rows);
+                });
+            });
+        map.forEach((rows, pieceId) => {
+            rows.sort((a, b) => {
+                const aMs = a.createdAtMs == null ? Number.MAX_SAFE_INTEGER : a.createdAtMs;
+                const bMs = b.createdAtMs == null ? Number.MAX_SAFE_INTEGER : b.createdAtMs;
+                if (aMs !== bMs) return aMs - bMs;
+                return String(a.issueId).localeCompare(String(b.issueId));
+            });
+            map.set(pieceId, rows);
+        });
+        return map;
+    }, [db.issue_to_cutter_machine]);
 
     // Focus barcode input on mount
     useEffect(() => {
@@ -61,8 +99,9 @@ export function CutterReceiveForm() {
             api.getIssueByCutterBarcode(barcodeFromUrl)
                 .then(res => {
                     if (res && res.id) {
-                        setIssueRecord(res);
-                        setCutId(res.cutId || '');
+                        const enriched = enrichIssueWithBalance(res);
+                        setIssueRecord(enriched);
+                        setCutId(enriched.cutId || '');
                         setHelperId('');
                         setBobbinId('');
                         setBoxId('');
@@ -93,10 +132,11 @@ export function CutterReceiveForm() {
         try {
             const res = await api.getIssueByCutterBarcode(barcode);
             if (res && res.id) {
-                setIssueRecord(res);
+                const enriched = enrichIssueWithBalance(res);
+                setIssueRecord(enriched);
                 // Auto-fill known fields if available/logical
                 // Auto-fill cut from issue, reset other fields
-                setCutId(res.cutId || '');
+                setCutId(enriched.cutId || '');
                 setHelperId('');
                 setBobbinId('');
                 setBoxId('');
@@ -126,51 +166,102 @@ export function CutterReceiveForm() {
         return Math.max(0, g - tare);
     }, [grossWeight, bobbinQty, selectedBobbin, selectedBox]);
 
-    // Compute inbound weight and total received for the current issue
-    const { inboundWeight, totalReceived, totalReceivedBobbins, pendingWeight } = useMemo(() => {
-        if (!issueRecord || !issueRecord.pieceIds?.length) return { inboundWeight: 0, totalReceived: 0, totalReceivedBobbins: 0, pendingWeight: 0 };
-        const pieceIds = issueRecord.pieceIds;
+    const issueReceiveRows = useMemo(() => {
+        if (!issueRecord?.id) return [];
+        const allRows = db.receive_from_cutter_machine_rows || [];
+        const linkedRows = allRows.filter((row) => !row.isDeleted && row.issueId === issueRecord.id);
+        const issuePieceIds = Array.isArray(issueRecord.pieceIds) ? issueRecord.pieceIds : [];
+        const issueCreatedAtMs = toTimeMs(issueRecord.createdAt);
+        // Include eligible legacy rows where issueId was not captured historically.
+        const legacyRows = allRows.filter((row) => {
+            if (row.isDeleted) return false;
+            if (row.issueId) return false;
+            if (!issuePieceIds.includes(row.pieceId)) return false;
+            const rowCreatedAtMs = toTimeMs(row.createdAt || row.date);
+            if (issueCreatedAtMs != null && (rowCreatedAtMs == null || rowCreatedAtMs < issueCreatedAtMs)) return false;
+            if (rowCreatedAtMs == null) return false;
+            const timeline = cutterIssueTimelineByPiece.get(row.pieceId) || [];
+            const assignedIssue = [...timeline]
+                .reverse()
+                .find((entry) => entry.createdAtMs != null && entry.createdAtMs <= rowCreatedAtMs);
+            return assignedIssue?.issueId === issueRecord.id;
+        });
+        const byId = new Map();
+        [...linkedRows, ...legacyRows].forEach((row) => {
+            if (row?.id) byId.set(row.id, row);
+        });
+        return Array.from(byId.values());
+    }, [db.receive_from_cutter_machine_rows, issueRecord, cutterIssueTimelineByPiece]);
 
-        // Get inbound weight from inbound_items
+    // Compute issue-level metrics (take-back aware when issueBalance is present).
+    const {
+        inboundWeight,
+        originalIssuedWeight,
+        takenBackWeight,
+        netIssuedWeight,
+        totalReceived,
+        totalReceivedBobbins,
+        pendingWeight,
+        wastageWeight,
+    } = useMemo(() => {
+        if (!issueRecord || !issueRecord.pieceIds?.length) {
+            return {
+                inboundWeight: 0,
+                originalIssuedWeight: 0,
+                takenBackWeight: 0,
+                netIssuedWeight: 0,
+                totalReceived: 0,
+                totalReceivedBobbins: 0,
+                pendingWeight: 0,
+                wastageWeight: 0,
+            };
+        }
+        const pieceIds = issueRecord.pieceIds;
+        const issueBalance = issueRecord.issueBalance || db?.issue_balances?.[issueRecord.id] || null;
+
         const inboundWt = pieceIds.reduce((sum, pid) => {
             const piece = db.inbound_items?.find(p => p.id === pid);
             return sum + (piece?.weight || 0);
         }, 0);
 
-        // Get totals from piece totals (database)
-        let receivedFromDb = 0;
-        let wastageFromDb = 0;
-        let bobbinsFromDb = 0;
+        const receivedFromRows = issueReceiveRows
+            .filter((row) => !row.isWastage)
+            .reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0);
+        const wastageFromRows = issueReceiveRows
+            .filter((row) => row.isWastage)
+            .reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0);
+        const bobbinsFromRows = issueReceiveRows
+            .filter((row) => !row.isWastage)
+            .reduce((sum, row) => sum + Number(row.bobbinQuantity || 0), 0);
 
-        pieceIds.forEach((pid) => {
-            const tot = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pid);
-            receivedFromDb += Number(tot?.totalNetWeight || 0);
-            wastageFromDb += Number(tot?.wastageNetWeight || 0);
-            bobbinsFromDb += Number(tot?.totalBob || 0);
-        });
+        const receivedInCart = cart
+            .filter((entry) => !entry.isWastage)
+            .reduce((sum, entry) => sum + (Number(entry.netWeight) || 0), 0);
+        const bobbinsInCart = cart
+            .filter((entry) => !entry.isWastage)
+            .reduce((sum, entry) => sum + (Number(entry.bobbinQty) || 0), 0);
+        const wastageInCart = cart
+            .filter((entry) => entry.isWastage)
+            .reduce((sum, entry) => sum + (Number(entry.netWeight) || 0), 0);
 
-        // Add cart items' net weights and bobbins for real-time update
-        let receivedInCart = 0;
-        let bobbinsInCart = 0;
-        let wastageInCart = 0;
-
-        cart.forEach((entry) => {
-            if (!pieceIds.includes(entry.pieceId)) return;
-            if (entry.isWastage) {
-                wastageInCart += Number(entry.netWeight) || 0;
-                return;
-            }
-            receivedInCart += Number(entry.netWeight) || 0;
-            bobbinsInCart += Number(entry.bobbinQty) || 0;
-        });
+        const originalIssued = Number(issueBalance?.originalWeight ?? issueRecord.totalWeight ?? inboundWt);
+        const takenBack = Number(issueBalance?.takeBackWeight || 0);
+        const netIssued = Number(issueBalance?.netIssuedWeight ?? Math.max(0, originalIssued - takenBack));
+        const receivedBase = Number(issueBalance?.receivedWeight ?? receivedFromRows);
+        const wastageBase = Number(issueBalance?.wastageWeight ?? wastageFromRows);
+        const pendingBase = Number(issueBalance?.pendingWeight ?? Math.max(0, netIssued - receivedBase - wastageBase));
 
         return {
             inboundWeight: inboundWt,
-            totalReceived: receivedFromDb + receivedInCart,
-            totalReceivedBobbins: bobbinsFromDb + bobbinsInCart,
-            pendingWeight: Math.max(0, inboundWt - receivedFromDb - wastageFromDb - receivedInCart - wastageInCart)
+            originalIssuedWeight: Math.max(0, originalIssued),
+            takenBackWeight: Math.max(0, takenBack),
+            netIssuedWeight: Math.max(0, netIssued),
+            totalReceived: Math.max(0, receivedBase + receivedInCart),
+            totalReceivedBobbins: Math.max(0, bobbinsFromRows + bobbinsInCart),
+            pendingWeight: Math.max(0, pendingBase - receivedInCart - wastageInCart),
+            wastageWeight: Math.max(0, wastageBase + wastageInCart),
         };
-    }, [issueRecord, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
+    }, [issueRecord, db.inbound_items, db.issue_balances, issueReceiveRows, cart]);
 
     const pieceIdToUse = issueRecord?.pieceIds?.[0] || '';
 
@@ -185,12 +276,30 @@ export function CutterReceiveForm() {
                 hasWastageInCart: false,
             };
         }
-
         const pieceMeta = db.inbound_items?.find(p => p.id === pieceIdToUse);
-        const inboundWeight = Number(pieceMeta?.weight || 0);
-        const pieceTotals = db.receive_from_cutter_machine_piece_totals?.find(t => t.pieceId === pieceIdToUse);
-        const receivedDb = Number(pieceTotals?.totalNetWeight || 0);
-        const wastageDb = Number(pieceTotals?.wastageNetWeight || 0);
+        const issueLines = (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === issueRecord?.id);
+        const issueLineWeight = issueLines
+            .filter((line) => line.pieceId === pieceIdToUse)
+            .reduce((sum, line) => sum + Number(line.issuedWeight || 0), 0);
+        const activeTakeBacks = (db.issue_take_backs || []).filter((tb) => (
+            tb.issueId === issueRecord?.id
+            && !tb.isReverse
+            && !tb.isReversed
+        ));
+        const takeBackForPiece = activeTakeBacks.reduce((sum, tb) => {
+            const lines = Array.isArray(tb.lines) ? tb.lines : [];
+            return sum + lines
+                .filter((line) => String(line?.sourceId || '') === pieceIdToUse)
+                .reduce((lineSum, line) => lineSum + Number(line?.weight || 0), 0);
+        }, 0);
+
+        const linkedPieceRows = issueReceiveRows.filter((row) => row.pieceId === pieceIdToUse);
+        const receivedDb = linkedPieceRows
+            .filter((row) => !row.isWastage)
+            .reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0);
+        const wastageDb = linkedPieceRows
+            .filter((row) => row.isWastage)
+            .reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0);
 
         const cartReceived = cart.reduce((sum, entry) => {
             if (entry.pieceId !== pieceIdToUse || entry.isWastage) return sum;
@@ -202,17 +311,21 @@ export function CutterReceiveForm() {
             return sum + (Number(entry.netWeight) || 0);
         }, 0);
 
-        const pendingWeight = Math.max(0, inboundWeight - receivedDb - wastageDb - cartReceived - cartWastage);
+        const legacyInboundWeight = Number(pieceMeta?.weight || 0);
+        const issueNetForPiece = issueLineWeight > 0
+            ? Math.max(0, issueLineWeight - takeBackForPiece)
+            : legacyInboundWeight;
+        const pendingWeight = Math.max(0, issueNetForPiece - receivedDb - wastageDb - cartReceived - cartWastage);
 
         return {
-            inboundWeight,
+            inboundWeight: issueNetForPiece,
             receivedWeight: receivedDb + cartReceived,
             wastageWeight: wastageDb + cartWastage,
             pendingWeight,
             hasWastageInDb: wastageDb > 0,
             hasWastageInCart: cartWastage > 0,
         };
-    }, [pieceIdToUse, db.inbound_items, db.receive_from_cutter_machine_piece_totals, cart]);
+    }, [pieceIdToUse, db.inbound_items, db.issue_to_cutter_machine_lines, db.issue_take_backs, issueRecord?.id, issueReceiveRows, cart]);
 
     const effectiveNetWeight = isWastage ? pieceStatus.pendingWeight : netWeight;
     const isWastageClosed = pieceStatus.pendingWeight <= 0 && pieceStatus.hasWastageInDb;
@@ -250,7 +363,8 @@ export function CutterReceiveForm() {
         }
 
         if (isWastage) {
-            if (pieceStatus.pendingWeight <= 0) {
+            const closeWeight = Math.min(pieceStatus.pendingWeight, pendingWeight);
+            if (closeWeight <= 0) {
                 alert('Piece has no pending weight remaining.');
                 return;
             }
@@ -271,7 +385,7 @@ export function CutterReceiveForm() {
                 grossWeight: '',
                 isWastage: true,
                 receiveDate,
-                netWeight: pieceStatus.pendingWeight,
+                netWeight: closeWeight,
                 barcode: '',
 
                 // Display Names
@@ -318,15 +432,25 @@ export function CutterReceiveForm() {
 
         // Validate net weight doesn't exceed pending weight
         const pieceMeta = db.inbound_items.find((p) => p.id === pieceIdToUse);
-        const pendingWeight = pieceStatus.pendingWeight;
+        const piecePendingWeight = pieceStatus.pendingWeight;
 
         if (pendingWeight <= 0) {
+            alert('Issue has no pending weight remaining.');
+            return;
+        }
+
+        if (piecePendingWeight <= 0) {
             alert('Piece has no pending weight remaining.');
             return;
         }
 
-        if (netWeight > pendingWeight + 0.001) { // Small tolerance for floating point
-            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds pending weight (${pendingWeight.toFixed(3)} kg).`);
+        if (netWeight > pendingWeight + 0.001) {
+            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds issue pending weight (${pendingWeight.toFixed(3)} kg).`);
+            return;
+        }
+
+        if (netWeight > piecePendingWeight + 0.001) {
+            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds piece pending weight (${piecePendingWeight.toFixed(3)} kg).`);
             return;
         }
 
@@ -452,19 +576,20 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-1 sm:grid-cols-2 md:grid-cols-8 gap-4 text-sm">
+                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-1 sm:grid-cols-2 md:grid-cols-11 gap-4 text-sm">
                             <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
                             <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
                             <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
                             <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
                             <div><span className="font-semibold">Inbound:</span> {formatKg(inboundWeight)}</div>
+                            <div><span className="font-semibold">Issued (Orig):</span> {formatKg(originalIssuedWeight)}</div>
+                            <div><span className="font-semibold">Taken Back:</span> {formatKg(takenBackWeight)}</div>
+                            <div><span className="font-semibold">Net Issued:</span> {formatKg(netIssuedWeight)}</div>
                             <div>
                                 <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
                                 <InfoPopover
                                     title="Received Crates"
-                                    items={(db.receive_from_cutter_machine_rows || []).filter(row =>
-                                        !row.isDeleted && issueRecord?.pieceIds?.includes(row.pieceId)
-                                    )}
+                                    items={issueReceiveRows}
                                     renderContent={(items) => (
                                         <table className="w-full text-xs">
                                             <thead>
@@ -491,7 +616,7 @@ export function CutterReceiveForm() {
                                                 <tr className="border-t-2 bg-muted/50 font-semibold">
                                                     <td className="py-1 px-1" colSpan={2}>Total</td>
                                                     <td className="py-1 px-1 text-right">{items.reduce((sum, row) => sum + (row.bobbinQuantity || 0), 0)}</td>
-                                                    <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + (row.netWt || 0), 0))}</td>
+                                                    <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0))}</td>
                                                     <td className="py-1 px-1"></td>
                                                 </tr>
                                             </tfoot>
@@ -504,6 +629,7 @@ export function CutterReceiveForm() {
                                     align="right"
                                 />
                             </div>
+                            <div><span className="font-semibold">Wastage:</span> {formatKg(wastageWeight)}</div>
                             <div>
                                 <span className="font-semibold">Pending:</span> {formatKg(pendingWeight)}
                                 {isWastageClosed ? (

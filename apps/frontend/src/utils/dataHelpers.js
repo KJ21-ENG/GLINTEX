@@ -28,8 +28,15 @@ export function normalizeDb(raw) {
   const rollTypes = ensureArr(raw?.roll_types);
   const coneTypes = ensureArr(raw?.cone_types);
   const wrappers = ensureArr(raw?.wrappers);
+  const issueBalances = raw?.issue_balances && typeof raw.issue_balances === 'object'
+    ? raw.issue_balances
+    : {};
+  const enrichIssueWithBalance = (issue) => ({
+    ...issue,
+    issueBalance: issueBalances?.[issue.id] || null,
+  });
   const issueToCutterMachine = ensureArr(raw?.issue_to_cutter_machine).map((record) => ({
-    ...record,
+    ...enrichIssueWithBalance(record),
     pieceIds: typeof record.pieceIds === 'string' ? record.pieceIds.split(',').filter(Boolean) : ensureArr(record.pieceIds),
     // Normalize date to canonical ISO (YYYY-MM-DD) for sorting, keep original for display if needed
     dateISO: (function () {
@@ -46,8 +53,10 @@ export function normalizeDb(raw) {
     })(),
   }));
   const settings = ensureArr(raw?.settings);
-  const issueToHoloMachine = ensureArr(raw?.issue_to_holo_machine);
-  const issueToConingMachine = ensureArr(raw?.issue_to_coning_machine);
+  const issueToHoloMachine = ensureArr(raw?.issue_to_holo_machine).map(enrichIssueWithBalance);
+  const issueToConingMachine = ensureArr(raw?.issue_to_coning_machine).map(enrichIssueWithBalance);
+  const issueToCutterMachineLines = ensureArr(raw?.issue_to_cutter_machine_lines);
+  const issueTakeBacks = ensureArr(raw?.issue_take_backs);
   const receiveUploads = ensureArr(raw?.receive_from_cutter_machine_uploads);
   const receiveRows = ensureArr(raw?.receive_from_cutter_machine_rows);
   const receiveChallans = ensureArr(raw?.receive_from_cutter_machine_challans);
@@ -74,6 +83,9 @@ export function normalizeDb(raw) {
     issue_to_cutter_machine: issueToCutterMachine,
     issue_to_holo_machine: issueToHoloMachine,
     issue_to_coning_machine: issueToConingMachine,
+    issue_to_cutter_machine_lines: issueToCutterMachineLines,
+    issue_take_backs: issueTakeBacks,
+    issue_balances: issueBalances,
     settings,
     receive_from_cutter_machine_uploads: receiveUploads,
     receive_from_cutter_machine_rows: receiveRows,

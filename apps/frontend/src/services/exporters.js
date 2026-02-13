@@ -324,8 +324,10 @@ function getDetailConfig(viewType) {
   const lotContext = [
     { header: 'Lot No', format: (_r, lot) => lot.lotNo || '' },
     { header: 'Date', format: (_r, lot) => formatDateDDMMYYYY(lot.date) },
+    { header: 'Yarn', format: (_r, lot) => lot.yarnName || lot.yarn?.name || '' },
     { header: 'Item', format: (_r, lot) => lot.itemName || '' },
     { header: 'Cut', format: (_r, lot) => lot.cutName || '' },
+    { header: 'Twist', format: (_r, lot) => lot.twistName || lot.twist?.name || '' },
     { header: 'Firm', format: (_r, lot) => lot.firmName || '' },
     { header: 'Supplier', format: (_r, lot) => lot.supplierName || '' },
   ];
@@ -347,6 +349,7 @@ function getDetailConfig(viewType) {
           { header: 'Gross Weight (kg)', format: (r) => Number(r.grossWeight || 0).toFixed(3) },
           { header: 'Machine', format: (r) => r.machineNo || '' },
           { header: 'Steamed', format: (r) => r.isSteamed ? 'Yes' : 'No' },
+          { header: 'Notes', format: (r) => r.notes || r.note || '' },
         ],
       };
 
@@ -367,6 +370,7 @@ function getDetailConfig(viewType) {
           { header: 'Weight Avail (kg)', format: (r) => Number(r.availableWeight || 0).toFixed(3) },
           { header: 'Weight Total (kg)', format: (r) => Number(r.netWeight || 0).toFixed(3) },
           { header: 'Operator', format: (r) => r.employee || r.operator?.name || '' },
+          { header: 'Notes', format: (r) => r.notes || r.note || '' },
         ],
       };
 

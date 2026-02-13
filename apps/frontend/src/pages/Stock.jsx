@@ -10,7 +10,7 @@ import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
-import { exportStockXlsx, exportStockPdf } from '../services';
+import { exportStockXlsx, exportStockPdf, exportStockDetailedXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
 import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
@@ -523,6 +523,16 @@ export function Stock() {
       return;
     }
 
+    if (format === 'xlsx-detailed') {
+      exportStockDetailedXlsx(dataToExport, {
+        viewType,
+        groupBy: groupByItem,
+        grandTotals: totals,
+        statusFilter: filters.status,
+      });
+      return;
+    }
+
     exportStockXlsx(dataToExport, {
       viewType,
       groupBy: groupByItem,
@@ -776,6 +786,12 @@ export function Stock() {
                   </button>
                   <button
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                    onClick={() => { setExportMenuOpen(false); handleExport('xlsx-detailed'); }}
+                  >
+                    Excel Detailed (.xlsx)
+                  </button>
+                  <button
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors border-t"
                     onClick={() => { setExportMenuOpen(false); handleExport('pdf'); }}
                   >
                     PDF (.pdf)

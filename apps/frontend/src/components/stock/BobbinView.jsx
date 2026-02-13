@@ -290,6 +290,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
               displayData.map((l, idx) => {
                 const hasBarcodeHit = !!l.hasBarcodeHit;
                 const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
+                const activeCrates = (l.crates || []).filter((c) => (
+                  Number(c?.availableBobbins || 0) > 0 || Number(c?.availableWeight || 0) > EPSILON
+                ));
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
                 return (
                   <React.Fragment key={rowKey}>
@@ -340,7 +343,13 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {l.crates.map(c => {
+                                {activeCrates.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell colSpan={7} className="text-center py-4 text-muted-foreground">
+                                      No active crate rows.
+                                    </TableCell>
+                                  </TableRow>
+                                ) : activeCrates.map(c => {
                                   const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                                   return (
                                     <TableRow key={c.id} className={crateMatch ? 'bg-primary/10' : ''}>
@@ -391,6 +400,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           displayData.map((l, idx) => {
             const hasBarcodeHit = !!l.hasBarcodeHit;
             const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
+            const activeCrates = (l.crates || []).filter((c) => (
+              Number(c?.availableBobbins || 0) > 0 || Number(c?.availableWeight || 0) > EPSILON
+            ));
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
 
             return (
@@ -427,7 +439,11 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                 {isExpanded && !groupBy && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Crate Details</p>
-                    {l.crates.map(c => {
+                    {activeCrates.length === 0 ? (
+                      <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">
+                        No active crate rows.
+                      </div>
+                    ) : activeCrates.map(c => {
                       const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                       return (
                         <div key={c.id} className={cn("bg-background border rounded p-2 space-y-1", crateMatch && "bg-primary/10")}>

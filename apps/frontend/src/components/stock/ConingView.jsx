@@ -289,6 +289,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                 const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
                 const hasBarcodeHit = !!lot.hasBarcodeHit;
                 const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
+                const activeRows = (lot.rows || []).filter((row) => (
+                  Number(row?.availableCones || 0) > 0 || Number(row?.availableWeight || 0) > EPSILON
+                ));
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
@@ -342,7 +345,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {lot.rows.map((row) => {
+                                {activeRows.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell colSpan={9} className="text-center py-4 text-muted-foreground">
+                                      No active cone rows.
+                                    </TableCell>
+                                  </TableRow>
+                                ) : activeRows.map((row) => {
                                   const rowMatch = search && search.trim().length >= 6 && String(row.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                                   return (
                                     <TableRow key={row.id} className={rowMatch ? 'bg-primary/10' : ''}>
@@ -396,6 +405,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
             const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
             const hasBarcodeHit = !!lot.hasBarcodeHit;
             const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
+            const activeRows = (lot.rows || []).filter((row) => (
+              Number(row?.availableCones || 0) > 0 || Number(row?.availableWeight || 0) > EPSILON
+            ));
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
@@ -430,7 +442,11 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                 {isExpanded && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Box Details</p>
-                    {lot.rows.map(r => {
+                    {activeRows.length === 0 ? (
+                      <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">
+                        No active cone rows.
+                      </div>
+                    ) : activeRows.map(r => {
                       const rowMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                       return (
                         <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", rowMatch && "bg-primary/10")}>

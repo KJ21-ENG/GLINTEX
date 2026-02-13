@@ -209,6 +209,211 @@ export function exportStockXlsx(data, options = {}) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Export Stock data to Excel WITH row-level detail (two sheets).
+ * Sheet 1 – Summary (same as exportStockXlsx)
+ * Sheet 2 – Detail rows (one row per piece/roll/crate/cone with parent lot info)
+ *
+ * Handles all view types:
+ *  - jumbo  → lot.pieces  (Piece ID, Barcode, Seq, Weight, Pending, Received, Wastage …)
+ *  - holo   → lot.rows    (Barcode, Date, Roll Type, Available Rolls, Weights, Machine, Steamed)
+ *  - bobbins→ lot.crates  (Barcode, Date, Cut, Bobbin Type, Bobbins, Weights, Operator)
+ *  - coning → lot.rows    (Barcode, Date, Box, Cone Type, Cones, Weights, Machine, Operator, Notes)
+ *
+ * @param {Array} data - Array of displayed lots/rows (already filtered & grouped)
+ * @param {Object} options - Same options as exportStockXlsx
+ */
+export function exportStockDetailedXlsx(data, options = {}) {
+  const { viewType = 'jumbo', groupBy = false, grandTotals = {}, statusFilter = '' } = options;
+
+  if (!data || data.length === 0) {
+    alert('No data to export');
+    return;
+  }
+
+  const columns = getStockExportColumns({ viewType, groupBy, statusFilter });
+  if (columns.length === 0) {
+    alert('Unknown view type for export');
+    return;
+  }
+
+  // ── Sheet 1: Summary (identical to exportStockXlsx) ──
+  const summaryRows = data.map((item) => buildStockExportRowObject(item, columns));
+  summaryRows.push(buildStockTotalsRow(columns, { grandTotals }));
+
+  const ws1 = utils.json_to_sheet(summaryRows);
+
+  const summaryColWidths = columns.map((col) => {
+    const maxLen = Math.max(
+      col.header.length,
+      ...summaryRows.map((row) => String(row[col.header] ?? '').length)
+    );
+    return { wch: Math.min(50, Math.max(12, maxLen + 2)) };
+  });
+  ws1['!cols'] = summaryColWidths;
+
+  // ── Sheet 2: Detail rows (view-specific columns & detail arrays) ──
+  const { detailColumns, detailSheetName, getDetailItems } = getDetailConfig(viewType);
+
+  const detailRows = [];
+  const orderedData = orderLotsForExport(data);
+
+  for (const lot of orderedData) {
+    const items = getDetailItems(lot);
+    for (const item of items) {
+      const row = {};
+      detailColumns.forEach((col) => {
+        row[col.header] = col.format(item, lot);
+      });
+      detailRows.push(row);
+    }
+  }
+
+  if (detailRows.length === 0) {
+    // Fallback: no detail data available, export summary only
+    const wb = utils.book_new();
+    const sheetName = groupBy ? 'Stock (Grouped)' : 'Stock';
+    utils.book_append_sheet(wb, ws1, sheetName);
+    const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stock-${viewType}-detailed.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  const ws2 = utils.json_to_sheet(detailRows);
+
+  const detailColWidths = detailColumns.map((col) => {
+    const maxLen = Math.max(
+      col.header.length,
+      ...detailRows.map((row) => String(row[col.header] ?? '').length)
+    );
+    return { wch: Math.min(50, Math.max(12, maxLen + 2)) };
+  });
+  ws2['!cols'] = detailColWidths;
+
+  // ── Combine into workbook ──
+  const wb = utils.book_new();
+  const summarySheetName = groupBy ? 'Summary (Grouped)' : 'Summary';
+  utils.book_append_sheet(wb, ws1, summarySheetName);
+  utils.book_append_sheet(wb, ws2, detailSheetName);
+
+  const wbout = write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stock-${viewType}${groupBy ? '-grouped' : ''}-detailed.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Returns the detail column definitions, sheet name, and item extractor
+ * for each stock view type.
+ */
+function getDetailConfig(viewType) {
+  const EPSILON = 1e-9;
+  const hasActiveWeight = (value) => Number(value || 0) > EPSILON;
+
+  // Common lot-level context columns shared across views
+  const lotContext = [
+    { header: 'Lot No', format: (_r, lot) => lot.lotNo || '' },
+    { header: 'Date', format: (_r, lot) => formatDateDDMMYYYY(lot.date) },
+    { header: 'Item', format: (_r, lot) => lot.itemName || '' },
+    { header: 'Cut', format: (_r, lot) => lot.cutName || '' },
+    { header: 'Firm', format: (_r, lot) => lot.firmName || '' },
+    { header: 'Supplier', format: (_r, lot) => lot.supplierName || '' },
+  ];
+
+  switch (viewType) {
+    case 'holo':
+      return {
+        detailSheetName: 'Rolls',
+        getDetailItems: (lot) => (lot.rows || []).filter(
+          (r) => Number(r?.availableRolls || 0) > 0 || hasActiveWeight(r?.availableWeight)
+        ),
+        detailColumns: [
+          ...lotContext,
+          { header: 'Barcode', format: (r) => r.barcode || '' },
+          { header: 'Roll Date', format: (r) => formatDateDDMMYYYY(r.date) },
+          { header: 'Roll Type', format: (r) => r.rollType?.name || '' },
+          { header: 'Available Rolls', format: (r) => r.availableRolls ?? 0 },
+          { header: 'Net Weight (kg)', format: (r) => Number(r.availableWeight || 0).toFixed(3) },
+          { header: 'Gross Weight (kg)', format: (r) => Number(r.grossWeight || 0).toFixed(3) },
+          { header: 'Machine', format: (r) => r.machineNo || '' },
+          { header: 'Steamed', format: (r) => r.isSteamed ? 'Yes' : 'No' },
+        ],
+      };
+
+    case 'bobbins':
+      return {
+        detailSheetName: 'Crates',
+        getDetailItems: (lot) => (lot.crates || []).filter(
+          (r) => Number(r?.availableBobbins || 0) > 0 || hasActiveWeight(r?.availableWeight)
+        ),
+        detailColumns: [
+          ...lotContext,
+          { header: 'Barcode', format: (r) => r.barcode || '' },
+          { header: 'Crate Date', format: (r) => formatDateDDMMYYYY(r.date) },
+          { header: 'Crate Cut', format: (r) => r.cutName || '' },
+          { header: 'Bobbin Type', format: (r) => r.bobbinName || r.bobbin?.name || '' },
+          { header: 'Bobbins (Avail)', format: (r) => r.availableBobbins ?? 0 },
+          { header: 'Bobbins (Total)', format: (r) => r.bobbinQty ?? 0 },
+          { header: 'Weight Avail (kg)', format: (r) => Number(r.availableWeight || 0).toFixed(3) },
+          { header: 'Weight Total (kg)', format: (r) => Number(r.netWeight || 0).toFixed(3) },
+          { header: 'Operator', format: (r) => r.employee || r.operator?.name || '' },
+        ],
+      };
+
+    case 'coning':
+      return {
+        detailSheetName: 'Cones',
+        getDetailItems: (lot) => (lot.rows || []).filter(
+          (r) => Number(r?.availableCones || 0) > 0 || hasActiveWeight(r?.availableWeight)
+        ),
+        detailColumns: [
+          ...lotContext,
+          { header: 'Barcode', format: (r) => r.barcode || '' },
+          { header: 'Cone Date', format: (r) => formatDateDDMMYYYY(r.date) },
+          { header: 'Box', format: (r) => r.boxName || r.box?.name || '' },
+          { header: 'Cone Type', format: (r) => r.coneType || '' },
+          { header: 'Available Cones', format: (r) => r.availableCones ?? 0 },
+          { header: 'Net Weight (kg)', format: (r) => Number(r.availableWeight || 0).toFixed(3) },
+          { header: 'Gross Weight (kg)', format: (r) => Number(r.grossWeight || 0).toFixed(3) },
+          { header: 'Machine', format: (r) => r.machineName || '' },
+          { header: 'Operator', format: (r) => r.operatorName || '' },
+          { header: 'Notes', format: (r) => r.notes || r.note || '' },
+        ],
+      };
+
+    case 'jumbo':
+    default:
+      return {
+        detailSheetName: 'Pieces',
+        getDetailItems: (lot) => (lot.pieces || []).slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
+        detailColumns: [
+          ...lotContext,
+          { header: 'Piece ID', format: (p) => p.id || '' },
+          { header: 'Barcode', format: (p) => p.barcode || '' },
+          { header: 'Seq', format: (p) => p.seq ?? '' },
+          { header: 'Weight (kg)', format: (p) => Number(p.weight || 0).toFixed(3) },
+          { header: 'Pending Weight (kg)', format: (p) => Number(p.pendingWeight || 0).toFixed(3) },
+          { header: 'Received Weight (kg)', format: (p) => Number(p.receivedWeight || 0).toFixed(3) },
+          { header: 'Wastage (kg)', format: (p) => Number(p.wastageWeight || 0).toFixed(3) },
+          { header: 'Total Units', format: (p) => p.totalUnits ?? 0 },
+          { header: 'Status', format: (p) => p.status || '' },
+          { header: 'Issued', format: (p) => p.issuedLabel || '' },
+        ],
+      };
+  }
+}
+
+
 function getStockExportColumns({ viewType = 'jumbo', groupBy = false, statusFilter = '' }) {
   const hidePending = statusFilter === 'available_to_issue';
 

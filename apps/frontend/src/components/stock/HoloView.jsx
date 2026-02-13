@@ -20,6 +20,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
   const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+  const hasActiveRollAvailability = (row) => {
+    const rolls = Number(row?.availableRolls || 0);
+    const weight = Number(row?.availableWeight || 0);
+    return rolls > 0 || weight > EPSILON;
+  };
 
   // --- Data Prep ---
 
@@ -332,6 +337,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
                 const hasBarcodeHit = !!l.hasBarcodeHit;
                 const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
+                const expandedRows = (l.rows || []).filter(hasActiveRollAvailability);
                 return (
                   <React.Fragment key={rowKey}>
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
@@ -403,7 +409,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {l.rows.map(r => {
+                                {expandedRows.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell colSpan={8} className="py-4 text-center text-muted-foreground">
+                                      No active roll rows.
+                                    </TableCell>
+                                  </TableRow>
+                                ) : expandedRows.map(r => {
                                   const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                                   return (
                                     <TableRow key={r.id} className={cn(r.isSteamed ? 'bg-green-500/5' : '', rollMatch && 'bg-primary/10')}>
@@ -466,6 +478,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
             const hasBarcodeHit = !!l.hasBarcodeHit;
             const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
+            const expandedRows = (l.rows || []).filter(hasActiveRollAvailability);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
@@ -513,7 +526,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 {isExpanded && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase">Roll Details</p>
-                    {l.rows.map(r => {
+                    {expandedRows.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">No active roll rows.</div>
+                    ) : expandedRows.map(r => {
                       const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
                       return (
                         <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30", rollMatch && "bg-primary/10")}>

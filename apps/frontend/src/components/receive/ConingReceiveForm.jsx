@@ -244,12 +244,6 @@ export function ConingReceiveForm() {
             // Separate receive entries from wastage entries
             const receiveEntries = cart.filter(r => !r.isWastage);
             const wastageEntries = cart.filter(r => r.isWastage);
-            const receiveNetWeight = receiveEntries.reduce((sum, row) => sum + (calcRowNet(row) || 0), 0);
-            if (receiveNetWeight > Number(issueMetrics.pending || 0) + 0.001) {
-                alert(`Receive net weight (${receiveNetWeight.toFixed(3)} kg) exceeds pending issue weight (${Number(issueMetrics.pending || 0).toFixed(3)} kg).`);
-                setSubmitting(false);
-                return;
-            }
 
             const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
             const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;

@@ -27,6 +27,10 @@ import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
+import { getFeatureFlags } from '../utils/featureFlags';
+import { useV2CursorList } from '../hooks/useV2CursorList';
+import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
+import * as v2 from '../api/v2';
 
 const STAGE_OPTIONS = [
   { id: 'inbound', label: 'Inbound (Raw rolls)' },
@@ -52,6 +56,8 @@ const round3 = (val) => {
 export function OpeningStock() {
   const { db, refreshModuleData, ensureModuleData } = useInventory();
   const { canRead, canWrite, canDelete } = usePermission('opening_stock');
+  const flags = getFeatureFlags();
+  const v2Enabled = flags.v2OpeningStock;
   const isReadOnly = canRead && !canWrite;
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
   const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
@@ -73,9 +79,9 @@ export function OpeningStock() {
 
   useEffect(() => {
     if (canRead) {
-      ensureModuleData('opening_stock');
+      if (!v2Enabled) ensureModuleData('opening_stock');
     }
-  }, [canRead, ensureModuleData]);
+  }, [canRead, ensureModuleData, v2Enabled]);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -181,7 +187,8 @@ export function OpeningStock() {
             ? `Uploaded successfully! Created ${res.lotsCreated} Lots: ${res.lotNos.join(', ')} (Total: ${res.totalCount} entries)`
             : `Uploaded successfully! Lot: ${res.lotNos?.[0] || res.lotNo}, Count: ${res.totalCount || res.count}`;
           alert(message);
-          await refreshModuleData('opening_stock');
+          if (!v2Enabled) await refreshModuleData('opening_stock');
+          else v2HistoryList.refresh();
           await fetchOpeningPreview();
         } catch (err) {
           console.error(err);
@@ -280,7 +287,8 @@ export function OpeningStock() {
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
 
   // History data for opening stock entries
-  const openingHistory = useMemo(() => {
+  const legacyOpeningHistory = useMemo(() => {
+    if (v2Enabled) return { inbound: [], cutter: [], holo: [], coning: [] };
     const result = { inbound: [], cutter: [], holo: [], coning: [] };
 
     // Helper function for date filtering
@@ -380,7 +388,35 @@ export function OpeningStock() {
       .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return result;
-  }, [db, historySearchTerm, historyStartDate, historyEndDate]);
+  }, [db, historySearchTerm, historyStartDate, historyEndDate, v2Enabled]);
+
+  const v2HistoryList = useV2CursorList({
+    enabled: v2Enabled,
+    fetchPage: ({ limit, cursor, search, dateFrom, dateTo }) => (
+      v2.getV2OpeningStockHistory(stage, { limit, cursor, search, dateFrom, dateTo })
+    ),
+    limit: 50,
+    search: historySearchTerm,
+    dateFrom: historyStartDate,
+    dateTo: historyEndDate,
+    filters: [],
+  });
+
+  const openingHistory = useMemo(() => {
+    if (!v2Enabled) return legacyOpeningHistory;
+    const items = v2HistoryList.items || [];
+    return {
+      inbound: stage === 'inbound' ? items : [],
+      cutter: stage === 'cutter' ? items : [],
+      holo: stage === 'holo' ? items : [],
+      coning: stage === 'coning' ? items : [],
+    };
+  }, [v2Enabled, legacyOpeningHistory, stage, v2HistoryList.items]);
+
+  const loadMoreRef = useInfiniteScrollSentinel({
+    enabled: v2Enabled && v2HistoryList.hasMore && !v2HistoryList.isLoading,
+    onLoadMore: v2HistoryList.loadMore,
+  });
 
   const getBobbin = (id) => db.bobbins?.find(b => b.id === id);
   const getBox = (id) => db.boxes?.find(b => b.id === id);
@@ -765,7 +801,8 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningInbound(payload);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
       setInboundCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -789,7 +826,8 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteInboundItem(pieceId);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
     } catch (err) {
       alert(err.message || 'Failed to delete opening piece');
     } finally {
@@ -806,7 +844,8 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningCutterReceiveRow(rowId);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
     } catch (err) {
       alert(err.message || 'Failed to delete opening cutter row');
     } finally {
@@ -823,7 +862,8 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningHoloReceiveRow(rowId);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
     } catch (err) {
       alert(err.message || 'Failed to delete opening holo row');
     } finally {
@@ -840,7 +880,8 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningConingReceiveRow(rowId);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
     } catch (err) {
       alert(err.message || 'Failed to delete opening coning row');
     } finally {
@@ -875,7 +916,8 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningCutterReceive(payload);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
       setCutterCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -914,7 +956,8 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
       setHoloCart([]);
       setOpeningHoloSeries(null);
       holoCrateSeqRef.current = 0;
@@ -955,7 +998,8 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
-      await refreshModuleData('opening_stock');
+      if (!v2Enabled) await refreshModuleData('opening_stock');
+      else v2HistoryList.refresh();
       setConingCart([]);
       setOpeningConingSeries(null);
       coningCrateSeqRef.current = 0;
@@ -2113,17 +2157,16 @@ export function OpeningStock() {
                 {openingHistory.holo.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening holo receive entries found.</div>
                 ) : openingHistory.holo.map(row => {
-                  const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-                  const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                  const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
-                  const cutName = resolved.cutName;
+                  const issue = row.issue || db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                  const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
+                  const cutName = row.cutName || issue?.cut?.name || (issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '') || '—';
                   const net = row.rollWeight || (row.grossWeight - (row.tareWeight || 0));
                   return (
                     <div key={row.id} className="border rounded-lg bg-card p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="font-medium truncate">{issue?.lotNo || '—'}</div>
+                            <div className="font-medium truncate">{issue?.lotNo || row.issue?.lotNo || '—'}</div>
                             <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</div>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground truncate">{itemName || '—'}</div>
@@ -2189,15 +2232,14 @@ export function OpeningStock() {
                       <TableRow>
                         <TableCell colSpan={10} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
                       </TableRow>
-                    ) : openingHistory.holo.map(row => {
-                      const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-                      const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                      const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
-                      const cutName = resolved.cutName;
-                      return (
+                ) : openingHistory.holo.map(row => {
+                  const issue = row.issue || db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+                  const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
+                  const cutName = row.cutName || issue?.cut?.name || (issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '') || '—';
+                  return (
                         <TableRow key={row.id}>
                           <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
-                          <TableCell>{issue?.lotNo || '—'}</TableCell>
+                          <TableCell>{issue?.lotNo || row.issue?.lotNo || '—'}</TableCell>
                           <TableCell>{itemName || '—'}</TableCell>
                           <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
                           <TableCell>{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'}</TableCell>
@@ -2236,16 +2278,15 @@ export function OpeningStock() {
                 {openingHistory.coning.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening coning receive entries found.</div>
                 ) : openingHistory.coning.map(row => {
-                  const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                  const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                  const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
-                  const cutName = resolved.cutName;
+                  const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                  const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
+                  const cutName = row.cutName || issue?.cut?.name || (issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '') || '—';
                   return (
                     <div key={row.id} className="border rounded-lg bg-card p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="font-medium truncate">{issue?.lotNo || '—'}</div>
+                            <div className="font-medium truncate">{issue?.lotNo || row.issue?.lotNo || '—'}</div>
                             <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</div>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground truncate">{itemName || '—'}</div>
@@ -2310,15 +2351,14 @@ export function OpeningStock() {
                       <TableRow>
                         <TableCell colSpan={9} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
                       </TableRow>
-                    ) : openingHistory.coning.map(row => {
-                      const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                      const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '—';
-                      const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
-                      const cutName = resolved.cutName;
-                      return (
+                ) : openingHistory.coning.map(row => {
+                  const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                  const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
+                  const cutName = row.cutName || issue?.cut?.name || (issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '') || '—';
+                  return (
                         <TableRow key={row.id}>
                           <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
-                          <TableCell>{issue?.lotNo || '—'}</TableCell>
+                          <TableCell>{issue?.lotNo || row.issue?.lotNo || '—'}</TableCell>
                           <TableCell>{itemName || '—'}</TableCell>
                           <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
                           <TableCell>{row.coneCount || 0}</TableCell>
@@ -2349,6 +2389,8 @@ export function OpeningStock() {
               </div>
             </>
           )}
+          {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
+          <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
         </CardContent>
       </Card>
     </div>

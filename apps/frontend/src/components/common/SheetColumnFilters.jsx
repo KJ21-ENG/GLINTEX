@@ -106,6 +106,7 @@ export function SheetColumnFilter({ column, rows, filters, setFilters, openId, s
   const options = useMemo(() => {
     if (!isOpen) return [];
     if (!column || column.kind !== 'values') return [];
+    if (Array.isArray(column.facetOptions)) return column.facetOptions;
     // Defensive cap: value discovery over very large datasets can feel slow.
     // 10k rows is enough for accurate "Sheets-like" filtering in practice.
     const sample = Array.isArray(rows) && rows.length > 10000 ? rows.slice(0, 10000) : rows;

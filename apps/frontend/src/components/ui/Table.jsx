@@ -2,7 +2,10 @@ import * as React from "react"
 import { cn } from "../../lib/utils"
 
 const Table = React.forwardRef(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  // Important: Only provide horizontal overflow here.
+  // Vertical scrolling is handled by the page-level scroll container; having both causes nested
+  // scroll roots that lead to jitter at the end of infinite-scroll lists.
+  <div className="relative w-full overflow-x-auto overflow-y-visible">
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}

@@ -50,6 +50,11 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:4001}
+        VITE_FF_V2_STOCK: ${VITE_FF_V2_STOCK:-false}
+        VITE_FF_V2_ISSUE_TRACKING: ${VITE_FF_V2_ISSUE_TRACKING:-false}
+        VITE_FF_V2_RECEIVE_HISTORY: ${VITE_FF_V2_RECEIVE_HISTORY:-false}
+        VITE_FF_V2_OPENING_STOCK: ${VITE_FF_V2_OPENING_STOCK:-false}
+        VITE_FF_V2_ON_MACHINE: ${VITE_FF_V2_ON_MACHINE:-false}
     ports:
       - "4173:80"
     depends_on:

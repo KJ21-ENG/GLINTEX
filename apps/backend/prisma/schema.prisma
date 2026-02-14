@@ -315,6 +315,8 @@ model ReceiveFromConingMachineRow {
   netWeight   Float?
   tareWeight  Float?
   grossWeight Float?
+  // Source consumption breakdown (holo receive row refs). Stored on receive to avoid FIFO guessing later.
+  sourceRowRefs Json    @default("[]")
   boxId       String?
   machineNo   String?
   operatorId  String?

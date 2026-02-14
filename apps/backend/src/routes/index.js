@@ -592,12 +592,25 @@ async function getIssueReceivedAndWastage(client, stage, issue) {
 
   const rows = await client.receiveFromConingMachineRow.findMany({
     where: { issueId: issue.id, isDeleted: false },
-    select: { coneCount: true, netWeight: true },
+    select: { coneCount: true, netWeight: true, sourceRowRefs: true },
   });
   rows.forEach((row) => {
     // Coning receives are recorded in cone units, while issue/take-back counts are in roll units.
     // Keep count math unit-consistent by not mapping cones into receivedCount.
     receivedWeight += Number(row.netWeight || 0);
+
+    const refs = parseJsonArraySafe(row.sourceRowRefs);
+    refs.forEach((ref) => {
+      const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+      if (!sourceId) return;
+      const rolls = Number(ref?.rolls || 0);
+      const weight = Number(ref?.weight || 0);
+      if (rolls > 0) receivedCount += rolls;
+      const current = receivedBySource.get(sourceId) || { count: 0, weight: 0 };
+      current.count += rolls;
+      current.weight += weight;
+      receivedBySource.set(sourceId, current);
+    });
   });
   const totalRow = await client.receiveFromConingMachinePieceTotal.findUnique({
     where: { pieceId: issue.id },
@@ -689,12 +702,19 @@ function buildTakeBackConsumedBySource(stage, pending) {
   // cannot exceed net remaining on any source row.
   const originalMap = pending.original?.sourceMap || new Map();
   const takeBackBySource = pending.takeBack?.activeBySource || new Map();
-  let remainingCountToAllocate = clampZero(
-    Number(pending.received?.receivedCount || 0) + Number(pending.received?.wastageCount || 0),
-  );
-  let remainingWeightToAllocate = clampZero(
-    Number(pending.received?.receivedWeight || 0) + Number(pending.received?.wastageWeight || 0),
-  );
+  // Prefer actual persisted per-source consumption if available (coning upgrade path).
+  // Any leftover issue-level consumption (e.g. wastage without refs) is allocated FIFO as a fallback.
+  let remainingCountToAllocate = clampZero(Number(pending.received?.receivedCount || 0) + Number(pending.received?.wastageCount || 0));
+  let remainingWeightToAllocate = clampZero(Number(pending.received?.receivedWeight || 0) + Number(pending.received?.wastageWeight || 0));
+
+  for (const [sourceId, received] of receivedBySource.entries()) {
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.count += Number(received?.count || 0);
+    current.weight += Number(received?.weight || 0);
+    consumedBySource.set(sourceId, current);
+    remainingCountToAllocate = clampZero(remainingCountToAllocate - Number(received?.count || 0));
+    remainingWeightToAllocate = clampZero(remainingWeightToAllocate - Number(received?.weight || 0));
+  }
 
   const orderedSourceIds = Array.from(originalMap.keys());
 
@@ -704,11 +724,16 @@ function buildTakeBackConsumedBySource(stage, pending) {
     if (remainingCountToAllocate <= TAKE_BACK_EPSILON) break;
     const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
     const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
-    const sourceNetCount = clampZero(Number(originalLine?.count || 0) - Number(takenBackLine?.count || 0));
+    const alreadyConsumed = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetCount = clampZero(
+      Number(originalLine?.count || 0)
+      - Number(takenBackLine?.count || 0)
+      - Number(alreadyConsumed.count || 0),
+    );
     if (sourceNetCount <= TAKE_BACK_EPSILON) continue;
     const allocatedCount = Math.min(sourceNetCount, remainingCountToAllocate);
     const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
-    current.count = clampZero(allocatedCount);
+    current.count = clampZero(Number(current.count || 0) + allocatedCount);
     consumedBySource.set(sourceId, current);
     remainingCountToAllocate = clampZero(remainingCountToAllocate - allocatedCount);
   }
@@ -717,16 +742,94 @@ function buildTakeBackConsumedBySource(stage, pending) {
     if (remainingWeightToAllocate <= TAKE_BACK_EPSILON) break;
     const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
     const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
-    const sourceNetWeight = clampZero(Number(originalLine?.weight || 0) - Number(takenBackLine?.weight || 0));
+    const alreadyConsumed = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetWeight = clampZero(
+      Number(originalLine?.weight || 0)
+      - Number(takenBackLine?.weight || 0)
+      - Number(alreadyConsumed.weight || 0),
+    );
     if (sourceNetWeight <= TAKE_BACK_EPSILON) continue;
     const allocatedWeight = Math.min(sourceNetWeight, remainingWeightToAllocate);
     const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
-    current.weight = clampZero(allocatedWeight);
+    current.weight = clampZero(Number(current.weight || 0) + allocatedWeight);
     consumedBySource.set(sourceId, current);
     remainingWeightToAllocate = clampZero(remainingWeightToAllocate - allocatedWeight);
   }
 
   return consumedBySource;
+}
+
+async function computeConingReceiveSourceRowRefs(client, issue, netWeight, excludeReceiveRowId = null) {
+  const weightToAllocate = clampZero(Number(netWeight || 0));
+  if (!issue?.id || weightToAllocate <= TAKE_BACK_EPSILON) return [];
+
+  const original = await getIssueOriginalIssued(client, 'coning', issue);
+  const takeBack = await getIssueTakeBackSnapshot(client, 'coning', issue.id);
+  const takeBackBySource = takeBack?.activeBySource || new Map();
+
+  const existingRows = await client.receiveFromConingMachineRow.findMany({
+    where: {
+      issueId: issue.id,
+      isDeleted: false,
+      ...(excludeReceiveRowId ? { NOT: { id: excludeReceiveRowId } } : {}),
+    },
+    select: { sourceRowRefs: true },
+  });
+
+  const receivedBySource = new Map();
+  existingRows.forEach((row) => {
+    const refs = parseJsonArraySafe(row.sourceRowRefs);
+    refs.forEach((ref) => {
+      const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+      if (!sourceId) return;
+      const weight = Number(ref?.weight || 0);
+      const current = receivedBySource.get(sourceId) || 0;
+      receivedBySource.set(sourceId, current + weight);
+    });
+  });
+
+  let remaining = weightToAllocate;
+  const allocations = [];
+  const orderedSourceIds = Array.from(original.sourceMap.keys());
+
+  for (const sourceId of orderedSourceIds) {
+    if (remaining <= TAKE_BACK_EPSILON) break;
+    const originalLine = original.sourceMap.get(sourceId) || { count: 0, weight: 0, sourceBarcode: null };
+    const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
+    const netIssuedWeight = clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0));
+    const alreadyReceivedWeight = Number(receivedBySource.get(sourceId) || 0);
+    const remainingCap = clampZero(netIssuedWeight - alreadyReceivedWeight);
+    if (remainingCap <= TAKE_BACK_EPSILON) continue;
+
+    const allocated = Math.min(remaining, remainingCap);
+    allocations.push({
+      rowId: sourceId,
+      barcode: originalLine.sourceBarcode || null,
+      rolls: 0,
+      weight: roundTo3Decimals(allocated),
+    });
+    remaining = clampZero(remaining - allocated);
+  }
+
+  // If receive weight exceeds remaining caps (legacy behavior allowed it), attribute overflow to the last source
+  // so future take-back math is deterministic (it will clamp remaining at 0).
+  if (remaining > TAKE_BACK_EPSILON && orderedSourceIds.length > 0) {
+    const lastId = orderedSourceIds[orderedSourceIds.length - 1];
+    const existing = allocations.find((a) => a.rowId === lastId);
+    if (existing) {
+      existing.weight = roundTo3Decimals(Number(existing.weight || 0) + remaining);
+    } else {
+      const originalLine = original.sourceMap.get(lastId) || { sourceBarcode: null };
+      allocations.push({
+        rowId: lastId,
+        barcode: originalLine.sourceBarcode || null,
+        rolls: 0,
+        weight: roundTo3Decimals(remaining),
+      });
+    }
+  }
+
+  return allocations;
 }
 
 async function buildIssueBalancesByStage(client, stage, issues = []) {
@@ -9293,6 +9396,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
     }
     const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
+    const sourceRowRefs = await computeConingReceiveSourceRowRefs(prisma, issue, netWeight);
     const createdRow = await prisma.receiveFromConingMachineRow.create({
       data: {
         issueId,
@@ -9302,6 +9406,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
         netWeight: Number(netWeight),
         tareWeight: Number(tareWeight),
         grossWeight: Number(grossWeight),
+        sourceRowRefs,
         boxId: boxId || null,
         machineNo: machineNo || null,
         operatorId: operatorId || issue.operatorId || null,
@@ -9564,6 +9669,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
         throw new Error('Invalid totals after update');
       }
 
+      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, row.issue, netWeight, id);
       const updatedRow = await tx.receiveFromConingMachineRow.update({
         where: { id },
         data: {
@@ -9577,6 +9683,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
           netWeight,
           tareWeight,
           grossWeight: roundTo3Decimals(grossWeight),
+          sourceRowRefs,
           notes,
           ...actorUpdateFields(actorUserId),
         },

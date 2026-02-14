@@ -364,6 +364,13 @@ export function OnMachineTable({ db, process }) {
     const buildTakeBackSources = (entry) => {
         if (!entry) return [];
 
+        const EPSILON = 1e-9;
+        const clampZero = (v) => {
+            const n = Number(v || 0);
+            if (!Number.isFinite(n)) return 0;
+            return n > EPSILON ? n : 0;
+        };
+
         const activeTakeBacks = activeTakeBacksByIssue.get(entry.id) || [];
         const activeBySource = new Map();
         activeTakeBacks.forEach((tb) => {
@@ -447,6 +454,67 @@ export function OnMachineTable({ db, process }) {
                 pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
             });
         });
+
+        // Coning receives are stored at issue-level (RCO rows do not reference which holo roll was consumed),
+        // so we must allocate received/wastage weight to sources deterministically (FIFO by receivedRowRefs order)
+        // to match backend take-back validation.
+        if (process === 'coning') {
+            const coningRows = (db.receive_from_coning_machine_rows || [])
+                .filter((r) => !r?.isDeleted && String(r?.issueId || '').trim() === String(entry.id || '').trim());
+
+            const receivedBySource = new Map();
+            let hasAnyRefs = false;
+            coningRows.forEach((r) => {
+                let refs = r?.sourceRowRefs;
+                if (typeof refs === 'string') {
+                    try { refs = JSON.parse(refs || '[]'); } catch { refs = []; }
+                }
+                if (!Array.isArray(refs) || refs.length === 0) return;
+                hasAnyRefs = true;
+                refs.forEach((ref) => {
+                    const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
+                    if (!sourceId) return;
+                    const weight = Number(ref?.weight || 0);
+                    if (!Number.isFinite(weight) || weight <= 0) return;
+                    const current = receivedBySource.get(sourceId) || 0;
+                    receivedBySource.set(sourceId, current + weight);
+                });
+            });
+
+            const updated = [];
+            const totalIssueConsumedWeight = clampZero(Number(entry.receivedWeight || 0) + Number(entry.wastageWeight || 0));
+            const receivedAllocatedTotal = Array.from(receivedBySource.values()).reduce((sum, v) => sum + Number(v || 0), 0);
+            // Any remaining consumption not explained by stored refs (legacy rows or wastage) is allocated FIFO like backend.
+            let remainingToAllocate = hasAnyRefs
+                ? clampZero(totalIssueConsumedWeight - receivedAllocatedTotal)
+                : clampZero(totalIssueConsumedWeight);
+
+            for (const line of sourceMap.values()) {
+                const issuedWeight = clampZero(Number(line.maxWeight || 0));
+                const alreadyReceived = clampZero(Number(receivedBySource.get(line.sourceId) || 0));
+                let receivedAllocatedWeight = alreadyReceived;
+
+                if (remainingToAllocate > EPSILON) {
+                    const allocCap = clampZero(issuedWeight - alreadyReceived);
+                    const extra = allocCap > EPSILON ? Math.min(allocCap, remainingToAllocate) : 0;
+                    receivedAllocatedWeight = clampZero(receivedAllocatedWeight + extra);
+                    remainingToAllocate = clampZero(remainingToAllocate - extra);
+                }
+
+                const remainingWeight = clampZero(issuedWeight - receivedAllocatedWeight);
+                const remainingCount = remainingWeight > EPSILON ? clampZero(Number(line.maxCount || 0)) : 0;
+                updated.push({
+                    ...line,
+                    issuedWeight,
+                    receivedAllocatedWeight,
+                    maxWeight: remainingWeight,
+                    maxCount: remainingCount,
+                });
+            }
+
+            return updated;
+        }
+
         return Array.from(sourceMap.values());
     };
 
@@ -1544,8 +1612,15 @@ export function OnMachineTable({ db, process }) {
                                         </TableRow>
                                     ) : (
                                         takeBackLinesDraft.map((line, idx) => (
-                                            <TableRow key={line.sourceId}>
-                                                <TableCell className="font-mono text-xs align-middle whitespace-nowrap">{line.sourceBarcode || line.sourceId}</TableCell>
+                                            <TableRow key={line.sourceId} className={Number(line.maxWeight || 0) <= 0.0001 ? 'opacity-60' : ''}>
+                                                <TableCell className="align-middle whitespace-nowrap">
+                                                    <div className="font-mono text-xs">{line.sourceBarcode || line.sourceId}</div>
+                                                    {process === 'coning' ? (
+                                                        <div className="mt-1 text-[11px] text-muted-foreground">
+                                                            Issued: {formatKg(line.issuedWeight || 0)} • Received: {formatKg(line.receivedAllocatedWeight || 0)} • Remaining: {formatKg(line.maxWeight || 0)}
+                                                        </div>
+                                                    ) : null}
+                                                </TableCell>
                                                 {process === 'holo' && (
                                                     <TableCell className="text-xs align-middle whitespace-nowrap">
                                                         <div>{line.pieceTypeName || '—'}</div>
@@ -1558,6 +1633,7 @@ export function OnMachineTable({ db, process }) {
                                                             min={0}
                                                             max={line.maxCount || 0}
                                                             value={line.count}
+                                                            disabled={Number(line.maxWeight || 0) <= 0.0001}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value || 0);
                                                                 const maxCount = Math.max(0, Number(line.maxCount || 0));
@@ -1632,6 +1708,7 @@ export function OnMachineTable({ db, process }) {
                                                         step="0.001"
                                                         max={line.maxWeight || 0}
                                                         value={line.weight}
+                                                        disabled={Number(line.maxWeight || 0) <= 0.0001}
                                                         onChange={(e) => {
                                                             const raw = Number(e.target.value || 0);
                                                             const maxWeight = Math.max(0, Number(line.maxWeight || 0));

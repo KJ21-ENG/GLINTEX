@@ -19,6 +19,8 @@ import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
+import { getFeatureFlags } from '../utils/featureFlags';
+import * as v2 from '../api/v2';
 
 const EPSILON = 1e-9;
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
@@ -57,6 +59,7 @@ function buildStockGroupKey(lot) {
 
 export function Stock() {
   const { db, brand, createIssueToMachine, refreshing, refreshProcessData, process, ensureModuleData } = useInventory();
+  const flags = getFeatureFlags();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -70,10 +73,12 @@ export function Stock() {
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
 
   useEffect(() => {
-    // Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
+    // Legacy Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
     // can produce incorrect on-hand totals once the DB exceeds server-side fetch limits.
+    // When v2Stock is enabled (holo/coning), we use dedicated v2 stock reads instead of the heavy legacy module payload.
+    if (flags.v2Stock && (processId === 'holo' || processId === 'coning')) return;
     ensureModuleData('process', { process: processId, full: true });
-  }, [ensureModuleData, processId]);
+  }, [ensureModuleData, processId, flags.v2Stock]);
 
   // --- UI State ---
   const [searchParams, setSearchParams] = useSearchParams();
@@ -142,6 +147,65 @@ export function Stock() {
 
   // Clear export data when view changes to avoid stale data
   useEffect(() => { setExportData(null); }, [view, processId]);
+
+  // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
+  const v2StockEnabled = flags.v2Stock && (processId === 'holo' || processId === 'coning');
+  const [v2Lots, setV2Lots] = useState([]);
+  const [v2RowsByKey, setV2RowsByKey] = useState({});
+  const [v2BarcodeKeys, setV2BarcodeKeys] = useState(new Set());
+  const v2BarcodeReqId = useRef(0);
+
+  useEffect(() => {
+    if (!v2StockEnabled) return;
+    let cancelled = false;
+    setV2Lots([]);
+    setV2RowsByKey({});
+    setV2BarcodeKeys(new Set());
+    v2.getV2StockLots(processId)
+      .then((res) => {
+        if (cancelled) return;
+        setV2Lots(Array.isArray(res?.items) ? res.items : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Failed to load v2 stock lots', err);
+        setV2Lots([]);
+      });
+    return () => { cancelled = true; };
+  }, [v2StockEnabled, processId]);
+
+  const loadV2LotRows = async (lotKey) => {
+    if (!v2StockEnabled) return [];
+    if (v2RowsByKey[lotKey]) return v2RowsByKey[lotKey];
+    const res = await v2.getV2StockLotRows(processId, { key: lotKey });
+    const items = Array.isArray(res?.items) ? res.items : [];
+    setV2RowsByKey(prev => ({ ...prev, [lotKey]: items }));
+    return items;
+  };
+
+  useEffect(() => {
+    if (!v2StockEnabled) return;
+    const q = String(search || '').trim();
+    if (q.length < 6) {
+      setV2BarcodeKeys(new Set());
+      return;
+    }
+    const myId = ++v2BarcodeReqId.current;
+    const t = setTimeout(() => {
+      v2.getV2StockBarcodeLotKeys(processId, { q })
+        .then((res) => {
+          if (v2BarcodeReqId.current !== myId) return;
+          const keys = Array.isArray(res?.keys) ? res.keys : [];
+          setV2BarcodeKeys(new Set(keys));
+        })
+        .catch((err) => {
+          if (v2BarcodeReqId.current !== myId) return;
+          console.error('Failed to lookup v2 stock barcode keys', err);
+          setV2BarcodeKeys(new Set());
+        });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [v2StockEnabled, processId, search]);
 
   // Close export menu when clicking outside / pressing escape
   useEffect(() => {
@@ -901,9 +965,25 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {processId === 'coning' ? (
-        <ConingView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
+        <ConingView
+          db={db}
+          filters={filters}
+          search={search}
+          groupBy={groupByItem}
+          onApplyFilter={handleApplyLotFilter}
+          onDataChange={setExportData}
+          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
+        />
       ) : isHolo ? (
-        <HoloView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
+        <HoloView
+          db={db}
+          filters={filters}
+          search={search}
+          groupBy={groupByItem}
+          onApplyFilter={handleApplyLotFilter}
+          onDataChange={setExportData}
+          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
+        />
       ) : showBobbins ? (
         <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
       ) : (

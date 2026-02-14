@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
@@ -15,10 +15,16 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
-export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
+export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
+  const v2Lots = v2?.lots;
+  const v2RowsByKey = v2?.rowsByKey || {};
+  const v2LoadLotRows = v2?.loadLotRows;
+  const barcodeHitKeys = v2?.barcodeHitKeys;
+  const lastAutoExpandRef = useRef(null);
+
   const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const hasActiveRollAvailability = (row) => {
     const rolls = Number(row?.availableRolls || 0);
@@ -64,6 +70,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
   // 3. Process Rows
   const holoRows = useMemo(() => {
+    if (Array.isArray(v2Lots)) return [];
     return (db.receive_from_holo_machine_rows || []).map((row) => {
       const issue = row?.issueId ? holoIssueMap.get(row.issueId) : null;
       const lotNoRaw = issue?.lotNo || '';
@@ -122,10 +129,26 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         steamedAt: row.steamedAt || null,
       };
     });
-  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId]);
+  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId, v2Lots]);
 
   // 4. Group by Lot
   const holoLots = useMemo(() => {
+    if (Array.isArray(v2Lots)) {
+      return v2Lots.map((lot) => {
+        const lotNosArr = Array.isArray(lot.lotNos) ? lot.lotNos : [];
+        const cutNamesArr = Array.isArray(lot.cutNames) ? lot.cutNames : [];
+        const cutNamesSet = new Set(cutNamesArr.length ? cutNamesArr : [lot.cutName].filter(Boolean));
+        return {
+          ...lot,
+          lotNos: lotNosArr,
+          lotSearch: lotNosArr.join(' '),
+          barcodeStr: '',
+          barcodes: [],
+          cutNames: cutNamesSet,
+          rows: [], // expanded rows are fetched on-demand in v2 mode
+        };
+      });
+    }
     const map = new Map();
     holoRows.forEach((row) => {
       const lotKey = [
@@ -195,6 +218,25 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     });
   }, [holoRows]);
 
+  // Auto-expand on a single barcode hit (keeps barcode UX consistent without shipping all barcodes).
+  useEffect(() => {
+    if (!Array.isArray(v2Lots)) return;
+    if (!barcodeHitKeys || typeof barcodeHitKeys.size !== 'number') return;
+    if (barcodeHitKeys.size !== 1) return;
+    const key = Array.from(barcodeHitKeys)[0];
+    if (!key) return;
+    if (lastAutoExpandRef.current === key) return;
+    lastAutoExpandRef.current = key;
+
+    if (v2RowsByKey[key]) {
+      setExpandedLot(key);
+      return;
+    }
+    if (typeof v2LoadLotRows === 'function') {
+      v2LoadLotRows(key).then(() => setExpandedLot(key)).catch(() => { });
+    }
+  }, [v2Lots, barcodeHitKeys, v2RowsByKey, v2LoadLotRows]);
+
   // 5. Filter
   const filteredLots = useMemo(() => {
     let list = holoLots.map(l => {
@@ -215,9 +257,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       } else {
         score = 1;
       }
-      // Check for direct barcode hit
+      // Check for direct barcode hit (v2 uses server lookup to avoid shipping all barcodes).
       const searchLower = search ? search.trim().toLowerCase() : '';
-      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      const hasBarcodeHit = Array.isArray(v2Lots)
+        ? (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
+        : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
 
@@ -251,7 +295,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [holoLots, filters, search, db.cuts]);
+  }, [holoLots, filters, search, db.cuts, v2Lots, barcodeHitKeys]);
 
 
   const displayLots = useMemo(() => {
@@ -336,11 +380,35 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 // with multiple yarns/cuts, which can cause stale rows to remain visible after filtering.
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
                 const hasBarcodeHit = !!l.hasBarcodeHit;
-                const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
-                const expandedRows = (l.rows || []).filter(hasActiveRollAvailability);
+                const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[l.lotKey] || []) : (l.rows || []);
+                const isExpanded = !groupBy && (
+                  expandedLot === l.lotKey
+                  || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+                );
+                const expandedRows = rowsForLot.filter(hasActiveRollAvailability);
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
+                    <TableRow
+                      className="hover:bg-muted/50 cursor-pointer"
+                      onClick={() => {
+                        if (groupBy) return;
+                        if (!Array.isArray(v2Lots)) {
+                          setExpandedLot(isExpanded ? null : l.lotKey);
+                          return;
+                        }
+                        if (isExpanded) {
+                          setExpandedLot(null);
+                          return;
+                        }
+                        if (v2RowsByKey[l.lotKey]) {
+                          setExpandedLot(l.lotKey);
+                          return;
+                        }
+                        if (typeof v2LoadLotRows === 'function') {
+                          v2LoadLotRows(l.lotKey).then(() => setExpandedLot(l.lotKey)).catch(() => { });
+                        }
+                      }}
+                    >
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -421,7 +489,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                     <TableRow key={r.id} className={cn(r.isSteamed ? 'bg-green-500/5' : '', rollMatch && 'bg-primary/10')}>
                                       <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || ''} query={search} /></TableCell>
                                       <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
-                                      <TableCell>{r.rollType?.name || '—'}</TableCell>
+                                      <TableCell>{r.rollType?.name || r.rollTypeName || '—'}</TableCell>
                                       <TableCell className="">{r.availableRolls}</TableCell>
                                       <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
                                       <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
@@ -477,12 +545,36 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           displayLots.map((l, idx) => {
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
             const hasBarcodeHit = !!l.hasBarcodeHit;
-            const isExpanded = !groupBy && (expandedLot === l.lotKey || hasBarcodeHit);
-            const expandedRows = (l.rows || []).filter(hasActiveRollAvailability);
+            const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[l.lotKey] || []) : (l.rows || []);
+            const isExpanded = !groupBy && (
+              expandedLot === l.lotKey
+              || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+            );
+            const expandedRows = rowsForLot.filter(hasActiveRollAvailability);
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotKey)}>
+                <div
+                  className="p-4"
+                  onClick={() => {
+                    if (groupBy) return;
+                    if (!Array.isArray(v2Lots)) {
+                      setExpandedLot(isExpanded ? null : l.lotKey);
+                      return;
+                    }
+                    if (isExpanded) {
+                      setExpandedLot(null);
+                      return;
+                    }
+                    if (v2RowsByKey[l.lotKey]) {
+                      setExpandedLot(l.lotKey);
+                      return;
+                    }
+                    if (typeof v2LoadLotRows === 'function') {
+                      v2LoadLotRows(l.lotKey).then(() => setExpandedLot(l.lotKey)).catch(() => { });
+                    }
+                  }}
+                >
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">
@@ -537,7 +629,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                             <span>{formatKg(r.availableWeight)}</span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
-                            <span>{r.rollType?.name} • Rolls: {r.availableRolls}</span>
+                            <span>{(r.rollType?.name || r.rollTypeName || '—')} • Rolls: {r.availableRolls}</span>
                             <span className="flex items-center gap-1">
                               {r.isSteamed && <Flame className="w-3 h-3 text-green-600" />}
                               Mac: {r.machineNo}

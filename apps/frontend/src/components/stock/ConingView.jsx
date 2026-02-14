@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -17,10 +17,16 @@ const buildGroupKey = (lot) => ([
 
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
-export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
+export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
+
+  const v2Lots = v2?.lots;
+  const v2RowsByKey = v2?.rowsByKey || {};
+  const v2LoadLotRows = v2?.loadLotRows;
+  const barcodeHitKeys = v2?.barcodeHitKeys;
+  const lastAutoExpandRef = useRef(null);
 
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
 
@@ -43,6 +49,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   }, [db.lots, db.items, db.firms, db.suppliers]);
 
   const coningRows = useMemo(() => {
+    if (Array.isArray(v2Lots)) return [];
     return (db.receive_from_coning_machine_rows || []).map((row) => {
       const issue = row?.issueId ? issueMap.get(row.issueId) : row.issue;
       const lotNoRaw = row?.lotNo || issue?.lotNo || '';
@@ -114,10 +121,31 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     lotMetaMap,
     db.items,
     db.machines,
-    traceContext
+    traceContext,
+    v2Lots
   ]);
 
   const coningLots = useMemo(() => {
+    if (Array.isArray(v2Lots)) {
+      return v2Lots.map((lot) => {
+        const cutNamesArr = Array.isArray(lot.cutNames) ? lot.cutNames : [];
+        const yarnNamesArr = Array.isArray(lot.yarnNames) ? lot.yarnNames : [];
+        const cutNamesSet = new Set(cutNamesArr.length
+          ? cutNamesArr
+          : String(lot.cutName || '').split(',').map(v => v.trim()).filter(Boolean));
+        const yarnNamesSet = new Set(yarnNamesArr.length
+          ? yarnNamesArr
+          : String(lot.yarnName || '').split(',').map(v => v.trim()).filter(Boolean));
+        return {
+          ...lot,
+          cutNames: cutNamesSet,
+          yarnNames: yarnNamesSet,
+          barcodeStr: '',
+          barcodes: [],
+          rows: [],
+        };
+      });
+    }
     const map = new Map();
     coningRows.forEach((row) => {
       const lotNo = row.lotNo || '(No Lot)';
@@ -164,7 +192,26 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       yarnName: lot.yarnNames?.size ? Array.from(lot.yarnNames).join(', ') : '—',
       barcodeStr: (lot.barcodes || []).join(' '),
     }));
-  }, [coningRows]);
+  }, [coningRows, v2Lots]);
+
+  // Auto-expand on a single barcode hit (keeps barcode UX consistent without shipping all barcodes).
+  useEffect(() => {
+    if (!Array.isArray(v2Lots)) return;
+    if (!barcodeHitKeys || typeof barcodeHitKeys.size !== 'number') return;
+    if (barcodeHitKeys.size !== 1) return;
+    const key = Array.from(barcodeHitKeys)[0];
+    if (!key) return;
+    if (lastAutoExpandRef.current === key) return;
+    lastAutoExpandRef.current = key;
+
+    if (v2RowsByKey[key]) {
+      setExpandedLot(key);
+      return;
+    }
+    if (typeof v2LoadLotRows === 'function') {
+      v2LoadLotRows(key).then(() => setExpandedLot(key)).catch(() => { });
+    }
+  }, [v2Lots, barcodeHitKeys, v2RowsByKey, v2LoadLotRows]);
 
   const filteredLots = useMemo(() => {
     let list = coningLots.map(l => {
@@ -185,9 +232,11 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       } else {
         score = 1;
       }
-      // Check for direct barcode hit
+      // Check for direct barcode hit (v2 uses server lookup to avoid shipping all barcodes).
       const searchLower = search ? search.trim().toLowerCase() : '';
-      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      const hasBarcodeHit = Array.isArray(v2Lots)
+        ? (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
+        : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
 
@@ -215,7 +264,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [coningLots, filters, search, db.cuts]);
+  }, [coningLots, filters, search, db.cuts, v2Lots, barcodeHitKeys]);
 
 
   const displayLots = useMemo(() => {
@@ -288,13 +337,38 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               displayLots.map((lot, idx) => {
                 const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
                 const hasBarcodeHit = !!lot.hasBarcodeHit;
-                const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
-                const activeRows = (lot.rows || []).filter((row) => (
+                const targetKey = (lot.lotKey || lot.lotNo);
+                const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[targetKey] || []) : (lot.rows || []);
+                const isExpanded = !groupBy && (
+                  expandedLot === targetKey
+                  || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+                );
+                const activeRows = rowsForLot.filter((row) => (
                   Number(row?.availableCones || 0) > 0 || Number(row?.availableWeight || 0) > EPSILON
                 ));
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
+                    <TableRow
+                      className="hover:bg-muted/50 cursor-pointer"
+                      onClick={() => {
+                        if (groupBy) return;
+                        if (!Array.isArray(v2Lots)) {
+                          setExpandedLot(isExpanded ? null : targetKey);
+                          return;
+                        }
+                        if (isExpanded) {
+                          setExpandedLot(null);
+                          return;
+                        }
+                        if (v2RowsByKey[targetKey]) {
+                          setExpandedLot(targetKey);
+                          return;
+                        }
+                        if (typeof v2LoadLotRows === 'function') {
+                          v2LoadLotRows(targetKey).then(() => setExpandedLot(targetKey)).catch(() => { });
+                        }
+                      }}
+                    >
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -404,14 +478,39 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           displayLots.map((lot, idx) => {
             const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
             const hasBarcodeHit = !!lot.hasBarcodeHit;
-            const isExpanded = !groupBy && (expandedLot === (lot.lotKey || lot.lotNo) || hasBarcodeHit);
-            const activeRows = (lot.rows || []).filter((row) => (
+            const targetKey = (lot.lotKey || lot.lotNo);
+            const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[targetKey] || []) : (lot.rows || []);
+            const isExpanded = !groupBy && (
+              expandedLot === targetKey
+              || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+            );
+            const activeRows = rowsForLot.filter((row) => (
               Number(row?.availableCones || 0) > 0 || Number(row?.availableWeight || 0) > EPSILON
             ));
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : (lot.lotKey || lot.lotNo))}>
+                <div
+                  className="p-4"
+                  onClick={() => {
+                    if (groupBy) return;
+                    if (!Array.isArray(v2Lots)) {
+                      setExpandedLot(isExpanded ? null : targetKey);
+                      return;
+                    }
+                    if (isExpanded) {
+                      setExpandedLot(null);
+                      return;
+                    }
+                    if (v2RowsByKey[targetKey]) {
+                      setExpandedLot(targetKey);
+                      return;
+                    }
+                    if (typeof v2LoadLotRows === 'function') {
+                      v2LoadLotRows(targetKey).then(() => setExpandedLot(targetKey)).catch(() => { });
+                    }
+                  }}
+                >
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">

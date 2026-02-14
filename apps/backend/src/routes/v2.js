@@ -56,6 +56,26 @@ function receiveStagePermissionKey(req) {
   return `receive.${process}`;
 }
 
+function encodeStockLotKey(payload) {
+  // Opaque, stable identifier used by the frontend to request expanded rows for a lot group.
+  // Treat this as an internal contract (UI should never parse it).
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+}
+
+function decodeStockLotKey(raw) {
+  if (!raw) return null;
+  try {
+    const decoded = Buffer.from(String(raw), 'base64').toString('utf8');
+    const parsed = JSON.parse(decoded);
+    if (!parsed || parsed.v !== 1) return null;
+    const process = String(parsed.process || '').toLowerCase();
+    if (!['holo', 'coning'].includes(process)) return null;
+    return { ...parsed, process };
+  } catch {
+    return null;
+  }
+}
+
 function encodeCursor({ createdAt, id }) {
   const payload = { createdAt, id };
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
@@ -92,6 +112,12 @@ function applyCursorWhere(baseWhere, cursorWhere) {
 
 function normalizeText(v) {
   return String(v || '').trim();
+}
+
+function clampZero(n) {
+  const x = Number(n || 0);
+  if (!Number.isFinite(x)) return 0;
+  return x < 0 ? 0 : x;
 }
 
 function buildSearchOr({ search, fields }) {
@@ -1614,6 +1640,558 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
   } catch (err) {
     console.error('v2 on-machine error', err);
     res.status(500).json({ error: err.message || 'Failed to load on-machine' });
+  }
+});
+
+// -----------------------------
+// Stock v2 (fast-load, UI-parity)
+// -----------------------------
+
+router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_READ), async (req, res) => {
+  try {
+    const process = String(req.params.process || '').trim().toLowerCase();
+    if (!['holo', 'coning'].includes(process)) {
+      return res.status(400).json({ error: 'Invalid process' });
+    }
+
+    if (process === 'holo') {
+      const rows = await prisma.$queryRaw`
+        WITH issue_refs AS (
+          SELECT i.id AS issue_id, elem->>'rowId' AS cutter_row_id
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem ON true
+          WHERE i."isDeleted" = false
+        ),
+        issue_lots AS (
+          SELECT ir.issue_id,
+                 array_remove(array_agg(DISTINCT bi."lotNo"), NULL) AS lot_nos
+          FROM issue_refs ir
+          LEFT JOIN "ReceiveFromCutterMachineRow" cr ON cr.id = ir.cutter_row_id
+          LEFT JOIN "InboundItem" bi ON bi.id = cr."pieceId"
+          GROUP BY ir.issue_id
+        ),
+        issue_labels AS (
+          SELECT i.id AS issue_id,
+                 CASE
+                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) = 0 THEN ARRAY[i."lotNo"]::text[]
+                   ELSE il.lot_nos
+                 END AS lot_nos_final,
+                 CASE
+                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) <= 1 THEN COALESCE(il.lot_nos[1], i."lotNo", '')
+                   WHEN array_length(il.lot_nos, 1) <= 3 THEN 'Mixed (' || array_to_string(il.lot_nos, ', ') || ')'
+                   ELSE 'Mixed (' || array_length(il.lot_nos, 1) || ')'
+                 END AS lot_label,
+                 CASE WHEN COALESCE(array_length(il.lot_nos, 1), 0) > 1 THEN true ELSE false END AS is_mixed
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN issue_lots il ON il.issue_id = i.id
+          WHERE i."isDeleted" = false
+        ),
+        issued AS (
+          SELECT
+            elem->>'rowId' AS row_id,
+            SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
+            SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
+          FROM "IssueToConingMachine" ic,
+            jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem
+          WHERE ic."isDeleted" = false
+          GROUP BY row_id
+        ),
+        takeback AS (
+          SELECT
+            l."sourceId" AS row_id,
+            SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."count") AS tb_rolls,
+            SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."weight") AS tb_weight
+          FROM "IssueTakeBackLine" l
+          JOIN "IssueTakeBack" tb ON tb.id = l."takeBackId"
+          WHERE tb.stage = 'coning'
+          GROUP BY l."sourceId"
+        ),
+        row_calc AS (
+          SELECT
+            r.id AS row_id,
+            r."issueId" AS issue_id,
+            COALESCE(r."date", to_char(r."createdAt", 'YYYY-MM-DD')) AS date_str,
+            COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric AS net_weight,
+            COALESCE(r."rollCount", 0)::numeric AS roll_count,
+            COALESCE(r."dispatchedCount", 0)::numeric AS dispatched_count,
+            COALESCE(r."dispatchedWeight", 0)::numeric AS dispatched_weight,
+            (COALESCE(iss.issue_rolls, 0) + COALESCE(tb.tb_rolls, 0))::numeric AS issued_rolls,
+            (COALESCE(iss.issue_weight, 0) + COALESCE(tb.tb_weight, 0))::numeric AS issued_weight,
+            (st.id IS NOT NULL) AS is_steamed
+          FROM "ReceiveFromHoloMachineRow" r
+          JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+          LEFT JOIN issued iss ON iss.row_id = r.id
+          LEFT JOIN takeback tb ON tb.row_id = r.id
+          LEFT JOIN "BoilerSteamLog" st
+            ON st."holoReceiveRowId" = r.id OR (st."barcode" IS NOT NULL AND upper(st."barcode") = upper(r."barcode"))
+          WHERE r."isDeleted" = false
+        )
+        SELECT
+          il.lot_label AS lot_label,
+          il.lot_nos_final AS lot_nos,
+          il.is_mixed AS is_mixed,
+          i."lotNo" AS lot_no_raw,
+          i."itemId" AS item_id,
+          i."yarnId" AS yarn_id,
+          i."twistId" AS twist_id,
+          lot."firmId" AS firm_id,
+          lot."supplierId" AS supplier_id,
+          it.name AS item_name,
+          fm.name AS firm_name,
+          sp.name AS supplier_name,
+          yn.name AS yarn_name,
+          tw.name AS twist_name,
+          array_remove(array_agg(DISTINCT COALESCE(ct.name, '—')), NULL) AS cut_names,
+          MAX(rc.date_str) AS max_date,
+          SUM(GREATEST(0, rc.net_weight - rc.dispatched_weight - rc.issued_weight)) AS total_weight,
+          SUM(GREATEST(0, rc.roll_count - rc.dispatched_count - rc.issued_rolls)) AS total_rolls,
+          SUM(CASE WHEN rc.is_steamed THEN GREATEST(0, rc.net_weight - rc.dispatched_weight - rc.issued_weight) ELSE 0 END) AS steamed_weight,
+          SUM(CASE WHEN rc.is_steamed THEN GREATEST(0, rc.roll_count - rc.dispatched_count - rc.issued_rolls) ELSE 0 END) AS steamed_rolls
+        FROM row_calc rc
+        JOIN "IssueToHoloMachine" i ON i.id = rc.issue_id
+        JOIN issue_labels il ON il.issue_id = i.id
+        LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+        LEFT JOIN "Item" it ON it.id = i."itemId"
+        LEFT JOIN "Firm" fm ON fm.id = lot."firmId"
+        LEFT JOIN "Supplier" sp ON sp.id = lot."supplierId"
+        LEFT JOIN "Yarn" yn ON yn.id = i."yarnId"
+        LEFT JOIN "Twist" tw ON tw.id = i."twistId"
+        LEFT JOIN "Cut" ct ON ct.id = i."cutId"
+        GROUP BY
+          il.lot_label, il.lot_nos_final, il.is_mixed,
+          i."lotNo", i."itemId", i."yarnId", i."twistId",
+          lot."firmId", lot."supplierId",
+          it.name, fm.name, sp.name, yn.name, tw.name
+        ORDER BY il.lot_label ASC
+      `;
+
+      const items = (rows || []).map((r) => {
+        const cutNames = Array.isArray(r.cut_names) ? r.cut_names : [];
+        const cutName = cutNames.length > 1 ? 'Mixed' : (cutNames[0] || '—');
+        const totalRolls = Number(r.total_rolls || 0);
+        const steamedRolls = Number(r.steamed_rolls || 0);
+        const steamedStatusType = steamedRolls === 0 ? 'not_steamed'
+          : (steamedRolls >= totalRolls ? 'steamed' : 'partial');
+        const lotNos = Array.isArray(r.lot_nos) ? r.lot_nos.filter(Boolean) : [];
+        const isMixed = !!r.is_mixed;
+        const firmName = isMixed ? 'Mixed' : (r.firm_name || '—');
+        const supplierName = isMixed ? 'Mixed' : (r.supplier_name || '—');
+        const firmId = isMixed ? '' : (r.firm_id || '');
+        const supplierId = isMixed ? '' : (r.supplier_id || '');
+
+        return {
+          lotKey: encodeStockLotKey({
+            v: 1,
+            process: 'holo',
+            lotLabel: r.lot_label || '',
+            lotNoRaw: r.lot_no_raw || '',
+            itemId: r.item_id || '',
+            yarnId: r.yarn_id || null,
+            twistId: r.twist_id || null,
+            firmId,
+            supplierId,
+            cutNames,
+            isMixed,
+          }),
+          lotNo: r.lot_label || '—',
+          lotNoRaw: r.lot_no_raw || '',
+          lotNos,
+          itemId: r.item_id || '',
+          itemName: r.item_name || '—',
+          firmId,
+          firmName,
+          supplierId,
+          supplierName,
+          yarnId: r.yarn_id || '',
+          yarnName: r.yarn_name || '—',
+          twistId: r.twist_id || '',
+          twistName: r.twist_name || '—',
+          cutName,
+          cutNames,
+          totalRolls,
+          totalWeight: Number(r.total_weight || 0),
+          steamedRolls,
+          steamedWeight: Number(r.steamed_weight || 0),
+          steamedStatusType,
+          statusType: Number(r.total_weight || 0) > 0.000000001 ? 'active' : 'inactive',
+          date: r.max_date || '',
+          rows: [],
+        };
+      });
+
+      return res.json({ items });
+    }
+
+    // coning
+    const rows = await prisma.$queryRaw`
+      WITH trace AS (
+        SELECT
+          ic.id AS issue_id,
+          array_remove(array_agg(DISTINCT COALESCE(hc.name, NULL)), NULL) AS cut_names,
+          array_remove(array_agg(DISTINCT COALESCE(hy.name, NULL)), NULL) AS yarn_names
+        FROM "IssueToConingMachine" ic
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem ON true
+        LEFT JOIN "ReceiveFromHoloMachineRow" hr ON hr.id = elem->>'rowId'
+        LEFT JOIN "IssueToHoloMachine" hi ON hi.id = hr."issueId"
+        LEFT JOIN "Cut" hc ON hc.id = hi."cutId"
+        LEFT JOIN "Yarn" hy ON hy.id = hi."yarnId"
+        WHERE ic."isDeleted" = false
+        GROUP BY ic.id
+      )
+      SELECT
+        i."lotNo" AS lot_no,
+        i."itemId" AS item_id,
+        i."yarnId" AS yarn_id,
+        lot."firmId" AS firm_id,
+        lot."supplierId" AS supplier_id,
+        it.name AS item_name,
+        fm.name AS firm_name,
+        sp.name AS supplier_name,
+        COALESCE(tr.cut_names, ARRAY[]::text[]) AS cut_names,
+        COALESCE(tr.yarn_names, ARRAY[]::text[]) AS yarn_names,
+        MAX(COALESCE(r."date", to_char(r."createdAt", 'YYYY-MM-DD'))) AS max_date,
+        SUM(GREATEST(0, COALESCE(r."coneCount", 0) - COALESCE(r."dispatchedCount", 0))) AS total_cones,
+        SUM(GREATEST(0, COALESCE(r."netWeight", COALESCE(r."coneWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))) - COALESCE(r."dispatchedWeight", 0))) AS total_weight
+      FROM "ReceiveFromConingMachineRow" r
+      JOIN "IssueToConingMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+      LEFT JOIN trace tr ON tr.issue_id = i.id
+      LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+      LEFT JOIN "Item" it ON it.id = i."itemId"
+      LEFT JOIN "Firm" fm ON fm.id = lot."firmId"
+      LEFT JOIN "Supplier" sp ON sp.id = lot."supplierId"
+      WHERE r."isDeleted" = false
+      GROUP BY i."lotNo", i."itemId", i."yarnId", lot."firmId", lot."supplierId", it.name, fm.name, sp.name, tr.cut_names, tr.yarn_names
+      ORDER BY i."lotNo" ASC
+    `;
+
+    const items = (rows || []).map((r) => {
+      const cutNamesArr = Array.isArray(r.cut_names) ? r.cut_names.filter(Boolean) : [];
+      const yarnNamesArr = Array.isArray(r.yarn_names) ? r.yarn_names.filter(Boolean) : [];
+      const cutName = cutNamesArr.length ? cutNamesArr.join(', ') : '—';
+      const yarnName = yarnNamesArr.length ? yarnNamesArr.join(', ') : '—';
+      return {
+        lotKey: encodeStockLotKey({
+          v: 1,
+          process: 'coning',
+          lotNo: r.lot_no || '',
+          itemId: r.item_id || '',
+          yarnId: r.yarn_id || null,
+          firmId: r.firm_id || '',
+          supplierId: r.supplier_id || '',
+        }),
+        lotNo: r.lot_no || '—',
+        itemId: r.item_id || '',
+        itemName: r.item_name || '—',
+        firmId: r.firm_id || '',
+        firmName: r.firm_name || '—',
+        supplierId: r.supplier_id || '',
+        supplierName: r.supplier_name || '—',
+        yarnId: r.yarn_id || '',
+        yarnName,
+        cutName,
+        cutNames: cutNamesArr,
+        yarnNames: yarnNamesArr,
+        totalCones: Number(r.total_cones || 0),
+        totalWeight: Number(r.total_weight || 0),
+        statusType: Number(r.total_weight || 0) > 0.000000001 ? 'active' : 'inactive',
+        date: r.max_date || '',
+        rows: [],
+      };
+    });
+
+    return res.json({ items });
+  } catch (err) {
+    console.error('v2 stock lots error', err);
+    res.status(500).json({ error: err.message || 'Failed to load stock lots' });
+  }
+});
+
+router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', PERM_READ), async (req, res) => {
+  try {
+    const process = String(req.params.process || '').trim().toLowerCase();
+    const key = decodeStockLotKey(req.query?.key);
+    if (!key || key.process !== process) return res.status(400).json({ error: 'Invalid lot key' });
+
+    if (process === 'holo') {
+      const lotLabel = String(key.lotLabel || '');
+      const itemId = String(key.itemId || '');
+      const yarnId = key.yarnId ? String(key.yarnId) : null;
+      const twistId = key.twistId ? String(key.twistId) : null;
+      const isMixed = !!key.isMixed;
+      const cutNames = Array.isArray(key.cutNames) ? key.cutNames.map(String).filter(Boolean) : [];
+      const firmId = String(key.firmId || '');
+      const supplierId = String(key.supplierId || '');
+
+      const rows = await prisma.$queryRaw`
+        WITH issue_refs AS (
+          SELECT i.id AS issue_id, elem->>'rowId' AS cutter_row_id
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem ON true
+          WHERE i."isDeleted" = false
+        ),
+        issue_lots AS (
+          SELECT ir.issue_id,
+                 array_remove(array_agg(DISTINCT bi."lotNo"), NULL) AS lot_nos
+          FROM issue_refs ir
+          LEFT JOIN "ReceiveFromCutterMachineRow" cr ON cr.id = ir.cutter_row_id
+          LEFT JOIN "InboundItem" bi ON bi.id = cr."pieceId"
+          GROUP BY ir.issue_id
+        ),
+        issue_labels AS (
+          SELECT i.id AS issue_id,
+                 CASE
+                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) <= 1 THEN COALESCE(il.lot_nos[1], i."lotNo", '')
+                   WHEN array_length(il.lot_nos, 1) <= 3 THEN 'Mixed (' || array_to_string(il.lot_nos, ', ') || ')'
+                   ELSE 'Mixed (' || array_length(il.lot_nos, 1) || ')'
+                 END AS lot_label
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN issue_lots il ON il.issue_id = i.id
+          WHERE i."isDeleted" = false
+        ),
+        issued AS (
+          SELECT
+            elem->>'rowId' AS row_id,
+            SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
+            SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
+          FROM "IssueToConingMachine" ic,
+            jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem
+          WHERE ic."isDeleted" = false
+          GROUP BY row_id
+        ),
+        takeback AS (
+          SELECT
+            l."sourceId" AS row_id,
+            SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."count") AS tb_rolls,
+            SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."weight") AS tb_weight
+          FROM "IssueTakeBackLine" l
+          JOIN "IssueTakeBack" tb ON tb.id = l."takeBackId"
+          WHERE tb.stage = 'coning'
+          GROUP BY l."sourceId"
+        )
+        SELECT
+          r.id,
+          r."barcode",
+          COALESCE(r."date", to_char(r."createdAt", 'YYYY-MM-DD')) AS date,
+          r."machineNo",
+          rt.name AS roll_type_name,
+          COALESCE(r."grossWeight", 0)::numeric AS gross_weight,
+          COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric AS net_weight,
+          GREATEST(0, COALESCE(r."rollCount", 0)::numeric - COALESCE(r."dispatchedCount", 0)::numeric - (COALESCE(iss.issue_rolls, 0) + COALESCE(tb.tb_rolls, 0))::numeric) AS available_rolls,
+          GREATEST(0, COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric - COALESCE(r."dispatchedWeight", 0)::numeric - (COALESCE(iss.issue_weight, 0) + COALESCE(tb.tb_weight, 0))::numeric) AS available_weight,
+          (st.id IS NOT NULL) AS is_steamed
+        FROM "ReceiveFromHoloMachineRow" r
+        JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+        JOIN issue_labels il ON il.issue_id = i.id
+        LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+        LEFT JOIN "Cut" ct ON ct.id = i."cutId"
+        LEFT JOIN issued iss ON iss.row_id = r.id
+        LEFT JOIN takeback tb ON tb.row_id = r.id
+        LEFT JOIN "RollType" rt ON rt.id = r."rollTypeId"
+        LEFT JOIN "BoilerSteamLog" st
+          ON st."holoReceiveRowId" = r.id OR (st."barcode" IS NOT NULL AND upper(st."barcode") = upper(r."barcode"))
+        WHERE r."isDeleted" = false
+          AND il.lot_label = ${lotLabel}
+          AND i."itemId" = ${itemId}
+          AND (${yarnId}::text IS NULL OR i."yarnId" = ${yarnId})
+          AND (${twistId}::text IS NULL OR i."twistId" = ${twistId})
+          AND (${isMixed}::boolean = true OR COALESCE(lot."firmId", '') = ${firmId})
+          AND (${isMixed}::boolean = true OR COALESCE(lot."supplierId", '') = ${supplierId})
+          AND (${cutNames.length} = 0 OR COALESCE(ct.name, '—') = ANY(${cutNames}::text[]))
+        ORDER BY r."createdAt" DESC, r.id DESC
+      `;
+
+      const items = (rows || []).map((r) => ({
+        id: r.id,
+        barcode: r.barcode || '',
+        date: r.date || '',
+        machineNo: r.machineNo || '',
+        rollTypeName: r.roll_type_name || '—',
+        availableRolls: Number(r.available_rolls || 0),
+        availableWeight: Number(r.available_weight || 0),
+        grossWeight: Number(r.gross_weight || 0),
+        netWeight: Number(r.net_weight || 0),
+        isSteamed: !!r.is_steamed,
+      }));
+
+      return res.json({ items });
+    }
+
+    // coning rows
+    const lotNo = String(key.lotNo || '');
+    const itemId = String(key.itemId || '');
+    const yarnId = key.yarnId ? String(key.yarnId) : null;
+    const firmId = String(key.firmId || '');
+    const supplierId = String(key.supplierId || '');
+
+    const rows = await prisma.$queryRaw`
+      WITH cone_types AS (
+        SELECT
+          i.id AS issue_id,
+          array_remove(array_agg(DISTINCT COALESCE(ct.name, NULL)), NULL) AS cone_type_names
+        FROM "IssueToConingMachine" i
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem ON true
+        LEFT JOIN "ConeType" ct ON ct.id = elem->>'coneTypeId'
+        WHERE i."isDeleted" = false
+        GROUP BY i.id
+      )
+      SELECT
+        r.id,
+        r."barcode",
+        COALESCE(r."date", to_char(r."createdAt", 'YYYY-MM-DD')) AS date,
+        bx.name AS box_name,
+        COALESCE(array_to_string(cts.cone_type_names, ', '), '—') AS cone_type_name,
+        GREATEST(0, COALESCE(r."coneCount", 0)::numeric - COALESCE(r."dispatchedCount", 0)::numeric) AS available_cones,
+        COALESCE(r."netWeight", COALESCE(r."coneWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0))))::numeric AS net_weight,
+        COALESCE(r."grossWeight", 0)::numeric AS gross_weight,
+        GREATEST(0, COALESCE(r."netWeight", COALESCE(r."coneWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0))))::numeric - COALESCE(r."dispatchedWeight", 0)::numeric) AS available_weight,
+        COALESCE(r."machineNo", mc.name, '—') AS machine_name,
+        COALESCE(op.name, '—') AS operator_name,
+        r."notes" AS notes
+      FROM "ReceiveFromConingMachineRow" r
+      JOIN "IssueToConingMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+      LEFT JOIN cone_types cts ON cts.issue_id = i.id
+      LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+      LEFT JOIN "Box" bx ON bx.id = r."boxId"
+      LEFT JOIN "Machine" mc ON mc.id = i."machineId"
+      LEFT JOIN "Operator" op ON op.id = r."operatorId"
+      WHERE r."isDeleted" = false
+        AND i."lotNo" = ${lotNo}
+        AND i."itemId" = ${itemId}
+        AND (${yarnId}::text IS NULL OR i."yarnId" = ${yarnId})
+        AND COALESCE(lot."firmId", '') = ${firmId}
+        AND COALESCE(lot."supplierId", '') = ${supplierId}
+      ORDER BY r."createdAt" DESC, r.id DESC
+    `;
+
+    const items = (rows || []).map((r) => ({
+      id: r.id,
+      barcode: r.barcode || '',
+      date: r.date || '',
+      boxName: r.box_name || '—',
+      coneType: r.cone_type_name || '—',
+      availableCones: Number(r.available_cones || 0),
+      availableWeight: Number(r.available_weight || 0),
+      grossWeight: Number(r.gross_weight || 0),
+      netWeight: Number(r.net_weight || 0),
+      machineName: r.machine_name || '—',
+      operatorName: r.operator_name || '—',
+      notes: r.notes || '',
+    }));
+
+    return res.json({ items });
+  } catch (err) {
+    console.error('v2 stock lot-rows error', err);
+    res.status(500).json({ error: err.message || 'Failed to load lot rows' });
+  }
+});
+
+router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('stock', PERM_READ), async (req, res) => {
+  try {
+    const process = String(req.params.process || '').trim().toLowerCase();
+    if (!['holo', 'coning'].includes(process)) {
+      return res.status(400).json({ error: 'Invalid process' });
+    }
+    const q = String(req.query?.q || '').trim();
+    if (!q) return res.json({ keys: [] });
+
+    if (process === 'holo') {
+      const rows = await prisma.$queryRaw`
+        WITH issue_refs AS (
+          SELECT i.id AS issue_id, elem->>'rowId' AS cutter_row_id
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem ON true
+          WHERE i."isDeleted" = false
+        ),
+        issue_lots AS (
+          SELECT ir.issue_id,
+                 array_remove(array_agg(DISTINCT bi."lotNo"), NULL) AS lot_nos
+          FROM issue_refs ir
+          LEFT JOIN "ReceiveFromCutterMachineRow" cr ON cr.id = ir.cutter_row_id
+          LEFT JOIN "InboundItem" bi ON bi.id = cr."pieceId"
+          GROUP BY ir.issue_id
+        ),
+        issue_labels AS (
+          SELECT i.id AS issue_id,
+                 CASE
+                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) <= 1 THEN COALESCE(il.lot_nos[1], i."lotNo", '')
+                   WHEN array_length(il.lot_nos, 1) <= 3 THEN 'Mixed (' || array_to_string(il.lot_nos, ', ') || ')'
+                   ELSE 'Mixed (' || array_length(il.lot_nos, 1) || ')'
+                 END AS lot_label,
+                 CASE WHEN COALESCE(array_length(il.lot_nos, 1), 0) > 1 THEN true ELSE false END AS is_mixed
+          FROM "IssueToHoloMachine" i
+          LEFT JOIN issue_lots il ON il.issue_id = i.id
+          WHERE i."isDeleted" = false
+        )
+        SELECT DISTINCT
+          il.lot_label AS lot_label,
+          il.is_mixed AS is_mixed,
+          i."lotNo" AS lot_no_raw,
+          i."itemId" AS item_id,
+          i."yarnId" AS yarn_id,
+          i."twistId" AS twist_id,
+          lot."firmId" AS firm_id,
+          lot."supplierId" AS supplier_id
+        FROM "ReceiveFromHoloMachineRow" r
+        JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+        JOIN issue_labels il ON il.issue_id = i.id
+        LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+        WHERE r."isDeleted" = false
+          AND r."barcode" ILIKE ${'%' + q + '%'}
+        LIMIT 50
+      `;
+
+      const keys = (rows || []).map((r) => {
+        const isMixed = !!r.is_mixed;
+        const firmId = isMixed ? '' : (r.firm_id || '');
+        const supplierId = isMixed ? '' : (r.supplier_id || '');
+        return encodeStockLotKey({
+          v: 1,
+          process: 'holo',
+          lotLabel: r.lot_label || '',
+          lotNoRaw: r.lot_no_raw || '',
+          itemId: r.item_id || '',
+          yarnId: r.yarn_id || null,
+          twistId: r.twist_id || null,
+          firmId,
+          supplierId,
+          cutNames: [],
+          isMixed,
+        });
+      });
+
+      return res.json({ keys });
+    }
+
+    // coning
+    const rows = await prisma.$queryRaw`
+      SELECT DISTINCT
+        i."lotNo" AS lot_no,
+        i."itemId" AS item_id,
+        i."yarnId" AS yarn_id,
+        lot."firmId" AS firm_id,
+        lot."supplierId" AS supplier_id
+      FROM "ReceiveFromConingMachineRow" r
+      JOIN "IssueToConingMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
+      LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+      WHERE r."isDeleted" = false
+        AND r."barcode" ILIKE ${'%' + q + '%'}
+      LIMIT 50
+    `;
+
+    const keys = (rows || []).map((r) => encodeStockLotKey({
+      v: 1,
+      process: 'coning',
+      lotNo: r.lot_no || '',
+      itemId: r.item_id || '',
+      yarnId: r.yarn_id || null,
+      firmId: r.firm_id || '',
+      supplierId: r.supplier_id || '',
+    }));
+
+    return res.json({ keys });
+  } catch (err) {
+    console.error('v2 stock barcode-lot-keys error', err);
+    res.status(500).json({ error: err.message || 'Failed to lookup barcode lot keys' });
   }
 });
 

@@ -563,8 +563,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         if (process === 'cutter') return { ...legacyTotals, netWt: Number(s.netWt || 0), bobbinQty: Number(s.bobbinQty || 0) };
         if (process === 'holo') return { ...legacyTotals, rolls: Number(s.rolls || 0), weight: Number(s.weight || 0) };
         return { ...legacyTotals, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [v2Enabled, showHistory, v2List.summary, process]);
+    }, [v2Enabled, showHistory, v2List.summary, process, legacyTotals]);
 
     const loadMoreRef = useInfiniteScrollSentinel({
         enabled: v2Enabled && showHistory && v2List.hasMore && !v2List.isLoading,

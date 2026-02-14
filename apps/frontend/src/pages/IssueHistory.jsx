@@ -1241,8 +1241,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       takenBackWeight: Number(s.takenBackWeight || 0),
       netIssuedWeight: Number(s.netIssuedWeight || 0),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Enabled, v2List.summary, process]);
+  }, [v2Enabled, v2List.summary, process, legacyTotals]);
 
   const loadMoreRef = useInfiniteScrollSentinel({
     enabled: v2Enabled && v2List.hasMore && !v2List.isLoading,

@@ -796,11 +796,48 @@ function mapReceiveRow(process, row, extras = {}) {
     base.cutName = row.issue?.cut?.name || '';
     base.yarnName = row.issue?.yarn?.name || '';
     base.twistName = row.issue?.twist?.name || '';
+    if (process === 'coning') {
+      // Coning-specific fields are needed for immediate, correct first-render in Receive History.
+      // Returning them from v2 eliminates UI dependence on late-loaded legacy module data.
+      base.perConeTargetG = Number(row.issue?.requiredPerConeNetWeight || 0);
+      base.coneTypeName = extras.coneTypeName || '';
+    }
     if (Array.isArray(extras.computedPieceIds)) {
       base.computedPieceIds = extras.computedPieceIds;
     }
   }
   return base;
+}
+
+async function fetchConeTypeNameByIssueIdForConingReceiveRows(rows = []) {
+  const coneTypeIdByIssueId = new Map();
+  const coneTypeIds = new Set();
+
+  for (const row of rows || []) {
+    const issue = row?.issue;
+    const issueId = row?.issueId || issue?.id;
+    if (!issueId) continue;
+    const refs = normalizeReceivedRowRefs(issue?.receivedRowRefs);
+    const coneTypeId = refs?.[0]?.coneTypeId;
+    if (!coneTypeId) continue;
+    const normalizedConeTypeId = String(coneTypeId);
+    coneTypeIdByIssueId.set(String(issueId), normalizedConeTypeId);
+    coneTypeIds.add(normalizedConeTypeId);
+  }
+
+  if (!coneTypeIds.size) return new Map();
+
+  const coneTypes = await prisma.coneType.findMany({
+    where: { id: { in: Array.from(coneTypeIds) } },
+    select: { id: true, name: true },
+  });
+  const nameById = new Map(coneTypes.map((c) => [String(c.id), c.name || '']));
+
+  const out = new Map();
+  for (const [issueId, coneTypeId] of coneTypeIdByIssueId.entries()) {
+    out.set(issueId, nameById.get(coneTypeId) || '');
+  }
+  return out;
 }
 
 router.get('/receive/:process/history', requireAuth, requireStageReadPermission(receiveStagePermissionKey), async (req, res) => {
@@ -848,7 +885,11 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
     } else if (process === 'coning') {
       const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
+      const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(items);
+      items = items.map((r) => mapReceiveRow(process, r, {
+        computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
+        coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
+      }));
     } else {
       items = items.map((r) => mapReceiveRow(process, r));
     }
@@ -983,7 +1024,11 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
       items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
     } else if (process === 'coning') {
       const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
+      const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(items);
+      items = items.map((r) => mapReceiveRow(process, r, {
+        computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
+        coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
+      }));
     } else {
       items = items.map((r) => mapReceiveRow(process, r));
     }

@@ -302,7 +302,14 @@ export function Stock() {
     return m;
   }, [db, receiveTotalsMap, cutterIssueByPieceId]);
 
-  const allLots = useMemo(() => Object.values(lotsMap), [lotsMap]);
+  const allLots = useMemo(() => {
+    const isCutterPurchaseLotNo = (lotNo) =>
+      typeof lotNo === 'string' && lotNo.trim().toUpperCase().startsWith('CP-');
+    const values = Object.values(lotsMap);
+    // Jumbo Rolls should show only original inbound/opening-stock lots, not cutter purchase (CP-*) lots.
+    if (view !== 'jumbo') return values;
+    return values.filter((l) => !isCutterPurchaseLotNo(l?.lotNo));
+  }, [lotsMap, view]);
 
   // Filtered Lots
   const filteredLots = useMemo(() => {

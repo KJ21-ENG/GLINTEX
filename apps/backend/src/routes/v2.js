@@ -84,6 +84,12 @@ function buildCursorWhere(cursor) {
   };
 }
 
+function applyCursorWhere(baseWhere, cursorWhere) {
+  // IMPORTANT: both baseWhere and cursorWhere can contain top-level OR clauses.
+  // Spreading them into one object would overwrite OR and break filtering on page 2+.
+  return cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
+}
+
 function normalizeText(v) {
   return String(v || '').trim();
 }
@@ -472,10 +478,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
-    const wherePage = {
-      ...whereAll,
-      ...(cursorWhere ? cursorWhere : {}),
-    };
+    const wherePage = applyCursorWhere(whereAll, cursorWhere);
 
     const rowsRaw = await model.findMany({
       where: wherePage,
@@ -490,8 +493,8 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
     const issueIds = pageWithItems.map(r => r.id);
     const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds(process, issueIds);
     const items = pageWithItems.map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId }));
-    const last = items[items.length - 1];
-    const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+    const lastInPage = pageWithItems[pageWithItems.length - 1];
+    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
 
     // Summary for footer totals (full filter context, not just page).
     let summary = null;
@@ -513,8 +516,9 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
     // NOTE: this is still far cheaper than returning full issue graphs to the client.
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      const batchWhere = loopCursor ? applyCursorWhere(whereAll, buildCursorWhere(loopCursor)) : whereAll;
       const batch = await issueTable.findMany({
-        where: { ...whereAll, ...(loopCursor ? buildCursorWhere(loopCursor) : {}) },
+        where: batchWhere,
         select: process === 'coning'
           ? { id: true, createdAt: true, receivedRowRefs: true }
           : { id: true, createdAt: true },
@@ -716,6 +720,22 @@ const RECEIVE_FILTERS = {
     contains: (value) => ({ operator: { name: { contains: value, mode: 'insensitive' } } }),
     between: () => ({}),
   },
+  // Cutter UI uses `employee` column id; legacy rows may have either `operator.name` or `employee` string set.
+  employee: {
+    in: (values) => ({
+      OR: [
+        { operator: { name: { in: values } } },
+        { employee: { in: values } },
+      ],
+    }),
+    contains: (value) => ({
+      OR: [
+        { operator: { name: { contains: value, mode: 'insensitive' } } },
+        { employee: { contains: value, mode: 'insensitive' } },
+      ],
+    }),
+    between: () => ({}),
+  },
   helper: {
     in: (values) => ({ helper: { name: { in: values } } }),
     contains: (value) => ({ helper: { name: { contains: value, mode: 'insensitive' } } }),
@@ -783,10 +803,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
-    const wherePage = {
-      ...whereAll,
-      ...(cursorWhere ? cursorWhere : {}),
-    };
+    const wherePage = applyCursorWhere(whereAll, cursorWhere);
 
     const rowsRaw = await model.findMany({
       where: wherePage,
@@ -810,8 +827,8 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       items = items.map((r) => mapReceiveRow(process, r));
     }
 
-    const last = items[items.length - 1];
-    const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+    const lastInPage = pageWithUsers[pageWithUsers.length - 1];
+    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
     // Summary totals for footer
     let summary = null;
     if (process === 'cutter') {
@@ -887,6 +904,7 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
       facets: {
         machine: machines.map(r => r.name).filter(Boolean),
         operator: operators.map(r => r.name).filter(Boolean),
+        employee: operators.map(r => r.name).filter(Boolean),
         helper: helpers.map(r => r.name).filter(Boolean),
         item: items.map(r => r.name).filter(Boolean),
         cut: cuts.map(r => r.name).filter(Boolean),
@@ -966,9 +984,8 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const cursorWhere = buildCursorWhere(cursor);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'createdAt' });
       const q = normalizeText(search);
-      const where = {
+      const baseWhere = {
         isOpeningStock: true,
-        ...(cursorWhere ? cursorWhere : {}),
         ...(dateWhere ? dateWhere : {}),
         ...(q ? {
           OR: [
@@ -978,6 +995,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
           ],
         } : {}),
       };
+      const where = applyCursorWhere(baseWhere, cursorWhere);
       const rows = await prisma.inboundItem.findMany({
         where,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -996,10 +1014,9 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const cursorWhere = buildCursorWhere(cursor);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
-      const where = {
+      const baseWhere = {
         isDeleted: false,
         pieceId: { startsWith: 'OP-' },
-        ...(cursorWhere ? cursorWhere : {}),
         ...(dateWhere ? dateWhere : {}),
         ...(q ? {
           OR: [
@@ -1010,6 +1027,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
           ],
         } : {}),
       };
+      const where = applyCursorWhere(baseWhere, cursorWhere);
       const rowsRaw = await model.findMany({
         where,
         include: { bobbin: true, cutMaster: true },
@@ -1030,9 +1048,8 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
-      const where = {
+      const baseWhere = {
         isDeleted: false,
-        ...(cursorWhere ? cursorWhere : {}),
         ...(dateWhere ? dateWhere : {}),
         issue: { lotNo: { startsWith: 'OP-' }, isDeleted: false },
         ...(q ? {
@@ -1044,6 +1061,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
           ],
         } : {}),
       };
+      const where = applyCursorWhere(baseWhere, cursorWhere);
       const rowsRaw = await prisma.receiveFromHoloMachineRow.findMany({
         where,
         include: { rollType: true, issue: { include: { cut: true, yarn: true, twist: true } } },
@@ -1067,9 +1085,8 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
-      const where = {
+      const baseWhere = {
         isDeleted: false,
-        ...(cursorWhere ? cursorWhere : {}),
         ...(dateWhere ? dateWhere : {}),
         issue: { lotNo: { startsWith: 'OP-' }, isDeleted: false },
         ...(q ? {
@@ -1081,6 +1098,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
           ],
         } : {}),
       };
+      const where = applyCursorWhere(baseWhere, cursorWhere);
       const rowsRaw = await prisma.receiveFromConingMachineRow.findMany({
         where,
         include: { issue: { include: { cut: true, yarn: true, twist: true } }, box: true },
@@ -1259,12 +1277,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
 
     const whereAllFiltered = { ...whereAll, ...filterAnd };
 
-    // where = whereAll + cursor (for paginated results)
-    const where = {
-      ...whereAll,
-      ...(cursorWhere ? cursorWhere : {}),
-      ...filterAnd,
-    };
+    // where = all filters + cursor (for paginated results)
+    const where = applyCursorWhere(whereAllFiltered, cursorWhere);
 
     // isFirstPage — only compute summary on the first page to avoid repeating expensive work
     const isFirstPage = !cursor;
@@ -1358,8 +1372,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         summary = s;
       }
 
-      const last = items[items.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const lastInPage = pageWithItems[pageWithItems.length - 1];
+      const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
       res.json({ items, hasMore, nextCursor, summary });
       return;
     }
@@ -1472,8 +1486,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         summary = s;
       }
 
-      const last = items[items.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const lastInPage = pageWithItems[pageWithItems.length - 1];
+      const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
       res.json({ items, hasMore, nextCursor, summary });
       return;
     }
@@ -1594,8 +1608,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
       summary = s;
     }
 
-    const last = items[items.length - 1];
-    const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+    const lastInPage = pageWithItems[pageWithItems.length - 1];
+    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
     res.json({ items, hasMore, nextCursor, summary });
   } catch (err) {
     console.error('v2 on-machine error', err);

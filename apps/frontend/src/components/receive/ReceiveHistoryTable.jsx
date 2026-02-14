@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, CardHeader, CardTitle, CardContent, ActionMenu, Button, Input, Select } from '../ui';
@@ -14,9 +14,15 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
+import { getFeatureFlags } from '../../utils/featureFlags';
+import { useV2CursorList } from '../../hooks/useV2CursorList';
+import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
+import * as v2 from '../../api/v2';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const { db, process, refreshProcessData, refreshModuleData, patchDb } = useInventory();
+    const flags = getFeatureFlags();
+    const v2Enabled = flags.v2ReceiveHistory;
     const { canDelete: canDeleteInbound } = usePermission('inbound');
     const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
@@ -34,6 +40,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
+    const scrollRootRef = useRef(null);
 
     const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
     const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
@@ -48,6 +55,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     };
 
     const history = useMemo(() => {
+        if (v2Enabled) return [];
         let rows = [];
         if (process === 'holo') {
             rows = (db.receive_from_holo_machine_rows || []).filter(row => !row.isDeleted);
@@ -118,7 +126,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             }
             return { ...r, pieceIdsList };
         });
-    }, [db, process]);
+    }, [db, process, v2Enabled]);
 
     // Helper for Coning Machine Lookup
     const getConingMachineName = (row) => {
@@ -310,6 +318,58 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
+    // Legacy rows (db.receive_from_*) generally don't have flattened v2 fields and may not include `issue.*` relations.
+    // Precompute issue-level names once to keep legacy filtering fast and correct.
+    const legacyIssueNamesByIssueId = useMemo(() => {
+        const map = new Map();
+        const itemNameById = new Map((db.items || []).map((i) => [i.id, i.name || '']));
+        const cutNameById = new Map((db.cuts || []).map((c) => [c.id, c.name || '']));
+        const yarnNameById = new Map((db.yarns || []).map((y) => [y.id, y.name || '']));
+        const twistNameById = new Map((db.twists || []).map((t) => [t.id, t.name || '']));
+
+        const fillDirect = (issue, base = {}) => {
+            if (!issue) return base;
+            return {
+                itemName: base.itemName || (issue.itemId ? itemNameById.get(issue.itemId) : '') || '',
+                cutName: base.cutName || (issue.cutId ? cutNameById.get(issue.cutId) : '') || '',
+                yarnName: base.yarnName || (issue.yarnId ? yarnNameById.get(issue.yarnId) : '') || '',
+                twistName: base.twistName || (issue.twistId ? twistNameById.get(issue.twistId) : '') || '',
+            };
+        };
+
+        if (process === 'holo') {
+            for (const issue of db.issue_to_holo_machine || []) {
+                if (!issue?.id) continue;
+                let names = {};
+                try {
+                    const resolved = holoTraceContext ? resolveHoloTrace(issue, holoTraceContext) : null;
+                    names = {
+                        cutName: resolved?.cutName || '',
+                        yarnName: resolved?.yarnName || '',
+                        twistName: resolved?.twistName || '',
+                    };
+                } catch { }
+                map.set(issue.id, fillDirect(issue, names));
+            }
+        } else if (process === 'coning') {
+            for (const issue of db.issue_to_coning_machine || []) {
+                if (!issue?.id) continue;
+                let names = {};
+                try {
+                    const resolved = traceContext ? resolveConingTrace(issue, traceContext) : null;
+                    names = {
+                        cutName: resolved?.cutName || '',
+                        yarnName: resolved?.yarnName || '',
+                        twistName: resolved?.twistName || '',
+                    };
+                } catch { }
+                map.set(issue.id, fillDirect(issue, names));
+            }
+        }
+
+        return map;
+    }, [db.items, db.cuts, db.yarns, db.twists, db.issue_to_holo_machine, db.issue_to_coning_machine, process, traceContext, holoTraceContext]);
+
     const filterColumns = useMemo(() => {
         const base = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
@@ -351,46 +411,30 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         if (process === 'holo') {
             return [
                 ...base,
-                { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceId || '')) },
+                { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.computedPieceIds) ? r.computedPieceIds.join(', ') : (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceId || ''))) },
                 { id: 'rolls', label: 'Rolls', kind: 'number', getValue: (r) => r.rollCount || 0 },
                 { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.rollWeight || calcNetFromGrossTare(r) || 0 },
                 { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || '' },
                 { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
                 { id: 'helper', label: 'Helper', kind: 'values', getValue: (r) => r.helper?.name || '' },
                 {
-                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
-                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                        const itemId = issue?.itemId;
-                        return db.items?.find(i => i.id === itemId)?.name || '';
-                    }
+                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => (r.itemName || legacyIssueNamesByIssueId.get(r.issueId)?.itemName || '')
                 },
                 {
-                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
-                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '' };
-                        return resolved.cutName || '';
-                    }
+                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (r.cutName || legacyIssueNamesByIssueId.get(r.issueId)?.cutName || '')
                 },
                 {
-                    id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
-                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { yarnName: '' };
-                        return resolved.yarnName || '';
-                    }
+                    id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (r.yarnName || legacyIssueNamesByIssueId.get(r.issueId)?.yarnName || '')
                 },
                 {
-                    id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
-                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId) || r.issue || null;
-                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { twistName: '' };
-                        return resolved.twistName || '';
-                    }
+                    id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (r.twistName || legacyIssueNamesByIssueId.get(r.issueId)?.twistName || '')
                 },
             ];
         }
 
         return [
             ...base,
-            { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : '') },
+            { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.computedPieceIds) ? r.computedPieceIds.join(', ') : (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : '')) },
             {
                 id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => {
                     const issue = resolveConingIssue(r);
@@ -418,37 +462,22 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => getConingMachineName(r) || '' },
             { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
             {
-                id: 'item', label: 'Item', kind: 'values', getValue: (r) => {
-                    const issue = resolveConingIssue(r);
-                    const itemId = issue?.itemId;
-                    return db.items?.find(i => i.id === itemId)?.name || '';
-                }
+                id: 'item', label: 'Item', kind: 'values', getValue: (r) => (r.itemName || legacyIssueNamesByIssueId.get(r.issueId)?.itemName || '')
             },
             {
-                id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => {
-                    const issue = resolveConingIssue(r);
-                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '' };
-                    return resolved.cutName || '';
-                }
+                id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (r.cutName || legacyIssueNamesByIssueId.get(r.issueId)?.cutName || '')
             },
             {
-                id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => {
-                    const issue = resolveConingIssue(r);
-                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { yarnName: '' };
-                    return resolved.yarnName || '';
-                }
+                id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (r.yarnName || legacyIssueNamesByIssueId.get(r.issueId)?.yarnName || '')
             },
             {
-                id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => {
-                    const issue = resolveConingIssue(r);
-                    const resolved = issue ? resolveConingTrace(issue, traceContext) : { twistName: '' };
-                    return resolved.twistName || '';
-                }
+                id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (r.twistName || legacyIssueNamesByIssueId.get(r.issueId)?.twistName || '')
             },
         ];
-    }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue]);
+    }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue, v2Enabled, legacyIssueNamesByIssueId]);
 
-    const filteredHistory = useMemo(() => {
+    const legacyFilteredHistory = useMemo(() => {
+        if (v2Enabled) return [];
         let rows = applySheetFilters(history, filterColumns, sheetFilters);
 
         // Search across all filterColumns
@@ -465,9 +494,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         return rows;
     }, [history, filterColumns, sheetFilters, searchTerm]);
 
-    const totals = useMemo(() => {
+    const legacyTotals = useMemo(() => {
+        if (v2Enabled) return { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
         const t = { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
-        for (const r of filteredHistory || []) {
+        for (const r of legacyFilteredHistory || []) {
             if (process === 'cutter') {
                 t.netWt += Number(r.netWt || 0);
                 t.bobbinQty += Number(r.bobbinQuantity || 0);
@@ -480,7 +510,137 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             }
         }
         return t;
-    }, [filteredHistory, process]);
+    }, [legacyFilteredHistory, process, v2Enabled]);
+
+    const showHistory = process !== 'cutter' || activeTab === 'history';
+    const showChallans = process === 'cutter' && activeTab === 'challan';
+
+    const v2DateFilter = sheetFilters?.date && sheetFilters.date.kind === 'date' ? sheetFilters.date : null;
+    const v2DateFrom = v2DateFilter?.from || '';
+    const v2DateTo = v2DateFilter?.to || '';
+    const v2Filters = useMemo(() => {
+        const out = [];
+        for (const [field, f] of Object.entries(sheetFilters || {})) {
+            if (!f || field === 'date') continue;
+            if (f.kind === 'values') {
+                const values = Array.isArray(f.selected) ? f.selected.map(String) : [];
+                out.push({ field, op: 'in', values: values.length ? values : ['__NO_MATCH__'] });
+            } else if (f.kind === 'text') {
+                const value = String(f.query || '').trim();
+                if (value) out.push({ field, op: 'contains', value });
+            } else if (f.kind === 'number') {
+                const min = f.min === '' || f.min == null ? null : Number(f.min);
+                const max = f.max === '' || f.max == null ? null : Number(f.max);
+                if (min != null || max != null) out.push({ field, op: 'between', min, max });
+            }
+        }
+        return out;
+    }, [sheetFilters]);
+
+    const v2List = useV2CursorList({
+        enabled: v2Enabled && showHistory,
+        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
+            v2.getV2ReceiveHistory(process, {
+                limit,
+                cursor,
+                search,
+                dateFrom,
+                dateTo,
+                filters: JSON.stringify(filters || []),
+            })
+        ),
+        limit: 50,
+        search: searchTerm,
+        dateFrom: v2DateFrom,
+        dateTo: v2DateTo,
+        filters: v2Filters,
+    });
+
+    const filteredHistory = v2Enabled && showHistory ? v2List.items : legacyFilteredHistory;
+    const totals = useMemo(() => {
+        if (!v2Enabled || !showHistory) return legacyTotals;
+        const s = v2List.summary || {};
+        if (process === 'cutter') return { ...legacyTotals, netWt: Number(s.netWt || 0), bobbinQty: Number(s.bobbinQty || 0) };
+        if (process === 'holo') return { ...legacyTotals, rolls: Number(s.rolls || 0), weight: Number(s.weight || 0) };
+        return { ...legacyTotals, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [v2Enabled, showHistory, v2List.summary, process]);
+
+    const loadMoreRef = useInfiniteScrollSentinel({
+        enabled: v2Enabled && showHistory && v2List.hasMore && !v2List.isLoading,
+        onLoadMore: v2List.loadMore,
+        rootRef: scrollRootRef,
+    });
+
+    const [v2FacetsById, setV2FacetsById] = useState({});
+    useEffect(() => {
+        if (!v2Enabled) return;
+        if (!showHistory) return;
+        if (!openFilterId) return;
+        const col = filterColumns.find(c => c.id === openFilterId);
+        if (!col || col.kind !== 'values') return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await v2.getV2ReceiveHistoryFacets(process, {
+                    search: searchTerm,
+                    dateFrom: v2DateFrom,
+                    dateTo: v2DateTo,
+                    filters: JSON.stringify(v2Filters || []),
+                    excludeField: openFilterId,
+                });
+                const next = res?.facets?.[openFilterId];
+                if (!cancelled && Array.isArray(next)) {
+                    setV2FacetsById((prev) => ({ ...(prev || {}), [openFilterId]: next }));
+                }
+            } catch (_) { }
+        })();
+        return () => { cancelled = true; };
+    }, [v2Enabled, showHistory, openFilterId, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+
+    // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
+    useEffect(() => {
+        if (!v2Enabled) return;
+        if (!showHistory) return;
+        let cancelled = false;
+        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee'] : ['item', 'cut', 'yarn', 'twist'];
+        (async () => {
+            try {
+                const res = await Promise.all(fields.map(async (field) => {
+                    if (Array.isArray(v2FacetsById?.[field])) return null;
+                    const col = filterColumns.find(c => c.id === field);
+                    if (!col || col.kind !== 'values') return null;
+                    const out = await v2.getV2ReceiveHistoryFacets(process, {
+                        search: searchTerm,
+                        dateFrom: v2DateFrom,
+                        dateTo: v2DateTo,
+                        filters: JSON.stringify(v2Filters || []),
+                        excludeField: field,
+                    });
+                    return { field, values: out?.facets?.[field] };
+                }));
+                if (cancelled) return;
+                const patch = {};
+                for (const item of res) {
+                    if (!item) continue;
+                    if (Array.isArray(item.values)) patch[item.field] = item.values;
+                }
+                if (Object.keys(patch).length) {
+                    setV2FacetsById((prev) => ({ ...(prev || {}), ...patch }));
+                }
+            } catch (_) { }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [v2Enabled, showHistory, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+
+    const columnFor = (id) => {
+        const col = filterColumns.find(c => c.id === id);
+        if (!col) return col;
+        if (!v2Enabled || col.kind !== 'values') return col;
+        const facetOptions = v2FacetsById?.[id];
+        return Array.isArray(facetOptions) ? { ...col, facetOptions } : col;
+    };
 
     function resolveConingConeType(issue) {
         if (!issue?.receivedRowRefs) return null;
@@ -1000,10 +1160,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                             receive_from_holo_machine_piece_totals: nextTotals,
                         });
                     } else {
-                        await refreshProcessData(process);
+                        if (!v2Enabled) await refreshProcessData(process);
+                        else v2List.refresh();
                     }
                 } else {
-                    await refreshProcessData(process);
+                    if (!v2Enabled) await refreshProcessData(process);
+                    else v2List.refresh();
                 }
             } else if (process === 'coning') {
                 const payload = {
@@ -1058,7 +1220,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                         receive_from_coning_machine_piece_totals: nextTotals,
                     });
                 } else {
-                    await refreshProcessData(process);
+                    if (!v2Enabled) await refreshProcessData(process);
+                    else v2List.refresh();
                 }
             }
 
@@ -1121,7 +1284,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                         receive_from_holo_machine_piece_totals: nextTotals,
                     });
                 } else {
-                    await refreshProcessData(process);
+                    if (!v2Enabled) await refreshProcessData(process);
+                    else v2List.refresh();
                 }
             } else {
                 await api.deleteConingReceiveRow(row.id);
@@ -1300,7 +1464,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         setSavingEdit(true);
         try {
             await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
-            await refreshProcessData(process);
+            if (!v2Enabled) await refreshProcessData(process);
+            else v2List.refresh();
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1352,7 +1517,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 );
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
-                    await refreshProcessData(process);
+                    if (!v2Enabled) await refreshProcessData(process);
+                    else v2List.refresh();
                     closeEditDialog();
                 }
             } else {
@@ -1369,7 +1535,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         if (!ok) return;
         try {
             await api.deleteCutterReceiveChallan(challan.id);
-            await refreshProcessData(process);
+            if (!v2Enabled) await refreshProcessData(process);
+            else v2List.refresh();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
@@ -1405,7 +1572,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 );
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
-                    await refreshProcessData(process);
+                    if (!v2Enabled) await refreshProcessData(process);
+                    else v2List.refresh();
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');
@@ -1865,15 +2033,27 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         return { tare, net, coneTypeName: coneType?.name || '—', coneWeight };
     }, [process, receiveDraft, editingReceiveRow, db.boxes, db.issue_to_coning_machine, db.cone_types]);
 
-    const showHistory = process !== 'cutter' || activeTab === 'history';
-    const showChallans = process === 'cutter' && activeTab === 'challan';
-
-    const handleExportHistory = () => {
+    const handleExportHistory = async () => {
+        let sourceRows = filteredHistory;
+        if (v2Enabled && showHistory) {
+            try {
+                const res = await v2.exportV2ReceiveHistoryJson(process, {
+                    search: searchTerm,
+                    dateFrom: v2DateFrom,
+                    dateTo: v2DateTo,
+                    filters: JSON.stringify(v2Filters || []),
+                });
+                sourceRows = Array.isArray(res?.items) ? res.items : [];
+            } catch (err) {
+                alert(err?.message || 'Failed to export');
+                return;
+            }
+        }
         let exportData;
         let columns;
 
         if (process === 'cutter') {
-            exportData = filteredHistory.map(row => {
+            exportData = sourceRows.map(row => {
                 const piece = db.inbound_items?.find(p => p.id === row.pieceId);
                 const item = db.items?.find(i => i.id === piece?.itemId);
                 const resolvedCut = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || resolvePieceCutName(piece) || '—';
@@ -1881,7 +2061,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 const resolvedTwist = resolvePieceTwistName(piece) || '—';
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
-                    item: item?.name || '—',
+                    item: row.itemName || item?.name || '—',
                     piece: row.pieceId || '—',
                     cut: resolvedCut,
                     yarn: resolvedYarn,
@@ -1909,17 +2089,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 { key: 'bobbin', header: 'Bobbin' },
             ];
         } else if (process === 'holo') {
-            exportData = filteredHistory.map(row => {
-                const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-                const item = db.items?.find(i => i.id === issue?.itemId);
-                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+            exportData = sourceRows.map(row => {
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
-                    item: item?.name || '—',
-                    cut: resolved.cutName,
-                    yarn: resolved.yarnName,
-                    twist: resolved.twistName,
-                    piece: (row.pieceIdsList || []).join(', ') || '—',
+                    item: row.itemName || row.issue?.item?.name || '—',
+                    cut: row.cutName || row.issue?.cut?.name || '—',
+                    yarn: row.yarnName || row.issue?.yarn?.name || '—',
+                    twist: row.twistName || row.issue?.twist?.name || '—',
+                    piece: (row.computedPieceIds || row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
                     weight: formatKg(row.rollWeight ?? row.netWeight ?? row.grossWeight),
@@ -1946,20 +2123,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
             ];
         } else {
             // Coning - resolve cut/yarn from referenced source rows
-            exportData = filteredHistory.map(row => {
-                const coningIssue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+            exportData = sourceRows.map(row => {
+                const coningIssue = row.issue || (db.issue_to_coning_machine?.find(i => i.id === row.issueId) || null);
+                const item = row.itemName || coningIssue?.item?.name || (coningIssue?.itemId ? db.items?.find(i => i.id === coningIssue.itemId)?.name : '');
                 const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
                 const perConeNet = Number(coningIssue?.requiredPerConeNetWeight);
                 const actualPerConeNet = formatActualPerCone(row.netWeight ?? row.grossWeight, row.coneCount);
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
-                    item: item?.name || '—',
-                    cut: resolved.cutName,
-                    yarn: resolved.yarnName,
-                    twist: resolved.twistName,
-                    piece: (row.pieceIdsList || []).join(', ') || '—',
+                    item: item || '—',
+                    cut: row.cutName || coningIssue?.cut?.name || '—',
+                    yarn: row.yarnName || coningIssue?.yarn?.name || '—',
+                    twist: row.twistName || coningIssue?.twist?.name || '—',
+                    piece: (row.computedPieceIds || row.pieceIdsList || []).join(', ') || '—',
                     barcode: row.barcode || '—',
                     coneType: coneType?.name || '—',
                     perConeNetG: Number.isFinite(perConeNet) && perConeNet > 0 ? perConeNet : '',
@@ -2080,7 +2256,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
 
                 {showHistory && (
                     <>
-                        <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-auto">
+                        <div ref={scrollRootRef} className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -2089,68 +2265,68 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
 
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Employee</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'employee')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('employee')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Net Wt (kg)</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'netWt')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('netWt')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Bobbin Qty</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'bobbinQty')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('bobbinQty')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Bobbin</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'bobbin')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('bobbin')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2161,85 +2337,85 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Yarn</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Twist</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Rolls</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'rolls')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('rolls')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Weight (kg)</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Operator</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Helper</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'helper')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('helper')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Notes</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2250,103 +2426,103 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Yarn</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Twist</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cone Type</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'coneType')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('coneType')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Per Cone (g)</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'perCone')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('perCone')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Actual (g)</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'actualG')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('actualG')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Box</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'box')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('box')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cones</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'cones')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cones')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Weight (kg)</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Operator</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Notes</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={filterColumns.find(c => c.id === 'addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2403,19 +2579,26 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         </TableRow>
                                                     );
                                                 } else if (process === 'holo') {
-                                                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-                                                    const item = db.items?.find(i => i.id === issue?.itemId);
-                                                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                    // Prefer flattened v2 fields (fast, immediate). Fall back to legacy trace only if needed.
+                                                    const issue = (!r.itemName || !r.cutName || !r.yarnName || !r.twistName)
+                                                        ? db.issue_to_holo_machine?.find(i => i.id === r.issueId)
+                                                        : null;
+                                                    const item = issue ? db.items?.find(i => i.id === issue?.itemId) : null;
+                                                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : null;
+                                                    const itemName = r.itemName || item?.name || '—';
+                                                    const cutName = r.cutName || resolved?.cutName || '—';
+                                                    const yarnName = r.yarnName || resolved?.yarnName || '—';
+                                                    const twistName = r.twistName || resolved?.twistName || '—';
                                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                                <HighlightMatch text={(r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
+                                                                <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
                                                             <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-right">{r.rollCount || 1}</TableCell>
@@ -2431,25 +2614,33 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                         </TableRow>
                                                     );
                                                 } else if (process === 'coning') {
-                                                    const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-                                                    const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                                                    const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                                    // Prefer flattened v2 fields (fast, immediate). Fall back to legacy trace only if needed.
+                                                    const coningIssue = (!r.itemName || !r.cutName || !r.yarnName || !r.twistName || !r.coneTypeName || r.perConeTargetG == null)
+                                                        ? db.issue_to_coning_machine?.find(i => i.id === r.issueId)
+                                                        : null;
+                                                    const item = coningIssue ? db.items?.find(i => i.id === coningIssue?.itemId) : null;
+                                                    const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : null;
+                                                    const itemName = r.itemName || item?.name || '—';
+                                                    const cutName = r.cutName || resolved?.cutName || '—';
+                                                    const yarnName = r.yarnName || resolved?.yarnName || '—';
+                                                    const twistName = r.twistName || resolved?.twistName || '—';
                                                     const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
-                                                    const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                                    const coneTypeName = r.coneTypeName || coneType?.name || '—';
+                                                    const perConeNet = r.perConeTargetG ?? coningIssue?.requiredPerConeNetWeight;
                                                     const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell className="max-w-[120px] truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                                <HighlightMatch text={(r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
+                                                                <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
                                                             <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={coneType?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={coneTypeName} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
                                                             <TableCell className="text-right">{actualPerCone}</TableCell>
                                                             <TableCell><HighlightMatch text={r.box?.name || '—'} query={searchTerm} /></TableCell>
@@ -2470,6 +2661,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                     )}
                                 </TableBody>
                             </Table>
+                            {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
+                            <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
                         </div>
                         <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                             <span className="text-sm font-semibold">Grand Total (filtered)</span>
@@ -2551,8 +2744,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                             <p className="font-medium mt-1">{item?.name || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                                Piece: {(r.pieceIdsList || []).join(', ') || '—'}
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
+                                                                Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
                                                                 {dateDisplay} • {r.operator?.name || '—'}
@@ -2595,8 +2788,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                                                             <p className="text-xs text-muted-foreground mt-1">
                                                                 Actual: {actualPerCone}
                                                             </p>
-                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.pieceIdsList || []).join(', ')}>
-                                                                Piece: {(r.pieceIdsList || []).join(', ') || '—'}
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
+                                                                Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
                                                                 {dateDisplay} • {r.operator?.name || '—'}

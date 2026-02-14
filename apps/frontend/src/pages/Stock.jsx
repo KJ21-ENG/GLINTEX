@@ -70,6 +70,8 @@ export function Stock() {
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
 
   useEffect(() => {
+    // Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
+    // can produce incorrect on-hand totals once the DB exceeds server-side fetch limits.
     ensureModuleData('process', { process: processId, full: true });
   }, [ensureModuleData, processId]);
 

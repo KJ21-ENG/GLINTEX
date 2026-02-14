@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
@@ -11,6 +11,10 @@ import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilte
 import { HighlightMatch } from '../common/HighlightMatch';
 import { Dialog, DialogContent } from '../ui/Dialog';
 import { useInventory } from '../../context/InventoryContext';
+import { getFeatureFlags } from '../../utils/featureFlags';
+import { useV2CursorList } from '../../hooks/useV2CursorList';
+import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
+import * as v2 from '../../api/v2';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -21,6 +25,8 @@ import { useInventory } from '../../context/InventoryContext';
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
     const { createIssueTakeBack, reverseIssueTakeBack } = useInventory();
+    const flags = getFeatureFlags();
+    const v2Enabled = flags.v2OnMachine;
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedIds, setExpandedIds] = useState(() => new Set());
     const [sheetFilters, setSheetFilters] = useState({});
@@ -32,8 +38,9 @@ export function OnMachineTable({ db, process }) {
     const [takeBackNote, setTakeBackNote] = useState('');
     const [takeBackLinesDraft, setTakeBackLinesDraft] = useState([]);
     const [takeBackSaving, setTakeBackSaving] = useState(false);
-    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
-    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+    const scrollRootRef = useRef(null);
+    const traceContext = useMemo(() => (v2Enabled ? null : buildConingTraceContext(db)), [db, v2Enabled]);
+    const holoTraceContext = useMemo(() => (v2Enabled ? null : buildHoloTraceContext(db)), [db, v2Enabled]);
     const boxById = useMemo(() => {
         const map = new Map();
         (db.boxes || []).forEach((box) => {
@@ -151,6 +158,18 @@ export function OnMachineTable({ db, process }) {
 
     const resolveEntryNames = (entry) => {
         if (!entry) return { cutName: '—', yarnName: '—', twistName: '—' };
+
+        // In v2 mode we deliberately do not build trace contexts and we expect the API to send
+        // already-resolved display fields. Avoid doing any DB lookups that can "fill in later"
+        // (causes flicker) and can be expensive during scroll.
+        if (v2Enabled) {
+            return {
+                cutName: pickName(entry.cutName, ''),
+                yarnName: pickName(entry.yarnName, ''),
+                twistName: pickName(entry.twistName, ''),
+            };
+        }
+
         const firstPieceId = Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList[0] : null;
         const piece = firstPieceId ? db.inbound_items?.find(p => p.id === firstPieceId) : null;
         const fallbackCut = resolvePieceCutName(piece);
@@ -167,6 +186,13 @@ export function OnMachineTable({ db, process }) {
         }
 
         if (process === 'holo') {
+            if (!holoTraceContext) {
+                return {
+                    cutName: pickName(entry.cutName, fallbackCut),
+                    yarnName: pickName(entry.yarnName, fallbackYarn),
+                    twistName: pickName(entry.twistName, fallbackTwist),
+                };
+            }
             const resolved = resolveHoloTrace(entry, holoTraceContext);
             return {
                 cutName: pickName(resolved.cutName, fallbackCut),
@@ -176,6 +202,13 @@ export function OnMachineTable({ db, process }) {
         }
 
         if (process === 'coning') {
+            if (!traceContext) {
+                return {
+                    cutName: pickName(entry.cutName, fallbackCut),
+                    yarnName: pickName(entry.yarnName, fallbackYarn),
+                    twistName: pickName(entry.twistName, fallbackTwist),
+                };
+            }
             const resolved = resolveConingTrace(entry, traceContext);
             return {
                 cutName: pickName(resolved.cutName, fallbackCut),
@@ -527,6 +560,7 @@ export function OnMachineTable({ db, process }) {
 
     // Compute on-machine entries based on process
     const onMachineEntries = useMemo(() => {
+        if (v2Enabled) return [];
         let entries = [];
 
         if (process === 'cutter') {
@@ -720,20 +754,20 @@ export function OnMachineTable({ db, process }) {
         let sorted = entries.sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
 
         return sorted;
-    }, [db, process, cutterPieceTotals, coningPieceTotals]);
+    }, [db, process, cutterPieceTotals, coningPieceTotals, v2Enabled]);
 
     const filterColumns = useMemo(() => {
         const common = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
-            { id: 'item', label: 'Item', kind: 'values', getValue: (r) => itemNameById.get(r.itemId) || '' },
+            { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || itemNameById.get(r.itemId) || '' },
             { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceIds || '')) },
             { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveEntryNames(r).cutName || '') },
             ...(process !== 'cutter' ? [
                 { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (resolveEntryNames(r).yarnName || '') },
                 { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (resolveEntryNames(r).twistName || '') },
             ] : []),
-            { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => machineNameById.get(r.machineId) || '' },
-            { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => operatorNameById.get(r.operatorId) || '' },
+            { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineName || machineNameById.get(r.machineId) || '' },
+            { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operatorName || operatorNameById.get(r.operatorId) || '' },
             { id: 'issuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.issuedWeight },
             { id: 'receivedWeight', label: 'Received (kg)', kind: 'number', getValue: (r) => r.receivedWeight },
             { id: 'pendingWeight', label: 'Pending (kg)', kind: 'number', getValue: (r) => r.pendingWeight },
@@ -743,16 +777,17 @@ export function OnMachineTable({ db, process }) {
             return [
                 ...common.slice(0, 6),
                 { id: 'rollsIssued', label: 'Rolls Issued', kind: 'number', getValue: (r) => r.rollsIssued || 0 },
-                { id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => resolveConingConeTypeName(r) || '' },
-                { id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => r.requiredPerConeNetWeight || 0 },
+                { id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => r.coneTypeName || resolveConingConeTypeName(r) || '' },
+                { id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => (r.perConeTargetG ?? r.requiredPerConeNetWeight ?? 0) },
                 ...common.slice(6),
             ];
         }
         return common;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [process, itemNameById, machineNameById, operatorNameById, db, traceContext, holoTraceContext]);
+    }, [process, itemNameById, machineNameById, operatorNameById, db, traceContext, holoTraceContext, v2Enabled]);
 
-    const filteredEntries = useMemo(() => {
+    const legacyFilteredEntries = useMemo(() => {
+        if (v2Enabled) return [];
         let rows = applySheetFilters(onMachineEntries, filterColumns, sheetFilters);
 
         // Search across all filterColumns
@@ -767,9 +802,76 @@ export function OnMachineTable({ db, process }) {
         }
 
         return rows;
-    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm]);
+    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm, v2Enabled]);
+
+    const v2DateFilter = sheetFilters?.date && sheetFilters.date.kind === 'date' ? sheetFilters.date : null;
+    const v2DateFrom = v2DateFilter?.from || '';
+    const v2DateTo = v2DateFilter?.to || '';
+    const v2Filters = useMemo(() => {
+        const out = [];
+        for (const [field, f] of Object.entries(sheetFilters || {})) {
+            if (!f || field === 'date') continue;
+            if (f.kind === 'values') {
+                const values = Array.isArray(f.selected) ? f.selected.map(String) : [];
+                out.push({ field, op: 'in', values: values.length ? values : ['__NO_MATCH__'] });
+            } else if (f.kind === 'text') {
+                const value = String(f.query || '').trim();
+                if (value) out.push({ field, op: 'contains', value });
+            } else if (f.kind === 'number') {
+                const min = f.min === '' || f.min == null ? null : Number(f.min);
+                const max = f.max === '' || f.max == null ? null : Number(f.max);
+                if (min != null || max != null) out.push({ field, op: 'between', min, max });
+            }
+        }
+        return out;
+    }, [sheetFilters]);
+
+    const v2List = useV2CursorList({
+        enabled: v2Enabled,
+        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
+            v2.getV2OnMachine(process, {
+                limit,
+                cursor,
+                search,
+                dateFrom,
+                dateTo,
+                filters: JSON.stringify(filters || []),
+            })
+        ),
+        limit: 50,
+        search: searchTerm,
+        dateFrom: v2DateFrom,
+        dateTo: v2DateTo,
+        filters: v2Filters,
+    });
+
+    const filteredEntries = v2Enabled ? v2List.items : legacyFilteredEntries;
+    const filterRows = v2Enabled ? filteredEntries : onMachineEntries;
+
+    const loadMoreRef = useInfiniteScrollSentinel({
+        enabled: v2Enabled && v2List.hasMore && !v2List.isLoading,
+        onLoadMore: v2List.loadMore,
+        rootRef: scrollRootRef,
+    });
+
+    const columnFor = (id) => {
+        return filterColumns.find(c => c.id === id);
+    };
 
     const totals = useMemo(() => {
+        // When v2 is enabled, prefer the server-computed summary (covers ALL records, not just loaded pages).
+        if (v2Enabled && v2List.summary) {
+            return {
+                originalIssuedWeight: Number(v2List.summary.originalIssuedWeight || 0),
+                takeBackWeight: Number(v2List.summary.takeBackWeight || 0),
+                netIssuedWeight: Number(v2List.summary.netIssuedWeight || 0),
+                issuedWeight: Number(v2List.summary.netIssuedWeight || 0),
+                receivedWeight: Number(v2List.summary.receivedWeight || 0),
+                pendingWeight: Number(v2List.summary.pendingWeight || 0),
+                rollsIssued: Number(v2List.summary.rollsIssued || 0),
+            };
+        }
+        // Legacy / fallback: sum from loaded rows
         const base = {
             originalIssuedWeight: 0,
             takeBackWeight: 0,
@@ -789,7 +891,7 @@ export function OnMachineTable({ db, process }) {
             if (process === 'coning') base.rollsIssued += Number(r.rollsIssued || 0);
         }
         return base;
-    }, [filteredEntries, process]);
+    }, [filteredEntries, process, v2Enabled, v2List.summary]);
 
     const handleGoToReceive = (entry) => {
         // Navigate to receive page with barcode param for auto-scan
@@ -943,7 +1045,7 @@ export function OnMachineTable({ db, process }) {
                 </button>
             </div>
 
-            <div className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-y-auto">
+            <div ref={scrollRootRef} className="hidden sm:block rounded-md border max-h-[calc(100vh-280px)] overflow-y-auto">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -952,63 +1054,63 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Item</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('item')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Piece</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('piece')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Cut</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('cut')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
 
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Machine</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('machine')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Operator</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('operator')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Issued (O/TB/N)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Received (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'receivedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Pending (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'pendingWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>Progress</TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Barcode</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('barcode')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="w-[50px]">Actions</TableHead>
@@ -1019,74 +1121,74 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Item</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('item')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Piece</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('piece')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Cut</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('cut')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Yarn</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('yarn')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Twist</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('twist')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Machine</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('machine')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Operator</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('operator')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Issued (O/TB/N)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Received (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'receivedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Pending (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'pendingWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>Progress</TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Barcode</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('barcode')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="w-[50px]">Actions</TableHead>
@@ -1097,92 +1199,92 @@ export function OnMachineTable({ db, process }) {
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'date')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Item</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'item')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('item')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Piece</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'piece')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('piece')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Cut</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'cut')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('cut')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Yarn</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'yarn')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('yarn')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Twist</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'twist')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('twist')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Rolls Issued</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'rollsIssued')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('rollsIssued')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Cone Type</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'coneType')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('coneType')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Per Cone (g)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'perCone')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('perCone')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Machine</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'machine')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('machine')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Operator</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'operator')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('operator')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Issued (O/TB/N)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'issuedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Received (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'receivedWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Pending (kg)</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'pendingWeight')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>Progress</TableHead>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Barcode</span>
-                                            <SheetColumnFilter column={filterColumns.find(c => c.id === 'barcode')} rows={onMachineEntries} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                            <SheetColumnFilter column={columnFor('barcode')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="w-[50px]">Actions</TableHead>
@@ -1202,10 +1304,13 @@ export function OnMachineTable({ db, process }) {
                                 {filteredEntries.map((entry) => {
                                     const progressPercent = getProgressPercent(entry);
                                     const resolvedNames = resolveEntryNames(entry);
+                                    const itemDisplay = entry.itemName || itemNameById.get(entry.itemId) || '—';
+                                    const machineDisplay = entry.machineName || machineNameById.get(entry.machineId) || '—';
+                                    const operatorDisplay = entry.operatorName || operatorNameById.get(entry.operatorId) || '—';
                                     return (
                                         <TableRow key={entry.id}>
                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(entry.date)} query={searchTerm} /></TableCell>
-                                            <TableCell><HighlightMatch text={itemNameById.get(entry.itemId)} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
                                             <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
                                                 <HighlightMatch text={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')} query={searchTerm} />
                                             </TableCell>
@@ -1225,12 +1330,12 @@ export function OnMachineTable({ db, process }) {
                                                     <TableCell><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
                                                     <TableCell><HighlightMatch text={resolvedNames.twistName} query={searchTerm} /></TableCell>
                                                     <TableCell>{entry.rollsIssued || 0}</TableCell>
-                                                    <TableCell><HighlightMatch text={resolveConingConeTypeName(entry)} query={searchTerm} /></TableCell>
-                                                    <TableCell>{formatPerConeNet(entry.requiredPerConeNetWeight)}</TableCell>
+                                                    <TableCell><HighlightMatch text={entry.coneTypeName || resolveConingConeTypeName(entry)} query={searchTerm} /></TableCell>
+                                                    <TableCell>{formatPerConeNet(entry.perConeTargetG ?? entry.requiredPerConeNetWeight)}</TableCell>
                                                 </>
                                             )}
-                                            <TableCell><HighlightMatch text={machineNameById.get(entry.machineId)} query={searchTerm} /></TableCell>
-                                            <TableCell><HighlightMatch text={operatorNameById.get(entry.operatorId)} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={machineDisplay} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={operatorDisplay} query={searchTerm} /></TableCell>
                                             <TableCell>
                                                 <div className="space-y-0.5 leading-tight">
                                                     <div className="text-[11px] text-muted-foreground">O: {formatKg(entry.originalIssuedWeight || entry.issuedWeight)}</div>
@@ -1262,6 +1367,8 @@ export function OnMachineTable({ db, process }) {
                         )}
                     </TableBody>
                 </Table>
+                {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
+                <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
             </div>
             <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                 <span className="text-sm font-semibold">Grand Total (filtered)</span>
@@ -1437,105 +1544,105 @@ export function OnMachineTable({ db, process }) {
                                         </TableRow>
                                     ) : (
                                         takeBackLinesDraft.map((line, idx) => (
-                                                <TableRow key={line.sourceId}>
-                                                    <TableCell className="font-mono text-xs align-middle whitespace-nowrap">{line.sourceBarcode || line.sourceId}</TableCell>
-                                                    {process === 'holo' && (
-                                                        <TableCell className="text-xs align-middle whitespace-nowrap">
-                                                            <div>{line.pieceTypeName || '—'}</div>
-                                                        </TableCell>
-                                                    )}
-                                                    {process !== 'cutter' && (
-                                                        <TableCell className="text-right align-middle">
-                                                            <input
-                                                                type="number"
-                                                                min={0}
-                                                                max={line.maxCount || 0}
-                                                                value={line.count}
-                                                                onChange={(e) => {
-                                                                    const raw = Number(e.target.value || 0);
-                                                                    const maxCount = Math.max(0, Number(line.maxCount || 0));
-                                                                    const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
-                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                        if (i !== idx) return l;
-                                                                        const nextWeight = process === 'holo'
-                                                                            ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
-                                                                            : calcAutoTakeBackWeight(l, nextCount);
-                                                                        return {
-                                                                            ...l,
-                                                                            count: nextCount,
-                                                                            weight: nextWeight,
-                                                                        };
-                                                                    }));
-                                                                }}
-                                                                className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                            />
-                                                        </TableCell>
-                                                    )}
-                                                    {process === 'holo' && (
-                                                        <TableCell className="align-middle">
-                                                            <select
-                                                                value={line.boxId || ''}
-                                                                onChange={(e) => {
-                                                                    const nextBoxId = String(e.target.value || '');
-                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                        if (i !== idx) return l;
-                                                                        return {
-                                                                            ...l,
-                                                                            boxId: nextBoxId,
-                                                                            weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
-                                                                        };
-                                                                    }));
-                                                                }}
-                                                                className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
-                                                            >
-                                                                <option value="">Select Box</option>
-                                                                {(db.boxes || []).map((box) => (
-                                                                    <option key={box.id} value={box.id}>{box.name}</option>
-                                                                ))}
-                                                            </select>
-                                                        </TableCell>
-                                                    )}
-                                                    {process === 'holo' && (
-                                                        <TableCell className="text-right align-middle">
-                                                            <input
-                                                                type="number"
-                                                                min={0}
-                                                                step="0.001"
-                                                                value={line.grossWeight || ''}
-                                                                onChange={(e) => {
-                                                                    const raw = Number(e.target.value || 0);
-                                                                    const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
-                                                                    setTakeBackLinesDraft((prev) => prev.map((l, i) => {
-                                                                        if (i !== idx) return l;
-                                                                        return {
-                                                                            ...l,
-                                                                            grossWeight,
-                                                                            weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
-                                                                        };
-                                                                    }));
-                                                                }}
-                                                                className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                            />
-                                                        </TableCell>
-                                                    )}
+                                            <TableRow key={line.sourceId}>
+                                                <TableCell className="font-mono text-xs align-middle whitespace-nowrap">{line.sourceBarcode || line.sourceId}</TableCell>
+                                                {process === 'holo' && (
+                                                    <TableCell className="text-xs align-middle whitespace-nowrap">
+                                                        <div>{line.pieceTypeName || '—'}</div>
+                                                    </TableCell>
+                                                )}
+                                                {process !== 'cutter' && (
+                                                    <TableCell className="text-right align-middle">
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            max={line.maxCount || 0}
+                                                            value={line.count}
+                                                            onChange={(e) => {
+                                                                const raw = Number(e.target.value || 0);
+                                                                const maxCount = Math.max(0, Number(line.maxCount || 0));
+                                                                const nextCount = Math.max(0, Math.min(maxCount, Number.isFinite(raw) ? raw : 0));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    const nextWeight = process === 'holo'
+                                                                        ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
+                                                                        : calcAutoTakeBackWeight(l, nextCount);
+                                                                    return {
+                                                                        ...l,
+                                                                        count: nextCount,
+                                                                        weight: nextWeight,
+                                                                    };
+                                                                }));
+                                                            }}
+                                                            className="h-8 w-24 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                        />
+                                                    </TableCell>
+                                                )}
+                                                {process === 'holo' && (
+                                                    <TableCell className="align-middle">
+                                                        <select
+                                                            value={line.boxId || ''}
+                                                            onChange={(e) => {
+                                                                const nextBoxId = String(e.target.value || '');
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    return {
+                                                                        ...l,
+                                                                        boxId: nextBoxId,
+                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
+                                                                    };
+                                                                }));
+                                                            }}
+                                                            className="h-8 w-32 rounded-md border border-input bg-background px-2 text-xs"
+                                                        >
+                                                            <option value="">Select Box</option>
+                                                            {(db.boxes || []).map((box) => (
+                                                                <option key={box.id} value={box.id}>{box.name}</option>
+                                                            ))}
+                                                        </select>
+                                                    </TableCell>
+                                                )}
+                                                {process === 'holo' && (
                                                     <TableCell className="text-right align-middle">
                                                         <input
                                                             type="number"
                                                             min={0}
                                                             step="0.001"
-                                                            max={line.maxWeight || 0}
-                                                            value={line.weight}
+                                                            value={line.grossWeight || ''}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value || 0);
-                                                                const maxWeight = Math.max(0, Number(line.maxWeight || 0));
-                                                                const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
-                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
+                                                                const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
+                                                                setTakeBackLinesDraft((prev) => prev.map((l, i) => {
+                                                                    if (i !== idx) return l;
+                                                                    return {
+                                                                        ...l,
+                                                                        grossWeight,
+                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
+                                                                    };
+                                                                }));
                                                             }}
                                                             className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                            readOnly={process === 'holo'}
                                                         />
                                                     </TableCell>
-                                                </TableRow>
+                                                )}
+                                                <TableCell className="text-right align-middle">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step="0.001"
+                                                        max={line.maxWeight || 0}
+                                                        value={line.weight}
+                                                        onChange={(e) => {
+                                                            const raw = Number(e.target.value || 0);
+                                                            const maxWeight = Math.max(0, Number(line.maxWeight || 0));
+                                                            const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
+                                                            setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
+                                                        }}
+                                                        className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
+                                                        readOnly={process === 'holo'}
+                                                    />
+                                                </TableCell>
+                                            </TableRow>
                                         ))
                                     )}
                                 </TableBody>

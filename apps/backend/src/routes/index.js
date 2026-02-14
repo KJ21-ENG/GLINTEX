@@ -19,6 +19,7 @@ import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
 import { generateSummaryPDF } from '../utils/pdf/index.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
+import v2Router from './v2.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -30,6 +31,9 @@ const TAKE_BACK_EPSILON = 1e-6;
 const TAKE_BACK_STAGES = ['cutter', 'holo', 'coning'];
 
 let bootstrapToken = null;
+
+// v2 performance endpoints (cursor pagination, server-side filtering, facets, export)
+router.use('/api/v2', v2Router);
 
 function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();

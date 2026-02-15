@@ -21,6 +21,7 @@
     "jspdf": "^4.0.0",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
+    "pg": "^8.18.0",
     "qrcode": "^1.5.4",
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
     "xlsx": "^0.18.5"

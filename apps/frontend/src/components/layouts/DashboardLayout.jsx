@@ -26,6 +26,7 @@ import { cn } from "../../lib/utils";
 import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
 import { useAuth } from "../../context/AuthContext";
 import { ACCESS_LEVELS, getPermissionLevel } from "../../utils/permissions";
+import CountdownTimer from "../common/CountdownTimer";
 
 const NAV_ITEMS = [
   { key: "inbound", label: "Inbound", icon: PackagePlus, permissions: ["inbound"] },
@@ -177,6 +178,9 @@ export default function DashboardLayout() {
         {/* Content Area */}
         {/* NOTE: Avoid overflow clipping here; it breaks dropdowns/menus on smaller screens. */}
         <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full min-w-0">
+          <div className="pb-4 border-b border-border/50 bg-muted/30">
+            <CountdownTimer />
+          </div>
           <Outlet />
         </div>
       </main>

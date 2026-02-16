@@ -28,25 +28,54 @@ export function ConingReceiveForm() {
         };
     };
 
+    const findIssueByBarcodeInCache = (barcode) => {
+        const normalized = String(barcode || '').trim().toUpperCase();
+        if (!normalized) return null;
+        return (db.issue_to_coning_machine || []).find(
+            (i) => String(i.barcode || '').trim().toUpperCase() === normalized
+        ) || null;
+    };
+
+    const loadIssueByBarcode = async (barcode, { notFoundMessage = 'Coning issue not found for barcode' } = {}) => {
+        const normalized = String(barcode || '').trim();
+        if (!normalized) return null;
+
+        const cached = findIssueByBarcodeInCache(normalized);
+        if (cached) return enrichIssueWithBalance(cached);
+
+        try {
+            const lookedUp = await api.getIssueByConingBarcode(normalized);
+            if (lookedUp?.id) return enrichIssueWithBalance(lookedUp);
+        } catch (err) {
+            if (!String(err?.message || '').toLowerCase().includes('not found')) {
+                throw err;
+            }
+        }
+
+        alert(notFoundMessage);
+        return null;
+    };
+
     // Auto-scan barcode from URL query param (from "Go to Receive" button in OnMachineTable)
     useEffect(() => {
         const barcodeFromUrl = searchParams.get('barcode');
-        if (barcodeFromUrl && !issue) {
-            // For coning, lookup in db.issue_to_coning_machine by barcode
-            const found = db.issue_to_coning_machine?.find(
-                i => (i.barcode || '').toUpperCase() === barcodeFromUrl.toUpperCase()
-            );
-
-            if (found) {
-                setIssue(enrichIssueWithBalance(found));
-                setCart([]);
-            } else {
-                alert('Coning issue not found for barcode');
+        if (!barcodeFromUrl || issue) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const found = await loadIssueByBarcode(barcodeFromUrl);
+                if (!cancelled && found) {
+                    setIssue(found);
+                    setCart([]);
+                }
+            } catch (e) {
+                if (!cancelled) alert(e?.message || 'Failed to lookup coning issue');
+            } finally {
+                // Clear the URL param to prevent re-scan on refresh
+                if (!cancelled) setSearchParams({}, { replace: true });
             }
-
-            // Clear the URL param to prevent re-scan on refresh
-            setSearchParams({}, { replace: true });
-        }
+        })();
+        return () => { cancelled = true; };
     }, [searchParams, issue, setSearchParams, db.issue_to_coning_machine]);
 
     // --- Derived ---
@@ -123,21 +152,10 @@ export function ConingReceiveForm() {
     async function handleScan() {
         if (!scanInput.trim()) return;
         try {
-            // Expecting Issue Barcode (CN-...)
-            // Note: The original logic might have scanned receive crates first, but usually we load the Issue context first.
-            // Assuming we scan the Issue Barcode to start.
-
-            // Since the API might not have a direct lookup for coning issue by barcode in the client sdk explicitly named,
-            // we can try finding it in the loaded DB issues if available, or assume `getIssueByBarcode` works.
-            // In the original code, `lookupIssue` filtered `db.issue_to_coning_machine`.
-
-            const found = db.issue_to_coning_machine.find(i => (i.barcode || '').toUpperCase() === scanInput.trim().toUpperCase());
-
+            const found = await loadIssueByBarcode(scanInput.trim(), { notFoundMessage: 'Issue not found' });
             if (found) {
-                setIssue(enrichIssueWithBalance(found));
+                setIssue(found);
                 setCart([]);
-            } else {
-                alert('Issue not found');
             }
         } catch (e) {
             alert(e.message);

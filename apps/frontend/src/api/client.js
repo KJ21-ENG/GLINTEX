@@ -278,6 +278,7 @@ export async function getInboundByBarcode(code) { return await request(`/api/inb
 export async function getIssueByCutterBarcode(code) { return await request(`/api/issue_to_cutter_machine/lookup?barcode=${encodeURIComponent(code)}`); }
 export async function getIssueByBarcode(code) { return await getIssueByCutterBarcode(code); }
 export async function getIssueByHoloBarcode(code) { return await request(`/api/issue_to_holo_machine/lookup?barcode=${encodeURIComponent(code)}`); }
+export async function getIssueByConingBarcode(code) { return await request(`/api/issue_to_coning_machine/lookup?barcode=${encodeURIComponent(code)}`); }
 
 export function barcodeImageUrl(code, options = {}) {
   if (!code) return '';
@@ -474,5 +475,6 @@ export default {
   getIssueByBarcode,
   getIssueByCutterBarcode,
   getIssueByHoloBarcode,
+  getIssueByConingBarcode,
   barcodeImageUrl,
 };

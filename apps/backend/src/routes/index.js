@@ -2951,6 +2951,19 @@ router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', 
   }
 });
 
+router.get('/api/issue_to_coning_machine/lookup', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query.barcode);
+    if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
+    const issue = await prisma.issueToConingMachine.findFirst({ where: { barcode, isDeleted: false } });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    res.json(issue);
+  } catch (err) {
+    console.error('Failed to lookup coning issue barcode', err);
+    res.status(500).json({ error: 'Failed to lookup barcode' });
+  }
+});
+
 function getTakeBackEventName(stage, action) {
   const suffix = action === 'reversed' ? 'reversed' : 'created';
   return `issue_to_${stage}_machine_takeback_${suffix}`;

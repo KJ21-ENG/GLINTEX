@@ -707,6 +707,18 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
+        // Fallback: if local process cache does not have source cutter rows, use server lookup.
+        if (!bobbinType && row?.barcode) {
+          try {
+            const lookup = await api.getIssueByHoloBarcode(row.barcode);
+            if (lookup?.crates?.length) {
+              bobbinType = lookup.crates[0]?.bobbinName || bobbinType;
+            }
+          } catch (_) {
+            // Keep best-effort local value.
+          }
+        }
+
         const resolvedBobbinQty = bobbinQty || row.metallicBobbins || 0;
         const resolvedNetWeight = issuedWeight || totalWeight || 0;
 

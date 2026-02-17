@@ -2901,6 +2901,7 @@ router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', 
         where: { id: { in: rowIds }, isDeleted: false },
         select: {
           id: true,
+          bobbinId: true,
           pieceId: true,
           barcode: true,
           netWt: true,
@@ -2912,6 +2913,14 @@ router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', 
         },
       })
       : [];
+    const bobbinIds = Array.from(new Set(rows.map((r) => r.bobbinId).filter(Boolean)));
+    const bobbins = bobbinIds.length > 0
+      ? await prisma.bobbin.findMany({
+        where: { id: { in: bobbinIds } },
+        select: { id: true, name: true },
+      })
+      : [];
+    const bobbinNameById = new Map(bobbins.map((b) => [b.id, b.name || '']));
     const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
     if (pieceIds.length === 0 && issue?.lotNo) {
       pieceIds.push(`${issue.lotNo}-1`);
@@ -2930,6 +2939,8 @@ router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', 
       const crateTare = row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0;
       return {
         rowId: row.id,
+        bobbinId: row.bobbinId || null,
+        bobbinName: row.bobbinId ? (bobbinNameById.get(row.bobbinId) || null) : null,
         pieceId: row.pieceId,
         lotNo: piece?.lotNo || meta.lotNo || null,
         itemId: piece?.itemId || meta.itemId || null,

@@ -889,7 +889,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 };
             } else if (process === 'coning') {
                 stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE;
-                const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+                const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const operator = db.operators?.find(o => o.id === row.operatorId);
                 const item = db.items?.find(i => i.id === issue?.itemId);
@@ -900,6 +900,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 let cut = '';
                 let yarnName = '';
                 let rollType = '';
+                let twist = '';
 
                 try {
                     const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
@@ -909,35 +910,49 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                         // Get cone type and wrapper
                         if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
                         if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
-                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', rollTypeName: '—' };
+                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
                         cut = resolved.cutName;
                         yarnName = resolved.yarnName;
+                        twist = resolved.twistName;
                         rollType = resolved.rollTypeName;
                     }
                 } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
-                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
+                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || row.lotNo || '';
                 const netWeight = Number.isFinite(row.netWeight)
                     ? Number(row.netWeight)
                     : Number.isFinite(row.grossWeight) && Number.isFinite(row.tareWeight)
                         ? Math.max(0, Number(row.grossWeight) - Number(row.tareWeight))
                         : Number(row.grossWeight || 0);
 
+                const resolved = issue ? resolveConingTrace(issue, traceContext) : null;
+                const cutResolved = cut === '—' ? '' : cut;
+                const yarnResolved = yarnName === '—' ? '' : yarnName;
+                const twistResolved = twist === '—' ? '' : twist;
+                const rollTypeResolved = rollType === '—' ? '' : rollType;
+                const machineName = row.machineNo
+                    || (issue?.machineId ? db.machines?.find((m) => m.id === issue.machineId)?.name : '')
+                    || getConingMachineName(row)
+                    || '';
+                const operatorName = operator?.name || row.operator?.name || (issue?.operatorId ? db.operators?.find((o) => o.id === issue.operatorId)?.name : '') || '';
+
                 data = {
                     lotNo: lotLabel,
-                    itemName: item?.name || '',
+                    itemName: row.itemName || item?.name || '',
                     coneCount: row.coneCount,
                     grossWeight: row.grossWeight,
                     tareWeight: row.tareWeight || 0,
                     netWeight,
                     boxName: box?.name || row.box?.name || '',
-                    cut: cut,
-                    yarnName: yarnName,
-                    rollType: rollType,
-                    coneType: coneType,
+                    cut: row.cutName || (cutResolved || resolved?.cutName || ''),
+                    yarnName: row.yarnName || (yarnResolved || resolved?.yarnName || ''),
+                    twist: row.twistName || (twistResolved || resolved?.twistName || ''),
+                    rollType: rollTypeResolved || resolved?.rollTypeName || '',
+                    coneType: row.coneTypeName || coneType,
                     wrapperName: wrapperName,
-                    operatorName: operator?.name || row.operator?.name || '',
-                    machineName: getConingMachineName(row),
+                    operatorName,
+                    machineName,
+                    shift: issue?.shift || row.shift || '',
                     date: row.date || row.createdAt,
                     barcode: row.barcode,
                 };

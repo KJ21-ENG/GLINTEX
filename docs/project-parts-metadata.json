@@ -1,0 +1,40 @@
+{
+  "repository_type": "monorepo",
+  "project_root": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX",
+  "project_parts": [
+    {
+      "part_id": "frontend",
+      "display_name": "Frontend",
+      "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/frontend",
+      "project_type_id": "web",
+      "primary_stack": ["react", "vite", "tailwindcss"]
+    },
+    {
+      "part_id": "backend",
+      "display_name": "Backend",
+      "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/backend",
+      "project_type_id": "backend",
+      "primary_stack": ["express", "prisma", "postgresql"]
+    },
+    {
+      "part_id": "local-print-service",
+      "display_name": "Local Print Service",
+      "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/local-print-service",
+      "project_type_id": "backend",
+      "primary_stack": ["express", "nodejs"]
+    },
+    {
+      "part_id": "print-client",
+      "display_name": "Print Client",
+      "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/print-client",
+      "project_type_id": "desktop",
+      "primary_stack": ["tauri", "react", "vite", "rust"]
+    }
+  ],
+  "project_types": [
+    {"part_id": "frontend", "project_type_id": "web", "display_name": "Web"},
+    {"part_id": "backend", "project_type_id": "backend", "display_name": "Backend"},
+    {"part_id": "local-print-service", "project_type_id": "backend", "display_name": "Backend"},
+    {"part_id": "print-client", "project_type_id": "desktop", "display_name": "Desktop"}
+  ]
+}

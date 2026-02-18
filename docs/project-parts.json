@@ -1,0 +1,51 @@
+{
+  "repository_type": "monorepo",
+  "parts": [
+    {
+      "part_id": "frontend",
+      "project_type_id": "web",
+      "root_path": "apps/frontend"
+    },
+    {
+      "part_id": "backend",
+      "project_type_id": "backend",
+      "root_path": "apps/backend"
+    },
+    {
+      "part_id": "local-print-service",
+      "project_type_id": "backend",
+      "root_path": "apps/local-print-service"
+    },
+    {
+      "part_id": "print-client",
+      "project_type_id": "desktop",
+      "root_path": "apps/print-client"
+    }
+  ],
+  "integration_points": [
+    {
+      "from": "frontend",
+      "to": "backend",
+      "type": "REST",
+      "details": "frontend src/api clients call backend /api and /api/v2"
+    },
+    {
+      "from": "backend",
+      "to": "postgres",
+      "type": "Prisma/PostgreSQL",
+      "details": "schema and migrations under apps/backend/prisma"
+    },
+    {
+      "from": "print-client",
+      "to": "local-print-service",
+      "type": "REST localhost",
+      "details": "reads /printers and /queue, controls lifecycle via UI"
+    },
+    {
+      "from": "local-print-service",
+      "to": "OS printer subsystem",
+      "type": "System command",
+      "details": "lp on Unix, PowerShell raw print on Windows"
+    }
+  ]
+}

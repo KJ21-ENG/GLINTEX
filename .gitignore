@@ -68,7 +68,6 @@ jspm_packages/
 .cursor/
 # BMAD rules and docs
 .bmad/
-docs/
 
 # macOS
 .DS_Store

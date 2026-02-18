@@ -35,6 +35,7 @@ const getPieceIssueableWeight = (piece) => {
 const isPieceAvailableForIssue = (piece) => (
   getPieceIssueableWeight(piece) > EPSILON
   && Number(piece?.dispatchedWeight || 0) <= EPSILON
+  && String(piece?.status || '').toLowerCase() !== 'consumed'
 );
 
 const countAvailablePieces = (pieces = []) => pieces.filter(isPieceAvailableForIssue).length;

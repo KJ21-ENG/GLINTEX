@@ -1206,6 +1206,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const v2List = useV2CursorList({
     enabled: v2Enabled,
+    scopeKey: `issue-history:${process}`,
     fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
       v2.getV2IssueTracking(process, {
         limit,

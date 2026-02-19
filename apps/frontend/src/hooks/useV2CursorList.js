@@ -29,6 +29,7 @@ export function useV2CursorList({
   enabled,
   fetchPage, // ({limit, cursor, search, dateFrom, dateTo, filters}) => {items, hasMore, nextCursor}
   limit = 50,
+  scopeKey = '',
   search = '',
   dateFrom = '',
   dateTo = '',
@@ -52,7 +53,10 @@ export function useV2CursorList({
   cursorRef.current = cursor;
   hasMoreRef.current = hasMore;
 
-  const key = useMemo(() => stableStringify({ search, dateFrom, dateTo, filters }), [search, dateFrom, dateTo, filters]);
+  const key = useMemo(
+    () => stableStringify({ scopeKey, search, dateFrom, dateTo, filters }),
+    [scopeKey, search, dateFrom, dateTo, filters],
+  );
 
   const refresh = useCallback(() => {
     setItems([]);

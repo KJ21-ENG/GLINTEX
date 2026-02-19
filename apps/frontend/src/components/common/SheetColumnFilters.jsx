@@ -97,13 +97,14 @@ const buildDistinctOptions = (rows, col) => {
 export function SheetColumnFilter({ column, rows, filters, setFilters, openId, setOpenId }) {
   const menuRef = useRef(null);
   const anchorRef = useRef(null);
+  const lastNonEmptyOptionsRef = useRef([]);
   const isOpen = openId === column.id;
   const active = isSheetFilterActive(filters?.[column.id]);
   const [optionSearch, setOptionSearch] = useState('');
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 280 });
 
   // Build distinct values only when the menu is open; doing it for every column on every render is expensive.
-  const options = useMemo(() => {
+  const rawOptions = useMemo(() => {
     if (!isOpen) return [];
     if (!column || column.kind !== 'values') return [];
     if (Array.isArray(column.facetOptions)) return column.facetOptions;
@@ -112,6 +113,29 @@ export function SheetColumnFilter({ column, rows, filters, setFilters, openId, s
     const sample = Array.isArray(rows) && rows.length > 10000 ? rows.slice(0, 10000) : rows;
     return buildDistinctOptions(sample, column);
   }, [rows, column, isOpen]);
+
+  const currentValuesFilter = filters?.[column.id]?.kind === 'values' ? filters[column.id] : null;
+
+  useEffect(() => {
+    if (!isOpen || column?.kind !== 'values') return;
+    if (rawOptions.length > 0) {
+      lastNonEmptyOptionsRef.current = rawOptions;
+    }
+  }, [isOpen, column?.kind, rawOptions]);
+
+  const options = useMemo(() => {
+    if (!isOpen || column?.kind !== 'values') return rawOptions;
+    if (
+      rawOptions.length === 0
+      && currentValuesFilter
+      && Array.isArray(currentValuesFilter.selected)
+      && currentValuesFilter.selected.length === 0
+      && lastNonEmptyOptionsRef.current.length > 0
+    ) {
+      return lastNonEmptyOptionsRef.current;
+    }
+    return rawOptions;
+  }, [isOpen, column?.kind, rawOptions, currentValuesFilter]);
 
   useEffect(() => {
     if (!isOpen) return;

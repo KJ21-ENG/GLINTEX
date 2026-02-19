@@ -896,6 +896,7 @@ export function OnMachineTable({ db, process }) {
 
     const v2List = useV2CursorList({
         enabled: v2Enabled,
+        scopeKey: `on-machine:${process}`,
         fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
             v2.getV2OnMachine(process, {
                 limit,

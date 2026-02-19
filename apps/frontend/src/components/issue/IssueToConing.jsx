@@ -12,6 +12,25 @@ export function IssueToConing() {
     const { db, refreshProcessData } = useInventory();
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+    const activeConingTakeBackByIssueSource = useMemo(() => {
+        const map = new Map();
+        (db.issue_take_backs || []).forEach((tb) => {
+            if (tb?.stage !== 'coning') return;
+            if (tb?.isReverse || tb?.isReversed) return;
+            const issueId = String(tb?.issueId || '').trim();
+            if (!issueId) return;
+            (tb.lines || []).forEach((line) => {
+                const sourceId = String(line?.sourceId || '').trim();
+                if (!sourceId) return;
+                const key = `${issueId}::${sourceId}`;
+                const current = map.get(key) || { count: 0, weight: 0 };
+                current.count += Number(line?.count || 0);
+                current.weight += Number(line?.weight || 0);
+                map.set(key, current);
+            });
+        });
+        return map;
+    }, [db.issue_take_backs]);
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -121,9 +140,11 @@ export function IssueToConing() {
         const dispatchedRolls = Number(row.dispatchedCount || 0);
         const dispatchedWeight = Number(row.dispatchedWeight || 0);
 
-        // Calculate rolls/weight already issued to coning for this specific holo receive row
+        // Calculate net issued-to-coning for this specific holo receive row:
+        // historical issue refs minus active take-backs.
         let issuedToConingRolls = 0;
         let issuedToConingWeight = 0;
+        const rawIssuedByIssueSource = new Map();
         (db.issue_to_coning_machine || []).forEach(coningIssue => {
             if (coningIssue.isDeleted) return;
             try {
@@ -132,11 +153,19 @@ export function IssueToConing() {
                     : (coningIssue.receivedRowRefs || []);
                 refs.forEach(ref => {
                     if (ref.rowId === row.id || ref.barcode === row.barcode) {
-                        issuedToConingRolls += Number(ref.issueRolls || 0);
-                        issuedToConingWeight += Number(ref.issueWeight || 0);
+                        const key = `${coningIssue.id}::${row.id}`;
+                        const current = rawIssuedByIssueSource.get(key) || { rolls: 0, weight: 0 };
+                        current.rolls += Number(ref.issueRolls || 0);
+                        current.weight += Number(ref.issueWeight || 0);
+                        rawIssuedByIssueSource.set(key, current);
                     }
                 });
             } catch (e) { /* ignore parse errors */ }
+        });
+        rawIssuedByIssueSource.forEach((rawIssued, key) => {
+            const takeBack = activeConingTakeBackByIssueSource.get(key) || { count: 0, weight: 0 };
+            issuedToConingRolls += Math.max(0, Number(rawIssued.rolls || 0) - Number(takeBack.count || 0));
+            issuedToConingWeight += Math.max(0, Number(rawIssued.weight || 0) - Number(takeBack.weight || 0));
         });
 
         const totalUsedRolls = dispatchedRolls + issuedToConingRolls;

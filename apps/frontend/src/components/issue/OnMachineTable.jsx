@@ -83,6 +83,15 @@ export function OnMachineTable({ db, process }) {
         const net = gross - ((count * bobbinWeight) + boxWeight);
         return roundTakeBackWeight(Math.max(0, net));
     };
+    const calcConingTakeBackNetWeight = (line, grossWeightInput, nextBoxId) => {
+        const gross = Number(grossWeightInput || 0);
+        if (!Number.isFinite(gross) || gross <= 0) return 0;
+        const boxWeight = Number(boxById.get(nextBoxId)?.weight || 0);
+        if (!Number.isFinite(boxWeight) || boxWeight < 0) return 0;
+        const net = gross - boxWeight;
+        const maxWeight = Math.max(0, Number(line?.maxWeight || 0));
+        return roundTakeBackWeight(Math.max(0, Math.min(maxWeight, net)));
+    };
 
     // Build lookup maps
     const itemNameById = useMemo(() => {
@@ -442,13 +451,16 @@ export function OnMachineTable({ db, process }) {
             const maxWeight = Math.max(0, originalWeight - Number(active.weight || 0));
             if (maxWeight <= 0.0001) return;
             const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
+            const holoRow = process === 'coning' ? holoReceiveById.get(sourceId) : null;
             const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
             sourceMap.set(sourceId, {
                 sourceId,
                 label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
                 maxCount,
                 maxWeight,
-                sourceBoxId: process === 'holo' ? String(cutterRow?.boxId || '').trim() : '',
+                sourceBoxId: process === 'holo'
+                    ? String(cutterRow?.boxId || '').trim()
+                    : (process === 'coning' ? String(holoRow?.boxId || '').trim() : ''),
                 pieceTypeId: process === 'holo' ? String(cutterRow?.bobbinId || '').trim() : '',
                 pieceTypeName: process === 'holo' ? (bobbin?.name || '—') : '',
                 pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
@@ -527,16 +539,22 @@ export function OnMachineTable({ db, process }) {
         setTakeBackLinesDraft(
             sources.map((line) => {
                 const count = process === 'cutter' ? 0 : line.maxCount;
-                const boxId = process === 'holo' ? (line.sourceBoxId || '') : '';
+                const boxId = (process === 'holo' || process === 'coning') ? (line.sourceBoxId || '') : '';
                 const tareEstimate = process === 'holo'
                     ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
-                    : 0;
+                    : (process === 'coning'
+                        ? Number(boxById.get(boxId)?.weight || 0)
+                        : 0);
                 const grossWeight = process === 'holo'
                     ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
-                    : 0;
+                    : (process === 'coning'
+                        ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
+                        : 0);
                 const weight = process === 'holo'
                     ? calcHoloTakeBackNetWeight(line, count, grossWeight, boxId)
-                    : (process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, count));
+                    : (process === 'coning'
+                        ? calcConingTakeBackNetWeight(line, grossWeight, boxId)
+                        : (process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, count)));
                 return {
                     sourceId: line.sourceId,
                     sourceBarcode: line.label,
@@ -569,7 +587,7 @@ export function OnMachineTable({ db, process }) {
                 weight: Math.max(0, Number(line.weight || 0)),
             }))
             .filter((line) => line.weight > 0.0001 && (process === 'cutter' || line.count > 0));
-        if (process === 'holo') {
+        if (process === 'holo' || process === 'coning') {
             const invalidGross = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && (!Number.isFinite(Number(line.grossWeight)) || Number(line.grossWeight) <= 0));
             if (invalidGross) {
                 alert(`Enter valid gross weight for source ${invalidGross.sourceBarcode || invalidGross.sourceId}`);
@@ -1599,15 +1617,15 @@ export function OnMachineTable({ db, process }) {
                                         <TableHead>Source</TableHead>
                                         {process === 'holo' && <TableHead>Piece Type</TableHead>}
                                         {process !== 'cutter' && <TableHead className="text-right">Count</TableHead>}
-                                        {process === 'holo' && <TableHead>Box</TableHead>}
-                                        {process === 'holo' && <TableHead className="text-right">Gross (kg)</TableHead>}
+                                        {(process === 'holo' || process === 'coning') && <TableHead>Box</TableHead>}
+                                        {(process === 'holo' || process === 'coning') && <TableHead className="text-right">Gross (kg)</TableHead>}
                                         <TableHead className="text-right">Weight (kg)</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {takeBackLinesDraft.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={process === 'cutter' ? 2 : (process === 'holo' ? 6 : 3)} className="text-center py-6 text-muted-foreground">
+                                            <TableCell colSpan={process === 'cutter' ? 2 : (process === 'holo' || process === 'coning' ? 5 + (process === 'holo' ? 1 : 0) : 3)} className="text-center py-6 text-muted-foreground">
                                                 No take-back eligible lines.
                                             </TableCell>
                                         </TableRow>
@@ -1643,7 +1661,9 @@ export function OnMachineTable({ db, process }) {
                                                                     if (i !== idx) return l;
                                                                     const nextWeight = process === 'holo'
                                                                         ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
-                                                                        : calcAutoTakeBackWeight(l, nextCount);
+                                                                        : (process === 'coning'
+                                                                            ? calcConingTakeBackNetWeight(l, l.grossWeight, l.boxId)
+                                                                            : calcAutoTakeBackWeight(l, nextCount));
                                                                     return {
                                                                         ...l,
                                                                         count: nextCount,
@@ -1655,7 +1675,7 @@ export function OnMachineTable({ db, process }) {
                                                         />
                                                     </TableCell>
                                                 )}
-                                                {process === 'holo' && (
+                                                {(process === 'holo' || process === 'coning') && (
                                                     <TableCell className="align-middle">
                                                         <select
                                                             value={line.boxId || ''}
@@ -1666,7 +1686,9 @@ export function OnMachineTable({ db, process }) {
                                                                     return {
                                                                         ...l,
                                                                         boxId: nextBoxId,
-                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
+                                                                        weight: process === 'holo'
+                                                                            ? calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId)
+                                                                            : calcConingTakeBackNetWeight(l, l.grossWeight, nextBoxId),
                                                                     };
                                                                 }));
                                                             }}
@@ -1679,7 +1701,7 @@ export function OnMachineTable({ db, process }) {
                                                         </select>
                                                     </TableCell>
                                                 )}
-                                                {process === 'holo' && (
+                                                {(process === 'holo' || process === 'coning') && (
                                                     <TableCell className="text-right align-middle">
                                                         <input
                                                             type="number"
@@ -1694,7 +1716,9 @@ export function OnMachineTable({ db, process }) {
                                                                     return {
                                                                         ...l,
                                                                         grossWeight,
-                                                                        weight: calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId),
+                                                                        weight: process === 'holo'
+                                                                            ? calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId)
+                                                                            : calcConingTakeBackNetWeight(l, grossWeight, l.boxId),
                                                                     };
                                                                 }));
                                                             }}
@@ -1717,7 +1741,7 @@ export function OnMachineTable({ db, process }) {
                                                             setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
                                                         }}
                                                         className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
-                                                        readOnly={process === 'holo'}
+                                                        readOnly={process === 'holo' || process === 'coning'}
                                                     />
                                                 </TableCell>
                                             </TableRow>

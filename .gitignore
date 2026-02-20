@@ -92,8 +92,7 @@ desktop.ini
 
 
 # AI Agents and Tools
-.agent/
-.agents/
+
 .claude/
 .gemini/
 .github/

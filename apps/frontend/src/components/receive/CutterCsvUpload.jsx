@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import * as api from '../../api';
 import {
@@ -147,7 +147,7 @@ function SummaryCard({ title, summary, actions }) {
 }
 
 export function CutterCsvUpload() {
-  const { db, refreshProcessData } = useInventory();
+  const { db, refreshProcessData, emitInvalidation } = useInventory();
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewData, setPreviewData] = useState(null);
@@ -250,6 +250,10 @@ export function CutterCsvUpload() {
       clearSelection();
       // CSV import affects cutter receives; refresh only the cutter process module.
       await refreshProcessData('cutter');
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
+        source: 'importReceiveFromMachine',
+        uploadId: result?.upload?.id || null,
+      });
     } catch (err) {
       const issues = Array.isArray(err.details?.issues) ? err.details.issues : [];
       const duplicates = Array.isArray(err.details?.duplicates) ? err.details.duplicates : [];

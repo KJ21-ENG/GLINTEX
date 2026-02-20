@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { useInventory } from '../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import * as api from '../api';
 import {
   Button,
@@ -54,7 +54,7 @@ const round3 = (val) => {
 };
 
 export function OpeningStock() {
-  const { db, refreshModuleData, ensureModuleData } = useInventory();
+  const { db, refreshModuleData, ensureModuleData, emitInvalidation, subscribeInvalidation } = useInventory();
   const { canRead, canWrite, canDelete } = usePermission('opening_stock');
   const flags = getFeatureFlags();
   const v2Enabled = flags.v2OpeningStock;
@@ -188,7 +188,10 @@ export function OpeningStock() {
             : `Uploaded successfully! Lot: ${res.lotNos?.[0] || res.lotNo}, Count: ${res.totalCount || res.count}`;
           alert(message);
           if (!v2Enabled) await refreshModuleData('opening_stock');
-          else v2HistoryList.refresh();
+          emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory(stage), {
+            source: 'uploadOpeningStock',
+            stage,
+          });
           await fetchOpeningPreview();
         } catch (err) {
           console.error(err);
@@ -401,6 +404,14 @@ export function OpeningStock() {
     dateTo: historyEndDate,
     filters: [],
   });
+
+  useEffect(() => {
+    if (!v2Enabled) return;
+    const key = INVENTORY_INVALIDATION_KEYS.openingStockHistory(stage);
+    return subscribeInvalidation(key, () => {
+      v2HistoryList.refresh();
+    });
+  }, [stage, subscribeInvalidation, v2Enabled, v2HistoryList.refresh]);
 
   const openingHistory = useMemo(() => {
     if (!v2Enabled) return legacyOpeningHistory;
@@ -802,7 +813,9 @@ export function OpeningStock() {
       };
       const result = await api.createOpeningInbound(payload);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('inbound'), {
+        source: 'createOpeningInbound',
+      });
       setInboundCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -827,7 +840,10 @@ export function OpeningStock() {
     try {
       await api.deleteInboundItem(pieceId);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('inbound'), {
+        source: 'deleteInboundItem',
+        rowId: pieceId,
+      });
     } catch (err) {
       alert(err.message || 'Failed to delete opening piece');
     } finally {
@@ -845,7 +861,10 @@ export function OpeningStock() {
     try {
       await api.deleteOpeningCutterReceiveRow(rowId);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('cutter'), {
+        source: 'deleteOpeningCutterReceiveRow',
+        rowId,
+      });
     } catch (err) {
       alert(err.message || 'Failed to delete opening cutter row');
     } finally {
@@ -863,7 +882,10 @@ export function OpeningStock() {
     try {
       await api.deleteOpeningHoloReceiveRow(rowId);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('holo'), {
+        source: 'deleteOpeningHoloReceiveRow',
+        rowId,
+      });
     } catch (err) {
       alert(err.message || 'Failed to delete opening holo row');
     } finally {
@@ -881,7 +903,10 @@ export function OpeningStock() {
     try {
       await api.deleteOpeningConingReceiveRow(rowId);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('coning'), {
+        source: 'deleteOpeningConingReceiveRow',
+        rowId,
+      });
     } catch (err) {
       alert(err.message || 'Failed to delete opening coning row');
     } finally {
@@ -917,7 +942,9 @@ export function OpeningStock() {
       };
       const result = await api.createOpeningCutterReceive(payload);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('cutter'), {
+        source: 'createOpeningCutterReceive',
+      });
       setCutterCart([]);
       await fetchOpeningPreview();
     } catch (err) {
@@ -957,7 +984,9 @@ export function OpeningStock() {
       };
       const result = await api.createOpeningHoloReceive(payload);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('holo'), {
+        source: 'createOpeningHoloReceive',
+      });
       setHoloCart([]);
       setOpeningHoloSeries(null);
       holoCrateSeqRef.current = 0;
@@ -999,7 +1028,9 @@ export function OpeningStock() {
       };
       const result = await api.createOpeningConingReceive(payload);
       if (!v2Enabled) await refreshModuleData('opening_stock');
-      else v2HistoryList.refresh();
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('coning'), {
+        source: 'createOpeningConingReceive',
+      });
       setConingCart([]);
       setOpeningConingSeries(null);
       coningCrateSeqRef.current = 0;

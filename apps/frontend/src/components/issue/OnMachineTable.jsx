@@ -10,7 +10,7 @@ import { KeyValueGrid } from '../common/KeyValueGrid';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { Dialog, DialogContent } from '../ui/Dialog';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
@@ -25,7 +25,7 @@ import { InfoPopover } from '../common/InfoPopover';
  */
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
-    const { createIssueTakeBack, reverseIssueTakeBack } = useInventory();
+    const { createIssueTakeBack, reverseIssueTakeBack, subscribeInvalidation } = useInventory();
     const flags = getFeatureFlags();
     const v2Enabled = flags.v2OnMachine;
     const [searchTerm, setSearchTerm] = useState('');
@@ -1008,6 +1008,14 @@ export function OnMachineTable({ db, process }) {
         dateTo: v2DateTo,
         filters: v2Filters,
     });
+
+    useEffect(() => {
+        if (!v2Enabled) return;
+        const key = INVENTORY_INVALIDATION_KEYS.issueOnMachine(process);
+        return subscribeInvalidation(key, () => {
+            v2List.refresh();
+        });
+    }, [process, subscribeInvalidation, v2Enabled, v2List.refresh]);
 
     const filteredEntries = v2Enabled ? v2List.items : legacyFilteredEntries;
     const filterRows = v2Enabled ? filteredEntries : onMachineEntries;

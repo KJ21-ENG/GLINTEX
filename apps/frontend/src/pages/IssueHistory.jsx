@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useInventory } from '../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
@@ -18,7 +18,7 @@ import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
 
 export function IssueHistory({ db, canEdit = false, canDelete = false }) {
-  const { process, patchIssueRecord, refreshProcessData, reverseIssueTakeBack } = useInventory();
+  const { process, patchIssueRecord, refreshProcessData, reverseIssueTakeBack, emitInvalidation, subscribeInvalidation } = useInventory();
   const flags = getFeatureFlags();
   const v2Enabled = flags.v2IssueTracking;
   const [deletingId, setDeletingId] = useState(null);
@@ -161,6 +161,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       } else {
         v2List.refresh();
       }
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
+      ], { source: 'deleteIssueToMachine', issueId });
       alert('Issue record deleted.');
     } catch (err) {
       alert(err.message || 'Failed to delete issue record');
@@ -628,6 +631,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       } else {
         await refreshProcessData(process);
       }
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
+      ], { source: 'updateIssueToMachine', issueId: editingIssue.id });
       closeIssueEditor();
       alert('Issue record updated.');
     } catch (err) {
@@ -1223,6 +1229,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     dateTo: v2DateTo,
     filters: v2Filters,
   });
+
+  useEffect(() => {
+    if (!v2Enabled) return;
+    const key = INVENTORY_INVALIDATION_KEYS.issueHistory(process);
+    return subscribeInvalidation(key, () => {
+      v2List.refresh();
+    });
+  }, [process, subscribeInvalidation, v2Enabled, v2List.refresh]);
 
   const issues = v2Enabled ? v2List.items : legacyIssues;
   const totals = useMemo(() => {

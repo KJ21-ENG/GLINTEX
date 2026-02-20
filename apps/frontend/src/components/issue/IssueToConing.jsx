@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
@@ -9,7 +9,7 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToConing() {
-    const { db, refreshProcessData } = useInventory();
+    const { db, refreshProcessData, emitInvalidation } = useInventory();
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
     const activeConingTakeBackByIssueSource = useMemo(() => {
@@ -320,6 +320,10 @@ export function IssueToConing() {
                     );
                 }
             }
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.issueOnMachine('coning'),
+                INVENTORY_INVALIDATION_KEYS.issueHistory('coning'),
+            ], { source: 'createIssueToConingMachine' });
             // Avoid full bootstrap refresh; coning process module covers issues/receives involved here.
             await refreshProcessData('coning');
             setCrates([]);

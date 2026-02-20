@@ -75,6 +75,25 @@ const getModuleKey = (module, options = {}) => {
   return module;
 };
 
+const normalizeProcess = (value) => {
+  const stage = String(value || '').toLowerCase();
+  if (stage === 'holo' || stage === 'coning' || stage === 'cutter') return stage;
+  return 'cutter';
+};
+
+const normalizeOpeningStage = (value) => {
+  const stage = String(value || '').toLowerCase();
+  if (stage === 'inbound' || stage === 'cutter' || stage === 'holo' || stage === 'coning') return stage;
+  return 'inbound';
+};
+
+export const INVENTORY_INVALIDATION_KEYS = Object.freeze({
+  issueOnMachine: (process) => `issue:on-machine:${normalizeProcess(process)}`,
+  issueHistory: (process) => `issue:history:${normalizeProcess(process)}`,
+  receiveHistory: (process) => `receive:history:${normalizeProcess(process)}`,
+  openingStockHistory: (stage) => `opening-stock:history:${normalizeOpeningStage(stage)}`,
+});
+
 export const InventoryProvider = ({ children }) => {
   // --- State ---
   const [db, setDb] = useState(() => normalizeDb({}));
@@ -87,6 +106,8 @@ export const InventoryProvider = ({ children }) => {
   const [loadedModules, setLoadedModules] = useState(new Set());
   const dbRef = useRef(db);
   const inflightLoadsRef = useRef(new Map());
+  const invalidationSubscribersRef = useRef(new Map());
+  const invalidationVersionRef = useRef(new Map());
 
   const [brand, setBrand] = useState(defaultBrand);
   const [process, setProcess] = useState(() => {
@@ -246,6 +267,62 @@ export const InventoryProvider = ({ children }) => {
     }
   }, [loadBootstrap, loadModuleDataByKey]);
 
+  const emitInvalidation = useCallback((keyOrKeys, payload = {}) => {
+    const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+    keys.forEach((rawKey) => {
+      const key = String(rawKey || '').trim();
+      if (!key) return;
+      const nextVersion = (Number(invalidationVersionRef.current.get(key)) || 0) + 1;
+      invalidationVersionRef.current.set(key, nextVersion);
+      const listeners = invalidationSubscribersRef.current.get(key);
+      if (!listeners || listeners.size === 0) return;
+      listeners.forEach((listener) => {
+        try {
+          listener({
+            key,
+            version: nextVersion,
+            payload,
+          });
+        } catch (err) {
+          console.error(`Invalidation listener failed for key ${key}`, err);
+        }
+      });
+    });
+  }, []);
+
+  const subscribeInvalidation = useCallback((key, callback, options = {}) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey || typeof callback !== 'function') {
+      return () => { };
+    }
+    let listeners = invalidationSubscribersRef.current.get(normalizedKey);
+    if (!listeners) {
+      listeners = new Set();
+      invalidationSubscribersRef.current.set(normalizedKey, listeners);
+    }
+    listeners.add(callback);
+
+    if (options.replayLatest) {
+      const version = Number(invalidationVersionRef.current.get(normalizedKey)) || 0;
+      if (version > 0) {
+        try {
+          callback({ key: normalizedKey, version, payload: { replay: true } });
+        } catch (err) {
+          console.error(`Invalidation replay failed for key ${normalizedKey}`, err);
+        }
+      }
+    }
+
+    return () => {
+      const set = invalidationSubscribersRef.current.get(normalizedKey);
+      if (!set) return;
+      set.delete(callback);
+      if (set.size === 0) {
+        invalidationSubscribersRef.current.delete(normalizedKey);
+      }
+    };
+  }, []);
+
   const patchIssueRecord = useCallback((process, updatedIssue) => {
     if (!updatedIssue?.id) return;
     const key = process === 'holo'
@@ -341,12 +418,20 @@ export const InventoryProvider = ({ children }) => {
       const res = await api.createIssueToMachine(payload);
       // This action is cutter-only; avoid full bootstrap refresh.
       await refreshProcessData('cutter');
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.issueOnMachine('cutter'),
+        INVENTORY_INVALIDATION_KEYS.issueHistory('cutter'),
+      ], { source: 'createIssueToMachine' });
       return res;
     },
     createIssueTakeBack: async (process, issueId, payload) => {
       const stage = process || 'cutter';
       const res = await api.createIssueTakeBack(stage, issueId, payload);
       await refreshProcessData(stage);
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
+        INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
+      ], { source: 'createIssueTakeBack', issueId });
       return res;
     },
     reverseIssueTakeBack: async (takeBackId, payload = {}) => {
@@ -356,6 +441,12 @@ export const InventoryProvider = ({ children }) => {
         await refreshProcessData(stage);
       } else {
         await refreshDb();
+      }
+      if (stage) {
+        emitInvalidation([
+          INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
+          INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
+        ], { source: 'reverseIssueTakeBack', takeBackId });
       }
       return res;
     },
@@ -456,7 +547,7 @@ export const InventoryProvider = ({ children }) => {
       }
       await refreshDb();
     },
-  }), [refreshDb, refreshProcessData, refreshModuleData, process]);
+  }), [emitInvalidation, refreshDb, refreshProcessData, refreshModuleData, process]);
 
   const value = useMemo(() => ({
     db,
@@ -470,6 +561,8 @@ export const InventoryProvider = ({ children }) => {
     process,
     setProcess,
     refreshDb,
+    emitInvalidation,
+    subscribeInvalidation,
     patchDb,
     patchIssueRecord,
     refreshModuleData,
@@ -478,7 +571,7 @@ export const InventoryProvider = ({ children }) => {
     moduleLoading,
     loadedModules,
     ...actions
-  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, patchDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
+  }), [db, loading, refreshing, error, theme, cls, brand, process, refreshDb, emitInvalidation, subscribeInvalidation, patchDb, patchIssueRecord, refreshModuleData, refreshProcessData, ensureModuleData, moduleLoading, loadedModules, actions]);
 
   return (
     <InventoryContext.Provider value={value}>

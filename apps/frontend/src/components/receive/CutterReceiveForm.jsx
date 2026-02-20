@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
 import * as api from '../../api';
@@ -10,7 +10,7 @@ import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function CutterReceiveForm() {
-    const { db, refreshProcessData } = useInventory();
+    const { db, refreshProcessData, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
     const [barcode, setBarcode] = useState('');
@@ -544,6 +544,10 @@ export function CutterReceiveForm() {
             const res = await api.createCutterReceiveChallan({ entries });
             // Avoid full bootstrap refresh; cutter receives are covered by the cutter process module.
             await refreshProcessData('cutter');
+            emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
+                source: 'createCutterReceiveChallan',
+                challanId: res?.challan?.id || null,
+            });
             setCart([]);
             setIssueRecord(null);
             setBarcode('');

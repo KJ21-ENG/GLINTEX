@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, CardHeader, CardTitle, CardContent, ActionMenu, Button, Input, Select } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
@@ -20,7 +20,7 @@ import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel
 import * as v2 from '../../api/v2';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
-    const { db, process, refreshProcessData, refreshModuleData, patchDb } = useInventory();
+    const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
     const flags = getFeatureFlags();
     const v2Enabled = flags.v2ReceiveHistory;
     const { canDelete: canDeleteInbound } = usePermission('inbound');
@@ -40,7 +40,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const [searchTerm, setSearchTerm] = useState('');
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
+    const [historyDirtyWhileHidden, setHistoryDirtyWhileHidden] = useState(false);
     const scrollRootRef = useRef(null);
+    const lastV2RefreshAtRef = useRef(0);
 
     const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
     const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
@@ -555,6 +557,34 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         dateTo: v2DateTo,
         filters: v2Filters,
     });
+    const refreshV2List = (minIntervalMs = 150) => {
+        const now = Date.now();
+        if (now - lastV2RefreshAtRef.current < minIntervalMs) return;
+        lastV2RefreshAtRef.current = now;
+        v2List.refresh();
+    };
+
+    useEffect(() => {
+        if (!v2Enabled) return;
+        const key = INVENTORY_INVALIDATION_KEYS.receiveHistory(process);
+        return subscribeInvalidation(key, () => {
+            if (showHistory) {
+                refreshV2List();
+                return;
+            }
+            setHistoryDirtyWhileHidden(true);
+        });
+    }, [process, showHistory, subscribeInvalidation, v2Enabled]);
+
+    useEffect(() => {
+        if (!v2Enabled || !showHistory || !historyDirtyWhileHidden) return;
+        refreshV2List();
+        setHistoryDirtyWhileHidden(false);
+    }, [historyDirtyWhileHidden, showHistory, v2Enabled]);
+
+    useEffect(() => {
+        setHistoryDirtyWhileHidden(false);
+    }, [process]);
 
     const filteredHistory = v2Enabled && showHistory ? v2List.items : legacyFilteredHistory;
     const totals = useMemo(() => {
@@ -1175,11 +1205,11 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                         });
                     } else {
                         if (!v2Enabled) await refreshProcessData(process);
-                        else v2List.refresh();
+                        else refreshV2List();
                     }
                 } else {
                     if (!v2Enabled) await refreshProcessData(process);
-                    else v2List.refresh();
+                    else refreshV2List();
                 }
             } else if (process === 'coning') {
                 const payload = {
@@ -1235,7 +1265,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                     });
                 } else {
                     if (!v2Enabled) await refreshProcessData(process);
-                    else v2List.refresh();
+                    else refreshV2List();
                 }
             }
 
@@ -1299,7 +1329,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                     });
                 } else {
                     if (!v2Enabled) await refreshProcessData(process);
-                    else v2List.refresh();
+                    else refreshV2List();
                 }
             } else {
                 await api.deleteConingReceiveRow(row.id);
@@ -1479,7 +1509,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         try {
             await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
             if (!v2Enabled) await refreshProcessData(process);
-            else v2List.refresh();
+            else refreshV2List();
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1532,7 +1562,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
                     if (!v2Enabled) await refreshProcessData(process);
-                    else v2List.refresh();
+                    else refreshV2List();
                     closeEditDialog();
                 }
             } else {
@@ -1550,7 +1580,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         try {
             await api.deleteCutterReceiveChallan(challan.id);
             if (!v2Enabled) await refreshProcessData(process);
-            else v2List.refresh();
+            else refreshV2List();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
@@ -1587,7 +1617,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
                     if (!v2Enabled) await refreshProcessData(process);
-                    else v2List.refresh();
+                    else refreshV2List();
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');

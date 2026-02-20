@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
@@ -7,7 +7,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 
 export function IssueToHolo() {
-    const { db, refreshProcessData } = useInventory();
+    const { db, refreshProcessData, emitInvalidation } = useInventory();
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -223,6 +223,10 @@ export function IssueToHolo() {
                     );
                 }
             }
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.issueOnMachine('holo'),
+                INVENTORY_INVALIDATION_KEYS.issueHistory('holo'),
+            ], { source: 'createIssueToHoloMachine' });
             // Avoid full bootstrap refresh; issue + cutter rows are covered by the holo process module.
             await refreshProcessData('holo');
             setCrates([]);

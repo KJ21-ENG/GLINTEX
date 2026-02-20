@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
@@ -9,7 +9,7 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 
 export function HoloReceiveForm() {
-    const { db, patchDb } = useInventory();
+    const { db, patchDb, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
     const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
@@ -266,6 +266,10 @@ export function HoloReceiveForm() {
                     };
                 });
             }
+            emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('holo'), {
+                source: 'manualReceiveFromHoloMachine',
+                issueId: issue?.id || null,
+            });
 
             const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE));
             if (tpl && result?.row) {

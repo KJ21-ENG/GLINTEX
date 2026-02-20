@@ -71,6 +71,17 @@ async function requestFormData(path, formData) {
   return await res.json();
 }
 
+// Optional wrapper for future mutation flows that need a single success hook.
+// Keeps endpoint signatures unchanged while standardizing post-mutation side-effects.
+export async function runMutationWithSuccess(mutationFn, onSuccess) {
+  if (typeof mutationFn !== 'function') throw new Error('mutationFn must be a function');
+  const result = await mutationFn();
+  if (typeof onSuccess === 'function') {
+    await onSuccess(result);
+  }
+  return result;
+}
+
 export async function health() { return await request('/api/health'); }
 export async function getDB() { return await request('/api/db'); }
 export async function getBootstrap() { return await request('/api/bootstrap'); }
@@ -375,6 +386,7 @@ export async function boilerListSteamed(date) {
 }
 
 export default {
+  runMutationWithSuccess,
   health,
   getDB,
   getLotSequenceNext,

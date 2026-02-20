@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 
 export function ManualReceiveForm() {
-    const { db, refreshProcessData } = useInventory();
+    const { db, refreshProcessData, emitInvalidation } = useInventory();
     const [lotNo, setLotNo] = useState('');
     const [pieceId, setPieceId] = useState('');
     const [bobbinId, setBobbinId] = useState('');
@@ -85,6 +85,10 @@ export function ManualReceiveForm() {
             }
             // Manual receive here maps to cutter receive; refresh only the cutter process module.
             await refreshProcessData('cutter');
+            emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
+                source: 'manualReceiveFromMachine',
+                entryCount: cart.length,
+            });
             setCart([]);
             alert('Received successfully');
         } catch (e) {

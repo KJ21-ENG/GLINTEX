@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useInventory } from '../../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
@@ -10,7 +10,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
 export function ConingReceiveForm() {
-    const { db, patchDb } = useInventory();
+    const { db, patchDb, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [scanInput, setScanInput] = useState('');
@@ -434,6 +434,12 @@ export function ConingReceiveForm() {
                     const updatedBalance = nextIssueBalances[prev.id];
                     if (!updatedBalance) return prev;
                     return { ...prev, issueBalance: updatedBalance };
+                });
+            }
+            if (createdRows.length > 0 || wastageTotals) {
+                emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('coning'), {
+                    source: 'manualReceiveFromConingMachine',
+                    issueId: issue?.id || null,
                 });
             }
 

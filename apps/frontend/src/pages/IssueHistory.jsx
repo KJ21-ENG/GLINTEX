@@ -1330,7 +1330,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!col) return col;
     if (!v2Enabled || col.kind !== 'values') return col;
     const facetOptions = v2FacetsById?.[id];
-    return Array.isArray(facetOptions) ? { ...col, facetOptions } : col;
+    return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
   };
 
   const issueById = useMemo(() => {
@@ -1602,80 +1602,80 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Date</span>
-                      <SheetColumnFilter column={columnFor('date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Item</span>
-                      <SheetColumnFilter column={columnFor('item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('item')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Piece</span>
-                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Cut</span>
-                      <SheetColumnFilter column={columnFor('cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('cut')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
 
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Machine</span>
-                      <SheetColumnFilter column={columnFor('machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('machine')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Operator</span>
-                      <SheetColumnFilter column={columnFor('operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('operator')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Qty</span>
-                      <SheetColumnFilter column={columnFor('qty')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('qty')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Weight (kg)</span>
-                      <SheetColumnFilter column={columnFor('weight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('weight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Taken Back (kg)</span>
-                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Net Issued (kg)</span>
-                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Barcode</span>
-                      <SheetColumnFilter column={columnFor('barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('barcode')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Note</span>
-                      <SheetColumnFilter column={columnFor('note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('note')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Added By</span>
-                      <SheetColumnFilter column={columnFor('addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('addedBy')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
@@ -1686,103 +1686,103 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Date</span>
-                      <SheetColumnFilter column={columnFor('date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Item</span>
-                      <SheetColumnFilter column={columnFor('item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('item')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Lot</span>
-                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Cut</span>
-                      <SheetColumnFilter column={columnFor('cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('cut')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Yarn</span>
-                      <SheetColumnFilter column={columnFor('yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('yarn')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Twist</span>
-                      <SheetColumnFilter column={columnFor('twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('twist')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Machine</span>
-                      <SheetColumnFilter column={columnFor('machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('machine')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Operator</span>
-                      <SheetColumnFilter column={columnFor('operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('operator')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Metallic Bobbins</span>
-                      <SheetColumnFilter column={columnFor('metallicBobbins')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('metallicBobbins')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Met. Bob. Wt (kg)</span>
-                      <SheetColumnFilter column={columnFor('metallicBobbinsWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('metallicBobbinsWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Taken Back (kg)</span>
-                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Net Issued (kg)</span>
-                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Yarn Wt (kg)</span>
-                      <SheetColumnFilter column={columnFor('yarnKg')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('yarnKg')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Rolls Prod. Est.</span>
-                      <SheetColumnFilter column={columnFor('rollsProducedEstimate')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('rollsProducedEstimate')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Barcode</span>
-                      <SheetColumnFilter column={columnFor('barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('barcode')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Note</span>
-                      <SheetColumnFilter column={columnFor('note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('note')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Added By</span>
-                      <SheetColumnFilter column={columnFor('addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('addedBy')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>
@@ -1793,97 +1793,97 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Date</span>
-                      <SheetColumnFilter column={columnFor('date')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Item</span>
-                      <SheetColumnFilter column={columnFor('item')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('item')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Lot</span>
-                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('lotOrPiece')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Cut</span>
-                      <SheetColumnFilter column={columnFor('cut')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('cut')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Yarn</span>
-                      <SheetColumnFilter column={columnFor('yarn')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('yarn')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Twist</span>
-                      <SheetColumnFilter column={columnFor('twist')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('twist')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Machine</span>
-                      <SheetColumnFilter column={columnFor('machine')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('machine')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Operator</span>
-                      <SheetColumnFilter column={columnFor('operator')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('operator')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Cone Type</span>
-                      <SheetColumnFilter column={columnFor('coneType')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('coneType')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Per Cone (g)</span>
-                      <SheetColumnFilter column={columnFor('perCone')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('perCone')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Rolls Issued</span>
-                      <SheetColumnFilter column={columnFor('rollsIssued')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('rollsIssued')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Taken Back (kg)</span>
-                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
                     <div className="flex items-center justify-between gap-2">
                       <span>Net Issued (kg)</span>
-                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Barcode</span>
-                      <SheetColumnFilter column={columnFor('barcode')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('barcode')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Note</span>
-                      <SheetColumnFilter column={columnFor('note')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('note')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
                       <span>Added By</span>
-                      <SheetColumnFilter column={columnFor('addedBy')} rows={issuesBase} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                      <SheetColumnFilter column={columnFor('addedBy')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="w-[50px]">Actions</TableHead>

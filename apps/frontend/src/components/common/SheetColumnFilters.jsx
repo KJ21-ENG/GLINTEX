@@ -94,10 +94,23 @@ const buildDistinctOptions = (rows, col) => {
   return all;
 };
 
+const mergeDistinctOptions = (...lists) => {
+  const set = new Set();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const value of list) {
+      set.add(value == null ? '' : String(value));
+    }
+  }
+  const all = Array.from(set);
+  all.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  return all;
+};
+
 export function SheetColumnFilter({ column, rows, filters, setFilters, openId, setOpenId }) {
   const menuRef = useRef(null);
   const anchorRef = useRef(null);
-  const lastNonEmptyOptionsRef = useRef([]);
+  const optionUniverseRef = useRef([]);
   const isOpen = openId === column.id;
   const active = isSheetFilterActive(filters?.[column.id]);
   const [optionSearch, setOptionSearch] = useState('');
@@ -118,23 +131,21 @@ export function SheetColumnFilter({ column, rows, filters, setFilters, openId, s
 
   useEffect(() => {
     if (!isOpen || column?.kind !== 'values') return;
-    if (rawOptions.length > 0) {
-      lastNonEmptyOptionsRef.current = rawOptions;
-    }
-  }, [isOpen, column?.kind, rawOptions]);
+    optionUniverseRef.current = mergeDistinctOptions(
+      optionUniverseRef.current,
+      rawOptions,
+      currentValuesFilter?.selected
+    );
+  }, [isOpen, column?.kind, rawOptions, currentValuesFilter]);
 
   const options = useMemo(() => {
     if (!isOpen || column?.kind !== 'values') return rawOptions;
-    if (
-      rawOptions.length === 0
-      && currentValuesFilter
-      && Array.isArray(currentValuesFilter.selected)
-      && currentValuesFilter.selected.length === 0
-      && lastNonEmptyOptionsRef.current.length > 0
-    ) {
-      return lastNonEmptyOptionsRef.current;
-    }
-    return rawOptions;
+    // Keep a stable value universe so unchecking one value doesn't collapse other options.
+    return mergeDistinctOptions(
+      optionUniverseRef.current,
+      rawOptions,
+      currentValuesFilter?.selected
+    );
   }, [isOpen, column?.kind, rawOptions, currentValuesFilter]);
 
   useEffect(() => {

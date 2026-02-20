@@ -30,6 +30,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [issueDraft, setIssueDraft] = useState(null);
   const [issueScanInput, setIssueScanInput] = useState('');
   const scrollRootRef = useRef(null);
+  const takeBackScrollRef = useRef(null);
   const [savingIssue, setSavingIssue] = useState(false);
   const traceContext = useMemo(() => (v2Enabled ? null : buildConingTraceContext(db)), [db, v2Enabled]);
   const holoTraceContext = useMemo(() => (v2Enabled ? null : buildHoloTraceContext(db)), [db, v2Enabled]);
@@ -1033,6 +1034,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         note: 'Reversed from Issue History',
         stage: process,
       });
+      if (v2Enabled) {
+        emitInvalidation([INVENTORY_INVALIDATION_KEYS.issueHistory(process)], { source: 'reverseTakeBack', id: takeBack.id });
+      }
     } catch (err) {
       alert(err.message || 'Failed to reverse take-back');
     } finally {
@@ -1230,15 +1234,35 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     filters: v2Filters,
   });
 
+  const v2TakeBackList = useV2CursorList({
+    enabled: v2Enabled,
+    scopeKey: `take-back-history:${process}`,
+    fetchPage: ({ limit, cursor, search, dateFrom, dateTo }) => (
+      v2.getV2TakeBackHistory(process, {
+        limit,
+        cursor,
+        search,
+        dateFrom,
+        dateTo,
+      })
+    ),
+    limit: 50,
+    search: searchTerm,
+    dateFrom: v2DateFrom,
+    dateTo: v2DateTo,
+  });
+
   useEffect(() => {
     if (!v2Enabled) return;
     const key = INVENTORY_INVALIDATION_KEYS.issueHistory(process);
     return subscribeInvalidation(key, () => {
       v2List.refresh();
+      v2TakeBackList.refresh();
     });
-  }, [process, subscribeInvalidation, v2Enabled, v2List.refresh]);
+  }, [process, subscribeInvalidation, v2Enabled, v2List.refresh, v2TakeBackList.refresh]);
 
   const issues = v2Enabled ? v2List.items : legacyIssues;
+  const takeBacks = v2Enabled ? v2TakeBackList.items : stageTakeBacks;
   const totals = useMemo(() => {
     if (!v2Enabled) return legacyTotals;
     const s = v2List.summary || {};
@@ -1274,6 +1298,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     enabled: v2Enabled && v2List.hasMore && !v2List.isLoading,
     onLoadMore: v2List.loadMore,
     rootRef: scrollRootRef,
+  });
+
+  const takeBackLoadMoreRef = useInfiniteScrollSentinel({
+    enabled: v2Enabled && v2TakeBackList.hasMore && !v2TakeBackList.isLoading,
+    onLoadMore: v2TakeBackList.loadMore,
+    rootRef: takeBackScrollRef,
   });
 
   const [v2FacetsById, setV2FacetsById] = useState({});
@@ -2072,7 +2102,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
       <div className="rounded-md border">
         <div className="px-3 py-2 border-b bg-muted/30 text-sm font-semibold">Take-Back Ledger</div>
-        <div className="max-h-[260px] overflow-auto">
+        <div ref={takeBackScrollRef} className="max-h-[260px] overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2090,17 +2120,20 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {stageTakeBacks.length === 0 ? (
+              {takeBacks.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={11} className="text-center py-6 text-muted-foreground">
                     No take-back entries for {process}.
                   </TableCell>
                 </TableRow>
               ) : (
-                stageTakeBacks.map((tb) => {
-                  const issue = issueById.get(tb.issueId) || null;
+                takeBacks.map((tb) => {
+                  const issue = !v2Enabled && issueById.get(tb.issueId) ? issueById.get(tb.issueId) : null;
                   const isActiveOriginal = !tb.isReverse && !tb.isReversed;
                   const typeLabel = tb.isReverse ? 'Reverse' : (tb.isReversed ? 'Take Back (Reversed)' : 'Take Back');
+                  const displayBarcode = v2Enabled ? (tb.issueBarcode || '') : (issue?.barcode || tb.issueId || '');
+                  const displayLot = v2Enabled ? (tb.issueLotNo || '') : (lotLabelFor(issue) || '—');
+                  const displayItem = v2Enabled ? (tb.itemName || '') : (itemNameById.get(issue?.itemId) || '—');
                   return (
                     <TableRow key={tb.id}>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(tb.date || tb.createdAt)}</TableCell>
@@ -2109,9 +2142,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           {typeLabel}
                         </Badge>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{issue?.barcode || tb.issueId}</TableCell>
-                      <TableCell>{lotLabelFor(issue) || '—'}</TableCell>
-                      <TableCell>{itemNameById.get(issue?.itemId) || '—'}</TableCell>
+                      <TableCell className="font-mono text-xs">{displayBarcode}</TableCell>
+                      <TableCell>{displayLot}</TableCell>
+                      <TableCell>{displayItem}</TableCell>
                       <TableCell className="text-right">{Number(tb.totalCount || 0)}</TableCell>
                       <TableCell className="text-right">{formatKg(tb.totalWeight || 0)}</TableCell>
                       <TableCell className="max-w-[180px] truncate" title={tb.reason || ''}>{tb.reason || '—'}</TableCell>
@@ -2139,6 +2172,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               )}
             </TableBody>
           </Table>
+          <div ref={takeBackLoadMoreRef} style={{ height: 1 }} aria-hidden="true" />
         </div>
       </div>
 

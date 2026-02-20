@@ -1688,6 +1688,113 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
   }
 });
 
+router.get('/issue/:process/take-back-history', requireAuth, requireStageReadPermission(issueStagePermissionKey), async (req, res) => {
+  const process = String(req.params.process || '').trim().toLowerCase();
+  const limit = clampLimit(req.query.limit);
+  const cursor = decodeCursor(req.query.cursor);
+  const dateFrom = req.query.dateFrom;
+  const dateTo = req.query.dateTo;
+  const search = normalizeText(req.query.search);
+
+  try {
+    const cursorWhere = buildCursorWhere(cursor);
+    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+
+    let searchWhere = {};
+    if (search) {
+      // 1. Find issues matching barcode/lotNo
+      const issueModel = issueModelForProcess(process);
+      const matchingIssues = await issueModel.findMany({
+        where: {
+          OR: [
+            { barcode: { contains: search, mode: 'insensitive' } },
+            { lotNo: { contains: search, mode: 'insensitive' } }
+          ]
+        },
+        select: { id: true },
+        take: 2000
+      });
+      const issueIds = matchingIssues.map(i => i.id);
+
+      searchWhere = {
+        OR: [
+          { reason: { contains: search, mode: 'insensitive' } },
+          { note: { contains: search, mode: 'insensitive' } },
+          { issueId: { in: issueIds } }
+        ]
+      };
+    }
+
+    const whereAll = {
+      stage: process,
+      isReverse: false,
+      isReversed: false,
+      ...(dateWhere ? dateWhere : {}),
+      ...searchWhere
+    };
+
+    const wherePage = applyCursorWhere(whereAll, cursorWhere);
+
+    const rowsRaw = await prisma.issueTakeBack.findMany({
+      where: wherePage,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const hasMore = rowsRaw.length > limit;
+    const page = rowsRaw.slice(0, limit);
+    const pageWithUsers = await resolveUserFields(page);
+
+    // Resolve Issue Details
+    const issueIds = Array.from(new Set(page.map(r => r.issueId)));
+    let issueMap = new Map();
+    
+    if (issueIds.length > 0) {
+      const issueModel = issueModelForProcess(process);
+      const issues = await issueModel.findMany({
+        where: { id: { in: issueIds } },
+        select: { id: true, barcode: true, lotNo: true, itemId: true }
+      });
+      
+      // Resolve Item Names
+      const itemIds = Array.from(new Set(issues.map(i => i.itemId).filter(Boolean)));
+      const itemsRef = await prisma.item.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, name: true }
+      });
+      const itemNameById = new Map(itemsRef.map(i => [i.id, i.name]));
+
+      issueMap = new Map(issues.map(i => [i.id, { 
+        ...i, 
+        itemName: itemNameById.get(i.itemId) || '' 
+      }]));
+    }
+
+    const items = pageWithUsers.map(r => {
+      const issue = issueMap.get(r.issueId) || {};
+      return {
+        ...r,
+        issueBarcode: issue.barcode || '',
+        issueLotNo: issue.lotNo || '',
+        itemName: issue.itemName || '',
+      };
+    });
+
+    const lastInPage = page[page.length - 1];
+    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
+
+    res.json({
+      items,
+      hasMore,
+      nextCursor,
+    });
+
+  } catch (err) {
+    console.error('v2 take-back history error', err);
+    res.status(500).json({ error: err.message || 'Failed to load take-back history' });
+  }
+});
+
 // -----------------------------
 // Stock v2 (fast-load, UI-parity)
 // -----------------------------

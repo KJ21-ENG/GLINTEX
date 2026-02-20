@@ -40,6 +40,9 @@ async function request(path, params = {}) {
 export const getV2IssueTracking = (process, params = {}) =>
   request(`/api/v2/issue/${process}/tracking`, params);
 
+export const getV2TakeBackHistory = (process, params = {}) =>
+  request(`/api/v2/issue/${process}/take-back-history`, params);
+
 export const getV2IssueTrackingFacets = (process, params = {}) =>
   request(`/api/v2/issue/${process}/tracking/facets`, params);
 

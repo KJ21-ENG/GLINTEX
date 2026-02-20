@@ -1,0 +1,28 @@
+{
+    "repository_type": "multi-part",
+    "parts_count": 3,
+    "parts": [
+        {
+            "part_id": "backend",
+            "project_type_id": "backend",
+            "display_name": "Backend",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/backend",
+            "primary_language": "JavaScript/TypeScript"
+        },
+        {
+            "part_id": "frontend",
+            "project_type_id": "web",
+            "display_name": "Web",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/frontend",
+            "primary_language": "JavaScript/TypeScript"
+        },
+        {
+            "part_id": "print-client",
+            "project_type_id": "desktop",
+            "display_name": "Desktop",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/print-client",
+            "primary_language": "JavaScript/TypeScript, Rust"
+        }
+    ],
+    "integration_points": []
+}

@@ -1,0 +1,43 @@
+{
+    "repository_type": "monorepo",
+    "parts": [
+        {
+            "part_id": "backend",
+            "project_type": "backend",
+            "tech_stack": "Express + Prisma + PostgreSQL",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/backend"
+        },
+        {
+            "part_id": "frontend",
+            "project_type": "web",
+            "tech_stack": "React + Vite + Tailwind",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/frontend"
+        },
+        {
+            "part_id": "print-client",
+            "project_type": "desktop",
+            "tech_stack": "Tauri + React",
+            "root_path": "/Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/print-client"
+        }
+    ],
+    "integration_points": [
+        {
+            "from": "frontend",
+            "to": "backend",
+            "type": "REST API",
+            "details": "Frontend makes HTTP requests to backend endpoints protected by JWT auth cookies"
+        },
+        {
+            "from": "print-client",
+            "to": "backend",
+            "type": "REST API/WebSocket",
+            "details": "Print client listens for print signals via Central API"
+        },
+        {
+            "from": "backend",
+            "to": "third-party",
+            "type": "API Integrations",
+            "details": "Google Drive Sync APIs, Whatsapp WebJS (Puppeteer headless bindings)"
+        }
+    ]
+}

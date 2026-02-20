@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
@@ -15,6 +15,7 @@ import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../../api/v2';
+import { InfoPopover } from '../common/InfoPopover';
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -338,6 +339,82 @@ export function OnMachineTable({ db, process }) {
         }
         return fallback || sourceId;
     };
+
+    const receiveRowsByIssue = useMemo(() => {
+        const map = new Map();
+        const collection = process === 'cutter' ? (db.receive_from_cutter_machine_rows || []) :
+            process === 'holo' ? (db.receive_from_holo_machine_rows || []) :
+                process === 'coning' ? (db.receive_from_coning_machine_rows || []) : [];
+
+        collection.forEach(r => {
+            if (r.isDeleted || !r.issueId) return;
+            const arr = map.get(r.issueId) || [];
+            arr.push(r);
+            map.set(r.issueId, arr);
+        });
+        return map;
+    }, [db, process]);
+
+    const renderReceivedPopoverContent = useCallback((items, stage) => {
+        if (!items || items.length === 0) return null;
+
+        const totals = items.reduce((acc, row) => {
+            const netWt = Number(row.netWt || row.netWeight || row.rollWeight || 0);
+            const count = stage === 'coning' ? (Number(row.coneCount) || 0) :
+                (stage === 'cutter' ? (Number(row.bobbinQuantity) || 0) :
+                    (Number(row.rollCount) || 0));
+            return {
+                wt: acc.wt + netWt,
+                count: acc.count + count
+            };
+        }, { wt: 0, count: 0 });
+
+        return (
+            <table className="w-full text-xs">
+                <thead>
+                    <tr className="border-b">
+                        <th className="text-left py-1 px-1 font-medium">Barcode</th>
+                        <th className="text-left py-1 px-1 font-medium">Date</th>
+                        {stage === 'coning' ? (
+                            <th className="text-right py-1 px-1 font-medium">Cones</th>
+                        ) : (
+                            <th className="text-right py-1 px-1 font-medium">{stage === 'cutter' ? 'Bobbins' : 'Rolls'}</th>
+                        )}
+                        <th className="text-right py-1 px-1 font-medium">Net Wt</th>
+                        <th className="text-left py-1 px-1 font-medium">{stage === 'coning' ? 'Box' : 'Cut'}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {items.map((row, idx) => {
+                        const netWt = Number(row.netWt || row.netWeight || row.rollWeight || 0);
+                        const count = stage === 'coning' ? (row.coneCount || 0) : (stage === 'cutter' ? (row.bobbinQuantity || 0) : (row.rollCount || 0));
+                        const displayCut = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+                        const displayBox = row.box?.name || db.boxes?.find(b => b.id === row.boxId)?.name || '—';
+
+                        return (
+                            <tr key={row.id || idx} className="border-b last:border-0">
+                                <td className="py-1 px-1 font-mono">{row.barcode || '—'}</td>
+                                <td className="py-1 px-1 text-muted-foreground">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
+                                <td className="py-1 px-1 text-right">{count}</td>
+                                <td className="py-1 px-1 text-right font-medium">{formatKg(netWt)}</td>
+                                <td className="py-1 px-1 text-muted-foreground truncate max-w-[80px]">
+                                    {stage === 'coning' ? displayBox : displayCut}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+                <tfoot>
+                    <tr className="border-t-2 bg-muted/50 font-semibold">
+                        <td className="py-1 px-1" colSpan={2}>Total</td>
+                        <td className="py-1 px-1 text-right">{totals.count}</td>
+                        <td className="py-1 px-1 text-right">{formatKg(totals.wt)}</td>
+                        <td className="py-1 px-1"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        );
+    }, [db.cuts, db.boxes]);
 
     const activeTakeBacksByIssue = useMemo(() => {
         const map = new Map();
@@ -1430,7 +1507,22 @@ export function OnMachineTable({ db, process }) {
                                                     <div className="text-[11px] font-medium">N: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</div>
                                                 </div>
                                             </TableCell>
-                                            <TableCell className="text-green-600">{formatKg(entry.receivedWeight)}</TableCell>
+                                            <TableCell className="text-right">
+                                                <div className="flex items-center justify-end gap-1 text-green-600">
+                                                    <span className="font-medium">{formatKg(entry.receivedWeight)}</span>
+                                                    <InfoPopover
+                                                        title={process === 'cutter' ? 'Received Crates' : (process === 'holo' ? 'Holo Receives' : 'Coning Receives')}
+                                                        items={receiveRowsByIssue.get(entry.id) || []}
+                                                        renderContent={(items) => renderReceivedPopoverContent(items, process)}
+                                                        emptyText="No items received yet."
+                                                        widthClassName={process === 'coning' ? "w-[560px]" : "w-[420px]"}
+                                                        bodyClassName="max-h-[300px] overflow-y-auto"
+                                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex"
+                                                        align="right"
+                                                        actionLabel="View Details"
+                                                    />
+                                                </div>
+                                            </TableCell>
                                             <TableCell className="font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
                                             <TableCell>
                                                 <div className="flex items-center gap-2">
@@ -1551,7 +1643,20 @@ export function OnMachineTable({ db, process }) {
                                         <span className="text-muted-foreground">Orig: {formatKg(entry.originalIssuedWeight || entry.issuedWeight)}</span>
                                         <span className="text-amber-600">Taken Back: {formatKg(entry.takeBackWeight || 0)}</span>
                                         <span className="text-muted-foreground">Net: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</span>
-                                        <span className="text-green-600">Rcvd: {formatKg(entry.receivedWeight)}</span>
+                                        <div className="flex items-center gap-1 text-green-600">
+                                            <span>Rcvd: {formatKg(entry.receivedWeight)}</span>
+                                            <InfoPopover
+                                                title={process === 'cutter' ? 'Received Crates' : (process === 'holo' ? 'Holo Receives' : 'Coning Receives')}
+                                                items={receiveRowsByIssue.get(entry.id) || []}
+                                                renderContent={(items) => renderReceivedPopoverContent(items, process)}
+                                                emptyText="No items received yet."
+                                                widthClassName="w-[320px]"
+                                                bodyClassName="max-h-[300px] overflow-y-auto"
+                                                buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex"
+                                                align="left"
+                                                actionLabel="View Details"
+                                            />
+                                        </div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <div className="w-12 h-2 bg-muted rounded-full overflow-hidden">

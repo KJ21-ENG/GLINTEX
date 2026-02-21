@@ -651,10 +651,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
       if (process === 'cutter') {
         stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE;
-        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
-        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
-        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
-        const cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
+        const itemName = row.itemName || db.items?.find(i => i.id === row.itemId)?.name || '';
+        const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
+        const cut = row.cutName || db.cuts?.find(c => c.id === row.cutId)?.name || '';
 
         // Get inbound date from first piece
         const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -678,11 +678,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         };
       } else if (process === 'holo') {
         stageKey = LABEL_STAGE_KEYS.HOLO_ISSUE;
-        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
-        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
-        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
-        const yarnName = db.yarns?.find(y => y.id === row.yarnId)?.name || '';
-        const twistName = db.twists?.find(t => t.id === row.twistId)?.name || '';
+        const names = resolveIssueNames(row);
+        const itemName = names.itemName === '—' ? (row.itemName || '') : names.itemName;
+        const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
+        const yarnName = names.yarnName === '—' ? (row.yarnName || '') : names.yarnName;
+        const twistName = names.twistName === '—' ? (row.twistName || '') : names.twistName;
 
         // Get bobbin info and cut from receivedRowRefs
         let bobbinType = '';
@@ -701,9 +702,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               issuedWeight += Number(ref.issuedBobbinWeight || 0);
             });
 
-            // Get cut - first check direct cutId (Opening Stock), then cutter source row
-            const resolved = resolveHoloTrace(row, holoTraceContext);
-            cut = resolved.cutName === '—' ? '' : resolved.cutName;
+            // Get names - resolveIssueNames handles v2 flattening and trace fallback
+            const names = resolveIssueNames(row);
+            cut = names.cutName === '—' ? '' : names.cutName;
 
             // Still need bobbin info from first ref
             const firstRef = refs[0];
@@ -751,9 +752,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         };
       } else if (process === 'coning') {
         stageKey = LABEL_STAGE_KEYS.CONING_ISSUE;
-        const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
-        const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
-        const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
+        const names = resolveIssueNames(row);
+        const itemName = names.itemName === '—' ? '' : names.itemName;
+        const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
+        const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
 
         // Get coneType, wrapperName, and trace back to get cut, yarnName, rollType
         let coneType = '';
@@ -789,13 +791,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             grossWeight = totalWeight;
             tareWeight = 0;
 
-            const resolved = resolveConingTrace(row, traceContext);
-            cut = resolved.cutName === '—' ? '' : resolved.cutName;
-            yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
-            rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
-            const twistResolved = resolved.twistName;
-            twistName = twistResolved === '—' ? '' : twistResolved;
+            const names = resolveIssueNames(row);
+            cut = names.cutName === '—' ? '' : names.cutName;
+            yarnName = names.yarnName === '—' ? '' : names.yarnName;
+            twistName = names.twistName === '—' ? '' : names.twistName;
             twist = twistName;
+
+            // rollType still needs tracing as it's not flattened in v2 yet
+            if (traceContext) {
+              const resTrace = resolveConingTrace(row, traceContext);
+              rollType = resTrace.rollTypeName === '—' ? '' : resTrace.rollTypeName;
+            } else {
+              rollType = row.rollTypeName || row.rollType || '';
+            }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
         if (!grossWeight && totalWeight) grossWeight = totalWeight;
@@ -861,10 +869,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
 
       const stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
-      const itemName = db.items?.find(i => i.id === row.itemId)?.name || '';
-      const machineName = db.machines?.find(m => m.id === row.machineId)?.name || '';
-      const operatorName = db.operators?.find(o => o.id === row.operatorId)?.name || '';
-      const cut = db.cuts?.find(c => c.id === row.cutId)?.name || '';
+      const itemName = row.itemName || db.items?.find(i => i.id === row.itemId)?.name || '';
+      const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
+      const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
+      const cut = row.cutName || db.cuts?.find(c => c.id === row.cutId)?.name || '';
 
       // Get inbound date from first piece
       const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -982,6 +990,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const resolveIssueTraceNames = (row) => {
     if (!row) return { cutName: '—', yarnName: '—', twistName: '—' };
+
+    // Check if names are already on the row (v2 flattened or already resolved)
     if (row.cutName || row.yarnName || row.twistName) {
       return {
         cutName: row.cutName || '—',
@@ -989,12 +999,27 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         twistName: row.twistName || '—',
       };
     }
+
     if (process === 'holo') {
-      if (!holoTraceContext) return { cutName: '—', yarnName: '—', twistName: '—' };
+      if (!holoTraceContext) {
+        // Fallback to row fields if context is missing (v2 mode)
+        return {
+          cutName: row.cutName || '—',
+          yarnName: row.yarnName || '—',
+          twistName: row.twistName || '—',
+        };
+      }
       return resolveHoloTrace(row, holoTraceContext);
     }
     if (process === 'coning') {
-      if (!traceContext) return { cutName: '—', yarnName: '—', twistName: '—' };
+      if (!traceContext) {
+        // Fallback to row fields if context is missing (v2 mode)
+        return {
+          cutName: row.cutName || '—',
+          yarnName: row.yarnName || '—',
+          twistName: row.twistName || '—',
+        };
+      }
       return resolveConingTrace(row, traceContext);
     }
     return resolveCutterIssueDetails(row);

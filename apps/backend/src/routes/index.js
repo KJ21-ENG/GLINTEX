@@ -8351,7 +8351,15 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     const itemId = Array.from(itemSet)[0];
 
     // Extract cutId from source cutter rows (use first non-null cutId)
-    const resolvedCutId = receiveRows.map(r => r.cutId).find(Boolean) || null;
+    let resolvedCutId = receiveRows.map(r => r.cutId).find(Boolean) || null;
+    if (!resolvedCutId) {
+      // Fallback: if source rows only have cut name as string, try resolving ID from master
+      const cutName = receiveRows.map(r => r.cut).find(Boolean);
+      if (cutName) {
+        const cutRec = await prisma.cut.findUnique({ where: { name: cutName } });
+        if (cutRec) resolvedCutId = cutRec.id;
+      }
+    }
 
     let yarnRecord = null;
     if (yarnId) {

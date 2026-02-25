@@ -372,6 +372,45 @@ export async function sendSummaryWhatsApp(stage, type, date) {
     body: date ? { date } : {}
   });
 }
+export async function downloadSummaryPdf(stage, type, date) {
+  const params = date ? `?date=${encodeURIComponent(date)}` : '';
+  const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download${params}`;
+  const res = await fetch(BASE + path, {
+    method: 'GET',
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    }
+    const raw = await res.text();
+    let message = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      message = parsed.error || parsed.message || message;
+    } catch (_) { }
+    if (!message) message = `API GET ${path} failed with ${res.status}`;
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
+  }
+
+  const blob = await res.blob();
+  const contentDisposition = res.headers.get('content-disposition') || '';
+  const filenameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i);
+  const filenameRaw = filenameMatch?.[1] || filenameMatch?.[2];
+  const filename = filenameRaw ? decodeURIComponent(filenameRaw) : `summary_${stage}_${type}.pdf`;
+
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
 
 // Boiler (Steaming)
 export async function boilerLookup(barcode) {

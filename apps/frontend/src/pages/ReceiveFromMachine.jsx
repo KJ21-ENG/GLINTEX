@@ -2,8 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { ManualReceiveForm, HoloReceiveForm, ConingReceiveForm, CutterReceiveForm, CutterCsvUpload, ReceiveHistoryTable } from '../components/receive';
 import { Button } from '../components/ui';
-import { sendSummaryWhatsApp } from '../api/client';
-import { Send, Calendar } from 'lucide-react';
+import { sendSummaryWhatsApp, downloadSummaryPdf } from '../api/client';
+import { Send, Calendar, Download } from 'lucide-react';
+import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { useStagePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 
@@ -26,6 +27,8 @@ export function ReceiveFromMachine() {
   const readOnly = canRead && !canWrite;
   const [cutterMode, setCutterMode] = useState('scan');
   const [sendingSum, setSendingSum] = useState(false);
+  const [downloadingSum, setDownloadingSum] = useState(false);
+  const [summaryActionOpen, setSummaryActionOpen] = useState(false);
   const [sumMessage, setSumMessage] = useState(null);
   const [summaryDate, setSummaryDate] = useState(getTodayISO());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -58,7 +61,7 @@ export function ReceiveFromMachine() {
   }, [showDatePicker]);
 
   const handleSendSummary = async () => {
-    if (sendingSum) return;
+    if (sendingSum || downloadingSum) return;
     setSendingSum(true);
     setSumMessage(null);
     try {
@@ -77,10 +80,31 @@ export function ReceiveFromMachine() {
     }
   };
 
+  const handleDownloadSummary = async () => {
+    if (sendingSum || downloadingSum) return;
+    setDownloadingSum(true);
+    setSumMessage(null);
+    try {
+      const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
+      await downloadSummaryPdf(stage, 'receive', summaryDate);
+      setSumMessage({ type: 'success', text: 'Summary downloaded successfully!' });
+    } catch (err) {
+      setSumMessage({ type: 'error', text: err.message || 'Failed to download summary' });
+    } finally {
+      setDownloadingSum(false);
+      setTimeout(() => setSumMessage(null), 5000);
+    }
+  };
+
   const handleRightClick = (e) => {
     e.preventDefault();
     setPickerPosition({ x: e.clientX, y: e.clientY });
     setShowDatePicker(true);
+  };
+
+  const handleSummaryActionOpen = () => {
+    if (sendingSum || downloadingSum || readOnly) return;
+    setSummaryActionOpen(true);
   };
 
   const handleDateChange = (e) => {
@@ -116,17 +140,50 @@ export function ReceiveFromMachine() {
           <Button
             variant="outline"
             size="sm"
-            onClick={handleSendSummary}
+            onClick={handleSummaryActionOpen}
             onContextMenu={handleRightClick}
-            disabled={sendingSum || readOnly}
+            disabled={sendingSum || downloadingSum || readOnly}
             className="flex items-center gap-2"
-            title="Left-click to send, Right-click to change date"
+            title="Click to choose action, Right-click to change date"
           >
             <Send className="h-4 w-4" />
             {sendingSum ? 'Sending...' : 'Send Summary'}
           </Button>
         </div>
       </div>
+
+      <Dialog open={summaryActionOpen} onOpenChange={setSummaryActionOpen}>
+        <DialogContent title="Summary Action" onOpenChange={setSummaryActionOpen}>
+          <p className="text-sm text-muted-foreground mb-4">
+            Choose what to do for {formatDateDisplay(summaryDate)} summary.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Button
+              onClick={async () => {
+                setSummaryActionOpen(false);
+                await handleSendSummary();
+              }}
+              disabled={sendingSum || downloadingSum || readOnly}
+              className="flex-1 flex items-center gap-2"
+            >
+              <Send className="h-4 w-4" />
+              Send on WhatsApp
+            </Button>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                setSummaryActionOpen(false);
+                await handleDownloadSummary();
+              }}
+              disabled={sendingSum || downloadingSum}
+              className="flex-1 flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Download Summary
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Date Picker Popup */}
       {showDatePicker && (

@@ -16456,6 +16456,47 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
   }
 });
 
+// GET /api/summary/:stage/:type/download - Generate PDF and download directly (no WhatsApp send)
+router.get('/api/summary/:stage/:type/download', async (req, res) => {
+  try {
+    const { stage, type } = req.params;
+    const date = req.query.date || getTodayDateString();
+
+    const validStages = ['cutter', 'holo', 'coning'];
+    const validTypes = ['issue', 'receive'];
+
+    if (!validStages.includes(stage)) {
+      return res.status(400).json({ error: `Invalid stage. Must be one of: ${validStages.join(', ')}` });
+    }
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+    }
+
+    const permissionKey = type === 'issue' ? `issue.${stage}` : `receive.${stage}`;
+    if (!req.user?.isAdmin) {
+      const level = Number(req.user?.permissions?.[permissionKey] || 0);
+      if (level < PERM_READ) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+    }
+
+    const summaryData = await generateSummaryData(stage, type, date);
+    if (!summaryData.totalCount || summaryData.totalCount === 0) {
+      return res.status(404).json({ error: `No ${type} entries found for ${stage} on ${date}` });
+    }
+
+    const pdfBuffer = await generateSummaryPDF(stage, type, summaryData);
+    const filename = `summary_${stage}_${type}_${formatDateForFilename(date)}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Failed to download summary', err);
+    res.status(500).json({ error: err.message || 'Failed to download summary' });
+  }
+});
+
 // ========== BOILER (STEAMING) FEATURE ==========
 
 // Lookup barcode for boiler steaming

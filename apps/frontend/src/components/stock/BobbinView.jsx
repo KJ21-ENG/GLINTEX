@@ -1,10 +1,11 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
+import { useBarcodeAutoExpand } from '../../utils/useBarcodeAutoExpand';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -210,6 +211,17 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     });
   }, [bobbinLots, filters, search, db.cuts]);
 
+  const getLotKey = useCallback((lot) => lot?.lotNo || null, []);
+  const { markManualInteraction } = useBarcodeAutoExpand({
+    enabled: true,
+    groupBy,
+    search,
+    filteredLots,
+    getLotKey,
+    expandedLot,
+    setExpandedLot,
+  });
+
 
   const displayData = useMemo(() => {
     if (!groupBy) return filteredLots;
@@ -288,15 +300,21 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
               <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
             ) : (
               displayData.map((l, idx) => {
-                const hasBarcodeHit = !!l.hasBarcodeHit;
-                const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
+                const isExpanded = !groupBy && expandedLot === l.lotNo;
                 const activeCrates = (l.crates || []).filter((c) => (
                   Number(c?.availableBobbins || 0) > 0 || Number(c?.availableWeight || 0) > EPSILON
                 ));
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || l.lotNo || idx);
                 return (
                   <React.Fragment key={rowKey}>
-                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
+                    <TableRow
+                      className="hover:bg-muted/50 cursor-pointer"
+                      onClick={() => {
+                        if (groupBy) return;
+                        markManualInteraction();
+                        setExpandedLot(isExpanded ? null : l.lotNo);
+                      }}
+                    >
                       <TableCell>
                         {!groupBy && (isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
                       </TableCell>
@@ -398,8 +416,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No bobbin stock found.</div>
         ) : (
           displayData.map((l, idx) => {
-            const hasBarcodeHit = !!l.hasBarcodeHit;
-            const isExpanded = !groupBy && (expandedLot === l.lotNo || hasBarcodeHit);
+            const isExpanded = !groupBy && expandedLot === l.lotNo;
             const activeCrates = (l.crates || []).filter((c) => (
               Number(c?.availableBobbins || 0) > 0 || Number(c?.availableWeight || 0) > EPSILON
             ));
@@ -407,7 +424,14 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
             return (
               <div key={rowKey} className="border rounded-lg bg-card shadow-sm overflow-hidden text-sm">
-                <div className="p-4" onClick={() => !groupBy && setExpandedLot(isExpanded ? null : l.lotNo)}>
+                <div
+                  className="p-4"
+                  onClick={() => {
+                    if (groupBy) return;
+                    markManualInteraction();
+                    setExpandedLot(isExpanded ? null : l.lotNo);
+                  }}
+                >
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">

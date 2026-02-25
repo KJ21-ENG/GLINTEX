@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
@@ -21,6 +21,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/lab
 import { usePermission, useStagePermission } from '../hooks/usePermission';
 import { getFeatureFlags } from '../utils/featureFlags';
 import * as v2 from '../api/v2';
+import { useBarcodeAutoExpand } from '../utils/useBarcodeAutoExpand';
 
 const EPSILON = 1e-9;
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
@@ -489,6 +490,17 @@ export function Stock() {
     return grouped;
   }, [filteredLots, groupByItem]);
 
+  const getLotKey = useCallback((lot) => lot?.lotNo || null, []);
+  const { markManualInteraction } = useBarcodeAutoExpand({
+    enabled: isCutter && view === 'jumbo',
+    groupBy: groupByItem,
+    search,
+    filteredLots,
+    getLotKey,
+    expandedLot,
+    setExpandedLot,
+  });
+
   // Grand Totals for Jumbo Rolls view
   const grandTotals = useMemo(() => {
     return displayedLots.reduce((acc, lot) => ({
@@ -798,7 +810,10 @@ export function Stock() {
   }
 
   // --- Render Helper ---
-  const toggleExpand = (lotNo) => setExpandedLot(prev => prev === lotNo ? null : lotNo);
+  const toggleExpand = (lotNo) => {
+    markManualInteraction();
+    setExpandedLot(prev => prev === lotNo ? null : lotNo);
+  };
   const showBobbins = isCutter && view === 'bobbins';
   const formatWastageSummary = (lot) => {
     const count = Number(lot?.wastageCount || 0);
@@ -1011,8 +1026,7 @@ export function Stock() {
                   <TableRow><TableCell colSpan={(groupByItem ? 10 : 11) - (filters.status === 'available_to_issue' ? 1 : 0)} className="h-24 text-center text-muted-foreground">No lots found.</TableCell></TableRow>
                 ) : (
                   displayedLots.map((l, idx) => {
-                    const hasBarcodeHit = !!l.hasBarcodeHit;
-                    const isExpanded = !groupByItem && (expandedLot === l.lotNo || hasBarcodeHit);
+                    const isExpanded = !groupByItem && expandedLot === l.lotNo;
                     const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);
                     return (
                       <React.Fragment key={rowKey}>
@@ -1182,8 +1196,7 @@ export function Stock() {
               <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No lots found.</div>
             ) : (
               displayedLots.map((l, idx) => {
-                const hasBarcodeHit = !!l.hasBarcodeHit;
-                const isExpanded = !groupByItem && (expandedLot === l.lotNo || hasBarcodeHit);
+                const isExpanded = !groupByItem && expandedLot === l.lotNo;
                 const available = l.availableCount ?? countAvailablePieces(l.pieces || []);
                 const total = l.totalPieces ?? (l.pieces || []).length;
                 const rowKey = groupByItem ? (l.groupKey || l.lotNo || idx) : (l.lotNo || idx);

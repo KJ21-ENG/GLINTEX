@@ -15,6 +15,27 @@ const buildGroupKey = (lot) => ([
   lot.twistName || ''
 ].join('::'));
 
+const normalizeLotKeyIdentity = (rawKey) => {
+  try {
+    const decoded = JSON.parse(window.atob(String(rawKey || '')));
+    if (!decoded || typeof decoded !== 'object') return null;
+    if (decoded.process !== 'holo') return null;
+    return [
+      decoded.process || '',
+      decoded.lotLabel || '',
+      decoded.lotNoRaw || '',
+      decoded.itemId || '',
+      decoded.yarnId || '',
+      decoded.twistId || '',
+      decoded.firmId || '',
+      decoded.supplierId || '',
+      decoded.isMixed ? '1' : '0',
+    ].join('::');
+  } catch {
+    return null;
+  }
+};
+
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -24,6 +45,24 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const v2LoadLotRows = v2?.loadLotRows;
   const barcodeHitKeys = v2?.barcodeHitKeys;
   const lastAutoExpandRef = useRef(null);
+  const v2LotKeyByIdentity = useMemo(() => {
+    if (!Array.isArray(v2Lots)) return new Map();
+    const map = new Map();
+    v2Lots.forEach((lot) => {
+      const id = normalizeLotKeyIdentity(lot?.lotKey);
+      if (id && !map.has(id)) map.set(id, lot.lotKey);
+    });
+    return map;
+  }, [v2Lots]);
+  const barcodeHitIdentitySet = useMemo(() => {
+    if (!barcodeHitKeys || typeof barcodeHitKeys.forEach !== 'function') return new Set();
+    const set = new Set();
+    barcodeHitKeys.forEach((key) => {
+      const id = normalizeLotKeyIdentity(key);
+      if (id) set.add(id);
+    });
+    return set;
+  }, [barcodeHitKeys]);
 
   const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const hasActiveRollAvailability = (row) => {
@@ -223,19 +262,22 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     if (!Array.isArray(v2Lots)) return;
     if (!barcodeHitKeys || typeof barcodeHitKeys.size !== 'number') return;
     if (barcodeHitKeys.size !== 1) return;
-    const key = Array.from(barcodeHitKeys)[0];
-    if (!key) return;
-    if (lastAutoExpandRef.current === key) return;
-    lastAutoExpandRef.current = key;
+    const sourceKey = Array.from(barcodeHitKeys)[0];
+    if (!sourceKey) return;
+    const sourceIdentity = normalizeLotKeyIdentity(sourceKey);
+    const resolvedKey = (sourceIdentity && v2LotKeyByIdentity.get(sourceIdentity)) || sourceKey;
+    if (!resolvedKey) return;
+    if (lastAutoExpandRef.current === resolvedKey) return;
+    lastAutoExpandRef.current = resolvedKey;
 
-    if (v2RowsByKey[key]) {
-      setExpandedLot(key);
+    if (v2RowsByKey[resolvedKey]) {
+      setExpandedLot(resolvedKey);
       return;
     }
     if (typeof v2LoadLotRows === 'function') {
-      v2LoadLotRows(key).then(() => setExpandedLot(key)).catch(() => { });
+      v2LoadLotRows(resolvedKey).then(() => setExpandedLot(resolvedKey)).catch(() => { });
     }
-  }, [v2Lots, barcodeHitKeys, v2RowsByKey, v2LoadLotRows]);
+  }, [v2Lots, barcodeHitKeys, v2RowsByKey, v2LoadLotRows, v2LotKeyByIdentity]);
 
   // 5. Filter
   const filteredLots = useMemo(() => {
@@ -260,7 +302,10 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       // Check for direct barcode hit (v2 uses server lookup to avoid shipping all barcodes).
       const searchLower = search ? search.trim().toLowerCase() : '';
       const hasBarcodeHit = Array.isArray(v2Lots)
-        ? (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
+        ? (
+          (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
+          || barcodeHitIdentitySet.has(normalizeLotKeyIdentity(l.lotKey))
+        )
         : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
@@ -295,7 +340,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       }
       return (a.lotNo || '').localeCompare(b.lotNo || '', undefined, { numeric: true });
     });
-  }, [holoLots, filters, search, db.cuts, v2Lots, barcodeHitKeys]);
+  }, [holoLots, filters, search, db.cuts, v2Lots, barcodeHitKeys, barcodeHitIdentitySet]);
 
 
   const displayLots = useMemo(() => {

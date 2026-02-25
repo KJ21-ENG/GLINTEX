@@ -1918,7 +1918,7 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
       `;
 
       const items = (rows || []).map((r) => {
-        const cutNames = Array.isArray(r.cut_names) ? r.cut_names : [];
+        const cutNames = Array.isArray(r.cut_names) ? [...r.cut_names].sort((a, b) => String(a).localeCompare(String(b))) : [];
         const cutName = cutNames.length > 1 ? 'Mixed' : (cutNames[0] || '—');
         const totalRolls = Number(r.total_rolls || 0);
         const steamedRolls = Number(r.steamed_rolls || 0);
@@ -2274,7 +2274,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
           LEFT JOIN issue_lots il ON il.issue_id = i.id
           WHERE i."isDeleted" = false
         )
-        SELECT DISTINCT
+        SELECT
           il.lot_label AS lot_label,
           il.is_mixed AS is_mixed,
           i."lotNo" AS lot_no_raw,
@@ -2282,13 +2282,25 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
           i."yarnId" AS yarn_id,
           i."twistId" AS twist_id,
           lot."firmId" AS firm_id,
-          lot."supplierId" AS supplier_id
+          lot."supplierId" AS supplier_id,
+          array_remove(array_agg(DISTINCT COALESCE(ct.name, '—')), NULL) AS cut_names
         FROM "ReceiveFromHoloMachineRow" r
         JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
         JOIN issue_labels il ON il.issue_id = i.id
         LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+        LEFT JOIN "Cut" ct ON ct.id = i."cutId"
         WHERE r."isDeleted" = false
           AND r."barcode" ILIKE ${'%' + q + '%'}
+        GROUP BY
+          il.lot_label,
+          il.is_mixed,
+          i."lotNo",
+          i."itemId",
+          i."yarnId",
+          i."twistId",
+          lot."firmId",
+          lot."supplierId"
+        ORDER BY il.lot_label ASC
         LIMIT 50
       `;
 
@@ -2296,6 +2308,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
         const isMixed = !!r.is_mixed;
         const firmId = isMixed ? '' : (r.firm_id || '');
         const supplierId = isMixed ? '' : (r.supplier_id || '');
+        const cutNames = Array.isArray(r.cut_names) ? [...r.cut_names].sort((a, b) => String(a).localeCompare(String(b))) : [];
         return encodeStockLotKey({
           v: 1,
           process: 'holo',
@@ -2306,7 +2319,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
           twistId: r.twist_id || null,
           firmId,
           supplierId,
-          cutNames: [],
+          cutNames,
           isMixed,
         });
       });

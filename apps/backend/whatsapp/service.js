@@ -129,6 +129,13 @@ class WhatsappService {
     this._exitHandlersBound = false;
   }
 
+  _normalizeClientState(state) {
+    const st = String(state || '').toUpperCase();
+    if (st === 'CONNECTED') return 'connected';
+    if (['OPENING', 'PAIRING', 'TIMEOUT', 'CONFLICT', 'UNPAIRED', 'UNPAIRED_IDLE'].includes(st)) return 'reconnecting';
+    return null;
+  }
+
   async init(opts = {}) {
     const { force = false } = opts;
     if (this._shuttingDown) throw new Error('Whatsapp service shutting down');
@@ -219,6 +226,16 @@ class WhatsappService {
 
         client.on('change_state', (state) => {
           console.log('Whatsapp state changed:', state);
+          const mapped = this._normalizeClientState(state);
+          if (!mapped) return;
+          if (mapped !== this.status) {
+            this.status = mapped;
+            this.emitter.emit('status', { status: this.status, state });
+          }
+          if (mapped === 'connected') {
+            this._flushWaiting();
+            this._processQueue().catch(err => console.error('Queue processor failed', err));
+          }
         });
 
         client.on('auth_failure', async (msg) => {
@@ -305,7 +322,7 @@ class WhatsappService {
   }
 
   // Safe send that doesn't throw if client not ready immediately; returns a promise
-  async sendTextSafe(number, text) {
+  async sendTextSafe(number, text, opts = {}) {
     // try a gentle wait first
     try {
       await this._waitUntilConnected(15000);
@@ -315,20 +332,20 @@ class WhatsappService {
         await this.init();
       } catch (e) {
         // still not available, enqueue and let it run when ready; reject after timeout
-        return this.enqueueSend(number, text, { timeout: 30000 });
+        return this.enqueueSend(number, text, { timeout: 30000, meta: opts.meta || null });
       }
     }
-    return this.enqueueSend(number, text);
+    return this.enqueueSend(number, text, { meta: opts.meta || null });
   }
 
   // Send to a raw chat id (e.g. group id like '12345-67890@g.us')
-  async sendToChatIdSafe(chatId, text) {
+  async sendToChatIdSafe(chatId, text, opts = {}) {
     try {
       await this._waitUntilConnected(15000);
     } catch (err) {
       try { await this.init(); } catch (_) { /* ignore, will enqueue */ }
     }
-    return this.enqueueSend(null, text, { chatId });
+    return this.enqueueSend(null, text, { chatId, meta: opts.meta || null });
   }
 
   /**
@@ -394,6 +411,7 @@ class WhatsappService {
       const entry = {
         number: number || null,
         chatId: opts.chatId || null,
+        meta: opts.meta || null,
         text,
         resolve,
         reject,
@@ -457,12 +475,19 @@ class WhatsappService {
           entry.reject(new Error('No recipient specified'));
           continue;
         }
+        const logMeta = entry.meta ? JSON.stringify(entry.meta) : '{}';
+        console.log(`[Whatsapp][queue] sending`, logMeta);
         try {
           // perform send and await
           await this.client.sendMessage(id, entry.text, { sendSeen: false });
+          console.log(`[Whatsapp][queue] sent`, logMeta);
           entry.resolve(true);
         } catch (err) {
-          console.error('Failed to send whatsapp message', err && err.message);
+          console.error(`[Whatsapp][queue] failed`, JSON.stringify({
+            ...(entry.meta || {}),
+            error: err && err.message ? err.message : String(err),
+            attempts: entry.attempts,
+          }));
           // if attempts remain, push back to queue's end to retry after reconnect
           if (entry.attempts < this._maxSendAttempts) {
             this._sendQueue.push(entry);
@@ -610,6 +635,14 @@ class WhatsappService {
     try {
       const state = await this.client.getState();
       if (state !== 'CONNECTED') {
+        const mapped = this._normalizeClientState(state);
+        if (mapped === 'reconnecting') {
+          if (this.status !== mapped) {
+            this.status = mapped;
+            this.emitter.emit('status', { status: this.status, state });
+          }
+          return;
+        }
         throw new Error(`Unexpected whatsapp state: ${state}`);
       }
     } catch (err) {

@@ -16423,19 +16423,42 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
       totalPieces: summaryData.totalPieces || summaryData.totalBobbins || summaryData.totalRolls || summaryData.totalCones || 0,
     });
 
-    // Send to all recipients
+    // Send to all recipients with bounded timeout so API never hangs indefinitely.
+    const summarySendTimeoutMs = Number(process.env.WHATSAPP_SUMMARY_SEND_TIMEOUT_MS || 45000);
     const results = [];
     for (const r of recipients) {
       try {
-        if (r.type === 'number') {
-          await whatsapp.sendMediaSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
-        } else {
-          await whatsapp.sendMediaToChatIdSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
-        }
+        const sendPromise = (async () => {
+          if (r.type === 'number') {
+            await whatsapp.sendMediaSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
+          } else {
+            await whatsapp.sendMediaToChatIdSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
+          }
+        })();
+        const timeoutPromise = new Promise((_, reject) => {
+          const timer = setTimeout(() => reject(new Error(`send_timeout_${summarySendTimeoutMs}ms`)), summarySendTimeoutMs);
+          timer.unref?.();
+        });
+
+        await Promise.race([sendPromise, timeoutPromise]);
         results.push({ recipient: r.value, success: true });
       } catch (err) {
         console.error(`Failed to send summary to ${r.value}`, err);
-        results.push({ recipient: r.value, success: false, error: err.message });
+        try {
+          const fallbackText = `${caption}\n\n[PDF delivery failed, sent as text fallback]`;
+          if (r.type === 'number') {
+            await whatsapp.sendTextSafe(r.value, fallbackText, {
+              meta: { event: `summary_${stage}_${type}`, recipient: r.value, recipientType: r.type, fallback: 'text' }
+            });
+          } else {
+            await whatsapp.sendToChatIdSafe(r.value, fallbackText, {
+              meta: { event: `summary_${stage}_${type}`, recipient: r.value, recipientType: r.type, fallback: 'text' }
+            });
+          }
+          results.push({ recipient: r.value, success: true, fallback: 'text', mediaError: err.message });
+        } catch (fallbackErr) {
+          results.push({ recipient: r.value, success: false, error: err.message, fallbackError: fallbackErr?.message || String(fallbackErr) });
+        }
       }
     }
 

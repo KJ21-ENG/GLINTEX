@@ -78,23 +78,15 @@ function resolveRecipients({ template, settings }) {
   });
 }
 
-function makeEventId(event) {
-  const safeEvent = String(event || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const ts = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `${safeEvent}-${ts}-${rand}`;
-}
-
 export async function sendNotification(event, payload, opts = {}) {
   try {
-    const eventId = makeEventId(event);
-    console.log('[Whatsapp][notify] start', JSON.stringify({ eventId, event }));
+    console.log('sendNotification called for', event, 'payload:', payload && JSON.stringify(payload));
     let template = await getTemplateByEvent(event);
 
     if (!template) {
       if (!opts.fallbackTemplate) {
-        console.warn('[Whatsapp][notify] template_not_found', JSON.stringify({ eventId, event }));
-        return { ok: false, reason: 'template_not_found', eventId };
+        console.warn('No template for event', event);
+        return { ok: false, reason: 'template_not_found' };
       }
       template = {
         enabled: true,
@@ -105,8 +97,8 @@ export async function sendNotification(event, payload, opts = {}) {
     }
 
     if (!template.enabled) {
-      console.log('[Whatsapp][notify] template_disabled', JSON.stringify({ eventId, event }));
-      return { ok: false, reason: 'template_disabled', eventId };
+      console.log('Template disabled for event', event);
+      return { ok: false, reason: 'template_disabled' };
     }
 
     const msg = await buildWhatsappMessage(template.template, payload || {});
@@ -114,32 +106,21 @@ export async function sendNotification(event, payload, opts = {}) {
     const recipients = resolveRecipients({ template, settings });
 
     if (recipients.length === 0) {
-      console.warn('[Whatsapp][notify] no_recipients', JSON.stringify({ eventId, event }));
-      return { ok: false, reason: 'no_recipients', eventId };
+      console.warn('No recipients configured for', event);
+      return { ok: false, reason: 'no_recipients' };
     }
 
     recipients.forEach(r => {
-      const meta = {
-        eventId,
-        event,
-        recipientType: r.type,
-        recipient: r.value,
-      };
       if (r.type === 'number') {
-        whatsapp.sendTextSafe(r.value, msg, { meta }).catch(err => {
-          console.error('[Whatsapp][notify] send_failed', JSON.stringify({ ...meta, error: err?.message || String(err) }));
-        });
+        whatsapp.sendTextSafe(r.value, msg).catch(err => console.error('Failed to send to number', err));
       } else {
-        whatsapp.sendToChatIdSafe(r.value, msg, { meta }).catch(err => {
-          console.error('[Whatsapp][notify] send_failed', JSON.stringify({ ...meta, error: err?.message || String(err) }));
-        });
+        whatsapp.sendToChatIdSafe(r.value, msg).catch(err => console.error('Failed to send to group', err));
       }
     });
 
-    console.log('[Whatsapp][notify] queued', JSON.stringify({ eventId, event, recipients: recipients.length }));
-    return { ok: true, eventId, recipients };
+    return { ok: true, recipients };
   } catch (err) {
-    console.error('[Whatsapp][notify] error', JSON.stringify({ event, error: err?.message || String(err) }));
+    console.error('sendNotification error', err);
     return { ok: false, reason: 'error', error: err };
   }
 }

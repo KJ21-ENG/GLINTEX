@@ -164,7 +164,6 @@ class WhatsappService {
     const execPath = detectChromeExecutable();
     const puppeteerOpts = {
       headless: true, // Use standard true for Docker
-      protocolTimeout: Number(process.env.PUPPETEER_PROTOCOL_TIMEOUT || 120000),
       defaultViewport: null,
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       args: [
@@ -375,7 +374,7 @@ class WhatsappService {
     const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
     const media = new MessageMedia(mimetype, base64Data, filename);
 
-    await this._sendMediaWithRetries(chatId, media, caption, `number=${number} file=${filename}`);
+    await this.client.sendMessage(chatId, media, { caption, sendSeen: false });
     return true;
   }
 
@@ -402,43 +401,8 @@ class WhatsappService {
     const base64Data = Buffer.isBuffer(data) ? data.toString('base64') : data;
     const media = new MessageMedia(mimetype, base64Data, filename);
 
-    await this._sendMediaWithRetries(chatId, media, caption, `chatId=${chatId} file=${filename}`);
+    await this.client.sendMessage(chatId, media, { caption, sendSeen: false });
     return true;
-  }
-
-  async _sendMediaWithRetries(chatId, media, caption, logCtx = '') {
-    const maxMediaAttempts = 3;
-    let lastErr = null;
-    for (let attempt = 1; attempt <= maxMediaAttempts; attempt++) {
-      try {
-        if (this.status !== 'connected' || !this.client) {
-          try {
-            await this._waitUntilConnected(30000);
-          } catch (_) {
-            await this.init();
-            await this._waitUntilConnected(30000);
-          }
-        }
-        const client = this.client;
-        if (!client || this.status !== 'connected') {
-          throw new Error('WhatsApp client not connected');
-        }
-        await client.sendMessage(chatId, media, { caption, sendSeen: false });
-        return true;
-      } catch (err) {
-        lastErr = err;
-        const msg = String(err?.message || err || '');
-        console.error(`[Whatsapp][media] send failed attempt ${attempt}/${maxMediaAttempts} ${logCtx}: ${msg}`);
-        if (attempt < maxMediaAttempts) {
-          if (this._isFatalError(err) || /protocolerror|timed out|getchat|cannot read properties/i.test(msg)) {
-            await this._handleFatalDisconnect('media_send_failure');
-            try { await this.init(); } catch (_) { /* retry loop handles final error */ }
-          }
-          await new Promise(r => setTimeout(r, 800 * attempt));
-        }
-      }
-    }
-    throw lastErr || new Error('Failed to send media');
   }
 
   enqueueSend(number, text, opts = {}) {

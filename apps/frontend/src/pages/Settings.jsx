@@ -376,6 +376,8 @@ export function Settings() {
     const [groups, setGroups] = useState([]);
     const [whatsappStatus, setWhatsappStatus] = useState({ status: 'disconnected' });
     const [whatsappQr, setWhatsappQr] = useState(null);
+    const [telegramStatus, setTelegramStatus] = useState({ status: 'disconnected' });
+    const groupsRequestedRef = useRef(false);
 
     useEffect(() => {
         let mounted = true;
@@ -384,16 +386,25 @@ export function Settings() {
                 const s = await api.whatsappStatus();
                 if (!mounted) return;
                 setWhatsappStatus(s);
+                try {
+                    const t = await api.telegramStatus();
+                    if (mounted) setTelegramStatus(t || { status: 'disconnected' });
+                } catch (_) {
+                    if (mounted) setTelegramStatus({ status: 'disconnected' });
+                }
                 if (s.status === 'qr') {
                     const q = await api.whatsappQr();
                     if (mounted) setWhatsappQr(q.qr || null);
                 } else {
                     if (mounted) {
                         setWhatsappQr(null);
-                        // If connected, also load groups if not already loaded
-                        if (s.status === 'connected' && groups.length === 0) {
+                        // Load groups once per connected session unless explicitly refreshed
+                        if (s.status === 'connected' && groups.length === 0 && !groupsRequestedRef.current) {
+                            groupsRequestedRef.current = true;
                             const g = await api.whatsappGroups();
                             if (mounted) setGroups(g || []);
+                        } else if (s.status !== 'connected') {
+                            groupsRequestedRef.current = false;
                         }
                     }
                 }
@@ -427,7 +438,7 @@ export function Settings() {
                 <CardContent className="p-0">
                     <nav className="flex flex-col">
                         <button onClick={() => setActiveTab('whatsapp')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'whatsapp' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
-                            <MessageSquare className="w-4 h-4" /> WhatsApp
+                            <MessageSquare className="w-4 h-4" /> Notifications
                         </button>
                         <button onClick={() => setActiveTab('templates')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'templates' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
                             <Copy className="w-4 h-4" /> Message Templates
@@ -478,7 +489,7 @@ export function Settings() {
                                     onChange={(e) => setActiveTab(e.target.value)}
                                     className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 >
-                                    <option value="whatsapp">WhatsApp</option>
+                                    <option value="whatsapp">Notifications</option>
                                     <option value="templates">Message Templates</option>
                                     <option value="branding">Branding & System</option>
                                     <option value="data">Raw Data</option>
@@ -540,6 +551,9 @@ export function Settings() {
                         setWhatsappStatus={setWhatsappStatus}
                         whatsappQr={whatsappQr}
                         setWhatsappQr={setWhatsappQr}
+                        resetWhatsappGroupsFetch={() => { groupsRequestedRef.current = false; setGroups([]); }}
+                        telegramStatus={telegramStatus}
+                        setTelegramStatus={setTelegramStatus}
                         readOnly={isReadOnly}
                         isAdmin={isAdmin}
                     />
@@ -577,6 +591,10 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
         caret: 0
     });
     const [mentionIndex, setMentionIndex] = useState(0);
+    const settingsTelegramChatIds = Array.isArray(db?.settings?.[0]?.telegramChatIds)
+        ? db.settings[0].telegramChatIds
+        : [];
+    const [telegramChatInfoMap, setTelegramChatInfoMap] = useState({});
 
     const eventVariables = editing ? (WHATSAPP_EVENTS_CONFIG[editing.event]?.variables || []) : [];
 
@@ -586,6 +604,29 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
             loadGroups();
         }
     }, [whatsappStatus?.status]);
+
+    useEffect(() => {
+        let mounted = true;
+        async function resolveTelegramChats() {
+            if (!Array.isArray(settingsTelegramChatIds) || settingsTelegramChatIds.length === 0) {
+                if (mounted) setTelegramChatInfoMap({});
+                return;
+            }
+            try {
+                const response = await api.telegramResolveChats(settingsTelegramChatIds);
+                if (!mounted) return;
+                const map = {};
+                (response?.items || []).forEach((item) => {
+                    if (item?.chatId) map[item.chatId] = item;
+                });
+                setTelegramChatInfoMap(map);
+            } catch (_) {
+                if (mounted) setTelegramChatInfoMap({});
+            }
+        }
+        resolveTelegramChats();
+        return () => { mounted = false; };
+    }, [settingsTelegramChatIds.join(',')]);
 
     async function load() {
         setLoading(true);
@@ -621,7 +662,8 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
                 template: editing.template,
                 enabled: editing.enabled,
                 sendToPrimary: editing.sendToPrimary,
-                groupIds: validGroupIds
+                groupIds: validGroupIds,
+                telegramChatIds: editing.telegramChatIds || []
             });
             setEditing(null);
             load();
@@ -753,7 +795,7 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
                                         )}
                                         <p className="text-sm text-muted-foreground whitespace-pre-wrap">{t.template}</p>
 
-                                        {(t.sendToPrimary || assignedGroups.length > 0) && (
+                                        {(t.sendToPrimary || assignedGroups.length > 0 || (t.telegramChatIds || []).length > 0) && (
                                             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-muted/50">
                                                 {t.sendToPrimary && primaryNumber && (
                                                     <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600 dark:bg-blue-700 text-white rounded-md text-[11px] font-bold shadow-sm border border-blue-700 dark:border-blue-800">
@@ -775,6 +817,16 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
                                                         </span>
                                                     </div>
                                                 ))}
+                                                {(t.telegramChatIds || []).map(chatId => {
+                                                    const chatInfo = telegramChatInfoMap[chatId];
+                                                    const label = chatInfo?.displayName || chatId;
+                                                    return (
+                                                    <div key={chatId} className="flex items-center gap-1.5 px-2.5 py-1 bg-sky-600 text-white rounded-md text-[11px] font-bold shadow-sm border border-sky-700">
+                                                        <MessageSquare className="w-3.5 h-3.5 text-white/90" />
+                                                        <span className="max-w-[220px] truncate">TG: {label} ({chatId})</span>
+                                                    </div>
+                                                    );
+                                                })}
                                             </div>
                                         )}
                                     </div>
@@ -900,6 +952,47 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
                                     )}
                                 </div>
 
+                                <div className="space-y-2">
+                                    <Label>Send to Telegram Chat IDs</Label>
+                                    {settingsTelegramChatIds.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic bg-muted/30 p-2 rounded">
+                                            No Telegram chat IDs configured in Notification Settings.
+                                        </p>
+                                    ) : (
+                                        <div className="border rounded-md divide-y max-h-[180px] overflow-y-auto">
+                                            {settingsTelegramChatIds.map(chatId => {
+                                                const chatInfo = telegramChatInfoMap[chatId];
+                                                const label = chatInfo?.displayName || chatId;
+                                                return (
+                                                <label key={chatId} className="flex items-center gap-3 p-2 hover:bg-muted/50 cursor-pointer transition-colors">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={(editing.telegramChatIds || []).includes(chatId)}
+                                                        onChange={() => {
+                                                            const current = editing.telegramChatIds || [];
+                                                            if (current.includes(chatId)) {
+                                                                setEditing({ ...editing, telegramChatIds: current.filter(id => id !== chatId) });
+                                                            } else {
+                                                                setEditing({ ...editing, telegramChatIds: [...current, chatId] });
+                                                            }
+                                                        }}
+                                                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                                        disabled={isReadOnly}
+                                                    />
+                                                    <div className="flex flex-col min-w-0">
+                                                        <span className="text-sm truncate">{label}</span>
+                                                        <span className="text-[11px] text-muted-foreground truncate">{chatId}</span>
+                                                    </div>
+                                                </label>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Mandatory for Telegram: select one or more chat IDs for this template, or Telegram will not send for this event.
+                                    </p>
+                                </div>
+
                                 <div className="flex justify-end gap-2 pt-2 border-t mt-4">
                                     <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
                                     <Button onClick={handleSave} disabled={isReadOnly}>Save Changes</Button>
@@ -913,22 +1006,80 @@ function MessageTemplates({ db, groups, setGroups, whatsappStatus, readOnly }) {
     );
 }
 
-function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, whatsappStatus, setWhatsappStatus, whatsappQr, setWhatsappQr, readOnly, isAdmin }) {
+function WhatsAppSettings({
+    db,
+    refreshDb,
+    updateSettings,
+    groups,
+    setGroups,
+    whatsappStatus,
+    setWhatsappStatus,
+    whatsappQr,
+    setWhatsappQr,
+    resetWhatsappGroupsFetch,
+    telegramStatus,
+    setTelegramStatus,
+    readOnly,
+    isAdmin
+}) {
     const isReadOnly = !!readOnly;
     const isAdminUser = !!isAdmin;
     const canManageConnection = isAdminUser && !isReadOnly;
     const [working, setWorking] = useState(false);
+    const [testingTelegram, setTestingTelegram] = useState(false);
+    const [whatsappEnabled, setWhatsappEnabled] = useState(true);
     const [primaryMobile, setPrimaryMobile] = useState('');
     const [allowedGroupIds, setAllowedGroupIds] = useState([]);
+    const [telegramEnabled, setTelegramEnabled] = useState(false);
+    const [telegramBotToken, setTelegramBotToken] = useState('');
+    const [telegramChatIds, setTelegramChatIds] = useState([]);
+    const [telegramChatIdInput, setTelegramChatIdInput] = useState('');
+    const [telegramChatInfoMap, setTelegramChatInfoMap] = useState({});
+    const [resolvingTelegramChats, setResolvingTelegramChats] = useState(false);
 
     useEffect(() => {
         const settings = db?.settings?.[0];
         const num = settings?.whatsappNumber || '';
+        setWhatsappEnabled(settings?.whatsappEnabled !== false);
         setPrimaryMobile(num ? String(num).replace(/^91/, '') : '');
         setAllowedGroupIds(settings?.whatsappGroupIds || []);
+        setTelegramEnabled(settings?.telegramEnabled === true);
+        setTelegramBotToken((prev) => {
+            const incoming = settings?.telegramBotToken;
+            if (incoming === '********') return prev;
+            return incoming || '';
+        });
+        setTelegramChatIds(Array.isArray(settings?.telegramChatIds) ? settings.telegramChatIds : []);
     }, [db]);
 
+    useEffect(() => {
+        let mounted = true;
+        async function resolveTelegramChats() {
+            if (!Array.isArray(telegramChatIds) || telegramChatIds.length === 0) {
+                if (mounted) setTelegramChatInfoMap({});
+                return;
+            }
+            setResolvingTelegramChats(true);
+            try {
+                const response = await api.telegramResolveChats(telegramChatIds);
+                if (!mounted) return;
+                const map = {};
+                (response?.items || []).forEach((item) => {
+                    if (item?.chatId) map[item.chatId] = item;
+                });
+                setTelegramChatInfoMap(map);
+            } catch (_) {
+                if (mounted) setTelegramChatInfoMap({});
+            } finally {
+                if (mounted) setResolvingTelegramChats(false);
+            }
+        }
+        resolveTelegramChats();
+        return () => { mounted = false; };
+    }, [telegramChatIds.join(',')]);
+
     const isConnected = whatsappStatus.status === 'connected';
+    const isTelegramConnected = telegramStatus?.status === 'connected';
 
     const handleConnect = async () => {
         if (!canManageConnection) return;
@@ -953,23 +1104,55 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
 
     const handleRefreshGroups = () => {
         if (!canManageConnection) return;
+        if (typeof resetWhatsappGroupsFetch === 'function') {
+            resetWhatsappGroupsFetch();
+            return;
+        }
         setGroups([]);
+    };
+
+    const handleTelegramTest = async () => {
+        if (isReadOnly || testingTelegram) return;
+        const firstChatId = telegramChatIds[0];
+        if (!firstChatId) {
+            alert('Enter at least one Telegram chat ID before sending test message.');
+            return;
+        }
+        setTestingTelegram(true);
+        try {
+            await api.telegramSendTest(firstChatId);
+            const refreshed = await api.telegramStatus();
+            setTelegramStatus(refreshed || { status: 'disconnected' });
+            alert('Telegram test message sent.');
+        } catch (e) {
+            alert(e.message || 'Failed to send Telegram test message');
+        } finally {
+            setTestingTelegram(false);
+        }
     };
 
     const handleSaveSettings = async () => {
         if (isReadOnly) return;
         setWorking(true);
         try {
-            // Only keep group IDs that are currently valid/accessible
-            const validGroupIds = allowedGroupIds.filter(id =>
-                groups.some(g => g.id === id)
-            );
+            const validGroupIds = groups.length > 0
+                ? allowedGroupIds.filter(id => groups.some(g => g.id === id))
+                : allowedGroupIds;
 
-            await updateSettings({
+            const payload = {
+                whatsappEnabled,
                 whatsappNumber: primaryMobile,
-                whatsappGroupIds: validGroupIds
-            });
-            alert('WhatsApp settings saved');
+                whatsappGroupIds: validGroupIds,
+                telegramEnabled,
+                telegramChatIds,
+            };
+            if (telegramBotToken.trim()) {
+                payload.telegramBotToken = telegramBotToken.trim();
+            }
+            await updateSettings(payload);
+            const refreshed = await api.telegramStatus();
+            setTelegramStatus(refreshed || { status: 'disconnected' });
+            alert('Notification settings saved');
             refreshDb();
         } catch (e) { alert(e.message); } finally { setWorking(false); }
     };
@@ -983,53 +1166,82 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
         }
     };
 
+    const handleAddTelegramChatId = async () => {
+        if (isReadOnly) return;
+        const chatId = String(telegramChatIdInput || '').trim();
+        if (!chatId) return;
+        if (telegramChatIds.includes(chatId)) {
+            setTelegramChatIdInput('');
+            return;
+        }
+        setTelegramChatIds([...telegramChatIds, chatId]);
+        setTelegramChatIdInput('');
+    };
+
+    const handleRemoveTelegramChatId = (chatId) => {
+        if (isReadOnly) return;
+        setTelegramChatIds(telegramChatIds.filter((id) => id !== chatId));
+    };
+
     return (
         <div className="space-y-6">
             <Card>
                 <CardHeader>
                     <CardTitle>Connection Status</CardTitle>
                 </CardHeader>
-                <CardContent>
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="flex items-center gap-4">
-                            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                            <div className="flex flex-col">
-                                <span className="font-medium capitalize">{whatsappStatus.status === 'qr' ? 'Scan QR' : whatsappStatus.status}</span>
-                                {whatsappStatus.mobile && <span className="text-xs text-muted-foreground">+{whatsappStatus.mobile}</span>}
+                <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="rounded-md border p-3">
+                            <div className="flex items-center gap-3">
+                                <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                                <div className="flex flex-col">
+                                    <span className="font-medium">WhatsApp: {whatsappStatus.status === 'qr' ? 'scan qr' : whatsappStatus.status}</span>
+                                    {whatsappStatus.mobile ? <span className="text-xs text-muted-foreground">+{whatsappStatus.mobile}</span> : null}
+                                </div>
                             </div>
                         </div>
-                        {isAdminUser ? (
-                            <div className="flex gap-2 w-full sm:w-auto">
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={handleRefreshGroups}
-                                    disabled={!isConnected || working || !canManageConnection}
-                                    title="Refresh Groups"
-                                    className="flex-1 sm:flex-none"
-                                >
-                                    <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
-                                </Button>
-                                <Button size="sm" onClick={handleConnect} disabled={working || isConnected || !canManageConnection} className="flex-1 sm:flex-none">
-                                    {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
-                                </Button>
-                                {isConnected && (
-                                    <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working || !canManageConnection} className="flex-1 sm:flex-none">
-                                        <LogOut className="w-4 h-4 mr-2" /> Logout
-                                    </Button>
-                                )}
+                        <div className="rounded-md border p-3">
+                            <div className="flex items-center gap-3">
+                                <div className={`w-3 h-3 rounded-full ${isTelegramConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                                <div className="flex flex-col">
+                                    <span className="font-medium">Telegram: {telegramStatus?.status || 'disconnected'}</span>
+                                    {telegramStatus?.lastError ? <span className="text-xs text-muted-foreground truncate">{telegramStatus.lastError}</span> : null}
+                                </div>
                             </div>
-                        ) : (
-                            <p className="text-[10px] text-muted-foreground italic">
-                                Only administrators can manage WhatsApp connection.
-                            </p>
-                        )}
+                        </div>
                     </div>
-                    {whatsappQr && (
-                        <div className="mt-4 flex justify-center p-4 bg-white rounded-lg border">
+
+                    {isAdminUser ? (
+                        <div className="flex gap-2 w-full sm:w-auto">
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={handleRefreshGroups}
+                                disabled={!isConnected || working || !canManageConnection}
+                                title="Refresh Groups"
+                                className="flex-1 sm:flex-none"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${working ? 'animate-spin' : ''}`} />
+                            </Button>
+                            <Button size="sm" onClick={handleConnect} disabled={working || isConnected || !canManageConnection} className="flex-1 sm:flex-none">
+                                {working ? 'Working...' : isConnected ? 'Reconnect' : 'Connect'}
+                            </Button>
+                            {isConnected ? (
+                                <Button size="sm" variant="destructive" onClick={handleLogout} disabled={working || !canManageConnection} className="flex-1 sm:flex-none">
+                                    <LogOut className="w-4 h-4 mr-2" /> Logout
+                                </Button>
+                            ) : null}
+                        </div>
+                    ) : (
+                        <p className="text-[10px] text-muted-foreground italic">
+                            Only administrators can manage WhatsApp connection.
+                        </p>
+                    )}
+                    {whatsappQr ? (
+                        <div className="mt-2 flex justify-center p-4 bg-white rounded-lg border">
                             <img src={whatsappQr} alt="QR Code" className="max-w-[200px]" />
                         </div>
-                    )}
+                    ) : null}
                 </CardContent>
             </Card>
 
@@ -1038,26 +1250,48 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                     <CardTitle>Notification Settings</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="space-y-2">
-                        <Label>Primary Mobile Number (10 digits)</Label>
-                        <div className="flex gap-2">
-                            <div className="relative flex-1">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-medium">+91</span>
-                                <Input
-                                    className="pl-12"
-                                    value={primaryMobile}
-                                    onChange={e => setPrimaryMobile(e.target.value.replace(/\D/g, ''))}
-                                    placeholder="9876543210"
-                                    maxLength={10}
+                    <div className="space-y-3">
+                        <Label className="text-sm">Channel Toggles</Label>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            <label className="flex items-center gap-2 border rounded-md p-3">
+                                <input
+                                    type="checkbox"
+                                    checked={whatsappEnabled}
+                                    onChange={e => setWhatsappEnabled(e.target.checked)}
                                     disabled={isReadOnly}
                                 />
-                            </div>
+                                <span className="text-sm font-medium">Enable WhatsApp notifications</span>
+                            </label>
+                            <label className="flex items-center gap-2 border rounded-md p-3">
+                                <input
+                                    type="checkbox"
+                                    checked={telegramEnabled}
+                                    onChange={e => setTelegramEnabled(e.target.checked)}
+                                    disabled={isReadOnly}
+                                />
+                                <span className="text-sm font-medium">Enable Telegram notifications</span>
+                            </label>
                         </div>
-                        <p className="text-[10px] text-muted-foreground">Direct alerts will be sent to this administrator number.</p>
                     </div>
 
                     <div className="space-y-2">
-                        <Label>Authorized Groups</Label>
+                        <Label>Primary Mobile Number (10 digits)</Label>
+                        <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-medium">+91</span>
+                            <Input
+                                className="pl-12"
+                                value={primaryMobile}
+                                onChange={e => setPrimaryMobile(e.target.value.replace(/\D/g, ''))}
+                                placeholder="9876543210"
+                                maxLength={10}
+                                disabled={isReadOnly}
+                            />
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">Used for WhatsApp direct sends when WhatsApp is enabled.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Authorized WhatsApp Groups</Label>
                         {!isConnected ? (
                             <p className="text-xs text-muted-foreground italic bg-muted/30 p-3 rounded-md">Connect WhatsApp to view and authorize groups for notifications.</p>
                         ) : groups.length === 0 ? (
@@ -1065,14 +1299,14 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                         ) : (
                             <div className="border rounded-md divide-y max-h-[200px] overflow-y-auto">
                                 {groups.map(g => (
-                                            <label key={g.id} className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={allowedGroupIds.includes(g.id)}
-                                                    onChange={() => toggleAllowedGroup(g.id)}
-                                                    className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                                    disabled={isReadOnly}
-                                                />
+                                    <label key={g.id} className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={allowedGroupIds.includes(g.id)}
+                                            onChange={() => toggleAllowedGroup(g.id)}
+                                            className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            disabled={isReadOnly}
+                                        />
                                         <div className="flex flex-col">
                                             <span className="text-sm font-medium truncate">{g.name}</span>
                                             <span className="text-[10px] text-muted-foreground truncate opacity-70">{g.id}</span>
@@ -1081,7 +1315,75 @@ function WhatsAppSettings({ db, refreshDb, updateSettings, groups, setGroups, wh
                                 ))}
                             </div>
                         )}
-                        <p className="text-[10px] text-muted-foreground">Select which groups are allowed to receive system notifications.</p>
+                        <p className="text-[10px] text-muted-foreground">Only selected groups can receive template-driven WhatsApp notifications.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Telegram Bot Token</Label>
+                        <Input
+                            type="password"
+                            value={telegramBotToken}
+                            onChange={e => setTelegramBotToken(e.target.value)}
+                            placeholder="123456789:AA..."
+                            disabled={isReadOnly}
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                            Required only when Telegram notifications are enabled.
+                            {telegramStatus?.hasBotToken ? ' A token is already configured.' : ''}
+                        </p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Telegram Chat IDs</Label>
+                        <div className="flex gap-2">
+                            <Input
+                                value={telegramChatIdInput}
+                                onChange={(e) => setTelegramChatIdInput(e.target.value)}
+                                placeholder="Paste chat ID (e.g. -1001234567890)"
+                                disabled={isReadOnly}
+                            />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handleAddTelegramChatId}
+                                disabled={isReadOnly || !telegramChatIdInput.trim()}
+                            >
+                                Add
+                            </Button>
+                        </div>
+                        <div className="border rounded-md divide-y max-h-[220px] overflow-y-auto">
+                            {telegramChatIds.length === 0 ? (
+                                <div className="p-3 text-xs text-muted-foreground">No Telegram chats added yet.</div>
+                            ) : (
+                                telegramChatIds.map((chatId) => {
+                                    const info = telegramChatInfoMap[chatId];
+                                    const label = info?.displayName || (resolvingTelegramChats ? 'Resolving...' : chatId);
+                                    return (
+                                        <div key={chatId} className="flex items-center justify-between gap-3 p-3">
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-medium truncate">{label}</p>
+                                                <p className="text-[11px] text-muted-foreground truncate">{chatId}</p>
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleRemoveTelegramChatId(chatId)}
+                                                disabled={isReadOnly}
+                                            >
+                                                Remove
+                                            </Button>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <p className="text-[10px] text-muted-foreground">Messages are sent to all listed chats when Telegram is enabled.</p>
+                            <Button type="button" size="sm" variant="outline" onClick={handleTelegramTest} disabled={isReadOnly || testingTelegram}>
+                                {testingTelegram ? 'Testing...' : 'Send Telegram Test'}
+                            </Button>
+                        </div>
                     </div>
 
                     <Button className="w-full" onClick={handleSaveSettings} disabled={working || isReadOnly}>

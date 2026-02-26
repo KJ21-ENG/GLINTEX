@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import whatsapp from '../../whatsapp/service.js';
+import telegram from '../../telegram/service.js';
 import { getTemplateByEvent, interpolateTemplate } from './whatsappTemplates.js';
 import { resolveRecordUserFields } from './userResolver.js';
 
@@ -15,6 +16,34 @@ function formatCreatorLabel(user, fallbackId) {
     return display || username || fallbackId || '';
   }
   return fallbackId || '';
+}
+
+function normalizeChatIds(chatIds) {
+  if (!Array.isArray(chatIds)) return [];
+  const seen = new Set();
+  const normalized = [];
+  for (const raw of chatIds) {
+    const value = String(raw || '').trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+function isWhatsAppEnabled(settings) {
+  return settings?.whatsappEnabled !== false;
+}
+
+function isTelegramEnabled(settings) {
+  return settings?.telegramEnabled === true;
+}
+
+export function getNotificationChannelConfig(settings = {}) {
+  return {
+    whatsappEnabled: isWhatsAppEnabled(settings),
+    telegramEnabled: isTelegramEnabled(settings),
+  };
 }
 
 async function enrichPayloadWithCreator(payload) {
@@ -56,26 +85,69 @@ export async function appendCreatorToCaption(caption, createdByUserId) {
   return (base ? `${base}\n${suffix}` : suffix).slice(0, 1500);
 }
 
-function resolveRecipients({ template, settings }) {
+export function resolveWhatsappRecipients({ template, settings }) {
   const recipients = [];
-  if (template.sendToPrimary !== false && settings && settings.whatsappNumber) {
+  if (template?.sendToPrimary !== false && settings?.whatsappNumber) {
     recipients.push({ type: 'number', value: settings.whatsappNumber });
   }
 
-  const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds))
+  const allowedGroups = Array.isArray(settings?.whatsappGroupIds)
     ? settings.whatsappGroupIds
     : [];
-  const templateGroups = Array.isArray(template.groupIds) ? template.groupIds : [];
+  const templateGroups = Array.isArray(template?.groupIds) ? template.groupIds : [];
   const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
   for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
 
   const seen = new Set();
-  return recipients.filter(r => {
-    const key = `${r.type}:${r.value}`;
+  return recipients.filter((recipient) => {
+    const key = `${recipient.type}:${recipient.value}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+export function resolveTelegramRecipients(settings = {}) {
+  return normalizeChatIds(settings?.telegramChatIds);
+}
+
+export function resolveTemplateTelegramRecipients({ template, settings }) {
+  const settingsChatIds = resolveTelegramRecipients(settings || {});
+  const templateChatIds = normalizeChatIds(template?.telegramChatIds);
+  // Strict mode: Telegram targets must be explicitly selected per template.
+  if (templateChatIds.length === 0) return [];
+  // Global chat list is the authoritative allow-list.
+  if (settingsChatIds.length === 0) return [];
+  const allowSet = new Set(settingsChatIds);
+  return templateChatIds.filter((chatId) => allowSet.has(chatId));
+}
+
+async function sendWhatsappRecipients(recipients, message) {
+  const settled = await Promise.all(recipients.map(async (recipient) => {
+    try {
+      if (recipient.type === 'number') {
+        await whatsapp.sendTextSafe(recipient.value, message);
+      } else {
+        await whatsapp.sendToChatIdSafe(recipient.value, message);
+      }
+      return { recipient: recipient.value, type: recipient.type, success: true };
+    } catch (err) {
+      return { recipient: recipient.value, type: recipient.type, success: false, error: err?.message || String(err) };
+    }
+  }));
+  return settled;
+}
+
+async function sendTelegramRecipients(chatIds, message) {
+  const settled = await Promise.all(chatIds.map(async (chatId) => {
+    try {
+      await telegram.sendTextSafe(chatId, message);
+      return { recipient: chatId, success: true };
+    } catch (err) {
+      return { recipient: chatId, success: false, error: err?.message || String(err) };
+    }
+  }));
+  return settled;
 }
 
 export async function sendNotification(event, payload, opts = {}) {
@@ -103,24 +175,74 @@ export async function sendNotification(event, payload, opts = {}) {
 
     const msg = await buildWhatsappMessage(template.template, payload || {});
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const recipients = resolveRecipients({ template, settings });
+    const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
 
-    if (recipients.length === 0) {
-      console.warn('No recipients configured for', event);
-      return { ok: false, reason: 'no_recipients' };
+    if (!whatsappEnabled && !telegramEnabled) {
+      return { ok: false, reason: 'no_enabled_channels', channels: { whatsapp: { enabled: false }, telegram: { enabled: false } } };
     }
 
-    recipients.forEach(r => {
-      if (r.type === 'number') {
-        whatsapp.sendTextSafe(r.value, msg).catch(err => console.error('Failed to send to number', err));
-      } else {
-        whatsapp.sendToChatIdSafe(r.value, msg).catch(err => console.error('Failed to send to group', err));
-      }
-    });
+    const channelResults = {
+      whatsapp: {
+        enabled: whatsappEnabled,
+        recipients: [],
+        results: [],
+        ok: false,
+        reason: null,
+      },
+      telegram: {
+        enabled: telegramEnabled,
+        recipients: [],
+        results: [],
+        ok: false,
+        reason: null,
+      },
+    };
 
-    return { ok: true, recipients };
+    if (whatsappEnabled) {
+      const recipients = resolveWhatsappRecipients({ template, settings: settings || {} });
+      channelResults.whatsapp.recipients = recipients;
+      if (recipients.length === 0) {
+        channelResults.whatsapp.reason = 'no_recipients';
+      } else {
+        channelResults.whatsapp.results = await sendWhatsappRecipients(recipients, msg);
+        channelResults.whatsapp.ok = channelResults.whatsapp.results.some((result) => result.success);
+        if (!channelResults.whatsapp.ok) {
+          channelResults.whatsapp.reason = 'send_failed';
+        }
+      }
+    }
+
+    if (telegramEnabled) {
+      const chatIds = resolveTemplateTelegramRecipients({ template, settings: settings || {} });
+      channelResults.telegram.recipients = chatIds.map((chatId) => ({ type: 'chat', value: chatId }));
+      if (chatIds.length === 0) {
+        channelResults.telegram.reason = 'no_recipients';
+      } else {
+        channelResults.telegram.results = await sendTelegramRecipients(chatIds, msg);
+        channelResults.telegram.ok = channelResults.telegram.results.some((result) => result.success);
+        if (!channelResults.telegram.ok) {
+          channelResults.telegram.reason = 'send_failed';
+        }
+      }
+    }
+
+    const overallOk = channelResults.whatsapp.ok || channelResults.telegram.ok;
+    if (!overallOk) {
+      return {
+        ok: false,
+        reason: 'all_channels_failed',
+        recipients: channelResults.whatsapp.recipients,
+        channels: channelResults,
+      };
+    }
+
+    return {
+      ok: true,
+      recipients: channelResults.whatsapp.recipients,
+      channels: channelResults,
+    };
   } catch (err) {
     console.error('sendNotification error', err);
-    return { ok: false, reason: 'error', error: err };
+    return { ok: false, reason: 'error', error: err?.message || String(err) };
   }
 }

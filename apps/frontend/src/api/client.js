@@ -303,9 +303,13 @@ export async function whatsappStart() { return await request('/api/whatsapp/star
 export async function whatsappQr() { return await request('/api/whatsapp/qrcode'); }
 export async function whatsappLogout() { return await request('/api/whatsapp/logout', { method: 'POST' }); }
 export async function whatsappSendTest(number) { return await request('/api/whatsapp/send-test', { method: 'POST', body: { number } }); }
+export async function telegramStatus() { return await request('/api/telegram/status'); }
+export async function telegramSendTest(chatId, text) { return await request('/api/telegram/send-test', { method: 'POST', body: { chatId, text } }); }
+export async function telegramResolveChats(chatIds = []) { return await request('/api/telegram/chats/resolve', { method: 'POST', body: { chatIds } }); }
 export async function listWhatsappTemplates() { return await request('/api/whatsapp/templates'); }
 export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
-export async function sendWhatsappEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
+export async function sendNotificationEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
+export async function sendWhatsappEvent(event, payload) { return await sendNotificationEvent(event, payload); }
 export async function whatsappGroups() { return await request('/api/whatsapp/groups'); }
 export async function getWhatsappContacts() { return await request('/api/whatsapp/contacts'); }
 
@@ -366,12 +370,13 @@ export async function getSummary(stage, type, date) {
   const params = date ? `?date=${date}` : '';
   return await request(`/api/summary/${stage}/${type}${params}`);
 }
-export async function sendSummaryWhatsApp(stage, type, date) {
+export async function sendSummaryNotification(stage, type, date) {
   return await request(`/api/summary/${stage}/${type}/send`, {
     method: 'POST',
     body: date ? { date } : {}
   });
 }
+export async function sendSummaryWhatsApp(stage, type, date) { return await sendSummaryNotification(stage, type, date); }
 export async function downloadSummaryPdf(stage, type, date) {
   const params = date ? `?date=${encodeURIComponent(date)}` : '';
   const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download${params}`;

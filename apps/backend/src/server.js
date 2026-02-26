@@ -1,5 +1,6 @@
 import app from './app.js';
 import whatsapp from '../whatsapp/service.js';
+import telegram from '../telegram/service.js';
 import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 import { initBackupScheduler } from './utils/backup.js';
 
@@ -13,6 +14,15 @@ async function startWhatsapp() {
     console.log('Whatsapp service initialized');
   } catch (err) {
     console.error('Failed to initialize Whatsapp service', err);
+  }
+}
+
+async function startTelegram() {
+  try {
+    await telegram.init();
+    console.log('Telegram service initialized');
+  } catch (err) {
+    console.error('Failed to initialize Telegram service', err);
   }
 }
 
@@ -39,6 +49,7 @@ async function start() {
   });
 
   startWhatsapp();
+  startTelegram();
   await initBackupScheduler();
 }
 

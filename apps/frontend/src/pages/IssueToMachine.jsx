@@ -6,7 +6,7 @@ import { IssueToConing } from '../components/issue';
 import { OnMachineTable } from '../components/issue';
 import { IssueHistory } from './IssueHistory';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/ui';
-import { sendSummaryWhatsApp, downloadSummaryPdf } from '../api/client';
+import { sendSummaryNotification, downloadSummaryPdf } from '../api/client';
 import { Send, Calendar, Download } from 'lucide-react';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { useStagePermission } from '../hooks/usePermission';
@@ -64,9 +64,17 @@ export function IssueToMachine() {
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      const result = await sendSummaryWhatsApp(stage, 'issue', summaryDate);
+      const result = await sendSummaryNotification(stage, 'issue', summaryDate);
       if (result.ok) {
-        setSumMessage({ type: 'success', text: 'Summary sent successfully!' });
+        const channelErrors = Object.entries(result?.channels || {})
+          .flatMap(([channel, detail]) => (detail?.results || [])
+            .filter(r => !r.success)
+            .map(r => `${channel}: ${r.error || 'failed'}`));
+        if (channelErrors.length > 0) {
+          setSumMessage({ type: 'error', text: `Summary sent with partial failures (${channelErrors[0]})` });
+        } else {
+          setSumMessage({ type: 'success', text: 'Summary sent successfully!' });
+        }
       } else {
         setSumMessage({ type: 'error', text: result.message || 'Failed to send summary' });
       }
@@ -165,7 +173,7 @@ export function IssueToMachine() {
               className="flex-1 flex items-center gap-2"
             >
               <Send className="h-4 w-4" />
-              Send on WhatsApp
+              Send Notification
             </Button>
             <Button
               variant="outline"

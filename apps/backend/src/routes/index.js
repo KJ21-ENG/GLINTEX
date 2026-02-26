@@ -6,8 +6,9 @@ import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
 import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
+import telegram from '../../telegram/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
-import { appendCreatorToCaption, buildWhatsappMessage, sendNotification } from '../utils/notifications.js';
+import { appendCreatorToCaption, getNotificationChannelConfig, resolveTelegramRecipients, resolveTemplateTelegramRecipients, resolveWhatsappRecipients, sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
@@ -2285,6 +2286,14 @@ function buildBrandPayload(settingsRow) {
   };
 }
 
+function sanitizeSettingsForResponse(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  return {
+    ...settings,
+    telegramBotToken: settings.telegramBotToken ? '********' : null,
+  };
+}
+
 async function fetchInboundBasics() {
   const [lotsRaw, inbound_itemsRaw] = await Promise.all([
     prisma.lot.findMany(),
@@ -2746,7 +2755,9 @@ router.get('/api/bootstrap', async (req, res) => {
     slices.roll_types = allowed.roll_types ? await prisma.rollType.findMany() : [];
     slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
-    slices.settings = allowed.settings ? await prisma.settings.findMany() : [];
+    slices.settings = allowed.settings
+      ? (await prisma.settings.findMany()).map(sanitizeSettingsForResponse)
+      : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
     const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'cone_types', 'wrappers'];
@@ -5510,11 +5521,156 @@ async function processOpeningConingUpload(rows, { date, itemId, firmId, supplier
   });
 }
 
+function parseTelegramChatIds(value) {
+  const raw = Array.isArray(value)
+    ? value.map((entry) => String(entry || '').trim())
+    : typeof value === 'string'
+      ? value.split(/[\n,]/g).map((entry) => entry.trim())
+      : [];
+  const unique = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    unique.push(item);
+  }
+  return unique;
+}
+
+async function dispatchMediaByChannels({
+  settings,
+  template,
+  buffer,
+  filename,
+  mimetype,
+  caption = '',
+  explicitWhatsappRecipients = [],
+  explicitTelegramChatIds = [],
+}) {
+  const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
+  if (!whatsappEnabled && !telegramEnabled) {
+    return { ok: false, reason: 'no_enabled_channels', channels: { whatsapp: { enabled: false }, telegram: { enabled: false } } };
+  }
+
+  const channels = {
+    whatsapp: { enabled: whatsappEnabled, recipients: [], results: [], ok: false, reason: null },
+    telegram: { enabled: telegramEnabled, recipients: [], results: [], ok: false, reason: null },
+  };
+
+  if (whatsappEnabled) {
+    const recipients = explicitWhatsappRecipients.length > 0
+      ? explicitWhatsappRecipients
+      : resolveWhatsappRecipients({ template, settings });
+    channels.whatsapp.recipients = recipients;
+    if (recipients.length === 0) {
+      channels.whatsapp.reason = 'no_recipients';
+    } else {
+      channels.whatsapp.results = await Promise.all(recipients.map(async (recipient) => {
+        try {
+          if (recipient.type === 'number') {
+            await whatsapp.sendMediaSafe(recipient.value, buffer, filename, mimetype, caption);
+          } else {
+            await whatsapp.sendMediaToChatIdSafe(recipient.value, buffer, filename, mimetype, caption);
+          }
+          return { recipient: recipient.value, type: recipient.type, success: true };
+        } catch (err) {
+          return { recipient: recipient.value, type: recipient.type, success: false, error: err?.message || String(err) };
+        }
+      }));
+      channels.whatsapp.ok = channels.whatsapp.results.some((result) => result.success);
+      if (!channels.whatsapp.ok) channels.whatsapp.reason = 'send_failed';
+    }
+  }
+
+  if (telegramEnabled) {
+    const chatIds = explicitTelegramChatIds.length > 0
+      ? explicitTelegramChatIds
+      : resolveTemplateTelegramRecipients({ template, settings: settings || {} });
+    channels.telegram.recipients = chatIds.map((chatId) => ({ type: 'chat', value: chatId }));
+    if (chatIds.length === 0) {
+      channels.telegram.reason = 'no_recipients';
+    } else {
+      channels.telegram.results = await Promise.all(chatIds.map(async (chatId) => {
+        try {
+          await telegram.sendMediaSafe(chatId, buffer, filename, mimetype, caption);
+          return { recipient: chatId, success: true };
+        } catch (err) {
+          return { recipient: chatId, success: false, error: err?.message || String(err) };
+        }
+      }));
+      channels.telegram.ok = channels.telegram.results.some((result) => result.success);
+      if (!channels.telegram.ok) channels.telegram.reason = 'send_failed';
+    }
+  }
+
+  return {
+    ok: channels.whatsapp.ok || channels.telegram.ok,
+    reason: channels.whatsapp.ok || channels.telegram.ok ? null : 'all_channels_failed',
+    channels,
+  };
+}
+
 // Whatsapp control endpoints
 router.get('/api/whatsapp/status', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const status = whatsapp.getStatus();
     res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.get('/api/telegram/status', requirePermission('settings', PERM_READ), async (req, res) => {
+  try {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const status = await telegram.refreshStatus();
+    res.json({
+      ...status,
+      enabled: settings?.telegramEnabled === true,
+      hasBotToken: !!settings?.telegramBotToken,
+      chatCount: Array.isArray(settings?.telegramChatIds) ? settings.telegramChatIds.length : 0,
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post('/api/telegram/send-test', requirePermission('settings', PERM_WRITE), async (req, res) => {
+  try {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const configuredChatIds = resolveTelegramRecipients(settings || {});
+    const chatId = String(req.body?.chatId || '').trim() || configuredChatIds[0];
+    if (!chatId) return res.status(400).json({ error: 'No telegram chat ID configured' });
+    const text = String(req.body?.text || 'GLINTEX Telegram test message');
+    await telegram.sendTextSafe(chatId, text);
+    res.json({ ok: true, chatId });
+  } catch (err) {
+    console.error('Failed to send telegram test message', err);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.post('/api/telegram/chats/resolve', requirePermission('settings', PERM_READ), async (req, res) => {
+  try {
+    const rawChatIds = Array.isArray(req.body?.chatIds) ? req.body.chatIds : [];
+    const uniqueChatIds = Array.from(new Set(rawChatIds.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (uniqueChatIds.length === 0) return res.json({ items: [] });
+
+    const items = await Promise.all(uniqueChatIds.map(async (chatId) => {
+      try {
+        const info = await telegram.getChatInfoSafe(chatId);
+        return { ok: true, ...info };
+      } catch (err) {
+        return {
+          ok: false,
+          chatId,
+          displayName: chatId,
+          error: err?.message || String(err),
+        };
+      }
+    }));
+
+    res.json({ items });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -5605,9 +5761,29 @@ router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), 
   try {
     const actorUserId = req.user?.id;
     const { event } = req.params;
-    const { enabled, template, sendToPrimary, groupIds } = req.body;
+    const { enabled, template, sendToPrimary, groupIds, telegramChatIds } = req.body;
     const cleanGroups = Array.isArray(groupIds) ? groupIds.filter(x => typeof x === 'string') : [];
-    const t = await upsertTemplate(event, { enabled: !!enabled, template: template || '', sendToPrimary: sendToPrimary !== false, groupIds: cleanGroups }, { actorUserId });
+    const cleanTelegramChatIds = Array.isArray(telegramChatIds)
+      ? telegramChatIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    const uniqueTelegramChatIds = Array.from(new Set(cleanTelegramChatIds));
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const telegramEnabled = settings?.telegramEnabled === true;
+    const templateEnabled = enabled !== false;
+    if (telegramEnabled && templateEnabled && uniqueTelegramChatIds.length === 0) {
+      return res.status(400).json({ error: 'Select at least one Telegram chat ID for this template while Telegram is enabled' });
+    }
+    const t = await upsertTemplate(
+      event,
+      {
+        enabled: !!enabled,
+        template: template || '',
+        sendToPrimary: sendToPrimary !== false,
+        groupIds: cleanGroups,
+        telegramChatIds: uniqueTelegramChatIds,
+      },
+      { actorUserId }
+    );
     await logCrudWithActor(req, { entityType: 'whatsapp_template', entityId: String(t.id), action: 'upsert', payload: { event } });
     res.json(t);
   } catch (err) { res.status(500).json({ error: String(err) }); }
@@ -5656,44 +5832,34 @@ router.post('/api/whatsapp/send-document', requirePermission('send_documents', P
     if (!Object.prototype.hasOwnProperty.call(payloadWithActor, 'createdByUserId') && req.user?.id) {
       payloadWithActor.createdByUserId = req.user.id;
     }
-    const msg = await buildWhatsappMessage(tpl.template, payloadWithActor);
-    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const recipients = [];
-    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
-    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
-    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
-    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
-    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
-    if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
-    const seen = new Set();
-    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
-    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(() => { }); else whatsapp.sendToChatIdSafe(r.value, msg).catch(() => { }); });
-    res.json({ ok: true });
+    const outcome = await sendNotification(event, payloadWithActor);
+    if (!outcome.ok) {
+      return res.status(400).json({
+        ok: false,
+        reason: outcome.reason || 'send_failed',
+        channels: outcome.channels || {},
+      });
+    }
+    res.json({ ok: true, channels: outcome.channels || {} });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const { event, payload } = req.body;
-    const tpl = await getTemplateByEvent(event);
-    if (!tpl || !tpl.enabled) return res.status(400).json({ error: 'Template not enabled or missing' });
     const payloadWithActor = { ...(payload || {}) };
     if (!Object.prototype.hasOwnProperty.call(payloadWithActor, 'createdByUserId') && req.user?.id) {
       payloadWithActor.createdByUserId = req.user.id;
     }
-    const msg = await buildWhatsappMessage(tpl.template, payloadWithActor);
-    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const recipients = [];
-    if (tpl.sendToPrimary !== false && settings && settings.whatsappNumber) recipients.push({ type: 'number', value: settings.whatsappNumber });
-    const allowedGroups = (settings && Array.isArray(settings.whatsappGroupIds)) ? settings.whatsappGroupIds : [];
-    const templateGroups = (tpl && Array.isArray(tpl.groupIds)) ? tpl.groupIds : [];
-    const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
-    for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
-    if (recipients.length === 0) return res.status(400).json({ error: 'No recipients configured' });
-    const seen = new Set();
-    const unique = recipients.filter(r => { const k = `${r.type}:${r.value}`; if (seen.has(k)) return false; seen.add(k); return true; });
-    unique.forEach(r => { if (r.type === 'number') whatsapp.sendTextSafe(r.value, msg).catch(() => { }); else whatsapp.sendToChatIdSafe(r.value, msg).catch(() => { }); });
-    res.json({ ok: true });
+    const outcome = await sendNotification(event, payloadWithActor);
+    if (!outcome.ok) {
+      return res.status(400).json({
+        ok: false,
+        reason: outcome.reason || 'send_failed',
+        channels: outcome.channels || {},
+      });
+    }
+    res.json({ ok: true, channels: outcome.channels || {} });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
@@ -12091,13 +12257,31 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     const body = req.body || {};
     const brandPrimary = body.brandPrimary ?? body.primary;
     const brandGold = body.brandGold ?? body.gold;
-    const { logoDataUrl, faviconDataUrl, whatsappNumber, whatsappGroupIds, backupTime, challanFromName, challanFromAddress, challanFromMobile, challanFieldsConfig } = body;
+    const {
+      logoDataUrl,
+      faviconDataUrl,
+      whatsappEnabled,
+      whatsappNumber,
+      whatsappGroupIds,
+      telegramEnabled,
+      telegramBotToken,
+      telegramChatIds,
+      backupTime,
+      challanFromName,
+      challanFromAddress,
+      challanFromMobile,
+      challanFieldsConfig
+    } = body;
     const hasBrandPrimary = Object.prototype.hasOwnProperty.call(body, 'brandPrimary') || Object.prototype.hasOwnProperty.call(body, 'primary');
     const hasBrandGold = Object.prototype.hasOwnProperty.call(body, 'brandGold') || Object.prototype.hasOwnProperty.call(body, 'gold');
     const hasLogoDataUrl = Object.prototype.hasOwnProperty.call(body, 'logoDataUrl');
     const hasFaviconDataUrl = Object.prototype.hasOwnProperty.call(body, 'faviconDataUrl');
+    const hasWhatsAppEnabled = Object.prototype.hasOwnProperty.call(body, 'whatsappEnabled');
     const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(body, 'whatsappNumber');
     const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(body, 'whatsappGroupIds');
+    const hasTelegramEnabled = Object.prototype.hasOwnProperty.call(body, 'telegramEnabled');
+    const hasTelegramBotToken = Object.prototype.hasOwnProperty.call(body, 'telegramBotToken');
+    const hasTelegramChatIds = Object.prototype.hasOwnProperty.call(body, 'telegramChatIds');
     const hasBackupTime = Object.prototype.hasOwnProperty.call(body, 'backupTime');
     const hasChallanFromName = Object.prototype.hasOwnProperty.call(body, 'challanFromName');
     const hasChallanFromAddress = Object.prototype.hasOwnProperty.call(body, 'challanFromAddress');
@@ -12118,6 +12302,24 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     }
     const normalizedWhatsAppNumber = normalizeForStore(whatsappNumber);
     const cleanGroupIds = Array.isArray(whatsappGroupIds) ? whatsappGroupIds.filter(x => typeof x === 'string') : undefined;
+    const cleanTelegramChatIds = hasTelegramChatIds
+      ? parseTelegramChatIds(telegramChatIds)
+      : undefined;
+    let normalizedTelegramToken = hasTelegramBotToken
+      ? String(telegramBotToken || '').trim()
+      : undefined;
+    if (normalizedTelegramToken === '********') {
+      normalizedTelegramToken = undefined;
+    }
+    const effectiveTelegramEnabled = hasTelegramEnabled
+      ? !!telegramEnabled
+      : !!previousSettings?.telegramEnabled;
+    const effectiveTelegramToken = (hasTelegramBotToken && normalizedTelegramToken !== undefined)
+      ? normalizedTelegramToken
+      : String(previousSettings?.telegramBotToken || '').trim();
+    if (effectiveTelegramEnabled && !effectiveTelegramToken) {
+      return res.status(400).json({ error: 'Telegram bot token is required when Telegram is enabled' });
+    }
     const normalizedBackupTime = hasBackupTime ? normalizeBackupTime(backupTime) : null;
     if (hasBackupTime && !normalizedBackupTime) {
       return res.status(400).json({ error: 'backupTime must be in HH:mm format (00:00-23:59)' });
@@ -12131,8 +12333,12 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       if (hasBrandGold) updateData.brandGold = brandGold || '#D4AF37';
       if (hasLogoDataUrl) updateData.logoDataUrl = logoDataUrl || null;
       if (hasFaviconDataUrl) updateData.faviconDataUrl = faviconDataUrl || null;
+      if (hasWhatsAppEnabled) updateData.whatsappEnabled = !!whatsappEnabled;
       if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
+      if (hasTelegramEnabled) updateData.telegramEnabled = !!telegramEnabled;
+      if (hasTelegramBotToken && normalizedTelegramToken !== undefined) updateData.telegramBotToken = normalizedTelegramToken || null;
+      if (hasTelegramChatIds && cleanTelegramChatIds !== undefined) updateData.telegramChatIds = cleanTelegramChatIds;
       if (hasBackupTime) updateData.backupTime = normalizedBackupTime;
       if (hasChallanFromName) updateData.challanFromName = challanFromName || null;
       if (hasChallanFromAddress) updateData.challanFromAddress = challanFromAddress || null;
@@ -12146,9 +12352,13 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
         logoDataUrl: hasLogoDataUrl ? (logoDataUrl || null) : null,
         ...actorCreateFields(actorUserId),
       };
+      createData.whatsappEnabled = hasWhatsAppEnabled ? !!whatsappEnabled : true;
       if (hasFaviconDataUrl) createData.faviconDataUrl = faviconDataUrl || null;
       if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
       if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
+      createData.telegramEnabled = hasTelegramEnabled ? !!telegramEnabled : false;
+      if (hasTelegramBotToken && normalizedTelegramToken !== undefined) createData.telegramBotToken = normalizedTelegramToken || null;
+      if (hasTelegramChatIds) createData.telegramChatIds = cleanTelegramChatIds || [];
       createData.backupTime = hasBackupTime ? normalizedBackupTime : '03:00';
       createData.challanFromName = hasChallanFromName ? (challanFromName || null) : null;
       createData.challanFromAddress = hasChallanFromAddress ? (challanFromAddress || null) : null;
@@ -12172,11 +12382,11 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
         entityType: 'settings',
         entityId: '1',
         action: 'update',
-        before: previousSettings,
-        after: settings,
-        payload: settings,
+        before: sanitizeSettingsForResponse(previousSettings),
+        after: sanitizeSettingsForResponse(settings),
+        payload: sanitizeSettingsForResponse(settings),
       });
-      return res.json(settings);
+      return res.json(sanitizeSettingsForResponse(settings));
     } catch (innerErr) {
       // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
       console.warn('Failed to upsert with whatsappNumber, retrying without it:', innerErr.message || innerErr);
@@ -12212,11 +12422,11 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
         entityType: 'settings',
         entityId: '1',
         action: 'update',
-        before: previousSettings,
-        after: settings,
-        payload: settings,
+        before: sanitizeSettingsForResponse(previousSettings),
+        after: sanitizeSettingsForResponse(settings),
+        payload: sanitizeSettingsForResponse(settings),
       });
-      return res.json(settings);
+      return res.json(sanitizeSettingsForResponse(settings));
     }
   } catch (err) {
     console.error('Failed to update settings', err);
@@ -16348,7 +16558,7 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
   }
 });
 
-// POST /api/summary/:stage/:type/send - Generate PDF and send via WhatsApp
+// POST /api/summary/:stage/:type/send - Generate PDF and send via configured channels
 router.post('/api/summary/:stage/:type/send', async (req, res) => {
   try {
     const { stage, type } = req.params;
@@ -16395,22 +16605,15 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     const pdfBuffer = await generateSummaryPDF(stage, type, summaryData);
     const filename = `summary_${stage}_${type}_${formatDateForFilename(date)}.pdf`;
 
-    // Get settings and resolve recipients
+    // Get settings and resolve channel routing
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const recipients = [];
-
-    if (template.sendToPrimary !== false && settings?.whatsappNumber) {
-      recipients.push({ type: 'number', value: settings.whatsappNumber });
-    }
-
-    const allowedGroups = Array.isArray(settings?.whatsappGroupIds) ? settings.whatsappGroupIds : [];
-    const templateGroups = Array.isArray(template.groupIds) ? template.groupIds : [];
-    for (const gid of templateGroups.filter(id => allowedGroups.includes(id))) {
-      recipients.push({ type: 'group', value: gid });
-    }
-
-    if (recipients.length === 0) {
-      return res.json({ ok: false, reason: 'no_recipients', message: 'No WhatsApp recipients configured' });
+    const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
+    if (!whatsappEnabled && !telegramEnabled) {
+      return res.json({
+        ok: false,
+        reason: 'no_enabled_channels',
+        message: 'No notification channels are enabled',
+      });
     }
 
     // Generate caption from template
@@ -16423,26 +16626,19 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
       totalPieces: summaryData.totalPieces || summaryData.totalBobbins || summaryData.totalRolls || summaryData.totalCones || 0,
     });
 
-    // Send to all recipients
-    const results = [];
-    for (const r of recipients) {
-      try {
-        if (r.type === 'number') {
-          await whatsapp.sendMediaSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
-        } else {
-          await whatsapp.sendMediaToChatIdSafe(r.value, pdfBuffer, filename, 'application/pdf', caption);
-        }
-        results.push({ recipient: r.value, success: true });
-      } catch (err) {
-        console.error(`Failed to send summary to ${r.value}`, err);
-        results.push({ recipient: r.value, success: false, error: err.message });
-      }
-    }
+    const dispatchResult = await dispatchMediaByChannels({
+      settings: settings || {},
+      template,
+      buffer: pdfBuffer,
+      filename,
+      mimetype: 'application/pdf',
+      caption,
+    });
 
-    const allSuccess = results.every(r => r.success);
     res.json({
-      ok: allSuccess,
-      results,
+      ok: dispatchResult.ok,
+      reason: dispatchResult.reason,
+      channels: dispatchResult.channels,
       summary: {
         stage,
         type,
@@ -16754,52 +16950,77 @@ const documentUpload = multer({
   }
 });
 
-// Send document via WhatsApp
+// Send document via enabled notification channels
 router.post('/api/documents/send', requireAuth, requirePermission('send_documents', PERM_WRITE), documentUpload.single('file'), async (req, res) => {
   try {
     const { customerId, phone, caption, customerName } = req.body;
     const file = req.file;
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    if (!phone) {
+    if (!whatsappEnabled && !telegramEnabled) {
+      return res.status(400).json({ error: 'No notification channels are enabled' });
+    }
+    if (whatsappEnabled && !phone) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
 
-    // Resolve or create customer if not provided
+    const fallbackTelegramPhone = telegramEnabled ? (resolveTelegramRecipients(settings || {})[0] || 'telegram') : '';
+    const resolvedPhone = phone || fallbackTelegramPhone;
+
+    const finalCaption = await appendCreatorToCaption(caption || '', req.user?.id || null);
+
+    const whatsappRecipients = whatsappEnabled && resolvedPhone
+      ? [{ type: 'number', value: resolvedPhone }]
+      : [];
+    const telegramChatIds = telegramEnabled
+      ? resolveTelegramRecipients(settings || {})
+      : [];
+
+    const dispatchResult = await dispatchMediaByChannels({
+      settings: settings || {},
+      template: { sendToPrimary: false, groupIds: [] },
+      buffer: file.buffer,
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      caption: finalCaption,
+      explicitWhatsappRecipients: whatsappRecipients,
+      explicitTelegramChatIds: telegramChatIds,
+    });
+    if (!dispatchResult.ok) {
+      return res.status(400).json({
+        ok: false,
+        reason: dispatchResult.reason || 'send_failed',
+        channels: dispatchResult.channels || {},
+        error: 'Failed to send document to any enabled channel',
+      });
+    }
+
+    // Resolve or create customer after successful dispatch
     let customer = null;
     if (customerId) {
       customer = await prisma.customer.findUnique({ where: { id: customerId } });
     }
     if (!customer) {
-      customer = await prisma.customer.findFirst({ where: { phone } });
+      customer = await prisma.customer.findFirst({ where: { phone: resolvedPhone } });
     }
     if (!customer) {
       customer = await prisma.customer.create({
         data: {
-          name: (customerName || phone || '').trim() || 'Unknown',
-          phone
+          name: (customerName || resolvedPhone || '').trim() || 'Unknown',
+          phone: resolvedPhone || null
         }
       });
     }
-
-    const finalCaption = await appendCreatorToCaption(caption || '', req.user?.id || null);
-
-    // Send via WhatsApp (file stays in memory, no disk storage)
-    await whatsapp.sendMediaSafe(
-      phone,
-      file.buffer,          // Buffer directly from memory
-      file.originalname,
-      file.mimetype,
-      finalCaption
-    );
 
     // Save metadata only (no file content)
     const docMessage = await prisma.documentMessage.create({
       data: {
         customerId: customer.id,
-        phone,
+        phone: resolvedPhone,
         filename: file.originalname,
         mimetype: file.mimetype,
         fileSize: file.size,
@@ -16809,7 +17030,7 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
       include: { customer: true }
     });
 
-    res.json({ ok: true, message: docMessage });
+    res.json({ ok: true, message: docMessage, channels: dispatchResult.channels });
   } catch (err) {
     console.error('Failed to send document', err);
     res.status(500).json({ error: err.message || 'Failed to send document' });

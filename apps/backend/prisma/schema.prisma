@@ -508,8 +508,12 @@ model Settings {
   brandGold    String
   logoDataUrl  String?
   faviconDataUrl String?
+  whatsappEnabled Boolean @default(true)
   whatsappNumber String?
   whatsappGroupIds String[] @default([])
+  telegramEnabled Boolean @default(false)
+  telegramBotToken String?
+  telegramChatIds String[] @default([])
   backupTime   String @default("03:00")
   challanFromName    String?
   challanFromAddress String?
@@ -566,6 +570,7 @@ model WhatsappTemplate {
   template String
   sendToPrimary Boolean @default(true)
   groupIds String[] @default([])
+  telegramChatIds String[] @default([])
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
   createdByUserId String?

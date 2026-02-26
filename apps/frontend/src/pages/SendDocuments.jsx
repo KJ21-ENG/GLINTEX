@@ -146,8 +146,14 @@ export function SendDocuments() {
     }
 
     async function handleSend() {
-        if (!selectedFile || !phone || (recipientMode === 'contact' && !selectedCustomerId)) {
-            alert('Please select a file and recipient, then enter a phone number');
+        const settings = db?.settings?.[0] || {};
+        const whatsappEnabled = settings?.whatsappEnabled !== false;
+        if (!selectedFile || (whatsappEnabled && recipientMode === 'contact' && !selectedCustomerId)) {
+            alert('Please select a file and recipient');
+            return;
+        }
+        if (whatsappEnabled && !phone) {
+            alert('Phone number is required while WhatsApp notifications are enabled');
             return;
         }
 
@@ -162,13 +168,29 @@ export function SendDocuments() {
             if (selectedCustomer?.name) {
                 formData.append('customerName', selectedCustomer.name);
             }
-            formData.append('phone', phone);
+            if (phone) {
+                formData.append('phone', phone);
+            }
             if (caption.trim()) {
                 formData.append('caption', caption.trim());
             }
 
-            await api.sendDocument(formData);
+            const response = await api.sendDocument(formData);
+            if (!response?.ok) {
+                const channelErrors = Object.entries(response?.channels || {})
+                    .flatMap(([channel, detail]) => (detail?.results || [])
+                        .filter(r => !r.success)
+                        .map(r => `${channel}: ${r.error || 'failed'}`));
+                throw new Error(channelErrors[0] || response?.error || 'Failed to send document');
+            }
+            const partialErrors = Object.entries(response?.channels || {})
+                .flatMap(([channel, detail]) => (detail?.results || [])
+                    .filter(r => !r.success)
+                    .map(r => `${channel}: ${r.error || 'failed'}`));
             setSendSuccess(true);
+            if (partialErrors.length > 0) {
+                alert(`Document sent with partial failures (${partialErrors[0]})`);
+            }
             setTimeout(() => setSendSuccess(false), 3000);
             clearFile();
             setCaption('');
@@ -223,7 +245,7 @@ export function SendDocuments() {
                         <FileText className="w-6 h-6" />
                         Send Documents
                     </h1>
-                    <p className="text-muted-foreground text-sm">Share documents with customers via WhatsApp</p>
+                    <p className="text-muted-foreground text-sm">Share documents with customers via enabled notification channels</p>
                 </div>
 
                 {/* Tab Toggle */}

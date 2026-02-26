@@ -605,6 +605,26 @@ model AuditLog {
   createdAt  DateTime @default(now())
 }
 
+model NotificationDeliveryLog {
+  id              String   @id @default(cuid())
+  event           String?
+  templateEvent   String?
+  templateId      Int?
+  source          String?
+  channel         String
+  recipient       String?
+  recipientType   String?
+  status          String
+  reason          String?
+  error           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([event, createdAt])
+  @@index([channel, createdAt])
+}
+
 model Role {
   id          String   @id @default(cuid())
   key         String   @unique

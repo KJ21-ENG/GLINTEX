@@ -8,7 +8,7 @@ import { requireAuth, requireRole, requirePermission, requireEditPermission, req
 import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
-import { appendCreatorToCaption, getNotificationChannelConfig, resolveTelegramRecipients, resolveTemplateTelegramRecipients, resolveWhatsappRecipients, sendNotification } from '../utils/notifications.js';
+import { appendCreatorToCaption, getNotificationChannelConfig, persistNotificationDeliveryLogs, resolveTelegramRecipients, resolveTemplateTelegramRecipients, resolveWhatsappRecipients, sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
@@ -16634,6 +16634,14 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
       mimetype: 'application/pdf',
       caption,
     });
+    persistNotificationDeliveryLogs({
+      event: templateEvent,
+      templateEvent,
+      templateId: template?.id,
+      source: 'summary_send',
+      channels: dispatchResult.channels,
+      createdByUserId: req.user?.id || null,
+    }).catch(() => { });
 
     res.json({
       ok: dispatchResult.ok,
@@ -16990,6 +16998,14 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
       explicitWhatsappRecipients: whatsappRecipients,
       explicitTelegramChatIds: telegramChatIds,
     });
+    persistNotificationDeliveryLogs({
+      event: 'documents_send',
+      templateEvent: null,
+      templateId: null,
+      source: 'documents_send',
+      channels: dispatchResult.channels,
+      createdByUserId: req.user?.id || null,
+    }).catch(() => { });
     if (!dispatchResult.ok) {
       return res.status(400).json({
         ok: false,

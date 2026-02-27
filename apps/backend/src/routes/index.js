@@ -5707,6 +5707,16 @@ router.get('/api/whatsapp/groups', requireRole('admin'), requirePermission('sett
 // Templates endpoints
 router.get('/api/whatsapp/templates', requirePermission('settings', PERM_READ), async (req, res) => {
   try {
+    const documentTemplate = await getTemplateByEvent('documents_send');
+    if (!documentTemplate) {
+      await upsertTemplate('documents_send', {
+        enabled: true,
+        template: '*Document Shared*\n\n📄 *File:* @filename\n👤 *Customer:* @customerName\n📱 *Phone:* @phone\n📝 *Note:* @caption',
+        sendToPrimary: false,
+        groupIds: [],
+        telegramChatIds: [],
+      });
+    }
     const t = await listTemplates();
     res.json(t);
   } catch (err) { res.status(500).json({ error: String(err) }); }
@@ -16963,6 +16973,14 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
   try {
     const { customerId, phone, caption, customerName } = req.body;
     const file = req.file;
+    const templateEvent = 'documents_send';
+    const template = await getTemplateByEvent(templateEvent);
+    if (!template) {
+      return res.status(400).json({ error: 'Template not found: documents_send. Configure it in Message Templates.' });
+    }
+    if (!template.enabled) {
+      return res.status(400).json({ error: 'Template disabled: documents_send' });
+    }
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
     const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
 
@@ -16972,25 +16990,41 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
     if (!whatsappEnabled && !telegramEnabled) {
       return res.status(400).json({ error: 'No notification channels are enabled' });
     }
-    if (whatsappEnabled && !phone) {
-      return res.status(400).json({ error: 'Phone number is required' });
+
+    const normalizedPhone = String(phone || '').trim();
+    const templateWhatsappRecipients = whatsappEnabled
+      ? resolveWhatsappRecipients({ template, settings: settings || {} })
+      : [];
+    const manualPhoneRecipients = whatsappEnabled && normalizedPhone
+      ? [{ type: 'number', value: normalizedPhone }]
+      : [];
+    const whatsappRecipients = [...templateWhatsappRecipients, ...manualPhoneRecipients]
+      .filter((recipient, index, arr) => arr.findIndex((entry) => `${entry.type}:${entry.value}` === `${recipient.type}:${recipient.value}`) === index);
+    const telegramChatIds = telegramEnabled
+      ? resolveTemplateTelegramRecipients({ template, settings: settings || {} })
+      : [];
+    if (whatsappRecipients.length === 0 && telegramChatIds.length === 0) {
+      return res.status(400).json({
+        error: 'No recipients configured. Add phone in Send Documents or configure groups/chats in documents_send template.',
+      });
     }
 
-    const fallbackTelegramPhone = telegramEnabled ? (resolveTelegramRecipients(settings || {})[0] || 'telegram') : '';
-    const resolvedPhone = phone || fallbackTelegramPhone;
-
-    const finalCaption = await appendCreatorToCaption(caption || '', req.user?.id || null);
-
-    const whatsappRecipients = whatsappEnabled && resolvedPhone
-      ? [{ type: 'number', value: resolvedPhone }]
-      : [];
-    const telegramChatIds = telegramEnabled
-      ? resolveTelegramRecipients(settings || {})
-      : [];
+    const messageContext = {
+      caption: String(caption || ''),
+      customerName: String(customerName || ''),
+      phone: normalizedPhone,
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      fileSize: file.size,
+    };
+    const templateCaption = String(template.template || '').trim()
+      ? interpolateTemplate(template.template, messageContext)
+      : String(caption || '');
+    const finalCaption = await appendCreatorToCaption(templateCaption, req.user?.id || null);
 
     const dispatchResult = await dispatchMediaByChannels({
       settings: settings || {},
-      template: { sendToPrimary: false, groupIds: [] },
+      template,
       buffer: file.buffer,
       filename: file.originalname,
       mimetype: file.mimetype,
@@ -16999,9 +17033,9 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
       explicitTelegramChatIds: telegramChatIds,
     });
     persistNotificationDeliveryLogs({
-      event: 'documents_send',
-      templateEvent: null,
-      templateId: null,
+      event: templateEvent,
+      templateEvent,
+      templateId: template.id,
       source: 'documents_send',
       channels: dispatchResult.channels,
       createdByUserId: req.user?.id || null,
@@ -17016,6 +17050,9 @@ router.post('/api/documents/send', requireAuth, requirePermission('send_document
     }
 
     // Resolve or create customer after successful dispatch
+    const firstWhatsappNumber = whatsappRecipients.find((recipient) => recipient.type === 'number')?.value || '';
+    const fallbackTelegramPhone = telegramChatIds[0] || 'template';
+    const resolvedPhone = normalizedPhone || firstWhatsappNumber || fallbackTelegramPhone;
     let customer = null;
     if (customerId) {
       customer = await prisma.customer.findUnique({ where: { id: customerId } });

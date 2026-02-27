@@ -200,6 +200,17 @@ async function seed() {
         '📝 *Error:* @error\n' +
         '📂 *File:* @filename'
     },
+    {
+      event: 'documents_send',
+      enabled: true,
+      sendToPrimary: false,
+      groupIds: [],
+      template: '*Document Shared*\n\n' +
+        '📄 *File:* @filename\n' +
+        '👤 *Customer:* @customerName\n' +
+        '📱 *Phone:* @phone\n' +
+        '📝 *Note:* @caption'
+    },
     // Summary templates for PDF reports
     {
       event: 'summary_cutter_issue',
@@ -257,10 +268,12 @@ async function seed() {
   ];
 
   for (const t of defaults) {
+    const sendToPrimary = typeof t.sendToPrimary === 'boolean' ? t.sendToPrimary : true;
+    const groupIds = Array.isArray(t.groupIds) ? t.groupIds : [];
     await prisma.whatsappTemplate.upsert({
       where: { event: t.event },
-      update: { enabled: t.enabled, template: t.template, sendToPrimary: true, groupIds: [] },
-      create: { ...t, sendToPrimary: true, groupIds: [] },
+      update: { enabled: t.enabled, template: t.template, sendToPrimary, groupIds },
+      create: { ...t, sendToPrimary, groupIds },
     });
     console.log('Upserted', t.event);
   }

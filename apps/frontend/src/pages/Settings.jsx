@@ -296,6 +296,17 @@ const WHATSAPP_EVENTS_CONFIG = {
             { key: 'error', label: 'Error Message' },
             { key: 'host', label: 'Host' },
         ]
+    },
+    documents_send: {
+        note: 'Used by Send Documents. Manage WhatsApp groups and Telegram chat routing for document sends here.',
+        variables: [
+            { key: 'filename', label: 'Filename' },
+            { key: 'customerName', label: 'Customer Name' },
+            { key: 'phone', label: 'Direct Phone (if provided)' },
+            { key: 'caption', label: 'Caption from Send Documents form' },
+            { key: 'mimetype', label: 'File MIME type' },
+            { key: 'fileSize', label: 'File size (bytes)' },
+        ]
     }
 };
 

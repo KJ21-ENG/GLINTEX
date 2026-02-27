@@ -226,24 +226,28 @@ export async function persistNotificationDeliveryLogs({
 } = {}) {
   try {
     const data = [];
-    data.push(...buildDeliveryRowsForChannel({
-      channel: 'whatsapp',
-      channelData: channels?.whatsapp,
-      event,
-      templateEvent,
-      templateId,
-      source,
-      createdByUserId,
-    }));
-    data.push(...buildDeliveryRowsForChannel({
-      channel: 'telegram',
-      channelData: channels?.telegram,
-      event,
-      templateEvent,
-      templateId,
-      source,
-      createdByUserId,
-    }));
+    if (Object.prototype.hasOwnProperty.call(channels || {}, 'whatsapp')) {
+      data.push(...buildDeliveryRowsForChannel({
+        channel: 'whatsapp',
+        channelData: channels?.whatsapp,
+        event,
+        templateEvent,
+        templateId,
+        source,
+        createdByUserId,
+      }));
+    }
+    if (Object.prototype.hasOwnProperty.call(channels || {}, 'telegram')) {
+      data.push(...buildDeliveryRowsForChannel({
+        channel: 'telegram',
+        channelData: channels?.telegram,
+        event,
+        templateEvent,
+        templateId,
+        source,
+        createdByUserId,
+      }));
+    }
     if (data.length === 0) return;
     await prisma.notificationDeliveryLog.createMany({ data });
   } catch (err) {

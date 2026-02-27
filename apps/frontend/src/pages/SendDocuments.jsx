@@ -146,8 +146,14 @@ export function SendDocuments() {
     }
 
     async function handleSend() {
-        if (!selectedFile) {
-            alert('Please select a file');
+        const settings = db?.settings?.[0] || {};
+        const whatsappEnabled = settings?.whatsappEnabled !== false;
+        if (!selectedFile || (whatsappEnabled && recipientMode === 'contact' && !selectedCustomerId)) {
+            alert('Please select a file and recipient');
+            return;
+        }
+        if (whatsappEnabled && !phone) {
+            alert('Phone number is required while WhatsApp notifications are enabled');
             return;
         }
 
@@ -239,7 +245,7 @@ export function SendDocuments() {
                         <FileText className="w-6 h-6" />
                         Send Documents
                     </h1>
-                    <p className="text-muted-foreground text-sm">Routing is controlled by the "documents send" template in Settings → Message Templates.</p>
+                    <p className="text-muted-foreground text-sm">Share documents with customers via WhatsApp</p>
                 </div>
 
                 {/* Tab Toggle */}

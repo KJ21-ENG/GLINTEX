@@ -544,64 +544,21 @@ export function OnMachineTable({ db, process }) {
             });
         });
 
-        // Coning receives are stored at issue-level (RCO rows do not reference which holo roll was consumed),
-        // so we must allocate received/wastage weight to sources deterministically (FIFO by receivedRowRefs order)
-        // to match backend take-back validation.
         if (process === 'coning') {
-            const coningRows = (db.receive_from_coning_machine_rows || [])
-                .filter((r) => !r?.isDeleted && String(r?.issueId || '').trim() === String(entry.id || '').trim());
-
-            const receivedBySource = new Map();
-            let hasAnyRefs = false;
-            coningRows.forEach((r) => {
-                let refs = r?.sourceRowRefs;
-                if (typeof refs === 'string') {
-                    try { refs = JSON.parse(refs || '[]'); } catch { refs = []; }
-                }
-                if (!Array.isArray(refs) || refs.length === 0) return;
-                hasAnyRefs = true;
-                refs.forEach((ref) => {
-                    const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
-                    if (!sourceId) return;
-                    const weight = Number(ref?.weight || 0);
-                    if (!Number.isFinite(weight) || weight <= 0) return;
-                    const current = receivedBySource.get(sourceId) || 0;
-                    receivedBySource.set(sourceId, current + weight);
-                });
-            });
-
             const updated = [];
-            const totalIssueConsumedWeight = clampZero(Number(entry.receivedWeight || 0) + Number(entry.wastageWeight || 0));
-            const receivedAllocatedTotal = Array.from(receivedBySource.values()).reduce((sum, v) => sum + Number(v || 0), 0);
-            // Any remaining consumption not explained by stored refs (legacy rows or wastage) is allocated FIFO like backend.
-            let remainingToAllocate = hasAnyRefs
-                ? clampZero(totalIssueConsumedWeight - receivedAllocatedTotal)
-                : clampZero(totalIssueConsumedWeight);
-
             for (const line of sourceMap.values()) {
                 const issuedWeight = clampZero(Number(line.maxWeight || 0));
-                const alreadyReceived = clampZero(Number(receivedBySource.get(line.sourceId) || 0));
-                let receivedAllocatedWeight = alreadyReceived;
-
-                if (remainingToAllocate > EPSILON) {
-                    const allocCap = clampZero(issuedWeight - alreadyReceived);
-                    const extra = allocCap > EPSILON ? Math.min(allocCap, remainingToAllocate) : 0;
-                    receivedAllocatedWeight = clampZero(receivedAllocatedWeight + extra);
-                    remainingToAllocate = clampZero(remainingToAllocate - extra);
-                }
-
-                const remainingWeight = clampZero(issuedWeight - receivedAllocatedWeight);
-                const remainingCount = remainingWeight > EPSILON ? clampZero(Number(line.maxCount || 0)) : 0;
+                // maxWeight here is already: original issued − active take-backs (built in sourceMap above)
+                // No FIFO consumed deduction — user selects source freely; pool is enforced at issue level
                 updated.push({
                     ...line,
                     issuedWeight,
-                    receivedAllocatedWeight,
-                    maxWeight: remainingWeight,
-                    maxCount: remainingCount,
+                    maxWeight: issuedWeight,
+                    maxCount: clampZero(Number(line.maxCount || 0)),
                 });
             }
-
-            return updated;
+            // Filter out sources that are fully taken back (no remaining issued allocation)
+            return updated.filter((s) => s.maxWeight > 0.0001);
         }
 
         return Array.from(sourceMap.values());
@@ -615,7 +572,7 @@ export function OnMachineTable({ db, process }) {
         setTakeBackNote('');
         setTakeBackLinesDraft(
             sources.map((line) => {
-                const count = process === 'cutter' ? 0 : line.maxCount;
+                const count = (process === 'cutter' || process === 'coning') ? 0 : line.maxCount;
                 const boxId = (process === 'holo' || process === 'coning') ? (line.sourceBoxId || '') : '';
                 const tareEstimate = process === 'holo'
                     ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
@@ -624,9 +581,7 @@ export function OnMachineTable({ db, process }) {
                         : 0);
                 const grossWeight = process === 'holo'
                     ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
-                    : (process === 'coning'
-                        ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
-                        : 0);
+                    : 0;
                 const weight = process === 'holo'
                     ? calcHoloTakeBackNetWeight(line, count, grossWeight, boxId)
                     : (process === 'coning'
@@ -678,6 +633,14 @@ export function OnMachineTable({ db, process }) {
             const exceedsMax = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.weight || 0) - Number(line.maxWeight || 0) > 0.001);
             if (exceedsMax) {
                 alert(`Net weight exceeds max for source ${exceedsMax.sourceBarcode || exceedsMax.sourceId}`);
+                return;
+            }
+        }
+        if (process === 'coning') {
+            const totalLinesWeight = lines.reduce((sum, l) => sum + l.weight, 0);
+            const pending = Number(takeBackTarget.pendingWeight || 0);
+            if (totalLinesWeight - pending > 0.001) {
+                alert(`Total take-back weight (${formatKg(totalLinesWeight)}) exceeds issue pending weight (${formatKg(pending)})`);
                 return;
             }
         }
@@ -1186,6 +1149,14 @@ export function OnMachineTable({ db, process }) {
     };
 
     const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 14 : 17;
+
+    // Shared pool constraint for coning take-back modal
+    const issuePendingPool = process === 'coning'
+        ? Math.max(0, Number(takeBackTarget?.pendingWeight || 0))
+        : Infinity;
+    const totalEnteredWeight = process === 'coning'
+        ? (takeBackLinesDraft || []).reduce((sum, l) => sum + Math.max(0, Number(l.weight || 0)), 0)
+        : 0;
 
     return (
         <div className="space-y-4">
@@ -1723,6 +1694,15 @@ export function OnMachineTable({ db, process }) {
                                 className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                             />
                         </div>
+                        {process === 'coning' && (
+                            <div className="text-xs text-muted-foreground flex items-center gap-2">
+                                <span>Issue Pending: <strong>{formatKg(issuePendingPool)}</strong></span>
+                                <span>·</span>
+                                <span>Entered: <strong>{formatKg(totalEnteredWeight)}</strong></span>
+                                <span>·</span>
+                                <span>Remaining: <strong>{formatKg(Math.max(0, issuePendingPool - totalEnteredWeight))}</strong></span>
+                            </div>
+                        )}
                         <div className="rounded-md border overflow-auto">
                             <Table>
                                 <TableHeader>
@@ -1743,8 +1723,19 @@ export function OnMachineTable({ db, process }) {
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        takeBackLinesDraft.map((line, idx) => (
-                                            <TableRow key={line.sourceId} className={Number(line.maxWeight || 0) <= 0.0001 ? 'opacity-60' : ''}>
+                                        takeBackLinesDraft.map((line, idx) => {
+                                            const otherLinesWeight = process === 'coning'
+                                                ? totalEnteredWeight - Math.max(0, Number(line.weight || 0))
+                                                : 0;
+                                            const effectiveMaxWeight = process === 'coning'
+                                                ? Math.max(0, Math.min(
+                                                    Number(line.maxWeight || 0),
+                                                    issuePendingPool - otherLinesWeight
+                                                  ))
+                                                : Number(line.maxWeight || 0);
+                                            const isRowDisabled = effectiveMaxWeight <= 0.0001;
+                                            return (
+                                            <TableRow key={line.sourceId} className={isRowDisabled ? 'opacity-60' : ''}>
                                                 <TableCell className="align-middle whitespace-nowrap">
                                                     <div className="font-mono text-xs">{line.sourceBarcode || line.sourceId}</div>
                                                     {process === 'coning' ? (
@@ -1765,7 +1756,7 @@ export function OnMachineTable({ db, process }) {
                                                             min={0}
                                                             max={line.maxCount || 0}
                                                             value={line.count}
-                                                            disabled={Number(line.maxWeight || 0) <= 0.0001}
+                                                            disabled={isRowDisabled}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value || 0);
                                                                 const maxCount = Math.max(0, Number(line.maxCount || 0));
@@ -1821,18 +1812,16 @@ export function OnMachineTable({ db, process }) {
                                                             min={0}
                                                             step="0.001"
                                                             value={line.grossWeight || ''}
+                                                            disabled={isRowDisabled}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value || 0);
                                                                 const grossWeight = roundTakeBackWeight(Math.max(0, Number.isFinite(raw) ? raw : 0));
                                                                 setTakeBackLinesDraft((prev) => prev.map((l, i) => {
                                                                     if (i !== idx) return l;
-                                                                    return {
-                                                                        ...l,
-                                                                        grossWeight,
-                                                                        weight: process === 'holo'
-                                                                            ? calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId)
-                                                                            : calcConingTakeBackNetWeight(l, grossWeight, l.boxId),
-                                                                    };
+                                                                    const rawWeight = process === 'holo'
+                                                                        ? calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId)
+                                                                        : calcConingTakeBackNetWeight(l, grossWeight, l.boxId);
+                                                                    return { ...l, grossWeight, weight: rawWeight };
                                                                 }));
                                                             }}
                                                             className="h-8 w-28 rounded-md border border-input bg-background px-2 text-right text-xs"
@@ -1844,12 +1833,12 @@ export function OnMachineTable({ db, process }) {
                                                         type="number"
                                                         min={0}
                                                         step="0.001"
-                                                        max={line.maxWeight || 0}
+                                                        max={process === 'coning' ? undefined : effectiveMaxWeight}
                                                         value={line.weight}
-                                                        disabled={Number(line.maxWeight || 0) <= 0.0001}
+                                                        disabled={isRowDisabled}
                                                         onChange={(e) => {
                                                             const raw = Number(e.target.value || 0);
-                                                            const maxWeight = Math.max(0, Number(line.maxWeight || 0));
+                                                            const maxWeight = Math.max(0, effectiveMaxWeight);
                                                             const value = roundTakeBackWeight(Math.max(0, Math.min(maxWeight, Number.isFinite(raw) ? raw : 0)));
                                                             setTakeBackLinesDraft((prev) => prev.map((l, i) => i === idx ? { ...l, weight: value } : l));
                                                         }}
@@ -1858,7 +1847,8 @@ export function OnMachineTable({ db, process }) {
                                                     />
                                                 </TableCell>
                                             </TableRow>
-                                        ))
+                                            );
+                                        })
                                     )}
                                 </TableBody>
                             </Table>

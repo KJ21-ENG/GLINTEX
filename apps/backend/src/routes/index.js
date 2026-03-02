@@ -698,7 +698,11 @@ function buildTakeBackConsumedBySource(stage, pending) {
     return consumedBySource;
   }
 
-  // Holo/coning receives are tracked issue-level (not source-row-level). Allocate consumed
+  // Coning uses free source selection — per-source consumed deduction is skipped.
+  // The issue-level pendingWeight check is the authoritative guard for coning take-backs.
+  if (stage === 'coning') return consumedBySource;
+
+  // Holo receives are tracked issue-level (not source-row-level). Allocate consumed
   // issue quantity to source rows deterministically so per-source take-back validation
   // cannot exceed net remaining on any source row.
   const originalMap = pending.original?.sourceMap || new Map();
@@ -3180,8 +3184,15 @@ async function createIssueTakeBackForStage(req, res, stage) {
         const takenBackLine = activeTakeBackBySource.get(line.sourceId) || { count: 0, weight: 0 };
         const consumedLine = consumedBySource.get(line.sourceId) || { count: 0, weight: 0 };
 
-        const lineRemainingWeight = clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
-        const lineRemainingCount = clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
+        // For coning: skip FIFO-consumed deduction. The user selects source freely;
+        // the issue-level pendingWeight check below is the authoritative guard.
+        // For cutter/holo: keep existing per-source consumed deduction.
+        const lineRemainingWeight = stage === 'coning'
+            ? clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0))
+            : clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
+        const lineRemainingCount = stage === 'coning'
+            ? clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0))
+            : clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
 
         if (line.weight - lineRemainingWeight > TAKE_BACK_EPSILON) {
           throw new Error(`Requested weight exceeds remaining allocation for source ${line.sourceId}`);

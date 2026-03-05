@@ -227,6 +227,17 @@ function toNonNegativeInt(value) {
   return Math.max(0, Math.floor(num));
 }
 
+function deriveHoloIssuedWeightFromCount({ bobbinQuantity, netWeight, issuedBobbins }) {
+  const totalCount = Number(bobbinQuantity || 0);
+  const totalWeight = Number(netWeight || 0);
+  const requestedCount = Number(issuedBobbins || 0);
+  if (!Number.isFinite(totalCount) || totalCount <= 0) return 0;
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) return 0;
+  if (!Number.isFinite(requestedCount) || requestedCount <= 0) return 0;
+  const perBobbinWeight = totalWeight / totalCount;
+  return roundTo3Decimals(perBobbinWeight * requestedCount);
+}
+
 function getIssueModelByStage(stage) {
   if (stage === 'holo') return 'issueToHoloMachine';
   if (stage === 'coning') return 'issueToConingMachine';
@@ -8462,7 +8473,6 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       .map((crate) => ({
         rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
         issuedBobbins: Number(crate.issuedBobbins || 0),
-        issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
       }))
       .filter((crate) => crate.rowId);
 
@@ -8472,10 +8482,6 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbins) || crate.issuedBobbins <= 0)) {
       return res.status(400).json({ error: 'Enter bobbin quantity for each scanned crate' });
     }
-    if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbinWeight) || crate.issuedBobbinWeight < 0)) {
-      return res.status(400).json({ error: 'Invalid bobbin weight for a crate' });
-    }
-
     const rowIds = normalizedCrates.map((crate) => crate.rowId);
     const uniqueRowIds = new Set(rowIds);
     if (uniqueRowIds.size !== rowIds.length) {
@@ -8555,6 +8561,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     }
 
     const overIssuedCrates = [];
+    const computedCrates = [];
     for (const crate of normalizedCrates) {
       const sourceRow = rowMap.get(crate.rowId);
       if (!sourceRow) continue;
@@ -8565,16 +8572,14 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       const issuedWeight = Number(sourceRow.issuedBobbinWeight || 0);
       const dispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
-      const availableCount = calcAvailableCountFromWeight({
-        totalCount,
-        issuedCount,
-        dispatchedCount,
-        totalWeight: netWeight,
-        availableWeight,
-      });
+      const availableCount = Math.max(0, totalCount - issuedCount - dispatchedCount);
 
       const requestedCount = Number(crate.issuedBobbins || 0);
-      const requestedWeight = Number(crate.issuedBobbinWeight || 0);
+      const requestedWeight = deriveHoloIssuedWeightFromCount({
+        bobbinQuantity: sourceRow.bobbinQuantity,
+        netWeight: sourceRow.netWt,
+        issuedBobbins: requestedCount,
+      });
       const exceedsCount = availableCount != null && requestedCount > availableCount;
       const exceedsWeight = requestedWeight > availableWeight + 1e-6;
 
@@ -8587,6 +8592,12 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
           availableWeight: roundTo3Decimals(availableWeight),
         });
       }
+
+      computedCrates.push({
+        rowId: crate.rowId,
+        issuedBobbins: requestedCount,
+        issuedBobbinWeight: requestedWeight,
+      });
     }
 
     if (overIssuedCrates.length > 0) {
@@ -8596,11 +8607,11 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       });
     }
 
-    const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
+    const totalBobbins = computedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
     if (!Number.isFinite(totalBobbins) || totalBobbins <= 0) {
       return res.status(400).json({ error: 'Enter bobbin quantity for the scanned crates' });
     }
-    const totalWeight = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
+    const totalWeight = computedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
     const normalizedYarnKg = Number(yarnKg || 0);
 
     const created = await prisma.$transaction(async (tx) => {
@@ -8629,13 +8640,13 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
           metallicBobbins: totalBobbins,
           metallicBobbinsWeight: totalWeight,
           yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
-          receivedRowRefs: normalizedCrates,
+          receivedRowRefs: computedCrates,
           rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
           ...actorCreateFields(actorUserId),
         },
       });
 
-      for (const crate of normalizedCrates) {
+      for (const crate of computedCrates) {
         const sourceRow = rowMap.get(crate.rowId);
         const existingQty = Number(sourceRow?.issuedBobbins || 0);
         const existingWeight = Number(sourceRow?.issuedBobbinWeight || 0);
@@ -9426,13 +9437,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const dispatchedCount = Number(crate.dispatchedCount || 0);
       const dispatchedWeight = Number(crate.dispatchedWeight || 0);
       const availableWeight = Math.max(0, baseWeight - dispatchedWeight);
-      const countBasedAvailable = Math.max(0, baseRolls - dispatchedCount);
-      const weightBasedAvailable = baseRolls > 0 && baseWeight > 0
-        ? Math.floor(((availableWeight / baseWeight) * baseRolls) + 1e-6)
-        : countBasedAvailable;
-      const baseAvailableRolls = baseRolls > 0
-        ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
-        : 0;
+      const baseAvailableRolls = Math.max(0, baseRolls - dispatchedCount);
 
       const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
       const alreadyPlanned = issueTracker.get(rid) || 0;
@@ -11321,7 +11326,6 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
           .map((crate) => ({
             rowId: typeof crate.rowId === 'string' ? crate.rowId.trim() : '',
             issuedBobbins: Number(crate.issuedBobbins || 0),
-            issuedBobbinWeight: Number(crate.issuedBobbinWeight || 0),
           }))
           .filter((crate) => crate.rowId);
 
@@ -11331,10 +11335,6 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
         if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbins) || crate.issuedBobbins <= 0)) {
           throw new Error('Enter bobbin quantity for each scanned crate');
         }
-        if (normalizedCrates.some((crate) => !Number.isFinite(crate.issuedBobbinWeight) || crate.issuedBobbinWeight < 0)) {
-          throw new Error('Invalid bobbin weight for a crate');
-        }
-
         const rowIds = normalizedCrates.map((crate) => crate.rowId);
         const uniqueRowIds = new Set(rowIds);
         if (uniqueRowIds.size !== rowIds.length) {
@@ -11343,7 +11343,16 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
 
         const receiveRows = await tx.receiveFromCutterMachineRow.findMany({
           where: { id: { in: rowIds }, isDeleted: false },
-          select: { id: true, pieceId: true, issuedBobbins: true, issuedBobbinWeight: true },
+          select: {
+            id: true,
+            pieceId: true,
+            bobbinQuantity: true,
+            netWt: true,
+            issuedBobbins: true,
+            issuedBobbinWeight: true,
+            dispatchedCount: true,
+            dispatchedWeight: true,
+          },
         });
         if (receiveRows.length !== normalizedCrates.length) {
           throw new Error('One or more scanned crates were not found');
@@ -11393,9 +11402,6 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
           }
         }
 
-        const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
-        const totalWeight = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
-
         const oldRefsRaw = issueRecord.receivedRowRefs;
         let oldRefs = Array.isArray(oldRefsRaw) ? oldRefsRaw : [];
         if (typeof oldRefsRaw === 'string') {
@@ -11410,13 +11416,52 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
             issuedBobbinWeight: Number(ref.issuedBobbinWeight || 0),
           });
         });
+        const receiveRowMap = new Map(receiveRows.map((row) => [row.id, row]));
         const newMap = new Map();
         normalizedCrates.forEach((ref) => {
+          const sourceRow = receiveRowMap.get(ref.rowId);
+          if (!sourceRow) return;
           newMap.set(ref.rowId, {
             issuedBobbins: Number(ref.issuedBobbins || 0),
-            issuedBobbinWeight: Number(ref.issuedBobbinWeight || 0),
+            issuedBobbinWeight: deriveHoloIssuedWeightFromCount({
+              bobbinQuantity: sourceRow.bobbinQuantity,
+              netWeight: sourceRow.netWt,
+              issuedBobbins: ref.issuedBobbins,
+            }),
           });
         });
+
+        for (const crate of normalizedCrates) {
+          const sourceRow = receiveRowMap.get(crate.rowId);
+          if (!sourceRow) continue;
+          const oldForIssue = oldMap.get(crate.rowId) || { issuedBobbins: 0, issuedBobbinWeight: 0 };
+          const requestedCount = Number(crate.issuedBobbins || 0);
+          const requestedWeight = deriveHoloIssuedWeightFromCount({
+            bobbinQuantity: sourceRow.bobbinQuantity,
+            netWeight: sourceRow.netWt,
+            issuedBobbins: requestedCount,
+          });
+
+          const totalCount = Number(sourceRow.bobbinQuantity || 0);
+          const totalWeight = Number(sourceRow.netWt || 0);
+          const dispatchedCount = Number(sourceRow.dispatchedCount || 0);
+          const dispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
+          const issuedCountTotal = Number(sourceRow.issuedBobbins || 0);
+          const issuedWeightTotal = Number(sourceRow.issuedBobbinWeight || 0);
+
+          const availableCountForThisIssue = Math.max(0, totalCount - dispatchedCount - (issuedCountTotal - Number(oldForIssue.issuedBobbins || 0)));
+          if (requestedCount > availableCountForThisIssue + TAKE_BACK_EPSILON) {
+            throw new Error(`Requested bobbins exceed remaining allocation for crate ${crate.rowId}`);
+          }
+
+          const availableWeightForThisIssue = Math.max(0, totalWeight - dispatchedWeight - (issuedWeightTotal - Number(oldForIssue.issuedBobbinWeight || 0)));
+          if (requestedWeight > availableWeightForThisIssue + 1e-6) {
+            throw new Error(`Requested weight exceeds remaining allocation for crate ${crate.rowId}`);
+          }
+        }
+
+        const totalBobbins = normalizedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbins) || 0), 0);
+        const totalWeight = Array.from(newMap.values()).reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
 
         const allRowIds = Array.from(new Set([...oldMap.keys(), ...newMap.keys()]));
         if (allRowIds.length > 0) {
@@ -11457,7 +11502,11 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
         data.metallicBobbins = totalBobbins;
         data.metallicBobbinsWeight = totalWeight;
         data.yarnKg = yarnKgValue;
-        data.receivedRowRefs = normalizedCrates;
+        data.receivedRowRefs = Array.from(newMap.entries()).map(([rowId, vals]) => ({
+          rowId,
+          issuedBobbins: Number(vals.issuedBobbins || 0),
+          issuedBobbinWeight: Number(vals.issuedBobbinWeight || 0),
+        }));
       }
 
       if (Object.keys(data).length > 0) {

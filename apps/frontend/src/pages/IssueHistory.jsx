@@ -399,8 +399,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const bobbinQty = Number(row.bobbinQuantity || 0);
     const issuedCount = Number(row.issuedBobbins || 0);
     const issuedWt = Number(row.issuedBobbinWeight || 0);
-    const availCount = Math.max(0, bobbinQty - issuedCount);
-    const availWt = Math.max(0, Number(row.netWt || 0) - issuedWt);
+    const dispatchedCount = Number(row.dispatchedCount || 0);
+    const dispatchedWt = Number(row.dispatchedWeight || 0);
+    const availCount = Math.max(0, bobbinQty - issuedCount - dispatchedCount);
+    const availWt = Math.max(0, Number(row.netWt || 0) - issuedWt - dispatchedWt);
     const unitWeight = bobbinQty > 0 ? Number(row.netWt || 0) / bobbinQty : null;
 
     setIssueDraft((prev) => ({
@@ -2466,8 +2468,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                 <Input
                                   type="number"
                                   value={crate.issuedBobbinWeight}
-                                  onChange={(e) => updateHoloCrate(crate.rowId, 'issuedBobbinWeight', e.target.value)}
+                                  readOnly
                                   disabled={editingIssue.hasReceives}
+                                  className="bg-muted"
                                 />
                               </div>
                               <div className="flex items-end">

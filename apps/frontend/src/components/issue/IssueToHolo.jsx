@@ -98,19 +98,12 @@ export function IssueToHolo() {
         const totalCount = Number(row.bobbinQuantity || 0);
         const issuedCount = Number(row.issuedBobbins || 0);
         const dispatchedCount = Number(row.dispatchedCount || 0);
-        const countBasedAvailable = Math.max(0, totalCount - issuedCount - dispatchedCount);
+        const availCount = Math.max(0, totalCount - issuedCount - dispatchedCount);
 
         const netWeight = Number(row.netWt || 0);
         const issuedWt = Number(row.issuedBobbinWeight || 0);
         const dispatchedWt = Number(row.dispatchedWeight || 0);
         const availWt = Math.max(0, netWeight - issuedWt - dispatchedWt);
-
-        const weightBasedAvailable = totalCount > 0 && netWeight > 0
-            ? Math.floor(((availWt / netWeight) * totalCount) + 1e-6)
-            : countBasedAvailable;
-        const availCount = totalCount > 0
-            ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
-            : countBasedAvailable;
 
         if (availCount <= 0 || availWt <= 0) {
             alert('No bobbins available for issue (may have been dispatched).');

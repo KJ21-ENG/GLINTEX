@@ -171,13 +171,7 @@ export function IssueToConing() {
         const totalUsedRolls = dispatchedRolls + issuedToConingRolls;
         const totalUsedWeight = dispatchedWeight + issuedToConingWeight;
         const availableWeight = Math.max(0, totalWeight - totalUsedWeight);
-        const countBasedAvailable = Math.max(0, totalRolls - totalUsedRolls);
-        const weightBasedAvailable = totalRolls > 0 && totalWeight > 0
-            ? Math.floor(((availableWeight / totalWeight) * totalRolls) + 1e-6)
-            : countBasedAvailable;
-        const availableRolls = totalRolls > 0
-            ? Math.max(0, Math.min(countBasedAvailable, weightBasedAvailable))
-            : countBasedAvailable;
+        const availableRolls = Math.max(0, totalRolls - totalUsedRolls);
 
         if (availableRolls <= 0 || availableWeight <= 0) {
             alert('No rolls available for issue (may have been dispatched).');

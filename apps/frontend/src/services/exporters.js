@@ -343,7 +343,7 @@ function getDetailConfig(viewType) {
           ...lotContext,
           { header: 'Barcode', format: (r) => r.barcode || '' },
           { header: 'Roll Date', format: (r) => formatDateDDMMYYYY(r.date) },
-          { header: 'Roll Type', format: (r) => r.rollType?.name || '' },
+          { header: 'Roll Type', format: (r) => r.rollType?.name || r.rollTypeName || '' },
           { header: 'Available Rolls', format: (r) => r.availableRolls ?? 0 },
           { header: 'Net Weight (kg)', format: (r) => Number(r.availableWeight || 0).toFixed(3) },
           { header: 'Gross Weight (kg)', format: (r) => Number(r.grossWeight || 0).toFixed(3) },

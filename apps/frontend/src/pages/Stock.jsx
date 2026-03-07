@@ -610,6 +610,25 @@ export function Stock() {
     }
 
     if (format === 'xlsx-detailed') {
+      if (v2StockEnabled && dataToExport && dataToExport.length > 0) {
+        // v2 mode: row details are lazy-loaded on demand; fetch all before exporting.
+        (async () => {
+          const enrichedData = await Promise.all(
+            dataToExport.map(async (lot) => {
+              if (!lot.lotKey) return lot;
+              const rows = v2RowsByKey[lot.lotKey] || (await loadV2LotRows(lot.lotKey));
+              return { ...lot, rows };
+            })
+          );
+          exportStockDetailedXlsx(enrichedData, {
+            viewType,
+            groupBy: groupByItem,
+            grandTotals: totals,
+            statusFilter: filters.status,
+          });
+        })();
+        return;
+      }
       exportStockDetailedXlsx(dataToExport, {
         viewType,
         groupBy: groupByItem,

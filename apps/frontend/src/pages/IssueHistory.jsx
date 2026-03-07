@@ -51,6 +51,41 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return [];
     }
   };
+  const formatMixedLotLabel = (lotNos = []) => {
+    const uniqueLots = Array.from(new Set((lotNos || []).map((lot) => String(lot || '').trim()).filter(Boolean)));
+    if (uniqueLots.length === 0) return '';
+    if (uniqueLots.length === 1) return uniqueLots[0];
+    return uniqueLots.length <= 3
+      ? `Mixed (${uniqueLots.join(', ')})`
+      : `Mixed (${uniqueLots.length})`;
+  };
+  const resolveCutNameFromHoloIssue = (holoIssue) => {
+    if (!holoIssue) return '';
+    const directCut = holoIssue.cut?.name
+      || (holoIssue.cutId ? db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '' : '');
+    if (directCut) return directCut;
+    if (!holoTraceContext) return '';
+    const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
+    return resolved?.cutName && resolved.cutName !== '—' ? resolved.cutName : '';
+  };
+  const resolveConingSourceMeta = (sourceRow) => {
+    if (!sourceRow) return { lotNo: '', itemId: '', cut: '' };
+    let lotNo = sourceRow.issue?.lotNo || '';
+    let itemId = sourceRow.issue?.itemId || '';
+    let cut = sourceRow.issue?.cut?.name
+      || (sourceRow.issue?.cutId ? db.cuts?.find(c => c.id === sourceRow.issue.cutId)?.name || '' : '');
+
+    if (sourceRow.issueId) {
+      const holoIssue = db.issue_to_holo_machine?.find(i => i.id === sourceRow.issueId);
+      if (holoIssue) {
+        lotNo = holoIssue.lotNo || lotNo;
+        itemId = holoIssue.itemId || itemId;
+        if (!cut) cut = resolveCutNameFromHoloIssue(holoIssue);
+      }
+    }
+
+    return { lotNo, itemId, cut };
+  };
   const toTimeMs = (value) => {
     const ms = new Date(value || 0).getTime();
     return Number.isFinite(ms) ? ms : null;
@@ -265,13 +300,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       const baseRolls = sourceRow?.rollCount ?? sourceRow?.coneCount ?? 0;
       const baseWeight = sourceRow?.rollWeight ?? sourceRow?.coneWeight ?? 0;
       const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
-      let lotNo = sourceRow?.issue?.lotNo || '';
-      let itemId = sourceRow?.issue?.itemId || '';
-      if (!lotNo && holoRow?.issueId) {
-        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === holoRow.issueId);
-        lotNo = holoIssue?.lotNo || lotNo;
-        itemId = holoIssue?.itemId || itemId;
-      }
+      const { lotNo, itemId, cut } = resolveConingSourceMeta(sourceRow);
       return {
         rowId: ref.rowId,
         barcode: ref.barcode || sourceRow?.barcode || '',
@@ -280,6 +309,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         unitWeight,
         lotNo,
         itemId,
+        cut,
       };
     });
     const firstRef = refs[0] || {};
@@ -386,13 +416,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
 
     const currentItemId = issueDraft.crates[0]?.itemId;
-    const currentLotNo = issueDraft.crates[0]?.lotNo;
     if (currentItemId && piece.itemId !== currentItemId) {
       alert('Mixed items not allowed');
-      return;
-    }
-    if (currentLotNo && piece.lotNo !== currentLotNo) {
-      alert('Mixed lots not allowed');
       return;
     }
 
@@ -480,23 +505,20 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return;
     }
 
-    let lotNo = row.issue?.lotNo || '';
-    let itemId = row.issue?.itemId || '';
-    if (!lotNo && row.issueId) {
-      const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-      lotNo = holoIssue?.lotNo || lotNo;
-      itemId = holoIssue?.itemId || itemId;
-    }
+    const { lotNo, itemId, cut: cutName } = resolveConingSourceMeta(row);
     if (!lotNo) {
       alert('Lot not found for this crate');
       return;
     }
 
     if (issueDraft.crates.length > 0) {
-      const currentLotNo = issueDraft.crates[0]?.lotNo;
-      const currentItemId = issueDraft.crates[0]?.itemId;
-      if (currentLotNo && lotNo !== currentLotNo) {
-        alert('Mixed lots not allowed');
+      const currentLotNo = issueDraft.crates[0]?.lotNo || '';
+      const currentItemId = issueDraft.crates[0]?.itemId || '';
+      const currentCut = issueDraft.crates[0]?.cut || '';
+      if (currentLotNo && lotNo !== currentLotNo && (itemId !== currentItemId || cutName !== currentCut)) {
+        const existingItemName = db.items?.find(i => i.id === currentItemId)?.name || 'Unknown';
+        const scannedItemName = db.items?.find(i => i.id === itemId)?.name || 'Unknown';
+        alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${currentCut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
         return;
       }
       if (currentItemId && itemId && itemId !== currentItemId) {
@@ -521,6 +543,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           unitWeight,
           lotNo,
           itemId,
+          cut: cutName,
         },
       ],
       cratesTouched: true,
@@ -1608,7 +1631,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const totalBobbins = (issueDraft.crates || []).reduce((sum, c) => sum + Number(c.issuedBobbins || 0), 0);
     const totalWeight = (issueDraft.crates || []).reduce((sum, c) => sum + Number(c.issuedBobbinWeight || 0), 0);
     const itemId = issueDraft.crates?.[0]?.itemId || '';
-    const lotNo = issueDraft.crates?.[0]?.lotNo || '';
+    const lotNo = formatMixedLotLabel((issueDraft.crates || []).map(c => c.lotNo));
     return {
       totalBobbins,
       totalWeight,
@@ -1624,7 +1647,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const target = Number(issueDraft.requiredPerConeNetWeight || 0);
     const expectedCones = target > 0 ? Math.floor((totalWeight * 1000) / target) : 0;
     const itemId = issueDraft.crates?.[0]?.itemId || '';
-    const lotNo = issueDraft.crates?.[0]?.lotNo || '';
+    const lotNo = formatMixedLotLabel((issueDraft.crates || []).map(c => c.lotNo));
     return {
       totalRolls,
       totalWeight,

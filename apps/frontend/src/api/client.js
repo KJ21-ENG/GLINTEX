@@ -377,13 +377,23 @@ export async function sendSummaryNotification(stage, type, date) {
   });
 }
 export async function sendSummaryWhatsApp(stage, type, date) { return await sendSummaryNotification(stage, type, date); }
-export async function downloadSummaryPdf(stage, type, date) {
-  const params = date ? `?date=${encodeURIComponent(date)}` : '';
-  const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download${params}`;
-  const res = await fetch(BASE + path, {
-    method: 'GET',
-    credentials: 'include',
-  });
+async function downloadBlobResponse(path, fallbackFilename, options = {}) {
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method: 'GET',
+      credentials: 'include',
+      signal: options.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const aborted = new Error('Download cancelled');
+      aborted.name = 'AbortError';
+      aborted.cancelled = true;
+      throw aborted;
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     if (res.status === 401 && typeof window !== 'undefined') {
@@ -405,7 +415,7 @@ export async function downloadSummaryPdf(stage, type, date) {
   const contentDisposition = res.headers.get('content-disposition') || '';
   const filenameMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i);
   const filenameRaw = filenameMatch?.[1] || filenameMatch?.[2];
-  const filename = filenameRaw ? decodeURIComponent(filenameRaw) : `summary_${stage}_${type}.pdf`;
+  const filename = filenameRaw ? decodeURIComponent(filenameRaw) : fallbackFilename;
 
   const blobUrl = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -415,6 +425,23 @@ export async function downloadSummaryPdf(stage, type, date) {
   a.click();
   a.remove();
   window.URL.revokeObjectURL(blobUrl);
+}
+export async function downloadSummaryPdf(stage, type, date) {
+  const params = date ? `?date=${encodeURIComponent(date)}` : '';
+  const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download${params}`;
+  await downloadBlobResponse(path, `summary_${stage}_${type}.pdf`);
+}
+export async function downloadProductionDailyExport({ process, from, to, signal }) {
+  const params = new URLSearchParams({
+    process: String(process || ''),
+    from: String(from || ''),
+    to: String(to || ''),
+  });
+  const path = `/api/reports/production/export/daily?${params.toString()}`;
+  const fallbackFilename = from && to && from !== to
+    ? `production_daily_${process}_${from}_to_${to}.zip`
+    : `production_daily_${process}_${from || to || 'export'}.pdf`;
+  await downloadBlobResponse(path, fallbackFilename, { signal });
 }
 
 // Boiler (Steaming)
@@ -533,4 +560,6 @@ export default {
   getIssueByHoloBarcode,
   getIssueByConingBarcode,
   barcodeImageUrl,
+  downloadSummaryPdf,
+  downloadProductionDailyExport,
 };

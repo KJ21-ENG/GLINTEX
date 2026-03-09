@@ -1,18 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as api from '../api/client';
 import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
     Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Badge
 } from '../components/ui';
-import { formatKg, formatDateDDMMYYYY, todayISO } from '../utils';
+import { formatKg, formatDateDDMMYYYY, todayISO, getInclusiveUtcDayRange } from '../utils';
 import {
     BarChart3, Search, ChevronDown, ChevronRight,
     Package, Truck, Factory, Clock, Users, Gauge,
-    Calendar, FileBarChart2, ScanLine
+    Calendar, FileBarChart2, ScanLine, Download
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
+import { Dialog, DialogContent } from '../components/ui/Dialog';
 
 const STAGE_ICONS = {
     inbound: Package,
@@ -46,6 +47,8 @@ const STAGE_LABELS = {
     coning_receive: 'Received from Coning',
     dispatch: 'Dispatched',
 };
+
+const MAX_DAILY_EXPORT_RANGE_DAYS = 7;
 
 function BarcodeHistory() {
     const [barcode, setBarcode] = useState('');
@@ -285,11 +288,52 @@ function ProductionReport() {
     const [dateTo, setDateTo] = useState(todayISO());
     const [loading, setLoading] = useState(false);
     const [report, setReport] = useState(null);
+    const [exportModalOpen, setExportModalOpen] = useState(false);
+    const [exportProcess, setExportProcess] = useState('cutter');
+    const [exportFrom, setExportFrom] = useState('');
+    const [exportTo, setExportTo] = useState('');
+    const [exporting, setExporting] = useState(false);
+    const [exportError, setExportError] = useState('');
+    const exportAbortRef = useRef(null);
 
     // Expansion state
     const [expandedRows, setExpandedRows] = useState(new Set()); // Set of keys
     const [detailsCache, setDetailsCache] = useState(new Map()); // Map key -> data
     const [loadingDetails, setLoadingDetails] = useState(new Set()); // Set of keys being fetched
+
+    const getDefaultExportProcess = () => (
+        process === 'cutter' || process === 'holo' || process === 'coning'
+            ? process
+            : 'cutter'
+    );
+
+    const openExportModal = () => {
+        setExportProcess(getDefaultExportProcess());
+        setExportFrom(dateFrom || '');
+        setExportTo(dateTo || '');
+        setExportError('');
+        setExportModalOpen(true);
+    };
+
+    const closeExportModal = () => {
+        if (exporting && exportAbortRef.current) {
+            exportAbortRef.current.abort();
+            exportAbortRef.current = null;
+        }
+        setExportModalOpen(false);
+        setExportError('');
+    };
+
+    const validateExportForm = () => {
+        if (!exportFrom || !exportTo) return 'From Date and To Date are required.';
+        if (exportProcess === 'all') return 'Daily export supports only Cutter, Holo, or Coning.';
+        if (exportFrom > exportTo) return 'From Date cannot be later than To Date.';
+        const rangeDays = getInclusiveUtcDayRange(exportFrom, exportTo);
+        if (rangeDays > MAX_DAILY_EXPORT_RANGE_DAYS) {
+            return `Daily production export is limited to ${MAX_DAILY_EXPORT_RANGE_DAYS} days at a time.`;
+        }
+        return '';
+    };
 
     async function loadReport() {
         setLoading(true);
@@ -404,6 +448,40 @@ function ProductionReport() {
         acc.count += (Number(item.count || item.rollCount || item.coneCount) || 0);
         return acc;
     }, { received: 0, count: 0 }) || { received: 0, count: 0 };
+    const exportRangeDays = getInclusiveUtcDayRange(exportFrom, exportTo);
+    const isMultiDayExport = exportRangeDays > 1;
+    const isExportRangeTooWide = exportRangeDays > MAX_DAILY_EXPORT_RANGE_DAYS;
+
+    const handleDailyExport = async () => {
+        const validationError = validateExportForm();
+        if (validationError) {
+            setExportError(validationError);
+            return;
+        }
+
+        setExportError('');
+        setExporting(true);
+        const controller = new AbortController();
+        exportAbortRef.current = controller;
+        try {
+            await api.downloadProductionDailyExport({
+                process: exportProcess,
+                from: exportFrom,
+                to: exportTo,
+                signal: controller.signal,
+            });
+            exportAbortRef.current = null;
+            setExportModalOpen(false);
+        } catch (err) {
+            if (err?.cancelled || err?.name === 'AbortError') {
+                return;
+            }
+            setExportError(err.message || 'Failed to export daily production report');
+        } finally {
+            exportAbortRef.current = null;
+            setExporting(false);
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -445,6 +523,17 @@ function ProductionReport() {
                                 value={dateTo}
                                 onChange={e => setDateTo(e.target.value)}
                             />
+                        </div>
+                        <div className="flex items-end sm:ml-auto">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full sm:w-auto"
+                                onClick={openExportModal}
+                            >
+                                <Download className="w-4 h-4 mr-2" />
+                                Daily Export
+                            </Button>
                         </div>
                     </div>
                 </CardContent>
@@ -781,6 +870,102 @@ function ProductionReport() {
                     )}
                 </CardContent>
             </Card>
+
+            <Dialog
+                open={exportModalOpen}
+                onOpenChange={(open) => {
+                    if (open) {
+                        setExportModalOpen(true);
+                        return;
+                    }
+                    closeExportModal();
+                }}
+            >
+                <DialogContent
+                    title="Daily Production Export"
+                    onOpenChange={closeExportModal}
+                    className="max-w-xl"
+                >
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                            Export one PDF for a single date, or a ZIP with one PDF per day for a small date range.
+                        </p>
+                        {process === 'all' && (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                The current report is showing All Processes. Daily export requires one process, so a specific process must be selected here before download.
+                            </div>
+                        )}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">Process</label>
+                                <Select
+                                    value={exportProcess}
+                                    onChange={(e) => {
+                                        setExportProcess(e.target.value);
+                                        setExportError('');
+                                    }}
+                                    disabled={exporting}
+                                >
+                                    <option value="cutter">Cutter</option>
+                                    <option value="holo">Holo</option>
+                                    <option value="coning">Coning</option>
+                                </Select>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">From Date</label>
+                                <Input
+                                    type="date"
+                                    value={exportFrom}
+                                    onChange={(e) => {
+                                        setExportFrom(e.target.value);
+                                        setExportError('');
+                                    }}
+                                    disabled={exporting}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">To Date</label>
+                                <Input
+                                    type="date"
+                                    value={exportTo}
+                                    onChange={(e) => {
+                                        setExportTo(e.target.value);
+                                        setExportError('');
+                                    }}
+                                    disabled={exporting}
+                                />
+                            </div>
+                        </div>
+                        {exportFrom && exportTo && exportRangeDays > 0 && (
+                            <div className={cn(
+                                "rounded-md border px-3 py-2 text-sm",
+                                isExportRangeTooWide
+                                    ? "border-red-200 bg-red-50 text-red-700"
+                                    : "border-slate-200 bg-slate-50 text-slate-700"
+                            )}>
+                                {isExportRangeTooWide
+                                    ? `The selected range spans ${exportRangeDays} days. Reduce it to ${MAX_DAILY_EXPORT_RANGE_DAYS} days or fewer.`
+                                    : isMultiDayExport
+                                        ? `This export will generate ${exportRangeDays} daily PDFs inside one ZIP file.`
+                                        : 'This export will generate one PDF file.'}
+                            </div>
+                        )}
+                        {exportError && (
+                            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                {exportError}
+                            </div>
+                        )}
+                        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+                            <Button variant="outline" onClick={closeExportModal}>
+                                {exporting ? 'Cancel Export' : 'Cancel'}
+                            </Button>
+                            <Button onClick={handleDailyExport} disabled={exporting}>
+                                {exporting ? 'Preparing Download...' : 'Export PDF / ZIP'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

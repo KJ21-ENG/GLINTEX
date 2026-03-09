@@ -1,3 +1,4 @@
+import archiver from 'archiver';
 import multer from 'multer';
 import XLSX from 'xlsx';
 import { Router } from 'express';
@@ -18,7 +19,9 @@ import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeR
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
-import { generateSummaryPDF } from '../utils/pdf/index.js';
+import { generateSummaryPDF, generateProductionDailyExportPdf } from '../utils/pdf/index.js';
+import { buildProductionDailyExportData } from '../utils/pdf/productionDailyExportData.js';
+import { enumerateDatesInclusive, mapWithConcurrency, validateProductionDailyExportRequest } from '../utils/productionDailyExport.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
 
@@ -3199,11 +3202,11 @@ async function createIssueTakeBackForStage(req, res, stage) {
         // the issue-level pendingWeight check below is the authoritative guard.
         // For cutter/holo: keep existing per-source consumed deduction.
         const lineRemainingWeight = stage === 'coning'
-            ? clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0))
-            : clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
+          ? clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0))
+          : clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
         const lineRemainingCount = stage === 'coning'
-            ? clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0))
-            : clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
+          ? clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0))
+          : clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
 
         if (line.weight - lineRemainingWeight > TAKE_BACK_EPSILON) {
           throw new Error(`Requested weight exceeds remaining allocation for source ${line.sourceId}`);
@@ -15216,6 +15219,110 @@ router.get('/api/reports/production/details', requirePermission('reports', PERM_
   } catch (err) {
     console.error('Production report details failed', err);
     res.status(500).json({ error: 'Failed to fetch details' });
+  }
+});
+
+router.get('/api/reports/production/export/daily', requirePermission('reports', PERM_READ), async (req, res) => {
+  let archive = null;
+  let clientAborted = false;
+  const markAborted = () => {
+    clientAborted = true;
+    if (archive) {
+      try { archive.abort(); } catch (_) { }
+    }
+  };
+  req.on('aborted', markAborted);
+  res.on('close', () => {
+    if (!res.writableEnded) markAborted();
+  });
+
+  try {
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+    const validation = validateProductionDailyExportRequest({
+      process: req.query.process,
+      from,
+      to,
+    });
+
+    if (!validation.ok) {
+      return res.status(400).json({ error: validation.error });
+    }
+    const process = validation.process;
+    const fromDate = validation.fromDate;
+    const toDate = validation.toDate;
+
+    const ensureClientConnected = () => {
+      if (!clientAborted) return;
+      const error = new Error('Client disconnected during export');
+      error.code = 'CLIENT_ABORTED';
+      throw error;
+    };
+
+    const buildPdfEntry = async (date) => {
+      ensureClientConnected();
+      const exportData = await buildProductionDailyExportData({
+        process,
+        date,
+        helpers: {
+          parseRefs,
+          resolveHoloIssueDetails,
+          resolveConingTraceDetails,
+          resolveLotNoFromPieceId,
+        },
+      });
+      ensureClientConnected();
+      const pdfBuffer = await generateProductionDailyExportPdf(exportData);
+      ensureClientConnected();
+      return { date, pdfBuffer };
+    };
+
+    if (from === to) {
+      const { pdfBuffer } = await buildPdfEntry(from);
+      const filename = `production_daily_${process}_${from}.pdf`;
+
+      ensureClientConnected();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(pdfBuffer);
+    }
+
+    const dates = enumerateDatesInclusive(fromDate, toDate);
+    const pdfEntries = await mapWithConcurrency(dates, 2, async (date) => await buildPdfEntry(date));
+    ensureClientConnected();
+    const zipFilename = `production_daily_${process}_${from}_to_${to}.zip`;
+    archive = archiver('zip', { zlib: { level: 0 } });
+
+    archive.on('error', (error) => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message || 'Failed to build export ZIP' });
+        return;
+      }
+      res.destroy(error);
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    archive.pipe(res);
+
+    for (const entry of pdfEntries) {
+      ensureClientConnected();
+      archive.append(entry.pdfBuffer, {
+        name: `production_daily_${process}_${entry.date}.pdf`,
+      });
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    if (err?.code === 'CLIENT_ABORTED') {
+      return;
+    }
+    console.error('Failed to export daily production report', err);
+    if (res.headersSent) {
+      res.destroy(err);
+      return;
+    }
+    res.status(500).json({ error: err.message || 'Failed to export daily production report' });
   }
 });
 

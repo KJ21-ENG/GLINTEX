@@ -19,6 +19,35 @@ export function yyyymmdd(dateISO) {
   return dateISO.replaceAll("-", "");
 }
 
+export function parseDateOnlyUTC(value) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const [yearRaw, monthRaw, dayRaw] = raw.split('-');
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+export function getInclusiveUtcDayRange(from, to) {
+  const fromDate = parseDateOnlyUTC(from);
+  const toDate = parseDateOnlyUTC(to);
+  if (!fromDate || !toDate || toDate.getTime() < fromDate.getTime()) return 0;
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.floor((toDate.getTime() - fromDate.getTime()) / msPerDay) + 1;
+}
+
 // Parse a date string in common formats and return ISO (YYYY-MM-DD) or empty string
 export function parseDateToISO(dateStr) {
   if (!dateStr || typeof dateStr !== 'string') return '';

@@ -135,6 +135,7 @@ export function drawTable(doc, {
     padding = 2,
     bottomMargin = 25,
     lineHeight = 3.5,
+    pageStartY = 20,
 }) {
     const startX = 15;
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -214,7 +215,7 @@ export function drawTable(doc, {
             doc.rect(startX, currentPageTopY, tableWidth, currentPageHeight);
             hadPageBreak = true;
             doc.addPage();
-            y = 20;
+            y = pageStartY;
 
             // Redraw header on new page
             doc.setFillColor(52, 73, 94);

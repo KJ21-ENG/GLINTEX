@@ -177,15 +177,16 @@ export function drawTable(doc, {
         const maxWidth = colWidths[i] - (padding * 2);
         if (allowWrap) {
             const lines = doc.splitTextToSize(text, maxWidth);
+            const startY = y + (headerHeight - (lines.length - 1) * lineHeight) / 2 + 0.7;
             lines.forEach((line, idx) => {
-                doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+                doc.text(line, xPos, startY + idx * lineHeight, { align });
             });
         } else {
             let displayText = text;
             while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
                 displayText = displayText.slice(0, -4) + '...';
             }
-            doc.text(displayText, xPos, y + 5.5, { align });
+            doc.text(displayText, xPos, y + headerHeight / 2 + 0.7, { align });
         }
     });
     y += headerHeight;
@@ -213,6 +214,11 @@ export function drawTable(doc, {
             doc.setDrawColor(200, 200, 200);
             doc.setLineWidth(0.3);
             doc.rect(startX, currentPageTopY, tableWidth, currentPageHeight);
+            let colXBreak = startX;
+            for (let ci = 0; ci < colWidths.length - 1; ci += 1) {
+                colXBreak += colWidths[ci];
+                doc.line(colXBreak, currentPageTopY, colXBreak, currentPageTopY + currentPageHeight);
+            }
             hadPageBreak = true;
             doc.addPage();
             y = pageStartY;
@@ -235,15 +241,16 @@ export function drawTable(doc, {
                 const maxWidth = colWidths[i] - (padding * 2);
                 if (allowWrap) {
                     const lines = doc.splitTextToSize(text, maxWidth);
+                    const startY = y + (headerHeight - (lines.length - 1) * lineHeight) / 2 + 0.7;
                     lines.forEach((line, idx) => {
-                        doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+                        doc.text(line, xPos, startY + idx * lineHeight, { align });
                     });
                 } else {
                     let displayText = text;
                     while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
                         displayText = displayText.slice(0, -4) + '...';
                     }
-                    doc.text(displayText, xPos, y + 5.5, { align });
+                    doc.text(displayText, xPos, y + headerHeight / 2 + 0.7, { align });
                 }
             });
             y += headerHeight;
@@ -280,15 +287,16 @@ export function drawTable(doc, {
             const maxWidth = colWidths[i] - (padding * 2);
             if (headers[i]?.wrap) {
                 const lines = doc.splitTextToSize(text, maxWidth);
+                const startY = y + (rowHeightDynamic - (lines.length - 1) * lineHeight) / 2 + 0.7;
                 lines.forEach((line, idx) => {
-                    doc.text(line, xPos, y + 5 + idx * lineHeight, { align });
+                    doc.text(line, xPos, startY + idx * lineHeight, { align });
                 });
             } else {
                 let displayText = text;
                 while (doc.getTextWidth(displayText) > maxWidth && displayText.length > 3) {
                     displayText = displayText.slice(0, -4) + '...';
                 }
-                doc.text(displayText, xPos, y + 5, { align });
+                doc.text(displayText, xPos, y + rowHeightDynamic / 2 + 0.7, { align });
             }
         });
 
@@ -296,14 +304,24 @@ export function drawTable(doc, {
             doc.setFont('helvetica', 'normal');
         }
 
+        // Horizontal row divider
+        doc.setDrawColor(200, 200, 200);
+        doc.setLineWidth(0.2);
+        doc.line(startX, y + rowHeightDynamic, startX + tableWidth, y + rowHeightDynamic);
+
         y += rowHeightDynamic;
         currentPageHeight += rowHeightDynamic;
     });
 
-    // Draw table border
+    // Draw table border and column separators
     doc.setDrawColor(200, 200, 200);
     doc.setLineWidth(0.3);
     doc.rect(startX, currentPageTopY, tableWidth, currentPageHeight);
+    let colX = startX;
+    for (let i = 0; i < colWidths.length - 1; i += 1) {
+        colX += colWidths[i];
+        doc.line(colX, currentPageTopY, colX, currentPageTopY + currentPageHeight);
+    }
 
     return y + 5;
 }

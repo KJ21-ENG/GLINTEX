@@ -130,6 +130,7 @@ function drawTableHeaderAt(doc, {
   headers.forEach((header, index) => {
     const align = header.align || 'left';
     const lines = getCellLines(doc, header.text || header, header, colWidths[index], padding);
+    const startY = y + (headerHeight - (lines.length - 1) * lineHeight) / 2 + 0.7;
     let xPos = colPositions[index] + padding;
     if (align === 'right') {
       xPos = colPositions[index + 1] - padding;
@@ -137,7 +138,7 @@ function drawTableHeaderAt(doc, {
       xPos = colPositions[index] + (colWidths[index] / 2);
     }
     lines.forEach((line, lineIndex) => {
-      doc.text(line, xPos, y + 5 + (lineIndex * lineHeight), { align });
+      doc.text(line, xPos, startY + (lineIndex * lineHeight), { align });
     });
   });
 
@@ -177,6 +178,7 @@ function drawTableRowAt(doc, {
     const lines = getCellLines(doc, cell.text ?? cell, {
       wrap: cell.wrap ?? headers[index]?.wrap,
     }, colWidths[index], padding);
+    const startY = y + (rowHeight - (lines.length - 1) * lineHeight) / 2 + 0.7;
     let xPos = colPositions[index] + padding;
     if (align === 'right') {
       xPos = colPositions[index + 1] - padding;
@@ -184,7 +186,7 @@ function drawTableRowAt(doc, {
       xPos = colPositions[index] + (colWidths[index] / 2);
     }
     lines.forEach((line, lineIndex) => {
-      doc.text(line, xPos, y + 5 + (lineIndex * lineHeight), { align });
+      doc.text(line, xPos, startY + (lineIndex * lineHeight), { align });
     });
   });
 
@@ -451,7 +453,11 @@ export async function createProductionDailyExportPdfDocument(data) {
   ];
   const detailColWidths = [35, 40, 18, 24, 28, 16, 31, 18, 18, 18, 18];
 
-  const detailRows = data.rows.map((row) => ({
+  const sortedRows = [...data.rows].sort((a, b) =>
+    String(a.machine || '').localeCompare(String(b.machine || ''), undefined, { numeric: true, sensitivity: 'base' })
+  );
+
+  const detailRows = sortedRows.map((row) => ({
     cells: [
       { text: row.yarn || '-', align: 'left' },
       { text: row.item || '-', align: 'left' },

@@ -3642,6 +3642,7 @@ router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PER
         const isConsumed = Boolean(piece.isConsumed);
         const status = isConsumed ? 'consumed' : 'available';
         const consumptionDate = piece.consumptionDate || null;
+        const note = piece.note || null;
 
         const pieceId = `${lotNo}-${seq}`;
         const barcode = makeInboundBarcode({ lotNo, seq });
@@ -3656,6 +3657,7 @@ router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PER
             seq,
             barcode,
             consumptionDate,
+            note,
             isOpeningStock: true,
             ...actorCreateFields(actorUserId),
           },
@@ -3769,6 +3771,7 @@ router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stoc
         cutId: crate.cutId,
         shift: crate?.shift || null,
         machineNo: crate?.machineNo || null,
+        notes: crate?.notes || null,
       };
     });
 
@@ -3847,6 +3850,7 @@ router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stoc
             cut: cut ? cut.name : null,
             shift: row.shift,
             machineNo: row.machineNo,
+            notes: row.notes || null,
             narration: 'Opening stock',
             createdBy: 'opening',
             barcode,

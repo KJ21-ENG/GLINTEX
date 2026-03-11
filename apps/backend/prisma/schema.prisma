@@ -99,6 +99,7 @@ model InboundItem {
   itemId          String
   weight          Float
   status          String
+  note            String?
   seq             Int
   barcode         String   @unique
   consumptionDate String?
@@ -431,6 +432,7 @@ model ReceiveFromCutterMachineRow {
   operatorId    String?
   helperId      String?
   helperName    String?
+  notes         String?
   bobbinQuantity Int? @map("bobbin_quantity")
   issuedBobbins  Int   @default(0)
   issuedBobbinWeight Float @default(0)

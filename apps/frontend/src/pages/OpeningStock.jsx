@@ -213,6 +213,7 @@ export function OpeningStock() {
     weight: '',
     isConsumed: false,
     consumptionDate: todayISO(),
+    note: '',
   });
   const [inboundCart, setInboundCart] = useState([]);
 
@@ -226,6 +227,7 @@ export function OpeningStock() {
     cutId: '',
     shift: '',
     machineId: '',
+    notes: '',
   });
   const [cutterCart, setCutterCart] = useState([]);
 
@@ -234,6 +236,7 @@ export function OpeningStock() {
     rollCount: '',
     boxId: '',
     grossWeight: '',
+    notes: '',
   });
   const [holoCart, setHoloCart] = useState([]);
   const [holoIssue, setHoloIssue] = useState({
@@ -249,6 +252,7 @@ export function OpeningStock() {
     coneCount: '',
     grossWeight: '',
     boxId: '',
+    notes: '',
   });
   const [coningCart, setConingCart] = useState([]);
   const [coningIssue, setConingIssue] = useState({
@@ -525,6 +529,7 @@ export function OpeningStock() {
     setInboundEntry(prev => ({
       ...prev,
       weight: '',
+      note: '',
     }));
   };
 
@@ -611,6 +616,7 @@ export function OpeningStock() {
       ...prev,
       bobbinQuantity: '',
       grossWeight: '',
+      notes: '',
     }));
   };
 
@@ -702,6 +708,7 @@ export function OpeningStock() {
       ...prev,
       rollCount: '',
       grossWeight: '',
+      notes: '',
     }));
   };
 
@@ -792,6 +799,7 @@ export function OpeningStock() {
       ...prev,
       coneCount: '',
       grossWeight: '',
+      notes: '',
     }));
   };
 
@@ -809,6 +817,7 @@ export function OpeningStock() {
           weight: p.weight,
           isConsumed: p.isConsumed,
           consumptionDate: p.isConsumed ? p.consumptionDate : null,
+          note: p.note || null,
         })),
       };
       const result = await api.createOpeningInbound(payload);
@@ -938,6 +947,7 @@ export function OpeningStock() {
           cutId: row.cutId,
           shift: row.shift || null,
           machineNo: row.machineId ? (getMachine(row.machineId)?.name || '') : null,
+          notes: row.notes || null,
         })),
       };
       const result = await api.createOpeningCutterReceive(payload);
@@ -980,6 +990,7 @@ export function OpeningStock() {
           crateTareWeight: Number(row.crateTareWeight || 0),
           operatorId: holoIssue.operatorId || null,
           crateIndex: row.crateIndex,
+          notes: row.notes || null,
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
@@ -1024,6 +1035,7 @@ export function OpeningStock() {
           boxId: row.boxId || null,
           operatorId: coningIssue.operatorId || null,
           crateIndex: row.crateIndex,
+          notes: row.notes || null,
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
@@ -1284,6 +1296,14 @@ export function OpeningStock() {
                     onChange={e => setInboundEntry(prev => ({ ...prev, consumptionDate: e.target.value }))}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label>Note (Optional)</Label>
+                  <Input
+                    value={inboundEntry.note}
+                    onChange={e => setInboundEntry(prev => ({ ...prev, note: e.target.value }))}
+                    placeholder="Optional note"
+                  />
+                </div>
                 <Button onClick={addInboundPiece} className="gap-2 w-full sm:w-auto">
                   <Plus className="w-4 h-4" /> Add Piece
                 </Button>
@@ -1452,6 +1472,14 @@ export function OpeningStock() {
                       <option key={m.id} value={m.id}>{m.name}</option>
                     ))}
                   </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes (Optional)</Label>
+                  <Input
+                    value={cutterEntry.notes}
+                    onChange={e => setCutterEntry(prev => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Optional notes"
+                  />
                 </div>
               </div>
               {/* Live weight preview */}
@@ -1628,6 +1656,14 @@ export function OpeningStock() {
                       }}
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes (Optional)</Label>
+                  <Input
+                    value={holoEntry.notes}
+                    onChange={e => setHoloEntry(prev => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Optional notes"
+                  />
                 </div>
               </div>
               {/* Live weight preview */}
@@ -1808,6 +1844,14 @@ export function OpeningStock() {
                       }}
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes (Optional)</Label>
+                  <Input
+                    value={coningEntry.notes}
+                    onChange={e => setConingEntry(prev => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Optional notes"
+                  />
                 </div>
               </div>
               {/* Live weight preview */}

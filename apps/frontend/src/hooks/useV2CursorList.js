@@ -52,6 +52,8 @@ export function useV2CursorList({
   const hasMoreRef = useRef(hasMore);
   cursorRef.current = cursor;
   hasMoreRef.current = hasMore;
+  const queryParamsRef = useRef({ search, dateFrom, dateTo, filters });
+  queryParamsRef.current = { search, dateFrom, dateTo, filters };
 
   const key = useMemo(
     () => stableStringify({ scopeKey, search, dateFrom, dateTo, filters }),
@@ -75,20 +77,26 @@ export function useV2CursorList({
   const loadMore = useCallback(async () => {
     if (!enabled) return;
     if (inFlightRef.current) return;
-    if (cursorRef.current !== null && !hasMoreRef.current) return;
+    if (!hasMoreRef.current) return;
     inFlightRef.current = true;
     setLoading(true);
     setError(null);
     const genAtStart = genRef.current;
     try {
       const currentCursor = cursorRef.current;
+      const {
+        search: currentSearch,
+        dateFrom: currentDateFrom,
+        dateTo: currentDateTo,
+        filters: currentFilters,
+      } = queryParamsRef.current;
       const res = await fetchPageRef.current({
         limit,
         cursor: currentCursor,
-        search,
-        dateFrom,
-        dateTo,
-        filters,
+        search: currentSearch,
+        dateFrom: currentDateFrom,
+        dateTo: currentDateTo,
+        filters: currentFilters,
       });
       // Params changed while request was in flight: drop stale response.
       if (genAtStart !== genRef.current) return;
@@ -104,6 +112,8 @@ export function useV2CursorList({
         setSummary(null);
       }
       setItems((prev) => (currentCursor ? [...prev, ...nextItems] : nextItems));
+      cursorRef.current = nextCursor;
+      hasMoreRef.current = nextHasMore;
       setCursor(nextCursor);
       setHasMore(nextHasMore);
     } catch (e) {
@@ -114,7 +124,7 @@ export function useV2CursorList({
     }
     // Only re-create when the *parameters* change (via `key`), not when cursor/hasMore change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, limit, search, dateFrom, dateTo, filters]);
+  }, [enabled, limit]);
 
   // Reset + load first page on param changes.
   useEffect(() => {

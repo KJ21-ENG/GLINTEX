@@ -342,7 +342,8 @@ export function Dispatch() {
                 (item.barcode || '').toUpperCase() === barcode ||
                 (item.legacyBarcode || '').toUpperCase() === barcode ||
                 (item.lotNo || '').toUpperCase() === barcode ||
-                (item.pieceId || '').toUpperCase() === barcode
+                (item.pieceId || '').toUpperCase() === barcode ||
+                (item.notes || '').toUpperCase() === barcode
             );
 
             if (!match) {

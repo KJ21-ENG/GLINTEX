@@ -88,7 +88,8 @@ export function MobileDispatchView({
                 (item.barcode || '').toUpperCase() === normalized ||
                 (item.legacyBarcode || '').toUpperCase() === normalized ||
                 (item.lotNo || '').toUpperCase() === normalized ||
-                (item.pieceId || '').toUpperCase() === normalized
+                (item.pieceId || '').toUpperCase() === normalized ||
+                (item.notes || '').toUpperCase() === normalized
             );
 
             if (matchedItem) {

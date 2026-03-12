@@ -1192,26 +1192,11 @@ export function OpeningStock() {
         <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="space-y-2">
             <Label>Stage</Label>
-            <div className="sm:hidden">
-              <Select value={stage} onChange={e => setStage(e.target.value)}>
-                {STAGE_OPTIONS.map(opt => (
-                  <option key={opt.id} value={opt.id}>{opt.label}</option>
-                ))}
-              </Select>
-            </div>
-            <div className="hidden sm:flex flex-wrap gap-2">
+            <Select value={stage} onChange={e => setStage(e.target.value)}>
               {STAGE_OPTIONS.map(opt => (
-                <Button
-                  key={opt.id}
-                  type="button"
-                  size="sm"
-                  variant={stage === opt.id ? 'default' : 'outline'}
-                  onClick={() => setStage(opt.id)}
-                >
-                  {opt.label}
-                </Button>
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
               ))}
-            </div>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label>Date</Label>

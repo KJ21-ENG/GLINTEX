@@ -25,6 +25,19 @@ const STAGES = [
     { id: 'coning', label: 'Coning', description: 'Cones' },
 ];
 
+const STAGE_EMPTY_MESSAGES = {
+    inbound: 'No raw jumbo rolls received yet.',
+    cutter: 'No bobbins available for dispatch.',
+    holo: 'No rolls available for dispatch.',
+    coning: 'No cones available for dispatch.',
+};
+const STAGE_RECEIVE_ROUTES = {
+    inbound: '/app/inbound',
+    cutter: '/app/receive',
+    holo: '/app/receive',
+    coning: '/app/receive',
+};
+
 export function Dispatch() {
     const { db, patchDb, refreshProcessData, refreshModuleData } = useInventory();
     const { canRead, canWrite, canDelete } = usePermission('dispatch');
@@ -45,6 +58,9 @@ export function Dispatch() {
     const [expandedChallan, setExpandedChallan] = useState(null);
     const [scanInput, setScanInput] = useState('');
     const [scanQueue, setScanQueue] = useState([]);
+    const [stageItemsCache, setStageItemsCache] = useState({});
+    const [stageCounts, setStageCounts] = useState({});
+    const [selectedChallanNos, setSelectedChallanNos] = useState(new Set());
 
     // Auto-enable mobile mode on mobile devices
     React.useEffect(() => {
@@ -114,6 +130,8 @@ export function Dispatch() {
             try {
                 const res = await api.getDispatchAvailable(selectedStage);
                 setAvailableItems(res.items || []);
+                setStageItemsCache(prev => ({ ...prev, [selectedStage]: res.items || [] }));
+                setStageCounts(prev => ({ ...prev, [selectedStage]: (res.items || []).length }));
             } catch (err) {
                 console.error('Failed to load available items', err);
                 setAvailableItems([]);
@@ -126,10 +144,30 @@ export function Dispatch() {
         }
     }, [canRead, selectedStage, activeTab]);
 
+    // Load counts for all stages on mount (for badge display)
+    useEffect(() => {
+        if (!canRead || activeTab !== 'dispatch') return;
+        Promise.all(
+            STAGES.map(s => api.getDispatchAvailable(s.id)
+                .then(r => ({ id: s.id, count: (r.items || []).length }))
+                .catch(() => ({ id: s.id, count: 0 }))
+            )
+        ).then(results => {
+            const counts = {};
+            results.forEach(({ id, count }) => { counts[id] = count; });
+            setStageCounts(counts);
+        });
+    }, [canRead, activeTab]);
+
     useEffect(() => {
         setSelectedIds(new Set());
         setScanQueue([]);
     }, [selectedStage]);
+
+    // Reset selected challans on tab change
+    useEffect(() => {
+        setSelectedChallanNos(new Set());
+    }, [activeTab]);
 
     // Load dispatch history
     useEffect(() => {
@@ -313,7 +351,7 @@ export function Dispatch() {
         setBulkDispatchOpen(true);
     }
 
-    function handleScanSubmit(e) {
+    async function handleScanSubmit(e) {
         if (readOnly) return;
         e.preventDefault();
         const rawInput = scanInput.trim().toUpperCase();
@@ -377,10 +415,61 @@ export function Dispatch() {
         if (newEntries.length > 0) {
             setScanQueue(prev => [...newEntries.reverse(), ...prev]);
         }
+
+        // Async cross-stage check for not_found barcodes
+        const notFoundBarcodes = newEntries.filter(e => e.status === 'not_found').map(e => e.barcode);
+        if (notFoundBarcodes.length > 0) {
+            const otherStages = STAGES.map(s => s.id).filter(id => id !== selectedStage);
+            const stagesToFetch = otherStages.filter(id => !stageItemsCache[id]);
+            const fetchedResults = await Promise.all(
+                stagesToFetch.map(id => api.getDispatchAvailable(id)
+                    .then(r => ({ id, items: r.items || [] }))
+                    .catch(() => ({ id, items: [] }))
+                )
+            );
+            const updatedCache = { ...stageItemsCache };
+            fetchedResults.forEach(({ id, items }) => { updatedCache[id] = items; });
+            setStageItemsCache(updatedCache);
+
+            const suggestions = {};
+            for (const barcode of notFoundBarcodes) {
+                for (const stageId of otherStages) {
+                    const items = updatedCache[stageId] || [];
+                    const hit = items.find(item =>
+                        (item.barcode || '').toUpperCase() === barcode ||
+                        (item.legacyBarcode || '').toUpperCase() === barcode ||
+                        (item.lotNo || '').toUpperCase() === barcode ||
+                        (item.pieceId || '').toUpperCase() === barcode ||
+                        (item.notes || '').toUpperCase() === barcode
+                    );
+                    if (hit) { suggestions[barcode] = stageId; break; }
+                }
+            }
+
+            if (Object.keys(suggestions).length > 0) {
+                setScanQueue(prev => prev.map(entry =>
+                    suggestions[entry.barcode]
+                        ? { ...entry, suggestedStage: suggestions[entry.barcode] }
+                        : entry
+                ));
+            }
+        }
     }
 
     function clearScanQueue() {
         setScanQueue([]);
+    }
+
+    function removeScanEntry(barcode) {
+        const entry = scanQueue.find(e => e.barcode === barcode);
+        setScanQueue(prev => prev.filter(e => e.barcode !== barcode));
+        if (entry?.status === 'found' && entry.itemId) {
+            setSelectedIds(ids => {
+                const next = new Set(ids);
+                next.delete(entry.itemId);
+                return next;
+            });
+        }
     }
 
     async function handleCreateDispatch() {
@@ -575,6 +664,11 @@ export function Dispatch() {
         }
     }
 
+    function handlePrintSelected() {
+        const selected = filteredDispatches.filter(d => selectedChallanNos.has(d.challanNo));
+        selected.forEach(d => handlePrintChallan(d));
+    }
+
     function handlePrintChallan(dispatch) {
         const settings = db?.settings?.[0] || {};
         const firmDetails = {
@@ -730,7 +824,19 @@ export function Dispatch() {
                                                     : "bg-background hover:bg-muted border border-border"
                                             )}
                                         >
-                                            <div className="font-medium">{stage.label}</div>
+                                            <div className="font-medium flex items-center gap-1.5">
+                                                {stage.label}
+                                                {stageCounts[stage.id] !== undefined && (
+                                                    <span className={cn(
+                                                        "text-xs font-normal px-1.5 py-0.5 rounded-full",
+                                                        selectedStage === stage.id
+                                                            ? "bg-primary-foreground/20 text-primary-foreground"
+                                                            : "bg-muted text-muted-foreground"
+                                                    )}>
+                                                        {stageCounts[stage.id]}
+                                                    </span>
+                                                )}
+                                            </div>
                                             <div className={cn(
                                                 "text-xs",
                                                 selectedStage === stage.id ? "text-primary-foreground/80" : "text-muted-foreground"
@@ -774,10 +880,23 @@ export function Dispatch() {
                                                 variant="outline"
                                                 className={cn(
                                                     entry.status === 'found' && 'border-green-600 text-green-600',
-                                                    entry.status === 'not_found' && 'border-red-600 text-red-600'
+                                                    entry.status === 'not_found' && !entry.suggestedStage && 'border-red-600 text-red-600',
+                                                    entry.status === 'not_found' && entry.suggestedStage && 'border-amber-500 text-amber-600 cursor-pointer hover:bg-amber-50'
                                                 )}
+                                                onClick={entry.suggestedStage ? () => setSelectedStage(entry.suggestedStage) : undefined}
+                                                title={entry.suggestedStage ? `Found in ${entry.suggestedStage} — click to switch` : undefined}
                                             >
                                                 {entry.barcode}
+                                                {entry.suggestedStage && (
+                                                    <span className="ml-1 text-xs">→ {STAGES.find(s => s.id === entry.suggestedStage)?.label}</span>
+                                                )}
+                                                <button
+                                                    onClick={e => { e.stopPropagation(); removeScanEntry(entry.barcode); }}
+                                                    className="ml-1.5 hover:text-red-600 focus:outline-none"
+                                                    aria-label="Remove"
+                                                >
+                                                    <X className="w-3 h-3 inline" />
+                                                </button>
                                             </Badge>
                                         ))}
                                         {scanQueue.length > 12 && (
@@ -788,7 +907,75 @@ export function Dispatch() {
                             </CardContent>
                         </Card>
 
-                        {/* Available Items Table */}
+                        {/* Available Items Table / Scanned Items View */}
+                        {scanQueue.length > 0 ? (
+                            /* --- SCANNED ITEMS VIEW --- */
+                            <Card>
+                                <CardHeader>
+                                    <div className="flex items-center justify-between">
+                                        <CardTitle className="text-lg">Scanned Items</CardTitle>
+                                        <Button size="sm" variant="ghost" onClick={() => { clearScanQueue(); setSelectedIds(new Set()); }}>
+                                            ← Show all available
+                                        </Button>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="divide-y rounded-md border">
+                                        {scanQueue.map(entry => {
+                                            const item = entry.status === 'found'
+                                                ? availableItems.find(i => i.id === entry.itemId)
+                                                : null;
+                                            return (
+                                                <div key={entry.barcode} className="flex items-center justify-between px-4 py-3 gap-4">
+                                                    <div className="flex items-center gap-3 min-w-0">
+                                                        <span className={cn(
+                                                            "w-2 h-2 rounded-full shrink-0",
+                                                            entry.status === 'found' ? "bg-green-500" : "bg-red-400"
+                                                        )} />
+                                                        <div className="min-w-0">
+                                                            <p className="font-mono text-sm truncate">{entry.barcode}</p>
+                                                            {item && (
+                                                                <p className="text-xs text-muted-foreground">
+                                                                    {item.lotLabel || item.lotNo || '—'} · {formatKg(item.availableWeight)} avail
+                                                                </p>
+                                                            )}
+                                                            {!item && (
+                                                                <p className="text-xs text-red-500">
+                                                                    {entry.suggestedStage
+                                                                        ? `Not found here — found in ${STAGES.find(s => s.id === entry.suggestedStage)?.label}`
+                                                                        : 'Not found in this stage'}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        {item && !readOnly && (
+                                                            <Button size="sm" onClick={() => openDispatchModal(item)}>
+                                                                Dispatch
+                                                            </Button>
+                                                        )}
+                                                        <button
+                                                            onClick={() => removeScanEntry(entry.barcode)}
+                                                            className="text-muted-foreground hover:text-red-600 p-1"
+                                                        >
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    {selectedIds.size > 1 && !readOnly && (
+                                        <div className="mt-3 flex justify-end">
+                                            <Button onClick={openBulkDispatchModal}>
+                                                Dispatch All Found ({selectedIds.size})
+                                            </Button>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        ) : (
+                        /* --- AVAILABLE FOR DISPATCH TABLE --- */
                         <Card>
                             <CardHeader>
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -854,8 +1041,21 @@ export function Dispatch() {
                                                 </TableRow>
                                             ) : filteredItems.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                                                        No items available for dispatch
+                                                    <TableCell colSpan={8} className="h-32 text-center">
+                                                        {itemSearch.trim() && availableItems.length > 0 ? (
+                                                            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                                                <span>No items match your search.</span>
+                                                                <Button size="sm" variant="ghost" onClick={() => setItemSearch('')}>Clear search</Button>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                                                <Package className="w-8 h-8 opacity-40" />
+                                                                <span>{STAGE_EMPTY_MESSAGES[selectedStage]}</span>
+                                                                <a href={STAGE_RECEIVE_ROUTES[selectedStage]} className="text-sm text-primary underline">
+                                                                    Go to {STAGES.find(s => s.id === selectedStage)?.label} Receive →
+                                                                </a>
+                                                            </div>
+                                                        )}
                                                     </TableCell>
                                                 </TableRow>
                                             ) : (
@@ -905,7 +1105,22 @@ export function Dispatch() {
                                     {loadingItems ? (
                                         <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">Loading...</div>
                                     ) : filteredItems.length === 0 ? (
-                                        <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No items available for dispatch</div>
+                                        <div className="text-center py-8 border rounded-lg bg-card">
+                                            {itemSearch.trim() && availableItems.length > 0 ? (
+                                                <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                                    <span>No items match your search.</span>
+                                                    <Button size="sm" variant="ghost" onClick={() => setItemSearch('')}>Clear search</Button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                                    <Package className="w-8 h-8 opacity-40" />
+                                                    <span>{STAGE_EMPTY_MESSAGES[selectedStage]}</span>
+                                                    <a href={STAGE_RECEIVE_ROUTES[selectedStage]} className="text-sm text-primary underline">
+                                                        Go to {STAGES.find(s => s.id === selectedStage)?.label} Receive →
+                                                    </a>
+                                                </div>
+                                            )}
+                                        </div>
                                     ) : (
                                         filteredItems.map(item => (
                                             <div key={item.id} className="border rounded-lg p-4 bg-card shadow-sm">
@@ -938,6 +1153,7 @@ export function Dispatch() {
                                 </div>
                             </CardContent>
                         </Card>
+                        )}
                     </>
                 )
             ) : (
@@ -982,6 +1198,17 @@ export function Dispatch() {
                                     </div>
                                 </div>
                                 <div className="flex gap-2">
+                                    {selectedChallanNos.size > 0 && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-9"
+                                            onClick={handlePrintSelected}
+                                        >
+                                            <Printer className="w-4 h-4 mr-1" />
+                                            Print {selectedChallanNos.size} Selected
+                                        </Button>
+                                    )}
                                     <Button
                                         variant="ghost"
                                         size="sm"
@@ -1019,6 +1246,17 @@ export function Dispatch() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
+                                        <TableHead className="w-[30px]">
+                                            <input
+                                                type="checkbox"
+                                                checked={filteredDispatches.length > 0 && filteredDispatches.every(d => selectedChallanNos.has(d.challanNo))}
+                                                onChange={e => {
+                                                    if (e.target.checked) setSelectedChallanNos(new Set(filteredDispatches.map(d => d.challanNo)));
+                                                    else setSelectedChallanNos(new Set());
+                                                }}
+                                                className="h-4 w-4 rounded border-gray-300"
+                                            />
+                                        </TableHead>
                                         <TableHead className="w-[30px]"></TableHead>
                                         <TableHead>Challan No</TableHead>
                                         <TableHead>Date</TableHead>
@@ -1033,13 +1271,13 @@ export function Dispatch() {
                                 <TableBody>
                                     {loadingDispatches ? (
                                         <TableRow>
-                                            <TableCell colSpan={9} className="h-24 text-center">
+                                            <TableCell colSpan={10} className="h-24 text-center">
                                                 Loading...
                                             </TableCell>
                                         </TableRow>
                                     ) : filteredDispatches.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                                                 No dispatches found
                                             </TableCell>
                                         </TableRow>
@@ -1052,6 +1290,22 @@ export function Dispatch() {
                                                         className="cursor-pointer hover:bg-muted/50"
                                                         onClick={() => setExpandedChallan(isExpanded ? null : d.challanNo)}
                                                     >
+                                                        <TableCell>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedChallanNos.has(d.challanNo)}
+                                                                onChange={e => {
+                                                                    e.stopPropagation();
+                                                                    setSelectedChallanNos(prev => {
+                                                                        const next = new Set(prev);
+                                                                        e.target.checked ? next.add(d.challanNo) : next.delete(d.challanNo);
+                                                                        return next;
+                                                                    });
+                                                                }}
+                                                                onClick={e => e.stopPropagation()}
+                                                                className="h-4 w-4 rounded border-gray-300"
+                                                            />
+                                                        </TableCell>
                                                         <TableCell>
                                                             {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                                                         </TableCell>
@@ -1096,7 +1350,7 @@ export function Dispatch() {
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={9} className="p-4">
+                                                            <TableCell colSpan={10} className="p-4">
                                                                 <div className="border rounded-md bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>

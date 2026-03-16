@@ -27,6 +27,7 @@ const BOOTSTRAP_KEYS = [
   'bobbins',
   'boxes',
   'roll_types',
+  'holo_production_per_hours',
   'cone_types',
   'wrappers',
   'settings',
@@ -47,6 +48,7 @@ const buildRawFromDb = (db) => ({
   lots: db?.lots || [],
   inbound_items: db?.inbound_items || [],
   roll_types: db?.rollTypes || [],
+  holo_production_per_hours: db?.holo_production_per_hours || [],
   cone_types: db?.cone_types || [],
   wrappers: db?.wrappers || [],
   issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
@@ -492,8 +494,8 @@ export const InventoryProvider = ({ children }) => {
     deleteSupplier: async (id) => { await api.deleteSupplier(id); await refreshDb(); },
 
     // Masters - Machines
-    createMachine: async (name, processType) => { await api.createMachine(name, processType); await refreshDb(); },
-    updateMachine: async (id, name, processType) => { await api.updateMachine(id, name, processType); await refreshDb(); },
+    createMachine: async (name, processType, spindle) => { await api.createMachine(name, processType, spindle); await refreshDb(); },
+    updateMachine: async (id, name, processType, spindle) => { await api.updateMachine(id, name, processType, spindle); await refreshDb(); },
     deleteMachine: async (id) => { await api.deleteMachine(id); await refreshDb(); },
 
     // Masters - Operators/Workers
@@ -510,6 +512,11 @@ export const InventoryProvider = ({ children }) => {
     createRollType: async (name, weight) => { await api.createRollType(name, weight); await refreshDb(); },
     updateRollType: async (id, name, weight) => { await api.updateRollType(id, name, weight); await refreshDb(); },
     deleteRollType: async (id) => { await api.deleteRollType(id); await refreshDb(); },
+
+    // Masters - Holo Production Per Hour
+    createHoloProductionPerHour: async (payload) => { await api.createHoloProductionPerHour(payload); await refreshDb(); },
+    updateHoloProductionPerHour: async (id, payload) => { await api.updateHoloProductionPerHour(id, payload); await refreshDb(); },
+    deleteHoloProductionPerHour: async (id) => { await api.deleteHoloProductionPerHour(id); await refreshDb(); },
 
     // Masters - ConeTypes
     createConeType: async (name, weight) => { await api.createConeType(name, weight); await refreshDb(); },

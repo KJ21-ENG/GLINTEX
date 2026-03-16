@@ -27,6 +27,7 @@ model Yarn {
   updatedByUserId String?
   issues    IssueToHoloMachine[]
   coningIssues IssueToConingMachine[]
+  holoProductionPerHours HoloProductionPerHour[]
 }
 
 model Cut {
@@ -40,6 +41,7 @@ model Cut {
   cutterIssues IssueToCutterMachine[]
   holoIssues   IssueToHoloMachine[]
   coningIssues IssueToConingMachine[]
+  holoProductionPerHours HoloProductionPerHour[]
 }
 
 model Twist {
@@ -116,6 +118,7 @@ model Machine {
   id                    String                  @id @default(cuid())
   name                  String
   processType           String                  @default("all")
+  spindle               Int?
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @default(now()) @updatedAt
   createdByUserId       String?
@@ -233,6 +236,20 @@ model ReceiveFromHoloMachinePieceTotal {
   updatedByUserId String?
 }
 
+model HoloDailyMetric {
+  id              String   @id @default(cuid())
+  date            String
+  baseMachine     String
+  hours           Float?
+  wastage         Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+
+  @@unique([date, baseMachine])
+}
+
 model RollType {
   id        String   @id @default(cuid())
   name      String   @unique
@@ -242,6 +259,23 @@ model RollType {
   createdByUserId String?
   updatedByUserId String?
   receiveRows ReceiveFromHoloMachineRow[]
+}
+
+model HoloProductionPerHour {
+  id                  String   @id @default(cuid())
+  yarnId              String
+  cutId               String?
+  cutMatcher          String
+  productionPerHourKg Float
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now()) @updatedAt
+  createdByUserId     String?
+  updatedByUserId     String?
+  yarn                Yarn     @relation(fields: [yarnId], references: [id])
+  cut                 Cut?     @relation(fields: [cutId], references: [id])
+
+  @@unique([yarnId, cutMatcher])
+  @@index([cutId])
 }
 
 model ConeType {

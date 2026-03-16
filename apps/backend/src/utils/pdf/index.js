@@ -10,6 +10,7 @@ import { generateHoloReceivePdf } from './holoReceivePdf.js';
 import { generateConingIssuePdf } from './coningIssuePdf.js';
 import { generateConingReceivePdf } from './coningReceivePdf.js';
 import { generateProductionDailyExportPdf } from './productionDailyExportPdf.js';
+import { generateHoloWeeklyExportPdf } from './holoWeeklyExportPdf.js';
 
 /**
  * Generate summary PDF based on stage and type
@@ -47,4 +48,5 @@ export {
     generateConingIssuePdf,
     generateConingReceivePdf,
     generateProductionDailyExportPdf,
+    generateHoloWeeklyExportPdf,
 };

@@ -32,6 +32,7 @@ export function Masters() {
         createOperator, updateOperator, deleteOperator,
         createBobbin, updateBobbin, deleteBobbin,
         createRollType, updateRollType, deleteRollType,
+        createHoloProductionPerHour, updateHoloProductionPerHour, deleteHoloProductionPerHour,
         createConeType, updateConeType, deleteConeType,
         createWrapper, updateWrapper, deleteWrapper,
         createBox, updateBox, deleteBox,
@@ -64,6 +65,7 @@ export function Masters() {
             case 'workers': return <WorkersMaster data={db.workers || []} onCreate={createOperator} onUpdate={updateOperator} onDelete={deleteOperator} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'holoProductionPerHour': return <HoloProductionPerHourCrud data={db.holo_production_per_hours || []} yarns={db.yarns || []} cuts={db.cuts || []} onCreate={createHoloProductionPerHour} onUpdate={updateHoloProductionPerHour} onDelete={deleteHoloProductionPerHour} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
@@ -112,6 +114,7 @@ export function Masters() {
                         <TabButton id="yarns" label="Yarns" />
                         <TabButton id="twists" label="Twists" />
                         <TabButton id="rollTypes" label="Roll Types" />
+                        <TabButton id="holoProductionPerHour" label="Production Per Hour" />
 
                         <SectionDivider label="Coning" />
                         <TabButton id="coneTypes" label="Cone Types" />
@@ -397,14 +400,155 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
     )
 }
 
+function HoloProductionPerHourCrud({ data, yarns, cuts, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const [search, setSearch] = useState('');
+    const [newYarnId, setNewYarnId] = useState('');
+    const [newCutId, setNewCutId] = useState('ANY');
+    const [newRate, setNewRate] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editYarnId, setEditYarnId] = useState('');
+    const [editCutId, setEditCutId] = useState('ANY');
+    const [editRate, setEditRate] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+
+    const yarnOptions = [
+        { value: '', label: 'Select Yarn' },
+        ...(yarns || []).map((yarn) => ({ value: yarn.id, label: yarn.name })),
+    ];
+    const cutOptions = [
+        { value: 'ANY', label: 'ANY' },
+        ...(cuts || []).map((cut) => ({ value: cut.id, label: cut.name })),
+    ];
+
+    const filtered = (data || []).filter((item) => {
+        const yarnName = item.yarn?.name || '';
+        const cutName = item.cut?.name || item.cutMatcher || 'ANY';
+        return `${yarnName} ${cutName}`.toLowerCase().includes(search.toLowerCase());
+    });
+
+    const handleCreate = async () => {
+        if (!allowCreate) return;
+        const rate = Number(newRate);
+        if (!newYarnId || !Number.isFinite(rate) || rate <= 0) return;
+        await onCreate({
+            yarnId: newYarnId,
+            cutId: newCutId === 'ANY' ? '' : newCutId,
+            productionPerHourKg: rate,
+        });
+        setNewYarnId('');
+        setNewCutId('ANY');
+        setNewRate('');
+    };
+
+    const handleUpdate = async (id) => {
+        if (!allowEdit) return;
+        const rate = Number(editRate);
+        if (!editYarnId || !Number.isFinite(rate) || rate <= 0) return;
+        await onUpdate(id, {
+            yarnId: editYarnId,
+            cutId: editCutId === 'ANY' ? '' : editCutId,
+            productionPerHourKg: rate,
+        });
+        setEditingId(null);
+    };
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle>Holo Production Per Hour</CardTitle>
+                <div className="relative w-full sm:w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_180px_auto] gap-2">
+                    <Select value={newYarnId} onChange={e => setNewYarnId(e.target.value)} options={yarnOptions} searchable={false} disabled={!allowCreate} />
+                    <Select value={newCutId} onChange={e => setNewCutId(e.target.value)} options={cutOptions} searchable={false} disabled={!allowCreate} />
+                    <Input placeholder="Rate (kg)" type="number" step="0.001" value={newRate} onChange={e => setNewRate(e.target.value)} disabled={!allowCreate} />
+                    <Button onClick={handleCreate} disabled={loading || !newYarnId || !newRate || !allowCreate}><Plus className="w-4 h-4 mr-2" /> Add</Button>
+                </div>
+
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Yarn</TableHead>
+                                <TableHead>Cut</TableHead>
+                                <TableHead className="text-right">Rate (kg)</TableHead>
+                                <TableHead>Added By</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>
+                                        {editingId === item.id
+                                            ? <Select value={editYarnId} onChange={e => setEditYarnId(e.target.value)} options={yarnOptions} searchable={false} disabled={!allowEdit} />
+                                            : (item.yarn?.name || '—')}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id
+                                            ? <Select value={editCutId} onChange={e => setEditCutId(e.target.value)} options={cutOptions} searchable={false} disabled={!allowEdit} />
+                                            : (item.cut?.name || 'ANY')}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id
+                                            ? <Input type="number" step="0.001" value={editRate} onChange={e => setEditRate(e.target.value)} className="h-8 w-28 ml-auto" disabled={!allowEdit} />
+                                            : formatKg(item.productionPerHourKg)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => {
+                                                        setEditingId(item.id);
+                                                        setEditYarnId(item.yarnId || '');
+                                                        setEditCutId(item.cutId || 'ANY');
+                                                        setEditRate(item.productionPerHourKg);
+                                                    }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
 // New component for Machines with processType support
 function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
     const [newProcessType, setNewProcessType] = useState('all');
+    const [newSpindle, setNewSpindle] = useState('');
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
     const [editProcessType, setEditProcessType] = useState('all');
+    const [editSpindle, setEditSpindle] = useState('');
     const allowCreate = !!canCreate;
     const allowEdit = !!canEdit;
     const allowDelete = !!canDelete;
@@ -414,15 +558,16 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
     const handleCreate = async () => {
         if (!allowCreate) return;
         if (!newName.trim()) return;
-        await onCreate(newName, newProcessType);
+        await onCreate(newName, newProcessType, newSpindle === '' ? null : Number(newSpindle));
         setNewName('');
         setNewProcessType('all');
+        setNewSpindle('');
     }
 
     const handleUpdate = async (id) => {
         if (!allowEdit) return;
         if (!editName.trim()) return;
-        await onUpdate(id, editName, editProcessType);
+        await onUpdate(id, editName, editProcessType, editSpindle === '' ? null : Number(editSpindle));
         setEditingId(null);
     }
 
@@ -448,6 +593,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                         searchable={false}
                         disabled={!allowCreate}
                     />
+                    <Input placeholder="Spindle" type="number" min="0" step="1" value={newSpindle} onChange={e => setNewSpindle(e.target.value)} className="w-full sm:w-28" disabled={!allowCreate} />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Add</Button>
                 </div>
 
@@ -457,13 +603,14 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Process</TableHead>
+                                <TableHead className="text-right">Spindle</TableHead>
                                 <TableHead>Added By</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -485,6 +632,11 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                             </span>
                                         )}
                                     </TableCell>
+                                    <TableCell className="text-right">
+                                        {editingId === item.id
+                                            ? <Input type="number" min="0" step="1" value={editSpindle} onChange={e => setEditSpindle(e.target.value)} className="h-8 w-24 ml-auto" disabled={!allowEdit} />
+                                            : (item.spindle ?? '—')}
+                                    </TableCell>
                                     <TableCell>
                                         <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
                                     </TableCell>
@@ -499,7 +651,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                         ) : (
                                             <div className="flex justify-end gap-1">
                                                 <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
-                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all'); setEditSpindle(item.spindle ?? '') }}><Edit2 className="w-4 h-4" /></Button>
                                                 </DisabledWithTooltip>
                                                 <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
                                                     <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
@@ -523,6 +675,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                 <div className="space-y-2">
                                     <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Machine Name" disabled={!allowEdit} />
                                     <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
+                                    <Input type="number" min="0" step="1" value={editSpindle} onChange={e => setEditSpindle(e.target.value)} placeholder="Spindle" disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
                                         <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
                                             <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
@@ -535,10 +688,11 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                     <div>
                                         <span className="font-medium">{item.name}</span>
                                         <span className="text-xs text-muted-foreground ml-2">({PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'})</span>
+                                        <span className="text-xs text-muted-foreground ml-2">Spindle: {item.spindle ?? '—'}</span>
                                     </div>
                                     <div className="flex gap-1">
                                         <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
-                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all') }}><Edit2 className="w-4 h-4" /></Button>
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name); setEditProcessType(item.processType || 'all'); setEditSpindle(item.spindle ?? '') }}><Edit2 className="w-4 h-4" /></Button>
                                         </DisabledWithTooltip>
                                         <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
                                             <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>

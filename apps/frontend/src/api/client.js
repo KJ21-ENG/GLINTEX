@@ -247,9 +247,9 @@ export async function createSupplier(name) { return await request('/api/supplier
 export async function deleteSupplier(id) { return await request(`/api/suppliers/${id}`, { method: 'DELETE' }); }
 export async function updateSupplier(id, name) { return await request(`/api/suppliers/${id}`, { method: 'PUT', body: { name } }); }
 export async function listMachines() { return await request('/api/machines'); }
-export async function createMachine(name, processType = 'all') { return await request('/api/machines', { method: 'POST', body: { name, processType } }); }
+export async function createMachine(name, processType = 'all', spindle = null) { return await request('/api/machines', { method: 'POST', body: { name, processType, spindle } }); }
 export async function deleteMachine(id) { return await request(`/api/machines/${id}`, { method: 'DELETE' }); }
-export async function updateMachine(id, name, processType) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name, processType } }); }
+export async function updateMachine(id, name, processType, spindle = null) { return await request(`/api/machines/${id}`, { method: 'PUT', body: { name, processType, spindle } }); }
 export async function listOperators() { return await request('/api/operators'); }
 export async function createOperator(name, role = 'operator', processType = 'all') { return await request('/api/operators', { method: 'POST', body: { name, role, processType } }); }
 export async function deleteOperator(id) { return await request(`/api/operators/${id}`, { method: 'DELETE' }); }
@@ -262,6 +262,10 @@ export async function listRollTypes() { return await request('/api/roll_types');
 export async function createRollType(name, weight) { return await request('/api/roll_types', { method: 'POST', body: { name, weight } }); }
 export async function deleteRollType(id) { return await request(`/api/roll_types/${id}`, { method: 'DELETE' }); }
 export async function updateRollType(id, name, weight) { return await request(`/api/roll_types/${id}`, { method: 'PUT', body: { name, weight } }); }
+export async function listHoloProductionPerHours() { return await request('/api/holo_production_per_hours'); }
+export async function createHoloProductionPerHour(payload) { return await request('/api/holo_production_per_hours', { method: 'POST', body: payload }); }
+export async function updateHoloProductionPerHour(id, payload) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'PUT', body: payload }); }
+export async function deleteHoloProductionPerHour(id) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'DELETE' }); }
 export async function listConeTypes() { return await request('/api/cone_types'); }
 export async function createConeType(name, weight) { return await request('/api/cone_types', { method: 'POST', body: { name, weight } }); }
 export async function deleteConeType(id) { return await request(`/api/cone_types/${id}`, { method: 'DELETE' }); }
@@ -364,6 +368,13 @@ export async function getProductionReportDetails(params = {}) {
   const query = new URLSearchParams(params).toString();
   return await request(`/api/reports/production/details${query ? '?' + query : ''}`);
 }
+export async function getHoloProductionMetrics(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/reports/production/holo-metrics${query ? '?' + query : ''}`);
+}
+export async function saveHoloProductionMetrics(entries = []) {
+  return await request('/api/reports/production/holo-metrics', { method: 'PUT', body: { entries } });
+}
 
 // Summary
 export async function getSummary(stage, type, date) {
@@ -401,13 +412,17 @@ async function downloadBlobResponse(path, fallbackFilename, options = {}) {
     }
     const raw = await res.text();
     let message = raw;
+    let parsed = null;
     try {
-      const parsed = JSON.parse(raw);
+      parsed = JSON.parse(raw);
       message = parsed.error || parsed.message || message;
     } catch (_) { }
     if (!message) message = `API GET ${path} failed with ${res.status}`;
     const error = new Error(message);
     error.status = res.status;
+    if (parsed && typeof parsed === 'object') {
+      error.details = parsed;
+    }
     throw error;
   }
 
@@ -441,6 +456,16 @@ export async function downloadProductionDailyExport({ process, from, to, signal 
   const fallbackFilename = from && to && from !== to
     ? `production_daily_${process}_${from}_to_${to}.zip`
     : `production_daily_${process}_${from || to || 'export'}.pdf`;
+  await downloadBlobResponse(path, fallbackFilename, { signal });
+}
+export async function downloadProductionWeeklyExport({ process, from, to, signal }) {
+  const params = new URLSearchParams({
+    process: String(process || ''),
+    from: String(from || ''),
+    to: String(to || ''),
+  });
+  const path = `/api/reports/production/export/weekly?${params.toString()}`;
+  const fallbackFilename = `production_weekly_${process}_${from || 'from'}_to_${to || 'to'}.pdf`;
   await downloadBlobResponse(path, fallbackFilename, { signal });
 }
 
@@ -541,6 +566,10 @@ export default {
   createRollType,
   deleteRollType,
   updateRollType,
+  listHoloProductionPerHours,
+  createHoloProductionPerHour,
+  updateHoloProductionPerHour,
+  deleteHoloProductionPerHour,
   listBoxes,
   createBox,
   deleteBox,
@@ -562,4 +591,7 @@ export default {
   barcodeImageUrl,
   downloadSummaryPdf,
   downloadProductionDailyExport,
+  downloadProductionWeeklyExport,
+  getHoloProductionMetrics,
+  saveHoloProductionMetrics,
 };

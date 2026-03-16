@@ -26,6 +26,7 @@ export function normalizeDb(raw) {
   const lots = ensureArr(raw?.lots);
   const inbound_items = ensureArr(raw?.inbound_items);
   const rollTypes = ensureArr(raw?.roll_types);
+  const holoProductionPerHours = ensureArr(raw?.holo_production_per_hours);
   const coneTypes = ensureArr(raw?.cone_types);
   const wrappers = ensureArr(raw?.wrappers);
   const issueBalances = raw?.issue_balances && typeof raw.issue_balances === 'object'
@@ -78,6 +79,7 @@ export function normalizeDb(raw) {
     lots,
     inbound_items,
     rollTypes,
+    holo_production_per_hours: holoProductionPerHours,
     cone_types: coneTypes,
     wrappers,
     issue_to_cutter_machine: issueToCutterMachine,

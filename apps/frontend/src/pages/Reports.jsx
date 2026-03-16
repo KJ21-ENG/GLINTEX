@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../api/client';
+import { useInventory } from '../context/InventoryContext';
 import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
     Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Badge
 } from '../components/ui';
-import { formatKg, formatDateDDMMYYYY, todayISO, getInclusiveUtcDayRange } from '../utils';
+import { formatKg, formatDateDDMMYYYY, todayISO, getInclusiveUtcDayRange, getSortedBaseMachineNames } from '../utils';
 import {
     BarChart3, Search, ChevronDown, ChevronRight,
     Package, Truck, Factory, Clock, Users, Gauge,
@@ -49,6 +50,49 @@ const STAGE_LABELS = {
 };
 
 const MAX_DAILY_EXPORT_RANGE_DAYS = 7;
+
+function buildHoloMetricsDraft({ from, to, baseMachines, savedRows = [] }) {
+    const dates = [];
+    if (from && to && from <= to) {
+        const current = new Date(`${from}T00:00:00Z`);
+        const end = new Date(`${to}T00:00:00Z`);
+        while (current.getTime() <= end.getTime()) {
+            dates.push(current.toISOString().slice(0, 10));
+            current.setUTCDate(current.getUTCDate() + 1);
+        }
+    }
+
+    const savedMap = new Map((savedRows || []).map((row) => [`${row.date}::${row.baseMachine}`, row]));
+    const draft = [];
+    dates.forEach((date) => {
+        baseMachines.forEach((baseMachine) => {
+            const saved = savedMap.get(`${date}::${baseMachine}`);
+            draft.push({
+                date,
+                baseMachine,
+                hours: saved && saved.hours !== null && saved.hours !== undefined ? String(saved.hours) : '',
+                wastage: saved && saved.wastage !== null && saved.wastage !== undefined ? String(saved.wastage) : '',
+            });
+        });
+    });
+    return draft;
+}
+
+function formatWeeklyExportError(err) {
+    const details = err?.details?.details || err?.details;
+    if (details?.error === 'missing_spindle' && Array.isArray(details.machines)) {
+        return details.machines
+            .map((entry) => `${entry.baseMachine}${entry.sections?.length ? ` (${entry.sections.join(', ')})` : ''}`)
+            .join('\n');
+    }
+    if (details?.error === 'missing_production_per_hour' && Array.isArray(details.unresolved)) {
+        return details.unresolved
+            .slice(0, 12)
+            .map((entry) => `${formatDateDDMMYYYY(entry.date)} | ${entry.baseMachine} | ${entry.yarn} | ${entry.cut}`)
+            .join('\n');
+    }
+    return err?.message || 'Failed to export weekly production report';
+}
 
 function BarcodeHistory() {
     const [barcode, setBarcode] = useState('');
@@ -278,6 +322,7 @@ function BarcodeHistory() {
 }
 
 function ProductionReport() {
+    const { db } = useInventory();
     const [process, setProcess] = useState('cutter');
     const [view, setView] = useState('machine');
     const [dateFrom, setDateFrom] = useState(() => {
@@ -295,11 +340,24 @@ function ProductionReport() {
     const [exporting, setExporting] = useState(false);
     const [exportError, setExportError] = useState('');
     const exportAbortRef = useRef(null);
+    const [metricsModalOpen, setMetricsModalOpen] = useState(false);
+    const [metricsDraftRows, setMetricsDraftRows] = useState([]);
+    const [metricsLoading, setMetricsLoading] = useState(false);
+    const [metricsSaving, setMetricsSaving] = useState(false);
+    const [metricsError, setMetricsError] = useState('');
+    const [metricsLoadedRange, setMetricsLoadedRange] = useState({ from: '', to: '' });
+    const [weeklyModalOpen, setWeeklyModalOpen] = useState(false);
+    const [weeklyFrom, setWeeklyFrom] = useState('');
+    const [weeklyTo, setWeeklyTo] = useState('');
+    const [weeklyExporting, setWeeklyExporting] = useState(false);
+    const [weeklyError, setWeeklyError] = useState('');
 
     // Expansion state
     const [expandedRows, setExpandedRows] = useState(new Set()); // Set of keys
     const [detailsCache, setDetailsCache] = useState(new Map()); // Map key -> data
     const [loadingDetails, setLoadingDetails] = useState(new Set()); // Set of keys being fetched
+
+    const holoBaseMachines = useMemo(() => getSortedBaseMachineNames(db?.machines || [], { processType: 'holo', includeShared: false }), [db?.machines]);
 
     const getDefaultExportProcess = () => (
         process === 'cutter' || process === 'holo' || process === 'coning'
@@ -324,6 +382,13 @@ function ProductionReport() {
         setExportError('');
     };
 
+    const openWeeklyModal = () => {
+        setWeeklyFrom(dateFrom || '');
+        setWeeklyTo(dateTo || '');
+        setWeeklyError('');
+        setWeeklyModalOpen(true);
+    };
+
     const validateExportForm = () => {
         if (!exportFrom || !exportTo) return 'From Date and To Date are required.';
         if (exportProcess === 'all') return 'Daily export supports only Cutter, Holo, or Coning.';
@@ -333,6 +398,62 @@ function ProductionReport() {
             return `Daily production export is limited to ${MAX_DAILY_EXPORT_RANGE_DAYS} days at a time.`;
         }
         return '';
+    };
+
+    const validateWeeklyExportForm = () => {
+        if (!weeklyFrom || !weeklyTo) return 'From Date and To Date are required.';
+        if (weeklyFrom > weeklyTo) return 'From Date cannot be later than To Date.';
+        return '';
+    };
+
+    const loadHoloMetricsDraft = async (from, to) => {
+        setMetricsLoading(true);
+        setMetricsError('');
+        try {
+            const res = await api.getHoloProductionMetrics({ from, to });
+            const draft = buildHoloMetricsDraft({
+                from,
+                to,
+                baseMachines: holoBaseMachines,
+                savedRows: res?.rows || [],
+            });
+            setMetricsDraftRows(draft);
+            setMetricsLoadedRange({ from, to });
+        } catch (err) {
+            setMetricsError(err.message || 'Failed to load Holo hours and wastage.');
+        } finally {
+            setMetricsLoading(false);
+        }
+    };
+
+    const saveHoloMetricsDraft = async () => {
+        if (metricsDraftRows.length === 0) return;
+        setMetricsSaving(true);
+        setMetricsError('');
+        try {
+            await api.saveHoloProductionMetrics(metricsDraftRows.map((row) => ({
+                date: row.date,
+                baseMachine: row.baseMachine,
+                hours: row.hours,
+                wastage: row.wastage,
+            })));
+        } catch (err) {
+            setMetricsError(err.message || 'Failed to save Holo hours and wastage.');
+            throw err;
+        } finally {
+            setMetricsSaving(false);
+        }
+    };
+
+    const openMetricsModal = async () => {
+        const validationError = validateExportForm();
+        if (validationError) {
+            setExportError(validationError);
+            return;
+        }
+        if (exportProcess !== 'holo') return;
+        setMetricsModalOpen(true);
+        await loadHoloMetricsDraft(exportFrom, exportTo);
     };
 
     async function loadReport() {
@@ -483,6 +604,29 @@ function ProductionReport() {
         }
     };
 
+    const handleWeeklyExport = async () => {
+        const validationError = validateWeeklyExportForm();
+        if (validationError) {
+            setWeeklyError(validationError);
+            return;
+        }
+
+        setWeeklyError('');
+        setWeeklyExporting(true);
+        try {
+            await api.downloadProductionWeeklyExport({
+                process: 'holo',
+                from: weeklyFrom,
+                to: weeklyTo,
+            });
+            setWeeklyModalOpen(false);
+        } catch (err) {
+            setWeeklyError(formatWeeklyExportError(err));
+        } finally {
+            setWeeklyExporting(false);
+        }
+    };
+
     return (
         <div className="space-y-6">
             {/* Filters */}
@@ -524,7 +668,7 @@ function ProductionReport() {
                                 onChange={e => setDateTo(e.target.value)}
                             />
                         </div>
-                        <div className="flex items-end sm:ml-auto">
+                        <div className="flex items-end sm:ml-auto gap-2">
                             <Button
                                 type="button"
                                 variant="outline"
@@ -533,6 +677,15 @@ function ProductionReport() {
                             >
                                 <Download className="w-4 h-4 mr-2" />
                                 Daily Export
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full sm:w-auto"
+                                onClick={openWeeklyModal}
+                            >
+                                <Download className="w-4 h-4 mr-2" />
+                                Weekly Export
                             </Button>
                         </div>
                     </div>
@@ -955,12 +1108,152 @@ function ProductionReport() {
                                 {exportError}
                             </div>
                         )}
+                        {exportProcess === 'holo' && (
+                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 space-y-2">
+                                <div className="font-medium text-slate-900">Holo Hours & Wastage</div>
+                                <p>
+                                    Holo daily metrics are captured per date and base machine. Saved values are reused by the weekly Holo report.
+                                </p>
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <Button type="button" variant="outline" onClick={openMetricsModal} disabled={exporting || metricsLoading}>
+                                        Add Hours & Wastage
+                                    </Button>
+                                    {metricsLoadedRange.from === exportFrom && metricsLoadedRange.to === exportTo && metricsDraftRows.length > 0 && (
+                                        <span className="text-xs text-muted-foreground self-center">
+                                            {metricsDraftRows.length} date/machine entries loaded for this range.
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                         <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
                             <Button variant="outline" onClick={closeExportModal}>
                                 {exporting ? 'Cancel Export' : 'Cancel'}
                             </Button>
                             <Button onClick={handleDailyExport} disabled={exporting}>
                                 {exporting ? 'Preparing Download...' : 'Export PDF / ZIP'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={metricsModalOpen} onOpenChange={setMetricsModalOpen}>
+                <DialogContent
+                    title="Holo Hours & Wastage"
+                    onOpenChange={setMetricsModalOpen}
+                    className="max-w-4xl"
+                >
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                            Enter hours and wastage for every date and Holo base machine in the selected range. Leave values blank to keep them missing.
+                        </p>
+                        <div className="text-sm text-muted-foreground">
+                            Range: {exportFrom ? formatDateDDMMYYYY(exportFrom) : '—'} to {exportTo ? formatDateDDMMYYYY(exportTo) : '—'}
+                        </div>
+                        {metricsError && (
+                            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                {metricsError}
+                            </div>
+                        )}
+                        {metricsLoading ? (
+                            <div className="py-10 text-center text-sm text-muted-foreground">Loading Holo metrics...</div>
+                        ) : metricsDraftRows.length === 0 ? (
+                            <div className="py-10 text-center text-sm text-muted-foreground">
+                                No Holo base machines are available in masters for the selected range.
+                            </div>
+                        ) : (
+                            <div className="rounded-md border max-h-[60vh] overflow-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Machine</TableHead>
+                                            <TableHead className="text-right">Hours</TableHead>
+                                            <TableHead className="text-right">Wastage</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {metricsDraftRows.map((row, index) => (
+                                            <TableRow key={`${row.date}-${row.baseMachine}`}>
+                                                <TableCell>{formatDateDDMMYYYY(row.date)}</TableCell>
+                                                <TableCell>{row.baseMachine}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <Input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.01"
+                                                        value={row.hours}
+                                                        onChange={(e) => {
+                                                            const nextValue = e.target.value;
+                                                            setMetricsDraftRows(prev => prev.map((entry, entryIndex) => entryIndex === index ? { ...entry, hours: nextValue } : entry));
+                                                        }}
+                                                        className="h-8 w-24 ml-auto"
+                                                    />
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    <Input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.001"
+                                                        value={row.wastage}
+                                                        onChange={(e) => {
+                                                            const nextValue = e.target.value;
+                                                            setMetricsDraftRows(prev => prev.map((entry, entryIndex) => entryIndex === index ? { ...entry, wastage: nextValue } : entry));
+                                                        }}
+                                                        className="h-8 w-28 ml-auto"
+                                                    />
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                            <Button variant="outline" onClick={() => setMetricsModalOpen(false)}>Close</Button>
+                            <Button onClick={saveHoloMetricsDraft} disabled={metricsLoading || metricsSaving || metricsDraftRows.length === 0}>
+                                {metricsSaving ? 'Saving...' : 'Save Metrics'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={weeklyModalOpen} onOpenChange={setWeeklyModalOpen}>
+                <DialogContent
+                    title="Holo Weekly Export"
+                    onOpenChange={setWeeklyModalOpen}
+                    className="max-w-xl"
+                >
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                            Export a Holo weekly PDF for any date range. Missing daily metrics are treated as zero and will be called out in the PDF.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">From Date</label>
+                                <Input type="date" value={weeklyFrom} onChange={e => { setWeeklyFrom(e.target.value); setWeeklyError(''); }} disabled={weeklyExporting} />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">To Date</label>
+                                <Input type="date" value={weeklyTo} onChange={e => { setWeeklyTo(e.target.value); setWeeklyError(''); }} disabled={weeklyExporting} />
+                            </div>
+                        </div>
+                        {weeklyFrom && weeklyTo && weeklyFrom <= weeklyTo && (
+                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                Included dates: {formatDateDDMMYYYY(weeklyFrom)} to {formatDateDDMMYYYY(weeklyTo)}
+                            </div>
+                        )}
+                        {weeklyError && (
+                            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 whitespace-pre-line">
+                                {weeklyError}
+                            </div>
+                        )}
+                        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                            <Button variant="outline" onClick={() => setWeeklyModalOpen(false)} disabled={weeklyExporting}>Cancel</Button>
+                            <Button onClick={handleWeeklyExport} disabled={weeklyExporting}>
+                                {weeklyExporting ? 'Preparing Download...' : 'Download Weekly PDF'}
                             </Button>
                         </div>
                     </div>

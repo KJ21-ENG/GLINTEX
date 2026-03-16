@@ -19,9 +19,11 @@ import { deriveMaterialCodeFromItem, makeInboundBarcode, makeIssueBarcode, makeR
 import { createBackup, listBackups, getBackupPath, normalizeBackupTime, updateBackupScheduleTime } from '../utils/backup.js';
 import { getDiskUsage } from '../utils/diskSpace.js';
 import { createGoogleDriveAuthUrl, disconnectGoogleDrive, getGoogleDriveStatus, handleGoogleDriveCallback, listDriveBackups } from '../utils/googleDrive.js';
-import { generateSummaryPDF, generateProductionDailyExportPdf } from '../utils/pdf/index.js';
+import { generateSummaryPDF, generateProductionDailyExportPdf, generateHoloWeeklyExportPdf } from '../utils/pdf/index.js';
 import { buildProductionDailyExportData } from '../utils/pdf/productionDailyExportData.js';
-import { enumerateDatesInclusive, mapWithConcurrency, validateProductionDailyExportRequest } from '../utils/productionDailyExport.js';
+import { enumerateDatesInclusive, mapWithConcurrency, parseDateOnly, validateProductionDailyExportRequest } from '../utils/productionDailyExport.js';
+import { buildHoloWeeklyExportData } from '../utils/holoWeeklyExport.js';
+import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
 
@@ -187,6 +189,15 @@ function toInt(val) {
   if (num === null) return null;
   const rounded = Math.round(num);
   return Number.isFinite(rounded) ? rounded : null;
+}
+
+function normalizeCutMatcherValue(cutId) {
+  const normalized = String(cutId || '').trim();
+  return normalized || 'ANY';
+}
+
+function normalizeBaseMachineValue(value) {
+  return getBaseMachineName(String(value || '').trim());
 }
 
 // Round weight value to 3 decimal places for consistent storage
@@ -2753,6 +2764,7 @@ router.get('/api/bootstrap', async (req, res) => {
       bobbins: hasAnyReadPermission(req, ['receive.cutter', 'stock', 'opening_stock', 'masters']),
       boxes: hasAnyReadPermission(req, ['receive.cutter', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'box_transfer', 'masters']),
       roll_types: hasAnyReadPermission(req, ['receive.holo', 'stock', 'opening_stock', 'masters']),
+      holo_production_per_hours: hasReadPermission(req, 'masters'),
       cone_types: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
       wrappers: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
       settings: hasReadPermission(req, 'settings'),
@@ -2771,6 +2783,18 @@ router.get('/api/bootstrap', async (req, res) => {
     slices.bobbins = allowed.bobbins ? await prisma.bobbin.findMany() : [];
     slices.boxes = allowed.boxes ? await prisma.box.findMany() : [];
     slices.roll_types = allowed.roll_types ? await prisma.rollType.findMany() : [];
+    slices.holo_production_per_hours = allowed.holo_production_per_hours
+      ? await prisma.holoProductionPerHour.findMany({
+        include: {
+          yarn: true,
+          cut: true,
+        },
+        orderBy: [
+          { yarn: { name: 'asc' } },
+          { cutMatcher: 'asc' },
+        ],
+      })
+      : [];
     slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
     slices.settings = allowed.settings
@@ -2778,7 +2802,7 @@ router.get('/api/bootstrap', async (req, res) => {
       : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
-    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'cone_types', 'wrappers'];
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'cone_types', 'wrappers'];
     for (const key of masterSliceKeys) {
       if (slices[key] && slices[key].length > 0) {
         slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
@@ -10589,8 +10613,15 @@ router.put('/api/suppliers/:id', requireEditPermission('masters'), async (req, r
 router.get('/api/machines', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.machine.findMany()); });
 router.post('/api/machines', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
-  const { name, processType = 'all' } = req.body;
-  const machine = await prisma.machine.create({ data: { name, processType, ...actorCreateFields(actorUserId) } });
+  const { name, processType = 'all', spindle } = req.body;
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  const spindleValue = spindle === undefined || spindle === null || spindle === ''
+    ? null
+    : toNumber(spindle);
+  if (spindle !== undefined && spindle !== null && spindle !== '' && (!Number.isInteger(spindleValue) || spindleValue < 0)) {
+    return res.status(400).json({ error: 'spindle must be a non-negative integer' });
+  }
+  const machine = await prisma.machine.create({ data: { name, processType, spindle: spindleValue, ...actorCreateFields(actorUserId) } });
   await logCrudWithActor(req, { entityType: 'machine', entityId: machine.id, action: 'create', payload: machine });
   res.json(machine);
 });
@@ -10611,12 +10642,21 @@ router.put('/api/machines/:id', requireEditPermission('masters'), async (req, re
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
-    const { name, processType } = req.body;
+    const { name, processType, spindle } = req.body;
     if (!name) return res.status(400).json({ error: 'Missing name' });
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
     const data = { name };
     if (processType !== undefined) data.processType = processType;
+    if (spindle !== undefined) {
+      const spindleValue = spindle === null || spindle === ''
+        ? null
+        : toNumber(spindle);
+      if (spindle !== null && spindle !== '' && (!Number.isInteger(spindleValue) || spindleValue < 0)) {
+        return res.status(400).json({ error: 'spindle must be a non-negative integer' });
+      }
+      data.spindle = spindleValue;
+    }
     const updated = await prisma.machine.update({ where: { id }, data: { ...data, ...actorUpdateFields(actorUserId) } });
     await logCrudWithActor(req, {
       entityType: 'machine',
@@ -10629,6 +10669,8 @@ router.put('/api/machines/:id', requireEditPermission('masters'), async (req, re
         newName: updated.name,
         oldProcessType: existing.processType,
         newProcessType: updated.processType,
+        oldSpindle: existing.spindle,
+        newSpindle: updated.spindle,
       },
     });
     res.json(updated);
@@ -10836,6 +10878,124 @@ router.delete('/api/roll_types/:id', requireDeletePermission('masters'), async (
   } catch (err) {
     console.error('Failed to delete roll type', err);
     res.status(500).json({ error: err.message || 'Failed to delete roll type' });
+  }
+});
+
+// Holo production per hour master
+router.get('/api/holo_production_per_hours', requirePermission('masters', PERM_READ), async (req, res) => {
+  try {
+    const rows = await prisma.holoProductionPerHour.findMany({
+      include: {
+        yarn: true,
+        cut: true,
+      },
+      orderBy: [
+        { yarn: { name: 'asc' } },
+        { cutMatcher: 'asc' },
+      ],
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to list holo production per hour rows', err);
+    res.status(500).json({ error: err.message || 'Failed to list holo production per hour rows' });
+  }
+});
+router.post('/api/holo_production_per_hours', requirePermission('masters', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const yarnId = String(req.body?.yarnId || '').trim();
+    const cutId = String(req.body?.cutId || '').trim() || null;
+    const cutMatcher = normalizeCutMatcherValue(cutId);
+    const productionPerHourKg = toNumber(req.body?.productionPerHourKg);
+    if (!yarnId) return res.status(400).json({ error: 'yarnId is required' });
+    if (!Number.isFinite(productionPerHourKg) || productionPerHourKg <= 0) {
+      return res.status(400).json({ error: 'productionPerHourKg must be a positive number' });
+    }
+
+    const created = await prisma.holoProductionPerHour.create({
+      data: {
+        yarnId,
+        cutId,
+        cutMatcher,
+        productionPerHourKg,
+        ...actorCreateFields(actorUserId),
+      },
+      include: {
+        yarn: true,
+        cut: true,
+      },
+    });
+    await logCrudWithActor(req, { entityType: 'holo_production_per_hour', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create holo production per hour row', err);
+    const isUnique = err?.code === 'P2002' || String(err?.message || '').includes('Unique constraint');
+    res.status(isUnique ? 400 : 500).json({ error: isUnique ? 'A production-per-hour row already exists for this yarn/cut' : (err.message || 'Failed to create holo production per hour row') });
+  }
+});
+router.put('/api/holo_production_per_hours/:id', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const existing = await prisma.holoProductionPerHour.findUnique({ where: { id }, include: { yarn: true, cut: true } });
+    if (!existing) return res.status(404).json({ error: 'Production-per-hour row not found' });
+
+    const yarnId = String(req.body?.yarnId || '').trim();
+    const cutId = String(req.body?.cutId || '').trim() || null;
+    const cutMatcher = normalizeCutMatcherValue(cutId);
+    const productionPerHourKg = toNumber(req.body?.productionPerHourKg);
+    if (!yarnId) return res.status(400).json({ error: 'yarnId is required' });
+    if (!Number.isFinite(productionPerHourKg) || productionPerHourKg <= 0) {
+      return res.status(400).json({ error: 'productionPerHourKg must be a positive number' });
+    }
+
+    const updated = await prisma.holoProductionPerHour.update({
+      where: { id },
+      data: {
+        yarnId,
+        cutId,
+        cutMatcher,
+        productionPerHourKg,
+        ...actorUpdateFields(actorUserId),
+      },
+      include: {
+        yarn: true,
+        cut: true,
+      },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'holo_production_per_hour',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: {
+        oldYarnId: existing.yarnId,
+        newYarnId: updated.yarnId,
+        oldCutMatcher: existing.cutMatcher,
+        newCutMatcher: updated.cutMatcher,
+        oldProductionPerHourKg: existing.productionPerHourKg,
+        newProductionPerHourKg: updated.productionPerHourKg,
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update holo production per hour row', err);
+    const isUnique = err?.code === 'P2002' || String(err?.message || '').includes('Unique constraint');
+    res.status(isUnique ? 400 : 500).json({ error: isUnique ? 'A production-per-hour row already exists for this yarn/cut' : (err.message || 'Failed to update holo production per hour row') });
+  }
+});
+router.delete('/api/holo_production_per_hours/:id', requireDeletePermission('masters'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.holoProductionPerHour.findUnique({ where: { id }, include: { yarn: true, cut: true } });
+    if (!existing) return res.status(404).json({ error: 'Production-per-hour row not found' });
+    await prisma.holoProductionPerHour.delete({ where: { id } });
+    await logCrudWithActor(req, { entityType: 'holo_production_per_hour', entityId: id, action: 'delete', payload: existing });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete holo production per hour row', err);
+    res.status(500).json({ error: err.message || 'Failed to delete holo production per hour row' });
   }
 });
 
@@ -15229,6 +15389,129 @@ router.get('/api/reports/production/details', requirePermission('reports', PERM_
   }
 });
 
+router.get('/api/reports/production/holo-metrics', requirePermission('reports', PERM_READ), async (req, res) => {
+  try {
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+    const fromDate = parseDateOnly(from);
+    const toDate = parseDateOnly(to);
+    if (!fromDate || !toDate) {
+      return res.status(400).json({ error: 'from and to must be valid YYYY-MM-DD dates' });
+    }
+    if (fromDate.getTime() > toDate.getTime()) {
+      return res.status(400).json({ error: 'from date cannot be later than to date' });
+    }
+
+    const rows = await prisma.holoDailyMetric.findMany({
+      where: {
+        date: { gte: from, lte: to },
+      },
+      orderBy: [
+        { date: 'asc' },
+        { baseMachine: 'asc' },
+      ],
+    });
+    res.json({ ok: true, rows });
+  } catch (err) {
+    console.error('Failed to load holo daily metrics', err);
+    res.status(500).json({ error: err.message || 'Failed to load holo daily metrics' });
+  }
+});
+
+router.put('/api/reports/production/holo-metrics', requirePermission('reports', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const entriesRaw = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    if (entriesRaw.length === 0) {
+      return res.status(400).json({ error: 'entries must be a non-empty array' });
+    }
+
+    const normalizedMap = new Map();
+    for (const entry of entriesRaw) {
+      const date = String(entry?.date || '').trim();
+      const baseMachine = normalizeBaseMachineValue(entry?.baseMachine);
+      if (!date || !parseDateOnly(date)) {
+        return res.status(400).json({ error: 'Each entry must include a valid date' });
+      }
+      if (!baseMachine || baseMachine === 'Unassigned') {
+        return res.status(400).json({ error: 'Each entry must include a valid baseMachine' });
+      }
+
+      const hasHours = entry?.hours !== undefined && entry?.hours !== null && String(entry.hours).trim() !== '';
+      const hasWastage = entry?.wastage !== undefined && entry?.wastage !== null && String(entry.wastage).trim() !== '';
+      const hours = hasHours ? toNumber(entry.hours) : null;
+      const wastage = hasWastage ? toNumber(entry.wastage) : null;
+
+      if (hasHours && (!Number.isFinite(hours) || hours < 0)) {
+        return res.status(400).json({ error: 'hours must be a non-negative number' });
+      }
+      if (hasWastage && (!Number.isFinite(wastage) || wastage < 0)) {
+        return res.status(400).json({ error: 'wastage must be a non-negative number' });
+      }
+
+      normalizedMap.set(`${date}::${baseMachine}`, { date, baseMachine, hours, wastage });
+    }
+
+    const results = [];
+    await prisma.$transaction(async (tx) => {
+      for (const entry of normalizedMap.values()) {
+        const existing = await tx.holoDailyMetric.findUnique({
+          where: {
+            date_baseMachine: {
+              date: entry.date,
+              baseMachine: entry.baseMachine,
+            },
+          },
+        });
+
+        if (entry.hours === null && entry.wastage === null) {
+          if (existing) {
+            await tx.holoDailyMetric.delete({ where: { id: existing.id } });
+            results.push({ ...existing, deleted: true });
+          }
+          continue;
+        }
+
+        if (existing) {
+          const updated = await tx.holoDailyMetric.update({
+            where: { id: existing.id },
+            data: {
+              hours: entry.hours,
+              wastage: entry.wastage,
+              ...actorUpdateFields(actorUserId),
+            },
+          });
+          results.push(updated);
+          continue;
+        }
+
+        const created = await tx.holoDailyMetric.create({
+          data: {
+            date: entry.date,
+            baseMachine: entry.baseMachine,
+            hours: entry.hours,
+            wastage: entry.wastage,
+            ...actorCreateFields(actorUserId),
+          },
+        });
+        results.push(created);
+      }
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'holo_daily_metric',
+      entityId: 'batch',
+      action: 'upsert',
+      payload: { entries: Array.from(normalizedMap.values()) },
+    });
+
+    res.json({ ok: true, rows: results });
+  } catch (err) {
+    console.error('Failed to save holo daily metrics', err);
+    res.status(500).json({ error: err.message || 'Failed to save holo daily metrics' });
+  }
+});
+
 router.get('/api/reports/production/export/daily', requirePermission('reports', PERM_READ), async (req, res) => {
   let archive = null;
   let clientAborted = false;
@@ -15330,6 +15613,37 @@ router.get('/api/reports/production/export/daily', requirePermission('reports', 
       return;
     }
     res.status(500).json({ error: err.message || 'Failed to export daily production report' });
+  }
+});
+
+router.get('/api/reports/production/export/weekly', requirePermission('reports', PERM_READ), async (req, res) => {
+  try {
+    const process = String(req.query.process || '').trim().toLowerCase();
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+    if (process !== 'holo') {
+      return res.status(400).json({ error: 'Weekly production export supports only holo process' });
+    }
+
+    const exportData = await buildHoloWeeklyExportData({
+      from,
+      to,
+      helpers: {
+        parseRefs,
+        resolveHoloIssueDetails,
+      },
+    });
+    const pdfBuffer = await generateHoloWeeklyExportPdf(exportData);
+    const filename = `production_weekly_${process}_${from}_to_${to}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Failed to export weekly production report', err);
+    const statusCode = Number(err?.statusCode || 500);
+    const payload = { error: err.message || 'Failed to export weekly production report' };
+    if (err?.details) payload.details = err.details;
+    res.status(statusCode).json(payload);
   }
 });
 

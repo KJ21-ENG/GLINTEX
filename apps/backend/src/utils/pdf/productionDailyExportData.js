@@ -41,6 +41,10 @@ function createBuilderContext(helpers = {}) {
   };
 }
 
+export function createProductionExportBuilderContext(helpers = {}) {
+  return createBuilderContext(helpers);
+}
+
 function asTrimmedText(value, fallback = '') {
   const text = String(value || '').trim();
   return text || fallback;
@@ -59,6 +63,10 @@ async function getDefaultDb() {
     prismaModulePromise = import('../../lib/prisma.js').then((module) => module.default);
   }
   return prismaModulePromise;
+}
+
+export async function getProductionExportDb() {
+  return await getDefaultDb();
 }
 
 function roundTo3Decimals(value) {
@@ -228,6 +236,10 @@ async function loadHoloRows({ date, context, db }) {
     ],
   });
 
+  return await buildNormalizedHoloRows({ rows, context, db });
+}
+
+export async function buildNormalizedHoloRows({ rows = [], context, db }) {
   const itemNameMap = await getItemNameMap(db, rows.map((row) => row.issue?.itemId));
 
   const resolveIssueTrace = async (issue) => {
@@ -260,6 +272,7 @@ async function loadHoloRows({ date, context, db }) {
     const tare = asNumber(row.tareWeight);
     const net = asNumber(row.rollWeight);
     normalizedRows.push({
+      date: asTrimmedText(row.date || row.issue?.date),
       yarn: asTrimmedText(row.issue?.yarn?.name || trace?.yarnName),
       item: asTrimmedText(itemNameMap.get(row.issue?.itemId), 'Unassigned'),
       cut: asTrimmedText(row.issue?.cut?.name || trace?.cutName),
@@ -356,6 +369,22 @@ const PROCESS_LOADERS = {
   coning: loadConingRows,
 };
 
+export function sortProductionExportRows(rows = []) {
+  return [...rows].sort((a, b) => {
+    const yarnSort = sortByLabel(a.yarn, b.yarn);
+    if (yarnSort !== 0) return yarnSort;
+    const itemSort = sortByLabel(a.item, b.item);
+    if (itemSort !== 0) return itemSort;
+    const cutSort = sortByLabel(a.cut, b.cut);
+    if (cutSort !== 0) return cutSort;
+    const machineSort = sortByLabel(normalizeMachineLabel(a.machine), normalizeMachineLabel(b.machine));
+    if (machineSort !== 0) return machineSort;
+    const workerSort = sortByLabel(a.worker, b.worker);
+    if (workerSort !== 0) return workerSort;
+    return sortByLabel(a.rollType, b.rollType);
+  });
+}
+
 export async function buildProductionDailyExportData({ process, date, helpers = {}, db } = {}) {
   const normalizedProcess = String(process || '').trim().toLowerCase();
   const loader = PROCESS_LOADERS[normalizedProcess];
@@ -369,19 +398,7 @@ export async function buildProductionDailyExportData({ process, date, helpers = 
   const context = createBuilderContext(helpers);
   const activeDb = db || await getDefaultDb();
   const rows = await loader({ date, context, db: activeDb });
-  const sortedRows = rows.sort((a, b) => {
-    const yarnSort = sortByLabel(a.yarn, b.yarn);
-    if (yarnSort !== 0) return yarnSort;
-    const itemSort = sortByLabel(a.item, b.item);
-    if (itemSort !== 0) return itemSort;
-    const cutSort = sortByLabel(a.cut, b.cut);
-    if (cutSort !== 0) return cutSort;
-    const machineSort = sortByLabel(normalizeMachineLabel(a.machine), normalizeMachineLabel(b.machine));
-    if (machineSort !== 0) return machineSort;
-    const workerSort = sortByLabel(a.worker, b.worker);
-    if (workerSort !== 0) return workerSort;
-    return sortByLabel(a.rollType, b.rollType);
-  });
+  const sortedRows = sortProductionExportRows(rows);
 
   return {
     process: normalizedProcess,

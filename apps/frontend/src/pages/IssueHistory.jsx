@@ -1115,6 +1115,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           : 0));
       const takenBackWeight = Number(balance?.takeBackWeight ?? takeBackTotals.weight ?? 0);
       const netIssuedWeight = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takenBackWeight));
+      const wastageWeight = Number(process === 'cutter' ? (balance?.wastageWeight ?? 0) : 0);
       const takenBackCount = Number(takeBackTotals.count || 0);
       return {
         ...row,
@@ -1122,6 +1123,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         takenBackCount,
         originalIssuedWeight,
         netIssuedWeight,
+        ...(process === 'cutter' ? { wastageWeight } : {}),
       };
     });
 
@@ -1153,6 +1155,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.totalWeight || 0 },
         { id: 'takenBackWeight', label: 'Taken Back (kg)', kind: 'number', getValue: (r) => r.takenBackWeight || 0 },
         { id: 'netIssuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.netIssuedWeight ?? 0 },
+        { id: 'wastageWeight', label: 'Wastage (kg)', kind: 'number', getValue: (r) => r.wastageWeight || 0 },
       ];
     }
     if (process === 'holo') {
@@ -1516,6 +1519,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           twist: resolved.twistName,
           qty: r.count || 0,
           weight: formatKg(r.totalWeight),
+          wastageWeight: formatKg(r.wastageWeight || 0),
         };
       } else if (process === 'holo') {
         const resolved = resolveIssueTraceNames(r);
@@ -1562,6 +1566,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         { key: 'weight', header: 'Weight (kg)' },
         { key: 'takenBackWeight', header: 'Taken Back (kg)' },
         { key: 'netIssuedWeight', header: 'Net Issued (kg)' },
+        { key: 'wastageWeight', header: 'Wastage (kg)' },
         { key: 'barcode', header: 'Barcode' },
         { key: 'note', header: 'Note' },
       ];
@@ -1608,7 +1613,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
 
-  const emptyColSpan = process === 'cutter' ? 14 : process === 'holo' ? 18 : 17;
+  const emptyColSpan = process === 'cutter' ? 15 : process === 'holo' ? 18 : 17;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1752,6 +1757,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="flex items-center justify-between gap-2">
                       <span>Net Issued (kg)</span>
                       <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead className="text-right">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Wastage (kg)</span>
+                      <SheetColumnFilter column={columnFor('wastageWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
@@ -2007,6 +2018,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           <TableCell>{formatKg(r.totalWeight)}</TableCell>
                           <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
                           <TableCell>{formatKg(r.netIssuedWeight ?? r.totalWeight ?? 0)}</TableCell>
+                          <TableCell>{formatKg(r.wastageWeight || 0)}</TableCell>
                           <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
@@ -2133,7 +2145,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground mt-1">
-                      Taken Back: {formatKg(r.takenBackWeight || 0)} • Net Issued: {formatKg(r.netIssuedWeight ?? (process === 'cutter' ? r.totalWeight : process === 'holo' ? r.metallicBobbinsWeight : 0))}
+                      Taken Back: {formatKg(r.takenBackWeight || 0)} • Net Issued: {formatKg(r.netIssuedWeight ?? (process === 'cutter' ? r.totalWeight : process === 'holo' ? r.metallicBobbinsWeight : 0))}{process === 'cutter' ? ` • Wastage: ${formatKg(r.wastageWeight || 0)}` : ''}
                     </p>
                   </div>
                   <Badge variant="outline" className="whitespace-nowrap">

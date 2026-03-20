@@ -239,6 +239,167 @@ function buildDateWhere({ dateFrom, dateTo, field = 'date' }) {
   return { [field]: w };
 }
 
+function parsePieceIdsCsv(raw) {
+  if (Array.isArray(raw)) return raw.map((value) => String(value || '').trim()).filter(Boolean);
+  return String(raw || '').split(',').map((value) => value.trim()).filter(Boolean);
+}
+
+function toTimeMs(value) {
+  const ms = new Date(value || 0).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+const CUTTER_HISTORY_COMPUTED_FILTER_FIELDS = new Set([
+  'weight',
+  'takenBackWeight',
+  'netIssuedWeight',
+  'wastageWeight',
+]);
+
+function splitCutterHistoryFilters(filters = []) {
+  const rawFilters = [];
+  const computedFilters = [];
+  for (const filter of filters || []) {
+    const field = String(filter?.field || '').trim();
+    if (CUTTER_HISTORY_COMPUTED_FILTER_FIELDS.has(field)) {
+      computedFilters.push(filter);
+    } else {
+      rawFilters.push(filter);
+    }
+  }
+  return { rawFilters, computedFilters };
+}
+
+function getCutterHistoryComputedValue(row, field) {
+  if (field === 'weight') return Number(row?.totalWeight ?? row?.originalIssuedWeight ?? 0);
+  if (field === 'takenBackWeight') return Number(row?.takenBackWeight || 0);
+  if (field === 'netIssuedWeight') return Number(row?.netIssuedWeight ?? 0);
+  if (field === 'wastageWeight') return Number(row?.wastageWeight || 0);
+  return null;
+}
+
+function matchesComputedBetween(value, { min, max }) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return false;
+  if (Number.isFinite(min) && numeric < min) return false;
+  if (Number.isFinite(max) && numeric > max) return false;
+  return true;
+}
+
+function matchesCutterHistoryComputedFilters(row, filters = []) {
+  return (filters || []).every((filter) => {
+    if (!filter || typeof filter !== 'object') return true;
+    if (String(filter.op || '').trim() !== 'between') return true;
+    const field = String(filter.field || '').trim();
+    const value = getCutterHistoryComputedValue(row, field);
+    const min = filter.min == null || filter.min === '' ? null : Number(filter.min);
+    const max = filter.max == null || filter.max === '' ? null : Number(filter.max);
+    return matchesComputedBetween(value, { min, max });
+  });
+}
+
+function applyCursorToSortedItems(items = [], cursor) {
+  if (!cursor) return items;
+  const cursorMs = toTimeMs(cursor.createdAt);
+  return (items || []).filter((item) => {
+    const itemMs = toTimeMs(item?.createdAt);
+    if (itemMs == null || cursorMs == null) return false;
+    if (itemMs < cursorMs) return true;
+    if (itemMs > cursorMs) return false;
+    return String(item?.id || '') < String(cursor.id || '');
+  });
+}
+
+function buildCutterHistorySummary(items = []) {
+  return (items || []).reduce((summary, item) => {
+    summary.qty += Number(item?.count || 0);
+    summary.weight += Number(item?.totalWeight ?? item?.originalIssuedWeight ?? 0);
+    summary.takenBackWeight += Number(item?.takenBackWeight || 0);
+    summary.netIssuedWeight += Number(item?.netIssuedWeight ?? 0);
+    return summary;
+  }, {
+    qty: 0,
+    weight: 0,
+    takenBackWeight: 0,
+    netIssuedWeight: 0,
+  });
+}
+
+async function buildCutterIssueWastageByIssueId(issueRows = []) {
+  const issueIds = Array.from(new Set((issueRows || []).map((row) => row?.id).filter(Boolean)));
+  const output = new Map(issueIds.map((issueId) => [issueId, 0]));
+  if (!issueIds.length) return output;
+
+  const pieceIds = Array.from(new Set(
+    (issueRows || []).flatMap((row) => parsePieceIdsCsv(row?.pieceIds))
+  ));
+  if (!pieceIds.length) return output;
+
+  const issueLines = await prisma.issueToCutterMachineLine.findMany({
+    where: {
+      pieceId: { in: pieceIds },
+      issue: { isDeleted: false },
+    },
+    select: {
+      pieceId: true,
+      issueId: true,
+      issue: { select: { createdAt: true } },
+    },
+  });
+
+  const issuesByPiece = new Map();
+  issueLines.forEach((line) => {
+    const pieceId = String(line?.pieceId || '').trim();
+    if (!pieceId) return;
+    const entries = issuesByPiece.get(pieceId) || [];
+    entries.push({
+      issueId: line.issueId,
+      createdAtMs: toTimeMs(line.issue?.createdAt),
+    });
+    issuesByPiece.set(pieceId, entries);
+  });
+
+  issuesByPiece.forEach((entries, pieceId) => {
+    const deduped = Array.from(new Map(entries.map((entry) => [entry.issueId, entry])).values());
+    deduped.sort((a, b) => {
+      const aMs = a.createdAtMs == null ? Number.MAX_SAFE_INTEGER : a.createdAtMs;
+      const bMs = b.createdAtMs == null ? Number.MAX_SAFE_INTEGER : b.createdAtMs;
+      if (aMs !== bMs) return aMs - bMs;
+      return String(a.issueId).localeCompare(String(b.issueId));
+    });
+    issuesByPiece.set(pieceId, deduped);
+  });
+
+  const challans = await prisma.receiveFromCutterMachineChallan.findMany({
+    where: {
+      pieceId: { in: pieceIds },
+      isDeleted: false,
+    },
+    select: {
+      pieceId: true,
+      wastageNetWeight: true,
+      createdAt: true,
+    },
+  });
+
+  const targetIssueIds = new Set(issueIds);
+  challans.forEach((challan) => {
+    const pieceId = String(challan?.pieceId || '').trim();
+    if (!pieceId) return;
+    const wastageWeight = Number(challan?.wastageNetWeight || 0);
+    if (wastageWeight <= 0) return;
+    const challanAtMs = toTimeMs(challan?.createdAt);
+    const candidates = issuesByPiece.get(pieceId) || [];
+    const assigned = [...candidates]
+      .reverse()
+      .find((candidate) => candidate.createdAtMs != null && challanAtMs != null && candidate.createdAtMs <= challanAtMs);
+    if (!assigned || !targetIssueIds.has(assigned.issueId)) return;
+    output.set(assigned.issueId, Number(output.get(assigned.issueId) || 0) + wastageWeight);
+  });
+
+  return output;
+}
+
 async function computeHoloIssuePieceIdsByIssueId(issueIds = []) {
   const unique = Array.from(new Set((issueIds || []).filter(Boolean)));
   if (!unique.length) return new Map();
@@ -429,7 +590,7 @@ function pickIssueSearchFields(process) {
   return base;
 }
 
-function mapIssueRow(process, row, { takeBackTotalsByIssueId }) {
+function mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId } = {}) {
   const tb = takeBackTotalsByIssueId.get(row.id) || { count: 0, weight: 0 };
   let originalIssuedWeight = Number(process === 'cutter'
     ? row.totalWeight
@@ -444,6 +605,7 @@ function mapIssueRow(process, row, { takeBackTotalsByIssueId }) {
   }
   const takenBackWeight = Number(tb.weight || 0);
   const netIssuedWeight = Math.max(0, originalIssuedWeight - takenBackWeight);
+  const wastageWeight = Number(process === 'cutter' ? (wastageByIssueId?.get(row.id) || 0) : 0);
   return {
     ...row,
     // Flatten common names to avoid frontend deep lookups (UI stays same).
@@ -457,6 +619,7 @@ function mapIssueRow(process, row, { takeBackTotalsByIssueId }) {
     takenBackWeight,
     originalIssuedWeight,
     netIssuedWeight,
+    wastageWeight,
     ...(process === 'coning' ? { rollsIssued } : {}),
   };
 }
@@ -491,10 +654,13 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
 
   try {
     const model = issueModelForProcess(process);
-    const cursorWhere = buildCursorWhere(cursor);
+    const { rawFilters, computedFilters } = process === 'cutter'
+      ? splitCutterHistoryFilters(filters)
+      : { rawFilters: filters, computedFilters: [] };
+    const cursorWhere = computedFilters.length > 0 ? null : buildCursorWhere(cursor);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, ISSUE_FILTERS);
-    const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
+    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS);
+    const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
     if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
@@ -505,6 +671,31 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const wherePage = applyCursorWhere(whereAll, cursorWhere);
+
+    if (process === 'cutter' && computedFilters.length > 0) {
+      const rowsRaw = await model.findMany({
+        where: whereAll,
+        include: issueIncludesForProcess(process),
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const rowsWithUsers = await resolveUserFields(rowsRaw);
+      const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
+      const issueIds = rowsWithItems.map((row) => row.id);
+      const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds(process, issueIds);
+      const wastageByIssueId = await buildCutterIssueWastageByIssueId(rowsWithItems);
+      const allItems = rowsWithItems
+        .map((row) => mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId }))
+        .filter((row) => matchesCutterHistoryComputedFilters(row, computedFilters));
+      const pageCandidates = applyCursorToSortedItems(allItems, cursor);
+      const hasMore = pageCandidates.length > limit;
+      const items = pageCandidates.slice(0, limit);
+      const lastInPage = items[items.length - 1];
+      const nextCursor = hasMore && lastInPage
+        ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
+        : null;
+      const summary = !cursor ? buildCutterHistorySummary(allItems) : null;
+      return res.json({ items, hasMore, nextCursor, summary });
+    }
 
     const rowsRaw = await model.findMany({
       where: wherePage,
@@ -518,7 +709,10 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
     const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
     const issueIds = pageWithItems.map(r => r.id);
     const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds(process, issueIds);
-    const items = pageWithItems.map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId }));
+    const wastageByIssueId = process === 'cutter'
+      ? await buildCutterIssueWastageByIssueId(pageWithItems)
+      : new Map();
+    const items = pageWithItems.map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId, wastageByIssueId }));
     const lastInPage = pageWithItems[pageWithItems.length - 1];
     const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
 
@@ -672,9 +866,12 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
 
   try {
     const model = issueModelForProcess(process);
+    const { rawFilters, computedFilters } = process === 'cutter'
+      ? splitCutterHistoryFilters(filters)
+      : { rawFilters: filters, computedFilters: [] };
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, ISSUE_FILTERS);
-    const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
+    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS);
+    const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
     if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
@@ -692,7 +889,12 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
     const rowsWithUsers = await resolveUserFields(rowsRaw);
     const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
     const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds(process, rowsWithItems.map(r => r.id));
-    const items = rowsWithItems.map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId }));
+    const wastageByIssueId = process === 'cutter'
+      ? await buildCutterIssueWastageByIssueId(rowsWithItems)
+      : new Map();
+    const items = rowsWithItems
+      .map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId, wastageByIssueId }))
+      .filter((row) => process !== 'cutter' || matchesCutterHistoryComputedFilters(row, computedFilters));
     res.json({ items });
   } catch (err) {
     console.error('v2 issue export error', err);

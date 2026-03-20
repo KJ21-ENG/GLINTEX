@@ -35,6 +35,7 @@ function formatOptionalCount(value) {
 
 function drawCompactHeader(doc, { title, date, pageWidth }) {
   let y = 10;
+  const formattedReportDate = formatDateDDMMYYYY(date) || '-';
 
   doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
@@ -51,7 +52,7 @@ function drawCompactHeader(doc, { title, date, pageWidth }) {
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 100, 100);
-  doc.text(`Date: ${formatDateDDMMYYYY(date)}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(`Report Date: ${formattedReportDate}`, pageWidth / 2, y, { align: 'center' });
   y += 3.6;
 
   doc.setDrawColor(200, 200, 200);

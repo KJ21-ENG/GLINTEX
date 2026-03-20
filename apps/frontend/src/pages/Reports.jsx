@@ -81,15 +81,27 @@ function buildHoloMetricsDraft({ from, to, baseMachines, savedRows = [] }) {
 function formatWeeklyExportError(err) {
     const details = err?.details?.details || err?.details;
     if (details?.error === 'missing_spindle' && Array.isArray(details.machines)) {
-        return details.machines
+        const machineLines = details.machines
             .map((entry) => `${entry.baseMachine}${entry.sections?.length ? ` (${entry.sections.join(', ')})` : ''}`)
             .join('\n');
+        return [
+            'Weekly export is blocked because spindle is missing for one or more Holo machines.',
+            'Add spindle in Masters > Machines for:',
+            machineLines,
+        ].join('\n');
     }
     if (details?.error === 'missing_production_per_hour' && Array.isArray(details.unresolved)) {
-        return details.unresolved
+        const unresolvedLines = details.unresolved
             .slice(0, 12)
             .map((entry) => `${formatDateDDMMYYYY(entry.date)} | ${entry.baseMachine} | ${entry.yarn} | ${entry.cut}`)
             .join('\n');
+        const extraCount = Math.max(0, details.unresolved.length - 12);
+        return [
+            'Weekly export is blocked because one or more Yarn/Cut mappings are missing.',
+            'Add the missing entries in Masters > Holo > Production Per Hour for:',
+            unresolvedLines,
+            extraCount > 0 ? `...and ${extraCount} more` : '',
+        ].filter(Boolean).join('\n');
     }
     return err?.message || 'Failed to export weekly production report';
 }

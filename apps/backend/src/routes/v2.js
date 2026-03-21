@@ -1569,6 +1569,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
       const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
       const issueIds = pageWithItems.map(i => i.id);
       const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('cutter', issueIds);
+      const wastageByIssueId = await buildCutterIssueWastageByIssueId(pageWithItems);
       const receiveRows = issueIds.length
         ? await prisma.receiveFromCutterMachineRow.findMany({
           where: { isDeleted: false, issueId: { in: issueIds } },
@@ -1587,7 +1588,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         const takeBackWeight = Number(tb.weight || 0);
         const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
         const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-        const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight);
+        const wastageWeight = Number(wastageByIssueId.get(issue.id) || 0);
+        const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
         const pieceIdsList = Array.isArray(issue.pieceIds)
           ? issue.pieceIds
           : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1602,7 +1604,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           netIssuedWeight,
           issuedWeight: netIssuedWeight,
           receivedWeight,
-          wastageWeight: 0,
+          wastageWeight,
           pendingWeight,
           pieceIdsList,
         };
@@ -1613,10 +1615,11 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
       if (isFirstPage) {
         const allIssues = await prisma.issueToCutterMachine.findMany({
           where: whereAllFiltered,
-          select: { id: true, totalWeight: true },
+          select: { id: true, totalWeight: true, pieceIds: true },
         });
         const allIds = allIssues.map(i => i.id);
         const allTb = await fetchTakeBackTotalsByIssueIds('cutter', allIds);
+        const allWasteMap = await buildCutterIssueWastageByIssueId(allIssues);
         const allRecv = allIds.length
           ? await prisma.receiveFromCutterMachineRow.findMany({
             where: { isDeleted: false, issueId: { in: allIds } },
@@ -1627,19 +1630,21 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         for (const r of allRecv) {
           allRecvMap.set(r.issueId, (allRecvMap.get(r.issueId) || 0) + Number(r.netWt || 0));
         }
-        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, pendingWeight: 0 };
+        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0 };
         for (const issue of allIssues) {
           const tb = allTb.get(issue.id) || { weight: 0 };
           const orig = Number(issue.totalWeight || 0);
           const tbW = Number(tb.weight || 0);
           const net = Math.max(0, orig - tbW);
           const recv = Number(allRecvMap.get(issue.id) || 0);
-          const pend = Math.max(0, net - recv);
-          if (pend <= 0.001) continue; // skip fully received
+          const waste = Number(allWasteMap.get(issue.id) || 0);
+          const pend = Math.max(0, net - recv - waste);
+          if (pend <= 0.001) continue; // skip fully accounted issues
           s.originalIssuedWeight += orig;
           s.takeBackWeight += tbW;
           s.netIssuedWeight += net;
           s.receivedWeight += recv;
+          s.wastageWeight += waste;
           s.pendingWeight += pend;
         }
         summary = s;

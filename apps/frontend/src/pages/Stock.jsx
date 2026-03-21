@@ -359,7 +359,7 @@ export function Stock() {
 
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
-      lot.wastagePercent = lot.wastageWeightBaseTotal > 0 ? ((lot.wastageTotal / lot.wastageWeightBaseTotal) * 100) : 0;
+      lot.wastagePercent = Number(lot.totalWeight || 0) > 0 ? ((lot.wastageTotal / lot.totalWeight) * 100) : 0;
       lot.statusType = lotStatus(lot);
       lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
       lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
@@ -485,7 +485,7 @@ export function Stock() {
     const grouped = Array.from(map.values());
     grouped.forEach((lot) => {
       lot.avgWastage = lot.wastageCount > 0 ? (lot.wastageTotal / lot.wastageCount) : 0;
-      lot.wastagePercent = lot.wastageWeightBaseTotal > 0 ? ((lot.wastageTotal / lot.wastageWeightBaseTotal) * 100) : 0;
+      lot.wastagePercent = Number(lot.totalWeight || 0) > 0 ? ((lot.wastageTotal / lot.totalWeight) * 100) : 0;
     });
     return grouped;
   }, [filteredLots, groupByItem]);
@@ -835,16 +835,14 @@ export function Stock() {
   };
   const showBobbins = isCutter && view === 'bobbins';
   const formatWastageSummary = (lot) => {
-    const count = Number(lot?.wastageCount || 0);
-    if (!count) return '—';
-    const avg = Number(lot?.avgWastage || 0);
+    const total = Number(lot?.wastageTotal || 0);
+    if (total <= 0) return '—';
     const pct = Number(lot?.wastagePercent || 0);
-    return `${formatKg(avg)} kg (${pct.toFixed(1)}%)`;
+    return `${formatKg(total)} kg (${pct.toFixed(1)}%)`;
   };
   const grandWastageSummary = formatWastageSummary({
-    wastageCount: grandTotals.wastageCount,
-    avgWastage: grandTotals.wastageCount > 0 ? (grandTotals.wastageTotal / grandTotals.wastageCount) : 0,
-    wastagePercent: grandTotals.wastageWeightBaseTotal > 0 ? ((grandTotals.wastageTotal / grandTotals.wastageWeightBaseTotal) * 100) : 0,
+    wastageTotal: grandTotals.wastageTotal,
+    wastagePercent: grandTotals.totalWeight > 0 ? ((grandTotals.wastageTotal / grandTotals.totalWeight) * 100) : 0,
   });
 
   return (

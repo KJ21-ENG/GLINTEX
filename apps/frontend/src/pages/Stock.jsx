@@ -287,6 +287,7 @@ export function Stock() {
         wastageTotal: 0,
         wastageCount: 0,
         wastageWeightBaseTotal: 0,
+        issuedWeightBaseTotal: 0,
         avgWastage: 0,
         wastagePercent: 0,
         cutNames: new Set(),
@@ -348,6 +349,7 @@ export function Stock() {
         m[piece.lotNo].wastageCount = (m[piece.lotNo].wastageCount || 0) + 1;
         m[piece.lotNo].wastageWeightBaseTotal = (m[piece.lotNo].wastageWeightBaseTotal || 0) + Number(piece.weight || 0);
       }
+      m[piece.lotNo].issuedWeightBaseTotal = (m[piece.lotNo].issuedWeightBaseTotal || 0) + issuedToCutterWeight;
       const availableForIssue = isPieceAvailableForIssue(pieceEntry);
       if (availableForIssue) {
         m[piece.lotNo].availableCount = (m[piece.lotNo].availableCount || 0) + 1;
@@ -359,7 +361,7 @@ export function Stock() {
 
     Object.values(m).forEach(lot => {
       lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
-      lot.wastagePercent = Number(lot.totalWeight || 0) > 0 ? ((lot.wastageTotal / lot.totalWeight) * 100) : 0;
+      lot.wastagePercent = Number(lot.issuedWeightBaseTotal || 0) > 0 ? ((lot.wastageTotal / lot.issuedWeightBaseTotal) * 100) : 0;
       lot.statusType = lotStatus(lot);
       lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
       lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
@@ -463,6 +465,7 @@ export function Stock() {
         wastageTotal: 0,
         wastageCount: 0,
         wastageWeightBaseTotal: 0,
+        issuedWeightBaseTotal: 0,
         avgWastage: 0,
         wastagePercent: 0,
         pieces: [],
@@ -478,6 +481,7 @@ export function Stock() {
       existing.wastageTotal += Number(lot.wastageTotal || 0);
       existing.wastageCount += Number(lot.wastageCount || 0);
       existing.wastageWeightBaseTotal += Number(lot.wastageWeightBaseTotal || 0);
+      existing.issuedWeightBaseTotal += Number(lot.issuedWeightBaseTotal || 0);
       existing.statusType = existing.pendingWeight > EPSILON ? 'active' : 'inactive';
       existing.lots.push(lot.lotNo); // Add lot number to group
       map.set(key, existing);
@@ -485,7 +489,7 @@ export function Stock() {
     const grouped = Array.from(map.values());
     grouped.forEach((lot) => {
       lot.avgWastage = lot.wastageCount > 0 ? (lot.wastageTotal / lot.wastageCount) : 0;
-      lot.wastagePercent = Number(lot.totalWeight || 0) > 0 ? ((lot.wastageTotal / lot.totalWeight) * 100) : 0;
+      lot.wastagePercent = Number(lot.issuedWeightBaseTotal || 0) > 0 ? ((lot.wastageTotal / lot.issuedWeightBaseTotal) * 100) : 0;
     });
     return grouped;
   }, [filteredLots, groupByItem]);
@@ -512,7 +516,8 @@ export function Stock() {
       wastageTotal: acc.wastageTotal + Number(lot.wastageTotal || 0),
       wastageCount: acc.wastageCount + Number(lot.wastageCount || 0),
       wastageWeightBaseTotal: acc.wastageWeightBaseTotal + Number(lot.wastageWeightBaseTotal || 0),
-    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, remainingWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0 });
+      issuedWeightBaseTotal: acc.issuedWeightBaseTotal + Number(lot.issuedWeightBaseTotal || 0),
+    }), { availableCount: 0, totalPieces: 0, totalWeight: 0, remainingWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0, issuedWeightBaseTotal: 0 });
   }, [displayedLots]);
 
   // --- Export Handler ---
@@ -842,7 +847,7 @@ export function Stock() {
   };
   const grandWastageSummary = formatWastageSummary({
     wastageTotal: grandTotals.wastageTotal,
-    wastagePercent: grandTotals.totalWeight > 0 ? ((grandTotals.wastageTotal / grandTotals.totalWeight) * 100) : 0,
+    wastagePercent: grandTotals.issuedWeightBaseTotal > 0 ? ((grandTotals.wastageTotal / grandTotals.issuedWeightBaseTotal) * 100) : 0,
   });
 
   return (

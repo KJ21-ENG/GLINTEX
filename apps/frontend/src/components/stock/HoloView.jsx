@@ -1,11 +1,12 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
-import { ChevronDown, ChevronRight, Flame, FlameKindling } from 'lucide-react';
+import { ChevronDown, ChevronRight, Flame, FlameKindling, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -39,6 +40,7 @@ const normalizeLotKeyIdentity = (rawKey) => {
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
+  const [reprintingId, setReprintingId] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
   const v2Lots = v2?.lots;
   const v2RowsByKey = v2?.rowsByKey || {};
@@ -401,6 +403,57 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     }), { totalRolls: 0, totalWeight: 0, steamedRolls: 0 });
   }, [displayLots]);
 
+  const handleReprintRow = async (r) => {
+    if (reprintingId) return;
+    setReprintingId(r.id);
+    try {
+      const fullRow = db.receive_from_holo_machine_rows?.find(x => x.id === r.id) || r;
+      const issue = db.issue_to_holo_machine?.find(i => i.id === fullRow.issueId);
+      const item = db.items?.find(i => i.id === issue?.itemId);
+      const rollType = db.rollTypes?.find(rt => rt.id === fullRow.rollTypeId);
+      const box = db.boxes?.find(b => b.id === fullRow.boxId);
+      const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
+      const resolved = issue ? resolveHoloTrace(issue, traceContext) : { cutName: '—' };
+      const cut = resolved.cutName === '—' ? '' : resolved.cutName;
+      const boxWeight = Number(box?.weight || 0);
+      const rollTypeWeight = Number(rollType?.weight || 0);
+      const rollCount = Number(fullRow.rollCount || 1);
+      const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
+      const tareWeight = Number.isFinite(fullRow.tareWeight) ? Number(fullRow.tareWeight) : calculatedTare;
+      const lotLabel = issue?.lotLabel || issue?.lotNo || fullRow.issue?.lotNo || '';
+      const netWeight = Number.isFinite(fullRow.rollWeight)
+        ? Number(fullRow.rollWeight)
+        : Number.isFinite(fullRow.netWeight)
+          ? Number(fullRow.netWeight)
+          : Number.isFinite(fullRow.grossWeight)
+            ? Math.max(0, Number(fullRow.grossWeight) - tareWeight)
+            : 0;
+      const data = {
+        lotNo: lotLabel,
+        itemName: item?.name || '',
+        rollCount,
+        rollType: rollType?.name || r.rollTypeName || '',
+        netWeight,
+        grossWeight: fullRow.grossWeight,
+        tareWeight,
+        boxName: box?.name || fullRow.box?.name || '',
+        cut,
+        yarnName,
+        machineName: fullRow.machineNo || fullRow.machine?.name || '',
+        operatorName: fullRow.operator?.name || '',
+        date: fullRow.date || fullRow.createdAt,
+        barcode: fullRow.barcode,
+      };
+      const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
+      if (!template) { alert('No sticker template found for Holo Receive. Configure it in Label Designer.'); return; }
+      await printStageTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE, data, { template });
+    } catch (err) {
+      alert(err.message || 'Failed to reprint sticker');
+    } finally {
+      setReprintingId(null);
+    }
+  };
+
   return (
     <>
       <div className="hidden sm:block rounded-md border bg-card">
@@ -524,12 +577,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                   <TableHead>Machine</TableHead>
                                   <TableHead>Steamed</TableHead>
                                   <TableHead>Notes</TableHead>
+                                  <TableHead className="w-8"></TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {expandedRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={9} className="py-4 text-center text-muted-foreground">
+                                    <TableCell colSpan={10} className="py-4 text-center text-muted-foreground">
                                       No active roll rows.
                                     </TableCell>
                                   </TableRow>
@@ -558,6 +612,11 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                         )}
                                       </TableCell>
                                       <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={r.notes || '—'} query={search} /></TableCell>
+                                      <TableCell className="p-1">
+                                        <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                          <Printer className="w-3.5 h-3.5" />
+                                        </button>
+                                      </TableCell>
                                     </TableRow>
                                   );
                                 })}
@@ -683,7 +742,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                         <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30", rollMatch && "bg-primary/10")}>
                           <div className="flex justify-between font-mono text-xs">
                             <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
-                            <span>{formatKg(r.availableWeight)}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span>{formatKg(r.availableWeight)}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                <Printer className="w-3 h-3" />
+                              </button>
+                            </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
                             <span>{(r.rollType?.name || r.rollTypeName || '—')} • Rolls: {r.availableRolls}</span>

@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
@@ -20,6 +21,7 @@ const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
+  const [reprintingId, setReprintingId] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
   const v2Lots = v2?.lots;
@@ -312,6 +314,70 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     }), { totalCones: 0, totalWeight: 0 });
   }, [displayLots]);
 
+  const handleReprintRow = async (r) => {
+    if (reprintingId) return;
+    setReprintingId(r.id);
+    try {
+      const fullRow = db.receive_from_coning_machine_rows?.find(x => x.id === r.id) || r;
+      const issue = db.issue_to_coning_machine?.find(i => i.id === fullRow.issueId);
+      const box = db.boxes?.find(b => b.id === fullRow.boxId);
+      const operator = db.operators?.find(o => o.id === fullRow.operatorId);
+      const item = db.items?.find(i => i.id === issue?.itemId);
+      let coneType = ''; let wrapperName = '';
+      try {
+        const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
+        if (Array.isArray(refs) && refs.length > 0) {
+          const ref = refs[0];
+          if (ref.coneTypeId) coneType = db.cone_types?.find(c => c.id === ref.coneTypeId)?.name || '';
+          if (ref.wrapperId) wrapperName = db.wrappers?.find(w => w.id === ref.wrapperId)?.name || '';
+        }
+      } catch (e) {}
+      let cut = ''; let yarnName = ''; let twist = ''; let rollType = '';
+      if (issue) {
+        const resolved = resolveConingTrace(issue, traceContext);
+        cut = resolved.cutName === '—' ? '' : resolved.cutName;
+        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
+        twist = resolved.twistName === '—' ? '' : resolved.twistName;
+        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
+      }
+      const lotLabel = issue?.lotLabel || issue?.lotNo || fullRow.issue?.lotNo || fullRow.lotNo || '';
+      const netWeight = Number.isFinite(fullRow.netWeight)
+        ? Number(fullRow.netWeight)
+        : (Number.isFinite(fullRow.grossWeight) && Number.isFinite(fullRow.tareWeight))
+          ? Math.max(0, Number(fullRow.grossWeight) - Number(fullRow.tareWeight))
+          : Number(fullRow.grossWeight || 0);
+      const machineName = fullRow.machineNo || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '') || '';
+      const operatorName = operator?.name || fullRow.operator?.name || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '') || '';
+      const data = {
+        lotNo: lotLabel,
+        itemName: fullRow.itemName || item?.name || '',
+        coneCount: fullRow.coneCount,
+        grossWeight: fullRow.grossWeight,
+        tareWeight: fullRow.tareWeight || 0,
+        netWeight,
+        boxName: box?.name || fullRow.box?.name || '',
+        cut: fullRow.cutName || cut,
+        yarnName: fullRow.yarnName || yarnName,
+        twist: fullRow.twistName || twist,
+        rollType,
+        coneType: fullRow.coneTypeName || coneType,
+        wrapperName,
+        operatorName,
+        machineName,
+        shift: issue?.shift || fullRow.shift || '',
+        date: fullRow.date || fullRow.createdAt,
+        barcode: fullRow.barcode,
+      };
+      const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+      if (!template) { alert('No sticker template found for Coning Receive. Configure it in Label Designer.'); return; }
+      await printStageTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE, data, { template });
+    } catch (err) {
+      alert(err.message || 'Failed to reprint sticker');
+    } finally {
+      setReprintingId(null);
+    }
+  };
+
   return (
     <>
       <div className="hidden sm:block rounded-md border bg-card">
@@ -416,12 +482,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                   <TableHead>Machine</TableHead>
                                   <TableHead>Operator</TableHead>
                                   <TableHead>Notes</TableHead>
+                                  <TableHead className="w-8"></TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {activeRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={9} className="text-center py-4 text-muted-foreground">
+                                    <TableCell colSpan={10} className="text-center py-4 text-muted-foreground">
                                       No active cone rows.
                                     </TableCell>
                                   </TableRow>
@@ -438,6 +505,11 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell>{row.machineName}</TableCell>
                                       <TableCell>{row.operatorName}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
+                                      <TableCell className="p-1">
+                                        <button onClick={(e) => { e.stopPropagation(); handleReprintRow(row); }} disabled={reprintingId === row.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                          <Printer className="w-3.5 h-3.5" />
+                                        </button>
+                                      </TableCell>
                                     </TableRow>
                                   );
                                 })}
@@ -551,7 +623,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                         <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", rowMatch && "bg-primary/10")}>
                           <div className="flex justify-between font-mono text-xs">
                             <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
-                            <span>{formatKg(r.availableWeight)}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span>{formatKg(r.availableWeight)}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                <Printer className="w-3 h-3" />
+                              </button>
+                            </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
                             <span>{r.boxName} • Cones: {r.availableCones}</span>

@@ -1,11 +1,12 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { useBarcodeAutoExpand } from '../../utils/useBarcodeAutoExpand';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -20,6 +21,7 @@ const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
+  const [reprintingId, setReprintingId] = useState(null);
   useEffect(() => { setExpandedLot(null); }, [groupBy]);
 
   // --- Data Prep ---
@@ -281,6 +283,50 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
     }), { totalBobbins: 0, availableBobbins: 0, totalWeight: 0, availableWeight: 0, crateCount: 0 });
   }, [displayData]);
 
+  const handleReprintCrate = async (c) => {
+    if (reprintingId) return;
+    setReprintingId(c.id);
+    try {
+      const fullRow = db.receive_from_cutter_machine_rows?.find(x => x.id === c.id) || c;
+      const piece = db.inbound_items?.find(p => p.id === fullRow.pieceId);
+      const item = db.items?.find(i => i.id === (piece?.itemId || fullRow.itemId));
+      const bobbin = db.bobbins?.find(b => b.id === fullRow.bobbinId);
+      const box = db.boxes?.find(b => b.id === fullRow.boxId);
+      const cut = db.cuts?.find(ct => ct.id === fullRow.cutId)?.name || c.cutName || '';
+      const operator = db.operators?.find(o => o.id === fullRow.operatorId);
+      const helper = db.workers?.find(w => w.id === fullRow.helperId);
+      const issue = (db.issue_to_cutter_machine || []).find(i =>
+        Array.isArray(i.pieceIds) && i.pieceIds.includes(fullRow.pieceId)
+      );
+      const machine = db.machines?.find(m => m.id === issue?.machineId);
+      const data = {
+        lotNo: fullRow.lotNo || piece?.lotNo || '',
+        itemName: item?.name || '',
+        pieceId: fullRow.pieceId,
+        netWeight: fullRow.netWt,
+        grossWeight: fullRow.grossWt,
+        tareWeight: fullRow.tareWt,
+        bobbinQty: fullRow.bobbinQuantity,
+        bobbinName: bobbin?.name || fullRow.bobbin?.name || '',
+        boxName: box?.name || fullRow.box?.name || '',
+        cut,
+        cutName: cut,
+        machineName: machine?.name || fullRow.machineNo || '',
+        operatorName: operator?.name || fullRow.operator?.name || '',
+        helperName: helper?.name || fullRow.helper?.name || '',
+        date: fullRow.date || fullRow.createdAt,
+        barcode: fullRow.barcode,
+      };
+      const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
+      if (!template) { alert('No sticker template found for Cutter Receive. Configure it in Label Designer.'); return; }
+      await printStageTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE, data, { template });
+    } catch (err) {
+      alert(err.message || 'Failed to reprint sticker');
+    } finally {
+      setReprintingId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="hidden sm:block rounded-md border bg-card">
@@ -363,12 +409,13 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                   <TableHead className="">Weight (Avail)</TableHead>
                                   <TableHead>Operator</TableHead>
                                   <TableHead>Notes</TableHead>
+                                  <TableHead className="w-8"></TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {activeCrates.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={8} className="text-center py-4 text-muted-foreground">
+                                    <TableCell colSpan={9} className="text-center py-4 text-muted-foreground">
                                       No active crate rows.
                                     </TableCell>
                                   </TableRow>
@@ -387,6 +434,11 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
                                       <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={c.notes || '—'} query={search} /></TableCell>
+                                      <TableCell className="p-1">
+                                        <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                          <Printer className="w-3.5 h-3.5" />
+                                        </button>
+                                      </TableCell>
                                     </TableRow>
                                   );
                                 })}
@@ -485,7 +537,12 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                         <div key={c.id} className={cn("bg-background border rounded p-2 space-y-1", crateMatch && "bg-primary/10")}>
                           <div className="flex justify-between font-mono text-xs">
                             <span className="font-semibold text-primary"><HighlightMatch text={c.barcode} query={search} /></span>
-                            <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                <Printer className="w-3 h-3" />
+                              </button>
+                            </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
                             <span>{c.bobbinName} • Qty: {c.availableBobbins}</span>

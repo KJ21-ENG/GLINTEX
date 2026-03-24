@@ -33,6 +33,11 @@ function formatOptionalCount(value) {
   return Number.isFinite(num) ? formatNumber(num) : '';
 }
 
+function formatOptionalHours(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(2) : '';
+}
+
 function drawCompactHeader(doc, { title, date, pageWidth }) {
   let y = 10;
   const formattedReportDate = formatDateDDMMYYYY(date) || '-';
@@ -591,6 +596,35 @@ export async function createProductionDailyExportPdfDocument(data) {
       colWidths: [35, 14, 35],
     }],
   });
+
+  if (data.process === 'holo') {
+    const holoHoursWastageRows = (data.holoHoursWastageSummary || []).map((entry) => ({
+      cells: [
+        { text: entry.machine || 'Unassigned', align: 'left', wrap: true },
+        { text: formatOptionalHours(entry.hours), align: 'right' },
+        { text: formatOptionalWeight(entry.wastage), align: 'right' },
+      ],
+    }));
+
+    y = drawTable(doc, {
+      y,
+      title: 'Holo Hours & Wastage',
+      headers: [
+        { text: 'MACHINE', align: 'left', wrap: true },
+        { text: 'HOURS', align: 'right' },
+        { text: 'WASTAGE', align: 'right' },
+      ],
+      rows: holoHoursWastageRows,
+      colWidths: [70, 32, 34],
+      pageWidth,
+      rowHeight: 5,
+      headerHeight: 7,
+      padding: 1.2,
+      lineHeight: 2.6,
+      bottomMargin: SUMMARY_BOTTOM_MARGIN,
+      pageStartY: COMPACT_PAGE_START_Y,
+    });
+  }
 
   drawFooterOnAllPages(doc, pageHeight);
   return doc;

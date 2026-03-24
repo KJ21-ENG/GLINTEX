@@ -5,6 +5,7 @@ import {
   normalizeMachineLabel,
   sortByLabel,
 } from './productionDailyExportSummary.js';
+import { getSortedBaseMachineNames } from '../machineGrouping.js';
 
 const PROCESS_LABELS = {
   cutter: 'Cutter',
@@ -385,6 +386,33 @@ export function sortProductionExportRows(rows = []) {
   });
 }
 
+async function buildHoloHoursWastageSummary({ date, db }) {
+  const [machines, metrics] = await Promise.all([
+    db.machine.findMany({
+      where: { processType: 'holo' },
+      select: { name: true, processType: true },
+      orderBy: { name: 'asc' },
+    }),
+    db.holoDailyMetric.findMany({
+      where: { date },
+      select: { baseMachine: true, hours: true, wastage: true },
+      orderBy: { baseMachine: 'asc' },
+    }),
+  ]);
+
+  const metricMap = new Map(metrics.map((row) => [row.baseMachine, row]));
+  const baseMachines = getSortedBaseMachineNames(machines, { processType: 'holo', includeShared: false });
+
+  return baseMachines.map((machine) => {
+    const metric = metricMap.get(machine);
+    return {
+      machine,
+      hours: roundTo3Decimals(metric?.hours || 0),
+      wastage: roundTo3Decimals(metric?.wastage || 0),
+    };
+  });
+}
+
 export async function buildProductionDailyExportData({ process, date, helpers = {}, db } = {}) {
   const normalizedProcess = String(process || '').trim().toLowerCase();
   const loader = PROCESS_LOADERS[normalizedProcess];
@@ -408,6 +436,9 @@ export async function buildProductionDailyExportData({ process, date, helpers = 
     machineSummary: buildMachineSummary(sortedRows),
     itemSummary: buildItemSummary(sortedRows),
     yarnSummary: buildYarnSummary(sortedRows),
+    holoHoursWastageSummary: normalizedProcess === 'holo'
+      ? await buildHoloHoursWastageSummary({ date, db: activeDb })
+      : [],
     meta: buildMeta(sortedRows),
   };
 }

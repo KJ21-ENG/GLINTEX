@@ -24,6 +24,8 @@ function createDbStub({
   items = [],
   inboundItems = [],
   lots = [],
+  machines = [],
+  holoDailyMetrics = [],
   cutterRows = [],
   holoRows = [],
   coningRows = [],
@@ -45,6 +47,19 @@ function createDbStub({
       findMany: async ({ where }) => {
         const lotNos = new Set(where?.lotNo?.in || []);
         return lots.filter((lot) => lotNos.has(lot.lotNo));
+      },
+    },
+    machine: {
+      findMany: async ({ where } = {}) => {
+        const allowed = new Set(where?.processType?.in || []);
+        if (allowed.size === 0) return machines;
+        return machines.filter((machine) => allowed.has(machine.processType));
+      },
+    },
+    holoDailyMetric: {
+      findMany: async ({ where } = {}) => {
+        if (!where?.date) return holoDailyMetrics;
+        return holoDailyMetrics.filter((row) => row.date === where.date);
       },
     },
     receiveFromCutterMachineRow: {
@@ -267,6 +282,14 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     items: [
       { id: 'item-holo', name: 'Item Holo' },
     ],
+    machines: [
+      { id: 'machine-1', name: 'H1-A1', processType: 'holo' },
+      { id: 'machine-2', name: 'H1-A2', processType: 'holo' },
+      { id: 'machine-3', name: 'H2-A1', processType: 'holo' },
+    ],
+    holoDailyMetrics: [
+      { date: '2026-03-09', baseMachine: 'H1', hours: 12, wastage: 0.25 },
+    ],
     holoRows: [
       {
         grossWeight: 8,
@@ -311,6 +334,10 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
   ]);
   assert.deepEqual(data.machineSummary, [
     { machine: 'H1', totalQuantity: 2, totalNetProduction: 7 },
+  ]);
+  assert.deepEqual(data.holoHoursWastageSummary, [
+    { machine: 'H1', hours: 12, wastage: 0.25 },
+    { machine: 'H2', hours: 0, wastage: 0 },
   ]);
 });
 
@@ -445,6 +472,52 @@ test('createProductionDailyExportPdfDocument renders yarn/item headers and all t
   assert.match(pdfText, /H1-A2/);
   assert.match(pdfText, /H1/);
   assert.match(pdfText, /Cotton 40s/);
+});
+
+test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summary for holo exports', async () => {
+  const rows = [
+    {
+      yarn: 'Trace Yarn',
+      item: 'Item Holo',
+      cut: 'Trace Cut',
+      machine: 'H1-A1',
+      worker: 'Worker H',
+      crates: 'Crate H',
+      rollType: 'Roll H',
+      quantity: 2,
+      gross: 8,
+      tare: 1,
+      net: 7,
+    },
+  ];
+
+  const doc = await createProductionDailyExportPdfDocument({
+    process: 'holo',
+    processLabel: 'Holo',
+    date: '2026-03-09',
+    rows,
+    machineSummary: buildMachineSummary(rows),
+    itemSummary: buildItemSummary(rows),
+    yarnSummary: buildYarnSummary(rows),
+    holoHoursWastageSummary: [
+      { machine: 'H1', hours: 12, wastage: 0.25 },
+      { machine: 'H2', hours: 0, wastage: 0 },
+    ],
+    meta: {
+      noData: false,
+      rowCount: 1,
+      totalQuantity: 2,
+      totalGross: 8,
+      totalTare: 1,
+      totalNet: 7,
+    },
+  });
+
+  const pdfText = getDocumentText(doc);
+  assert.match(pdfText, /Holo Hours & Wastage/);
+  assert.match(pdfText, /HOURS/);
+  assert.match(pdfText, /WASTAGE/);
+  assert.match(pdfText, /H1/);
 });
 
 test('createProductionDailyExportPdfDocument renders empty-state exports', async () => {

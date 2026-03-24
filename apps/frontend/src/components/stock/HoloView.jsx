@@ -219,6 +219,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         lotNos: new Set(),
         rows: [],
         barcodes: [],
+        notes: [],
       };
 
       existing.rows.push(row);
@@ -227,6 +228,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       existing.cutNames.add(row.cutName || '—');
       (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
       if (row.barcode) existing.barcodes.push(row.barcode);
+      if (row.notes) existing.notes.push(row.notes);
       // Track steamed status
       if (row.isSteamed) {
         existing.steamedRolls += row.availableRolls;
@@ -250,6 +252,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
         barcodeStr: (lot.barcodes || []).join(' '),
+        notesStr: (lot.notes || []).join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
         steamedStatusType,
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
@@ -287,7 +290,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'lotSearch', 'itemName', 'cutName', 'yarnName', 'twistName', 'firmName', 'supplierName',
-          'totalRolls', 'totalWeight', 'barcodeStr'
+          'totalRolls', 'totalWeight', 'barcodeStr', 'notesStr'
         ];
         const tempItem = {
           ...l,
@@ -299,14 +302,15 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       } else {
         score = 1;
       }
-      // Check for direct barcode hit (v2 uses server lookup to avoid shipping all barcodes).
+      // Check for direct barcode or notes hit (v2 uses server lookup for barcodes; notes checked client-side).
       const searchLower = search ? search.trim().toLowerCase() : '';
       const hasBarcodeHit = Array.isArray(v2Lots)
         ? (
           (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
           || barcodeHitIdentitySet.has(normalizeLotKeyIdentity(l.lotKey))
         )
-        : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)));
+        : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)))
+          || (searchLower.length >= 3 && (l.notes || []).some(n => String(n || '').toLowerCase().includes(searchLower)));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
 
@@ -519,17 +523,21 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                   <TableHead className="">Gross Wt</TableHead>
                                   <TableHead>Machine</TableHead>
                                   <TableHead>Steamed</TableHead>
+                                  <TableHead>Notes</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {expandedRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={8} className="py-4 text-center text-muted-foreground">
+                                    <TableCell colSpan={9} className="py-4 text-center text-muted-foreground">
                                       No active roll rows.
                                     </TableCell>
                                   </TableRow>
                                 ) : expandedRows.map(r => {
-                                  const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                                  const rollMatch = search && (
+                                    (search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase()))
+                                    || (search.trim().length >= 3 && String(r.notes || '').toLowerCase().includes(search.trim().toLowerCase()))
+                                  );
                                   return (
                                     <TableRow key={r.id} className={cn(r.isSteamed ? 'bg-green-500/5' : '', rollMatch && 'bg-primary/10')}>
                                       <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || ''} query={search} /></TableCell>
@@ -549,6 +557,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                           <span className="text-xs text-muted-foreground">—</span>
                                         )}
                                       </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={r.notes || '—'} query={search} /></TableCell>
                                     </TableRow>
                                   );
                                 })}
@@ -666,7 +675,10 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                     {expandedRows.length === 0 ? (
                       <div className="text-xs text-muted-foreground">No active roll rows.</div>
                     ) : expandedRows.map(r => {
-                      const rollMatch = search && search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                      const rollMatch = search && (
+                        (search.trim().length >= 6 && String(r.barcode || '').toLowerCase().includes(search.trim().toLowerCase()))
+                        || (search.trim().length >= 3 && String(r.notes || '').toLowerCase().includes(search.trim().toLowerCase()))
+                      );
                       return (
                         <div key={r.id} className={cn("bg-background border rounded p-2 space-y-1", r.isSteamed && "border-green-500/30", rollMatch && "bg-primary/10")}>
                           <div className="flex justify-between font-mono text-xs">
@@ -680,6 +692,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                               Mac: {r.machineNo}
                             </span>
                           </div>
+                          {r.notes && <div className="text-[11px] text-muted-foreground">Note: <HighlightMatch text={r.notes} query={search} /></div>}
                         </div>
                       );
                     })}

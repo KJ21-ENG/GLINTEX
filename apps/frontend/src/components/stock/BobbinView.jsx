@@ -131,6 +131,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         availableWeight: 0,
         crates: [],
         barcodes: [],
+        notes: [],
       };
 
       existing.crates.push(crate);
@@ -142,6 +143,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       existing.availableWeight += crate.availableWeight;
       if (crate.cutName && crate.cutName !== '—') existing.cutNames.add(crate.cutName);
       if (crate.barcode) existing.barcodes.push(crate.barcode);
+      if (crate.notes) existing.notes.push(crate.notes);
 
       map.set(lotNo, existing);
     });
@@ -149,6 +151,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       ...l,
       cutName: l.cutNames.size > 1 ? 'Mixed' : Array.from(l.cutNames)[0] || '—',
       barcodeStr: (l.barcodes || []).join(' '),
+      notesStr: (l.notes || []).join(' '),
     }));
   }, [bobbinCrates]);
 
@@ -160,7 +163,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const formattedDate = formatDateDDMMYYYY(l.date);
         const searchableFields = [
           'lotNo', 'itemName', 'cutName', 'firmName', 'supplierName', 'bobbinName',
-          'totalBobbins', 'availableBobbins', 'totalWeight', 'availableWeight', 'barcodeStr'
+          'totalBobbins', 'availableBobbins', 'totalWeight', 'availableWeight', 'barcodeStr', 'notesStr'
         ];
         const tempItem = {
           ...l,
@@ -174,9 +177,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       } else {
         score = 1;
       }
-      // Also check for direct barcode hit (substring match)
+      // Also check for direct barcode or notes hit (substring match)
       const searchLower = search ? search.trim().toLowerCase() : '';
-      const hasBarcodeHit = searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower));
+      const hasBarcodeHit = (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)))
+        || (searchLower.length >= 3 && (l.notes || []).some(n => String(n || '').toLowerCase().includes(searchLower)));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
 
@@ -358,17 +362,21 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                   <TableHead className="">Bobbins (Avail)</TableHead>
                                   <TableHead className="">Weight (Avail)</TableHead>
                                   <TableHead>Operator</TableHead>
+                                  <TableHead>Notes</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {activeCrates.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={7} className="text-center py-4 text-muted-foreground">
+                                    <TableCell colSpan={8} className="text-center py-4 text-muted-foreground">
                                       No active crate rows.
                                     </TableCell>
                                   </TableRow>
                                 ) : activeCrates.map(c => {
-                                  const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                                  const crateMatch = search && (
+                                    (search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase()))
+                                    || (search.trim().length >= 3 && String(c.notes || '').toLowerCase().includes(search.trim().toLowerCase()))
+                                  );
                                   return (
                                     <TableRow key={c.id} className={crateMatch ? 'bg-primary/10' : ''}>
                                       <TableCell className="font-mono text-xs"><HighlightMatch text={c.barcode || ''} query={search} /></TableCell>
@@ -378,6 +386,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
                                       <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
                                       <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={c.notes || '—'} query={search} /></TableCell>
                                     </TableRow>
                                   );
                                 })}
@@ -468,7 +477,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                         No active crate rows.
                       </div>
                     ) : activeCrates.map(c => {
-                      const crateMatch = search && search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+                      const crateMatch = search && (
+                        (search.trim().length >= 6 && String(c.barcode || '').toLowerCase().includes(search.trim().toLowerCase()))
+                        || (search.trim().length >= 3 && String(c.notes || '').toLowerCase().includes(search.trim().toLowerCase()))
+                      );
                       return (
                         <div key={c.id} className={cn("bg-background border rounded p-2 space-y-1", crateMatch && "bg-primary/10")}>
                           <div className="flex justify-between font-mono text-xs">
@@ -479,6 +491,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                             <span>{c.bobbinName} • Qty: {c.availableBobbins}</span>
                             <span>Op: {c.operator?.name || '—'}</span>
                           </div>
+                          {c.notes && <div className="text-[11px] text-muted-foreground">Note: <HighlightMatch text={c.notes} query={search} /></div>}
                         </div>
                       );
                     })}

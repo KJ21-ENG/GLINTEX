@@ -2337,7 +2337,8 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric AS net_weight,
           GREATEST(0, COALESCE(r."rollCount", 0)::numeric - COALESCE(r."dispatchedCount", 0)::numeric - (COALESCE(iss.issue_rolls, 0) + COALESCE(tb.tb_rolls, 0))::numeric) AS available_rolls,
           GREATEST(0, COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric - COALESCE(r."dispatchedWeight", 0)::numeric - (COALESCE(iss.issue_weight, 0) + COALESCE(tb.tb_weight, 0))::numeric) AS available_weight,
-          (st.id IS NOT NULL) AS is_steamed
+          (st.id IS NOT NULL) AS is_steamed,
+          r."notes"
         FROM "ReceiveFromHoloMachineRow" r
         JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
         JOIN issue_labels il ON il.issue_id = i.id
@@ -2370,6 +2371,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
         grossWeight: Number(r.gross_weight || 0),
         netWeight: Number(r.net_weight || 0),
         isSteamed: !!r.is_steamed,
+        notes: r.notes || '',
       }));
 
       return res.json({ items });

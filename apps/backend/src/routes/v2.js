@@ -2499,7 +2499,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
         LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
         LEFT JOIN "Cut" ct ON ct.id = i."cutId"
         WHERE r."isDeleted" = false
-          AND r."barcode" ILIKE ${'%' + q + '%'}
+          AND (r."barcode" ILIKE ${'%' + q + '%'} OR r."notes" ILIKE ${'%' + q + '%'})
         GROUP BY
           il.lot_label,
           il.is_mixed,
@@ -2548,7 +2548,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
       JOIN "IssueToConingMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
       LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
       WHERE r."isDeleted" = false
-        AND r."barcode" ILIKE ${'%' + q + '%'}
+        AND (r."barcode" ILIKE ${'%' + q + '%'} OR r."notes" ILIKE ${'%' + q + '%'})
       LIMIT 50
     `;
 

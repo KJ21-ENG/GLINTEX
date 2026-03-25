@@ -408,41 +408,54 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     setReprintingId(r.id);
     try {
       const fullRow = db.receive_from_holo_machine_rows?.find(x => x.id === r.id) || r;
-      const issue = db.issue_to_holo_machine?.find(i => i.id === fullRow.issueId);
+      const issue = db.issue_to_holo_machine?.find(i => i.id === (fullRow.issueId || fullRow.issue?.id));
       const item = db.items?.find(i => i.id === issue?.itemId);
-      const rollType = db.rollTypes?.find(rt => rt.id === fullRow.rollTypeId);
-      const box = db.boxes?.find(b => b.id === fullRow.boxId);
+      const rollType = db.rollTypes?.find(rt => rt.id === fullRow.rollTypeId) || fullRow.rollType;
+      const box = db.boxes?.find(b => b.id === fullRow.boxId) || fullRow.box;
       const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
-      const resolved = issue ? resolveHoloTrace(issue, traceContext) : { cutName: '—' };
+      const resolved = issue ? resolveHoloTrace(issue, traceContext) : { cutName: '—', twistName: '—' };
       const cut = resolved.cutName === '—' ? '' : resolved.cutName;
+      const twistName = resolved.twistName === '—' ? '' : resolved.twistName;
       const boxWeight = Number(box?.weight || 0);
       const rollTypeWeight = Number(rollType?.weight || 0);
-      const rollCount = Number(fullRow.rollCount || 1);
+      const rollCount = Number(fullRow.rollCount || r.availableRolls || 1);
       const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
       const tareWeight = Number.isFinite(fullRow.tareWeight) ? Number(fullRow.tareWeight) : calculatedTare;
       const lotLabel = issue?.lotLabel || issue?.lotNo || fullRow.issue?.lotNo || '';
+      const grossWeight = fullRow.grossWeight ?? r.grossWeight ?? null;
       const netWeight = Number.isFinite(fullRow.rollWeight)
         ? Number(fullRow.rollWeight)
         : Number.isFinite(fullRow.netWeight)
           ? Number(fullRow.netWeight)
-          : Number.isFinite(fullRow.grossWeight)
-            ? Math.max(0, Number(fullRow.grossWeight) - tareWeight)
-            : 0;
+          : Number.isFinite(r.netWeight)
+            ? Number(r.netWeight)
+            : Number.isFinite(grossWeight)
+              ? Math.max(0, Number(grossWeight) - tareWeight)
+              : 0;
+      const operatorName = fullRow.operator?.name
+        || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '')
+        || '';
+      const machineName = fullRow.machineNo || r.machineNo
+        || fullRow.machine?.name
+        || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '')
+        || '';
       const data = {
         lotNo: lotLabel,
         itemName: item?.name || '',
         rollCount,
         rollType: rollType?.name || r.rollTypeName || '',
         netWeight,
-        grossWeight: fullRow.grossWeight,
+        grossWeight,
         tareWeight,
         boxName: box?.name || fullRow.box?.name || '',
         cut,
         yarnName,
-        machineName: fullRow.machineNo || fullRow.machine?.name || '',
-        operatorName: fullRow.operator?.name || '',
-        date: fullRow.date || fullRow.createdAt,
-        barcode: fullRow.barcode,
+        twist: twistName,
+        machineName,
+        operatorName,
+        shift: issue?.shift || fullRow.shift || '',
+        date: fullRow.date || r.date || fullRow.createdAt,
+        barcode: fullRow.barcode || r.barcode,
       };
       const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
       if (!template) { alert('No sticker template found for Holo Receive. Configure it in Label Designer.'); return; }

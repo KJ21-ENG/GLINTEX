@@ -883,8 +883,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
 
-                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—' };
+                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', twistName: '—' };
                 const cut = resolved.cutName === '—' ? '' : resolved.cutName;
+                const twistName = resolved.twistName === '—' ? '' : resolved.twistName;
 
                 // Calculate tare weight
                 const boxWeight = Number(box?.weight || 0);
@@ -901,6 +902,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                         : Number.isFinite(row.grossWeight)
                             ? Math.max(0, Number(row.grossWeight) - tareWeight)
                             : 0;
+                const operatorName = row.operator?.name
+                    || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '')
+                    || '';
+                const machineName = row.machineNo || row.machine?.name
+                    || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '')
+                    || '';
                 data = {
                     lotNo: lotLabel,
                     itemName: item?.name || '',
@@ -912,8 +919,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                     boxName: box?.name || row.box?.name || '',
                     cut: cut,
                     yarnName: yarnName,
-                    machineName: row.machineNo || row.machine?.name || '',
-                    operatorName: row.operator?.name || '',
+                    twist: twistName,
+                    machineName,
+                    operatorName,
+                    shift: issue?.shift || row.shift || '',
                     date: row.date || row.createdAt,
                     barcode: row.barcode,
                 };

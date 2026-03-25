@@ -1010,6 +1010,7 @@ export function Stock() {
           groupBy={groupByItem}
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
+          ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
         />
       ) : isHolo ? (
@@ -1020,6 +1021,7 @@ export function Stock() {
           groupBy={groupByItem}
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
+          ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
         />
       ) : showBobbins ? (

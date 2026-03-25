@@ -7,6 +7,7 @@ import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -37,7 +38,7 @@ const normalizeLotKeyIdentity = (rawKey) => {
   }
 };
 
-export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
+export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, ensureProcessData = null, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
@@ -67,6 +68,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   }, [barcodeHitKeys]);
 
   const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+  const findById = (rows, id) => (rows || []).find((row) => String(row?.id ?? '') === String(id ?? ''));
   const hasActiveRollAvailability = (row) => {
     const rolls = Number(row?.availableRolls || 0);
     const weight = Number(row?.availableWeight || 0);
@@ -407,56 +409,22 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     if (reprintingId) return;
     setReprintingId(r.id);
     try {
-      const fullRow = db.receive_from_holo_machine_rows?.find(x => x.id === r.id) || r;
-      const issue = db.issue_to_holo_machine?.find(i => i.id === (fullRow.issueId || fullRow.issue?.id));
-      const item = db.items?.find(i => i.id === issue?.itemId);
-      const rollType = db.rollTypes?.find(rt => rt.id === fullRow.rollTypeId) || fullRow.rollType;
-      const box = db.boxes?.find(b => b.id === fullRow.boxId) || fullRow.box;
-      const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
-      const resolved = issue ? resolveHoloTrace(issue, traceContext) : { cutName: '—', twistName: '—' };
-      const cut = resolved.cutName === '—' ? '' : resolved.cutName;
-      const twistName = resolved.twistName === '—' ? '' : resolved.twistName;
-      const boxWeight = Number(box?.weight || 0);
-      const rollTypeWeight = Number(rollType?.weight || 0);
-      const rollCount = Number(fullRow.rollCount || r.availableRolls || 1);
-      const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
-      const tareWeight = Number.isFinite(fullRow.tareWeight) ? Number(fullRow.tareWeight) : calculatedTare;
-      const lotLabel = issue?.lotLabel || issue?.lotNo || fullRow.issue?.lotNo || '';
-      const grossWeight = fullRow.grossWeight ?? r.grossWeight ?? null;
-      const netWeight = Number.isFinite(fullRow.rollWeight)
-        ? Number(fullRow.rollWeight)
-        : Number.isFinite(fullRow.netWeight)
-          ? Number(fullRow.netWeight)
-          : Number.isFinite(r.netWeight)
-            ? Number(r.netWeight)
-            : Number.isFinite(grossWeight)
-              ? Math.max(0, Number(grossWeight) - tareWeight)
-              : 0;
-      const operatorName = fullRow.operator?.name
-        || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '')
-        || '';
-      const machineName = fullRow.machineNo || r.machineNo
-        || fullRow.machine?.name
-        || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '')
-        || '';
-      const data = {
-        lotNo: lotLabel,
-        itemName: item?.name || '',
-        rollCount,
-        rollType: rollType?.name || r.rollTypeName || '',
-        netWeight,
-        grossWeight,
-        tareWeight,
-        boxName: box?.name || fullRow.box?.name || '',
-        cut,
-        yarnName,
-        twist: twistName,
-        machineName,
-        operatorName,
-        shift: issue?.shift || fullRow.shift || '',
-        date: fullRow.date || r.date || fullRow.createdAt,
-        barcode: fullRow.barcode || r.barcode,
-      };
+      let sourceDb = db;
+      let fullRow = findById(sourceDb.receive_from_holo_machine_rows, r.id) || null;
+
+      if (!fullRow) {
+        const loadedDb = typeof ensureProcessData === 'function'
+          ? await ensureProcessData()
+          : null;
+        if (loadedDb) {
+          sourceDb = loadedDb;
+          fullRow = findById(sourceDb.receive_from_holo_machine_rows, r.id) || null;
+        }
+      }
+
+      if (!fullRow) throw new Error('Original receive row not found for reprint');
+
+      const data = buildHoloReceiveLabelData({ db: sourceDb, row: fullRow });
       const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
       if (!template) { alert('No sticker template found for Holo Receive. Configure it in Label Designer.'); return; }
       await printStageTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE, data, { template });

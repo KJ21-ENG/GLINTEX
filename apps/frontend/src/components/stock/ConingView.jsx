@@ -7,6 +7,7 @@ import { HighlightMatch } from '../common/HighlightMatch';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { buildConingReceiveLabelData } from '../../utils/receiveLabelData';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -18,7 +19,7 @@ const buildGroupKey = (lot) => ([
 
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
-export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null }) {
+export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, ensureProcessData = null, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
@@ -31,6 +32,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   const lastAutoExpandRef = useRef(null);
 
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const findById = (rows, id) => (rows || []).find((row) => String(row?.id ?? '') === String(id ?? ''));
 
   const issueMap = useMemo(() => new Map((db.issue_to_coning_machine || []).map(i => [i.id, i])), [db.issue_to_coning_machine]);
 
@@ -318,56 +320,22 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
     if (reprintingId) return;
     setReprintingId(r.id);
     try {
-      const fullRow = db.receive_from_coning_machine_rows?.find(x => x.id === r.id) || r;
-      const issue = db.issue_to_coning_machine?.find(i => i.id === fullRow.issueId);
-      const box = db.boxes?.find(b => b.id === fullRow.boxId);
-      const operator = db.operators?.find(o => o.id === fullRow.operatorId);
-      const item = db.items?.find(i => i.id === issue?.itemId);
-      let coneType = ''; let wrapperName = '';
-      try {
-        const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-        if (Array.isArray(refs) && refs.length > 0) {
-          const ref = refs[0];
-          if (ref.coneTypeId) coneType = db.cone_types?.find(c => c.id === ref.coneTypeId)?.name || '';
-          if (ref.wrapperId) wrapperName = db.wrappers?.find(w => w.id === ref.wrapperId)?.name || '';
+      let sourceDb = db;
+      let fullRow = findById(sourceDb.receive_from_coning_machine_rows, r.id) || null;
+
+      if (!fullRow) {
+        const loadedDb = typeof ensureProcessData === 'function'
+          ? await ensureProcessData()
+          : null;
+        if (loadedDb) {
+          sourceDb = loadedDb;
+          fullRow = findById(sourceDb.receive_from_coning_machine_rows, r.id) || null;
         }
-      } catch (e) {}
-      let cut = ''; let yarnName = ''; let twist = ''; let rollType = '';
-      if (issue) {
-        const resolved = resolveConingTrace(issue, traceContext);
-        cut = resolved.cutName === '—' ? '' : resolved.cutName;
-        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
-        twist = resolved.twistName === '—' ? '' : resolved.twistName;
-        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
       }
-      const lotLabel = issue?.lotLabel || issue?.lotNo || fullRow.issue?.lotNo || fullRow.lotNo || '';
-      const netWeight = Number.isFinite(fullRow.netWeight)
-        ? Number(fullRow.netWeight)
-        : (Number.isFinite(fullRow.grossWeight) && Number.isFinite(fullRow.tareWeight))
-          ? Math.max(0, Number(fullRow.grossWeight) - Number(fullRow.tareWeight))
-          : Number(fullRow.grossWeight || 0);
-      const machineName = fullRow.machineNo || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '') || '';
-      const operatorName = operator?.name || fullRow.operator?.name || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '') || '';
-      const data = {
-        lotNo: lotLabel,
-        itemName: fullRow.itemName || item?.name || '',
-        coneCount: fullRow.coneCount,
-        grossWeight: fullRow.grossWeight,
-        tareWeight: fullRow.tareWeight || 0,
-        netWeight,
-        boxName: box?.name || fullRow.box?.name || '',
-        cut: fullRow.cutName || cut,
-        yarnName: fullRow.yarnName || yarnName,
-        twist: fullRow.twistName || twist,
-        rollType,
-        coneType: fullRow.coneTypeName || coneType,
-        wrapperName,
-        operatorName,
-        machineName,
-        shift: issue?.shift || fullRow.shift || '',
-        date: fullRow.date || fullRow.createdAt,
-        barcode: fullRow.barcode,
-      };
+
+      if (!fullRow) throw new Error('Original receive row not found for reprint');
+
+      const data = buildConingReceiveLabelData({ db: sourceDb, row: fullRow });
       const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
       if (!template) { alert('No sticker template found for Coning Receive. Configure it in Label Designer.'); return; }
       await printStageTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE, data, { template });

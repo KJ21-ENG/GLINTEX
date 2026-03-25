@@ -18,6 +18,7 @@ import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../../api/v2';
+import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
@@ -877,124 +878,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 };
             } else if (process === 'holo') {
                 stageKey = LABEL_STAGE_KEYS.HOLO_RECEIVE;
-                const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-                const item = db.items?.find(i => i.id === issue?.itemId);
-                const rollType = db.rollTypes?.find(rt => rt.id === row.rollTypeId);
-                const box = db.boxes?.find(b => b.id === row.boxId);
-                const yarnName = db.yarns?.find(y => y.id === issue?.yarnId)?.name || '';
-
-                const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', twistName: '—' };
-                const cut = resolved.cutName === '—' ? '' : resolved.cutName;
-                const twistName = resolved.twistName === '—' ? '' : resolved.twistName;
-
-                // Calculate tare weight
-                const boxWeight = Number(box?.weight || 0);
-                const rollTypeWeight = Number(rollType?.weight || 0);
-                const rollCount = Number(row.rollCount || 1);
-                const calculatedTare = boxWeight + (rollTypeWeight * rollCount);
-                const tareWeight = Number.isFinite(row.tareWeight) ? Number(row.tareWeight) : calculatedTare;
-
-                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || '';
-                const netWeight = Number.isFinite(row.rollWeight)
-                    ? Number(row.rollWeight)
-                    : Number.isFinite(row.netWeight)
-                        ? Number(row.netWeight)
-                        : Number.isFinite(row.grossWeight)
-                            ? Math.max(0, Number(row.grossWeight) - tareWeight)
-                            : 0;
-                const operatorName = row.operator?.name
-                    || (issue?.operatorId ? db.operators?.find(o => o.id === issue.operatorId)?.name : '')
-                    || '';
-                const machineName = row.machineNo || row.machine?.name
-                    || (issue?.machineId ? db.machines?.find(m => m.id === issue.machineId)?.name : '')
-                    || '';
-                data = {
-                    lotNo: lotLabel,
-                    itemName: item?.name || '',
-                    rollCount,
-                    rollType: rollType?.name || '',
-                    netWeight,
-                    grossWeight: row.grossWeight,
-                    tareWeight: tareWeight,
-                    boxName: box?.name || row.box?.name || '',
-                    cut: cut,
-                    yarnName: yarnName,
-                    twist: twistName,
-                    machineName,
-                    operatorName,
-                    shift: issue?.shift || row.shift || '',
-                    date: row.date || row.createdAt,
-                    barcode: row.barcode,
-                };
+                data = buildHoloReceiveLabelData({ db, row, holoTraceContext });
             } else if (process === 'coning') {
                 stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE;
-                const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
-                const box = db.boxes?.find(b => b.id === row.boxId);
-                const operator = db.operators?.find(o => o.id === row.operatorId);
-                const item = db.items?.find(i => i.id === issue?.itemId);
-
-                // Get coneType, wrapperName from issue's receivedRowRefs
-                let coneType = '';
-                let wrapperName = '';
-                let cut = '';
-                let yarnName = '';
-                let rollType = '';
-                let twist = '';
-
-                try {
-                    const refs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                    if (Array.isArray(refs) && refs.length > 0) {
-                        const firstRef = refs[0];
-
-                        // Get cone type and wrapper
-                        if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
-                        if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
-                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
-                        cut = resolved.cutName;
-                        yarnName = resolved.yarnName;
-                        twist = resolved.twistName;
-                        rollType = resolved.rollTypeName;
-                    }
-                } catch (e) { console.error('Error parsing receivedRowRefs', e); }
-
-                const lotLabel = issue?.lotLabel || issue?.lotNo || row.issue?.lotNo || row.lotNo || '';
-                const netWeight = Number.isFinite(row.netWeight)
-                    ? Number(row.netWeight)
-                    : Number.isFinite(row.grossWeight) && Number.isFinite(row.tareWeight)
-                        ? Math.max(0, Number(row.grossWeight) - Number(row.tareWeight))
-                        : Number(row.grossWeight || 0);
-
-                const resolved = issue ? resolveConingTrace(issue, traceContext) : null;
-                const cutResolved = cut === '—' ? '' : cut;
-                const yarnResolved = yarnName === '—' ? '' : yarnName;
-                const twistResolved = twist === '—' ? '' : twist;
-                const rollTypeResolved = rollType === '—' ? '' : rollType;
-                const machineName = row.machineNo
-                    || (issue?.machineId ? db.machines?.find((m) => m.id === issue.machineId)?.name : '')
-                    || getConingMachineName(row)
-                    || '';
-                const operatorName = operator?.name || row.operator?.name || (issue?.operatorId ? db.operators?.find((o) => o.id === issue.operatorId)?.name : '') || '';
-
-                data = {
-                    lotNo: lotLabel,
-                    itemName: row.itemName || item?.name || '',
-                    coneCount: row.coneCount,
-                    grossWeight: row.grossWeight,
-                    tareWeight: row.tareWeight || 0,
-                    netWeight,
-                    boxName: box?.name || row.box?.name || '',
-                    cut: row.cutName || (cutResolved || resolved?.cutName || ''),
-                    yarnName: row.yarnName || (yarnResolved || resolved?.yarnName || ''),
-                    twist: row.twistName || (twistResolved || resolved?.twistName || ''),
-                    rollType: rollTypeResolved || resolved?.rollTypeName || '',
-                    coneType: row.coneTypeName || coneType,
-                    wrapperName: wrapperName,
-                    operatorName,
-                    machineName,
-                    shift: issue?.shift || row.shift || '',
-                    date: row.date || row.createdAt,
-                    barcode: row.barcode,
-                };
+                data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
             }
 
 

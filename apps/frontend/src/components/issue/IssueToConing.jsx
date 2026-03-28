@@ -71,8 +71,8 @@ export function IssueToConing() {
     }, [crates, form.targetWeight]);
 
     const meta = useMemo(() => {
-        if (crates.length === 0) return { lotNo: '', itemId: null, cut: '' };
-        return { lotNo: crates[0].lotNo, itemId: crates[0].itemId, cut: crates[0].cut };
+        if (crates.length === 0) return { lotNo: '', itemId: null, cut: '', yarnId: null };
+        return { lotNo: crates[0].lotNo, itemId: crates[0].itemId, cut: crates[0].cut, yarnId: crates[0].yarnId };
     }, [crates]);
 
     // --- Handlers ---
@@ -117,6 +117,7 @@ export function IssueToConing() {
         // Resolve Item & Cut first (needed for mixed lot validation)
         const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
         const scannedItemId = holoIssue?.itemId;
+        const scannedYarnId = holoIssue?.yarnId || null;
         let cutName = '';
         if (holoIssue) {
             const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
@@ -132,6 +133,14 @@ export function IssueToConing() {
                 alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${meta.cut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
                 return;
             }
+        }
+
+        // Yarn consistency check
+        if (crates.length > 0 && scannedYarnId && meta.yarnId && scannedYarnId !== meta.yarnId) {
+            const existingYarnName = db.yarns?.find(y => y.id === meta.yarnId)?.name || 'Unknown';
+            const scannedYarnName = db.yarns?.find(y => y.id === scannedYarnId)?.name || 'Unknown';
+            alert(`Crates must belong to a single yarn.\n\nExisting: "${existingYarnName}"\nScanned: "${scannedYarnName}"`);
+            return;
         }
 
         // Defaults (factor in dispatch AND already issued to coning)
@@ -208,7 +217,8 @@ export function IssueToConing() {
             issueRolls: availableRolls, // Default all available
             issueWeight: defaultIssueWeight,
             itemId: scannedItemId,
-            cut: cutName
+            cut: cutName,
+            yarnId: scannedYarnId
         }]);
         setScanInput('');
         setScanFeedback(`Added ${normalized}`);

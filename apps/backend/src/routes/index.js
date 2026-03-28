@@ -9345,6 +9345,9 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       return res.status(400).json({ error: 'Crates must belong to a single cut' });
     }
     const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+    if (sourceYarnIds.size > 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single yarn' });
+    }
     const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
     const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
 
@@ -11915,6 +11918,9 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
           throw new Error('Crates must belong to a single cut');
         }
         const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+        if (sourceYarnIds.size > 1) {
+          throw new Error('Crates must belong to a single yarn');
+        }
         const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
         const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
 

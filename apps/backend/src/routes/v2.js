@@ -830,12 +830,12 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
     // Facets are intentionally limited to keep the query fast.
     // UI only needs distinct values for dropdowns.
     const [machines, operators, items, cuts, yarns, twists] = await Promise.all([
-      prisma.machine.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
-      prisma.operator.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
-      prisma.item.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
-      prisma.cut.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
-      prisma.yarn.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
-      prisma.twist.findMany({ select: { name: true }, where: { name: { not: null } }, orderBy: { name: 'asc' } }),
+      prisma.machine.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.item.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.cut.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.yarn.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
     ]);
 
     // NOTE: The above uses master tables (global facets) to preserve current dropdown behavior even when paging.

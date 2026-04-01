@@ -1745,7 +1745,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
             allRecvMap.set(r.issueId, (allRecvMap.get(r.issueId) || 0) + nw);
           }
         }
-        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, pendingWeight: 0 };
+        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0 };
         for (const issue of allIssues) {
           const tb = allTb.get(issue.id) || { weight: 0 };
           const orig = Number(issue.metallicBobbinsWeight || 0);
@@ -1759,6 +1759,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           s.takeBackWeight += tbW;
           s.netIssuedWeight += net;
           s.receivedWeight += recv;
+          s.wastageWeight += waste;
           s.pendingWeight += pend;
         }
         summary = s;
@@ -1793,6 +1794,17 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     for (const r of receiveRows) {
       receivedByIssue.set(r.issueId, (receivedByIssue.get(r.issueId) || 0) + Number(r.netWeight || 0));
     }
+    const wastageByIssue = new Map();
+    if (issueIds.length) {
+      const wastageTotals = await prisma.receiveFromConingMachinePieceTotal.findMany({
+        where: { pieceId: { in: issueIds } },
+        select: { pieceId: true, wastageNetWeight: true },
+      });
+      for (const w of wastageTotals) {
+        const wt = Number(w.wastageNetWeight || 0);
+        if (wt > 0) wastageByIssue.set(w.pieceId, wt);
+      }
+    }
     const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(issueIds);
     const coneTypeIds = new Set();
     for (const issue of pageWithItems) {
@@ -1823,7 +1835,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
       const takeBackWeight = Number(tb.weight || 0);
       const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
       const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-      const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight);
+      const wastageWeight = Number(wastageByIssue.get(issue.id) || 0);
+      const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
       return {
         ...issue,
         itemName: issue.itemName || '',
@@ -1840,7 +1853,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         coneTypeName,
         perConeTargetG: Number(issue.requiredPerConeNetWeight || 0),
         receivedWeight,
-        wastageWeight: 0,
+        wastageWeight,
         pendingWeight,
         pieceIdsList: pieceIdsByIssueId.get(issue.id) || [],
       };
@@ -1865,7 +1878,18 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
       for (const r of allRecv) {
         allRecvMap.set(r.issueId, (allRecvMap.get(r.issueId) || 0) + Number(r.netWeight || 0));
       }
-      const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, pendingWeight: 0, rollsIssued: 0 };
+      const allWasteMap = new Map();
+      if (allIds.length) {
+        const allWastageTotals = await prisma.receiveFromConingMachinePieceTotal.findMany({
+          where: { pieceId: { in: allIds } },
+          select: { pieceId: true, wastageNetWeight: true },
+        });
+        for (const w of allWastageTotals) {
+          const wt = Number(w.wastageNetWeight || 0);
+          if (wt > 0) allWasteMap.set(w.pieceId, wt);
+        }
+      }
+      const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, rollsIssued: 0 };
       for (const issue of allIssues) {
         const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
         const orig = refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
@@ -1874,12 +1898,14 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         const tbW = Number(tb.weight || 0);
         const net = Math.max(0, orig - tbW);
         const recv = Number(allRecvMap.get(issue.id) || 0);
-        const pend = Math.max(0, net - recv);
+        const waste = Number(allWasteMap.get(issue.id) || 0);
+        const pend = Math.max(0, net - recv - waste);
         if (pend <= 0.001) continue;
         s.originalIssuedWeight += orig;
         s.takeBackWeight += tbW;
         s.netIssuedWeight += net;
         s.receivedWeight += recv;
+        s.wastageWeight += waste;
         s.pendingWeight += pend;
         s.rollsIssued += rolls;
       }

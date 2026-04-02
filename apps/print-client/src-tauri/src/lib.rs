@@ -1,14 +1,13 @@
 use actix_cors::Cors;
 use actix_web::{middleware::DefaultHeaders, web, App, HttpResponse, HttpServer, Responder};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
-use tauri::Manager;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -24,6 +23,8 @@ struct PrintJob {
     content: String,
     #[serde(default)]
     r#type: String,
+    #[serde(default)]
+    encoding: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -33,6 +34,12 @@ struct PrintJobRecord {
     status: String, // "Processing", "Completed", "Failed"
     timestamp: String,
     error: Option<String>,
+    job_type: String,
+    encoding: String,
+    content_len: usize,
+    raw_len: usize,
+    byte_preview_hex: Option<String>,
+    debug_file: Option<String>,
 }
 
 struct AppState {
@@ -107,14 +114,33 @@ async fn get_queue(data: web::Data<AppState>) -> impl Responder {
     HttpResponse::Ok().json(&*queue)
 }
 
+fn preview_bytes_hex(bytes: &[u8], max_len: usize) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let preview = bytes
+        .iter()
+        .take(max_len)
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(preview)
+}
+
 async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Responder {
     let job_id = next_job_id();
-    let mut record = PrintJobRecord {
+    let record = PrintJobRecord {
         id: job_id.clone(),
         printer: job.printer.clone(),
         status: "Processing".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         error: None,
+        job_type: job.r#type.clone(),
+        encoding: job.encoding.clone(),
+        content_len: job.content.len(),
+        raw_len: 0,
+        byte_preview_hex: None,
+        debug_file: None,
     };
 
     // Add to queue
@@ -134,7 +160,7 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(800);
     {
-        let mut last = data.last_job_at.lock().unwrap();
+        let last = data.last_job_at.lock().unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         let elapsed = now - *last;
         if elapsed < min_interval_ms {
@@ -142,16 +168,49 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
         }
     }
 
-    let temp_dir = std::env::temp_dir();
-    let file_path = temp_dir.join(format!("print_job_{}.txt", job_id));
+    let raw_bytes = if job.encoding == "base64" {
+        match base64::engine::general_purpose::STANDARD.decode(&job.content) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let mut queue = data.queue.lock().unwrap();
+                if let Some(r) = queue.iter_mut().find(|r| r.id == job_id) {
+                    r.status = "Failed".to_string();
+                    r.error = Some(format!("Invalid base64 payload: {}", e));
+                }
+                return HttpResponse::BadRequest().body(format!("Invalid base64 content: {}", e));
+            }
+        }
+    } else {
+        job.content.as_bytes().to_vec()
+    };
 
-    if let Err(e) = fs::write(&file_path, &job.content) {
+    let temp_dir = std::env::temp_dir();
+    let file_ext = if job.encoding == "base64" { "bin" } else { "txt" };
+    let file_path = temp_dir.join(format!("print_job_{}.{}", job_id, file_ext));
+    let debug_dir = temp_dir.join("glintex-print-debug");
+    let _ = fs::create_dir_all(&debug_dir);
+    let debug_file_path = debug_dir.join(format!("print_job_{}.{}", job_id, file_ext));
+
+    if let Err(e) = fs::write(&file_path, &raw_bytes) {
         let mut queue = data.queue.lock().unwrap();
         if let Some(r) = queue.iter_mut().find(|r| r.id == job_id) {
             r.status = "Failed".to_string();
             r.error = Some(e.to_string());
         }
         return HttpResponse::InternalServerError().body(format!("Failed to write temp file: {}", e));
+    }
+
+    let debug_file = match fs::write(&debug_file_path, &raw_bytes) {
+        Ok(_) => Some(debug_file_path.to_string_lossy().to_string()),
+        Err(err) => Some(format!("debug-write-failed: {}", err)),
+    };
+    {
+        let mut queue = data.queue.lock().unwrap();
+        if let Some(r) = queue.iter_mut().find(|r| r.id == job_id) {
+            r.raw_len = raw_bytes.len();
+            r.byte_preview_hex = preview_bytes_hex(&raw_bytes, 32);
+            r.debug_file = debug_file;
+        }
     }
 
     let platform = std::env::consts::OS;
@@ -168,7 +227,7 @@ async fn print(job: web::Json<PrintJob>, data: web::Data<AppState>) -> impl Resp
         
         let ps_script = format!(r#"
 $printerName = "{}"
-$data = Get-Content -Path "{}" -Raw -Encoding utf8
+$bytes = [System.IO.File]::ReadAllBytes("{}")
 
 $definition = @"
 using System;
@@ -240,7 +299,13 @@ public class RawPrinterHelper {{
 }}
 "@
 Add-Type -TypeDefinition $definition
-[RawPrinterHelper]::SendStringToPrinter($printerName, $data)
+$pBytes = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+[System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $pBytes, $bytes.Length)
+try {{
+    [RawPrinterHelper]::SendBytesToPrinter($printerName, $pBytes, $bytes.Length)
+}} finally {{
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pBytes)
+}}
 "#, printer, escaped_file_path);
 
         if let Err(e) = fs::write(&ps_script_path, ps_script) {
@@ -298,10 +363,15 @@ Add-Type -TypeDefinition $definition
         *last = chrono::Utc::now().timestamp_millis();
     }
 
+    let job_snapshot = {
+        let queue = data.queue.lock().unwrap();
+        queue.iter().find(|r| r.id == job_id).cloned()
+    };
+
     match status {
-        Ok(s) if s.success() => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
-        Ok(_) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": "Print command failed" })),
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e.to_string() })),
+        Ok(s) if s.success() => HttpResponse::Ok().json(serde_json::json!({ "success": true, "job": job_snapshot })),
+        Ok(_) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": "Print command failed", "job": job_snapshot })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e.to_string(), "job": job_snapshot })),
     }
 }
 

@@ -9,6 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/roboto-mono": "^5.2.8",
+    "bwip-js": "^4.8.0",
     "clsx": "^2.1.1",
     "html5-qrcode": "^2.3.8",
     "jspdf": "^2.5.1",

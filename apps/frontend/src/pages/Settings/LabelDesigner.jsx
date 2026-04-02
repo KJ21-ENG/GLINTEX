@@ -5,6 +5,8 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label }
 import {
   DEFAULT_DIMENSIONS,
   DEFAULT_CONTENT,
+  FONT_FAMILY_OPTIONS,
+  getBarcodeQuietZoneMm,
   LABEL_STAGE_KEYS,
   getStageVariables,
   normalizeBlock,
@@ -16,7 +18,18 @@ import {
   sendToLocalPrinter,
   setPreferredPrinter,
   getPreferredPrinter,
+  prepareTemplateFields,
+  shouldUseBitmapPrint,
+  getWrappedTextLines,
+  uint8ArrayToBase64,
 } from '../../utils/labelPrint';
+import {
+  buildBitmapTsplFromTemplate,
+  getBitmapPolaritySanity,
+  measureRenderedBlock,
+  renderLabelToCanvas,
+  waitForLabelFonts,
+} from '../../utils/labelBitmap';
 
 const PX_PER_MM = 3.6; // for on-screen preview
 
@@ -45,9 +58,33 @@ const normalizeTextBlock = (block = {}, fallbackId = 0) => normalizeBlock(block,
 
 const migrateLegacyContent = (raw) => migrateContent(raw);
 
+const LabelCanvasSurface = ({ sourceCanvas }) => {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !sourceCanvas) return;
+    canvas.width = sourceCanvas.width;
+    canvas.height = sourceCanvas.height;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(sourceCanvas, 0, 0);
+  }, [sourceCanvas]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full pointer-events-none"
+      style={{ imageRendering: 'auto' }}
+    />
+  );
+};
+
 const LabelPreview = ({
   dimensions,
   content,
+  stageKey,
   setContent,
   setContentWithHistory,
   pushHistory,
@@ -73,53 +110,100 @@ const LabelPreview = ({
   } = dimensions;
   const totalLabelsWidth = columns * width + horizontalGap * (columns - 1);
   const pagePadding = Math.max(0, (pageWidth - totalLabelsWidth) / 2);
-  const pxToMm = (px) => px / PX_PER_MM;
-
-  // Constrain long text so it doesn't cross into the other half of the label.
-  // This prevents long single-line fields from visually "overwriting" content placed on the opposite half.
-  const getHalfWrapMaxWidthMm = (block) => {
-    if (!block || block.type !== 'text') return null;
-    if (block.style?.wrapAtCenter !== true) return null;
-    const angle = snapAngle(block.angle || 0);
-    const pos = block.pos || { x: 0, y: 0 };
-    const originX = (pos.x || 0) + offsetX;
-    const originY = (pos.y || 0) + offsetY;
-    const left = offsetX;
-    const right = offsetX + width;
-    const top = offsetY;
-    const bottom = offsetY + height;
-    const centerX = (left + right) / 2;
-    const centerY = (top + bottom) / 2;
-
-    if (angle === 0) return (originX < centerX ? centerX : right) - originX;
-    if (angle === 180) return originX - (originX > centerX ? centerX : left);
-    if (angle === 90) return (originY < centerY ? centerY : bottom) - originY;
-    if (angle === 270) return originY - (originY > centerY ? centerY : top);
-    return null;
-  };
-
-  const wrapTextByChars = (text = '', maxChars = 0) => {
-    const max = Math.max(1, Math.floor(maxChars || 0));
-    const inputLines = String(text ?? '').split(/\r?\n/);
-    const out = [];
-
-    inputLines.forEach((lineRaw) => {
-      let line = String(lineRaw ?? '');
-      while (line.length > max) {
-        let breakAt = line.lastIndexOf(' ', max);
-        if (breakAt <= 0) breakAt = max;
-        out.push(line.slice(0, breakAt).trimEnd());
-        line = line.slice(breakAt).trimStart();
-      }
-      if (line.length) out.push(line);
-    });
-
-    return out.length ? out : [''];
-  };
+  const previewScrollRef = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [showGrid, setShowGrid] = useState(true);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [printerMode, setPrinterMode] = useState(false);
+  const [showRulers, setShowRulers] = useState(true);
+  const [showQuietZones, setShowQuietZones] = useState(true);
+  const [panning, setPanning] = useState(null);
+  const pxToMm = (px) => px / (PX_PER_MM * zoom);
+  const fitToWidth = useCallback(() => {
+    const container = previewScrollRef.current;
+    if (!container) return;
+    const available = Math.max(240, container.clientWidth - 40);
+    const baseWidthPx = Math.max(1, mmToPx(pageWidth));
+    setZoom(Math.max(0.5, Math.min(3, available / baseWidthPx)));
+  }, [pageWidth]);
+  const previewPixelsPerMm = useMemo(() => {
+    if (typeof window === 'undefined') return PX_PER_MM;
+    return PX_PER_MM * (window.devicePixelRatio || 1);
+  }, []);
+  const [fontRenderNonce, setFontRenderNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    waitForLabelFonts({ dimensions, content })
+      .then(() => {
+        if (!cancelled) setFontRenderNonce((current) => current + 1);
+      })
+      .catch((error) => {
+        console.error('Failed to prepare label fonts', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, dimensions]);
+  useEffect(() => {
+    fitToWidth();
+  }, [fitToWidth, columns, pageWidth]);
+  const previewRender = useMemo(() => {
+    try {
+      return renderLabelToCanvas(
+        { dimensions, content },
+        {},
+        { stageKey, pixelsPerMm: previewPixelsPerMm, preserveColor: true, printerMode },
+      );
+    } catch (error) {
+      console.error('Failed to render label preview canvas', error);
+      return null;
+    }
+  }, [content, dimensions, fontRenderNonce, previewPixelsPerMm, printerMode, stageKey]);
+  const previewFields = useMemo(
+    () => prepareTemplateFields(dimensions, content, {}, { stageKey }).fields,
+    [content, dimensions, stageKey],
+  );
 
   const applyFlowLayout = (blocks) => {
     const AFTER_WRAP_GAP_LINES = 1;
+    const FLOW_LANE_CLUSTER_MM = 10;
     const groups = new Map();
+    const laneKeyById = new Map();
+    const laneMeta = (blocks || [])
+      .filter((block) => block?.style?.visible !== false)
+      .map((b) => {
+        const angle = snapAngle(b.angle || 0);
+        const pos = b.pos || { x: 0, y: 0 };
+        const originX = (pos.x || 0) + offsetX;
+        const originY = (pos.y || 0) + offsetY;
+        const centerX = (offsetX + offsetX + width) / 2;
+        const centerY = (offsetY + offsetY + height) / 2;
+        const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
+        const laneRaw = angle === 0 || angle === 180 ? originX : originY;
+        return { id: b.id, angle, half, laneRaw };
+      });
+
+    const clusteredByStream = new Map();
+    laneMeta.forEach((meta) => {
+      const streamKey = `${meta.angle}:${meta.half}`;
+      const list = clusteredByStream.get(streamKey) || [];
+      list.push(meta);
+      clusteredByStream.set(streamKey, list);
+    });
+
+    clusteredByStream.forEach((list, streamKey) => {
+      const sorted = [...list].sort((a, b) => a.laneRaw - b.laneRaw);
+      let clusterIndex = -1;
+      let previousLane = null;
+      sorted.forEach((meta) => {
+        if (previousLane === null || Math.abs(meta.laneRaw - previousLane) > FLOW_LANE_CLUSTER_MM) {
+          clusterIndex += 1;
+        }
+        laneKeyById.set(meta.id, `${streamKey}:${clusterIndex}`);
+        previousLane = meta.laneRaw;
+      });
+    });
+
     const keyFor = (b) => {
       const angle = snapAngle(b.angle || 0);
       const pos = b.pos || { x: 0, y: 0 };
@@ -128,9 +212,7 @@ const LabelPreview = ({
       const centerX = (offsetX + offsetX + width) / 2;
       const centerY = (offsetY + offsetY + height) / 2;
       const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
-      const laneRaw = angle === 0 || angle === 180 ? originX : originY;
-      const lane = Math.round(laneRaw * 2) / 2;
-      return `${angle}:${half}:${lane}`;
+      return laneKeyById.get(b.id) || `${angle}:${half}:fallback`;
     };
 
     (blocks || []).forEach((b) => {
@@ -181,20 +263,11 @@ const LabelPreview = ({
         const scale = getFontScale(style.size || dimensions.fontSize);
         const charHeightMm = 3 * scale;
         const stepMm = charHeightMm * 1.05;
-        const charWidthMm = 2 * scale;
-        const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
-        const safetyMm = style.background?.enabled ? 0.25 : 0;
-        const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(b);
-        const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
-        const availableTextWidthMm = wrapMaxWidthMm
-          ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
-          : null;
-        const maxChars = availableTextWidthMm ? Math.max(1, Math.floor(availableTextWidthMm / charWidthMm)) : null;
         const raw = b.value || '';
-        const effectiveLines = maxChars && raw.length > maxChars ? wrapTextByChars(raw, maxChars) : [raw];
+        const effectiveLines = b.type === 'text' ? getWrappedTextLines(b, dimensions, raw, { stageKey }) : [raw];
         const lineCount = Math.max(1, effectiveLines.length);
         const extraGap = b.type === 'text' && style.wrapAtCenter === true && lineCount > 1 ? AFTER_WRAP_GAP_LINES : 0;
-        const advanceLines = b.type === 'text' && style.wrapAtCenter === true ? lineCount + extraGap : 1;
+        const advanceLines = b.type === 'text' ? lineCount + extraGap : 1;
 
         const newShift = shifts.get(b.id);
         const axisAfterShift = baseAxis + (angle === 0 || angle === 180 ? newShift?.dy || 0 : newShift?.dx || 0);
@@ -246,47 +319,15 @@ const LabelPreview = ({
   const dragMovedRef = useRef(false);
   const preResizeSnapshotRef = useRef(null);
   const resizeMovedRef = useRef(false);
+  const mmToViewPx = useCallback((mm) => mmToPx(mm) * zoom, [zoom]);
 
   const measureBlock = (block) => {
-    if (block.type === 'line') {
-      const angle = snapAngle(block.angle || 0);
-      const lengthMm = Math.max(0.1, Number(block.style?.lengthMm ?? 20));
-      const thicknessMm = Math.max(0.1, Number(block.style?.thicknessMm ?? 0.6));
-      const horizontal = angle === 0 || angle === 180;
-      return {
-        widthMm: horizontal ? lengthMm : thicknessMm,
-        heightMm: horizontal ? thicknessMm : lengthMm,
-      };
-    }
-    if (block.type === 'barcode') {
-      const moduleMm = block.style?.moduleMm ?? 0.3;
-      const heightMm = block.style?.heightMm ?? 12;
-      const valueLength = Math.max(1, (block.value || '').length);
-      const modules = Math.max(30, valueLength * 11 + 35); // rough Code128 width estimate
-      const widthMm = modules * moduleMm;
-      return { widthMm, heightMm };
-    }
-    const scale = getFontScale(block.style?.size || dimensions.fontSize);
-    const charHeightMm = 3 * scale;
-    const charWidthMm = 2 * scale;
-    const paddingMm = block.style?.background?.enabled ? block.style.background.paddingMm ?? 0.8 : 0;
-    const underlineExtraMm = block.style?.underline ? charHeightMm * 0.3 : 0;
-    const textLen = Math.max(1, (block.value || '').length);
-    const safetyMm = block.style?.background?.enabled ? 0.25 : 0; // +2 dots @203dpi
-    const naturalTextWidthMm = textLen * charWidthMm;
-    const naturalBlockWidthMm = naturalTextWidthMm + paddingMm * 2 + safetyMm;
-
-    const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(block);
-    const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
-    const availableTextWidthMm = wrapMaxWidthMm
-      ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
-      : null;
-    const lineCount = availableTextWidthMm ? Math.max(1, Math.ceil(naturalTextWidthMm / availableTextWidthMm)) : 1;
-    const lineStepMm = charHeightMm * 1.05;
-    const totalLineHeightMm = charHeightMm + lineStepMm * Math.max(0, lineCount - 1);
-    const widthMm = wrapMaxWidthMm ? Math.min(naturalBlockWidthMm, wrapMaxWidthMm) : naturalBlockWidthMm;
-    const heightMm = totalLineHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
-    return { widthMm, heightMm };
+    const metrics = measureRenderedBlock(block, dimensions, {
+      stageKey,
+      pixelsPerMm: previewPixelsPerMm,
+      preserveColor: true,
+    });
+    return { widthMm: metrics.widthMm, heightMm: metrics.heightMm };
   };
 
   const computeBoundingBox = (text) => {
@@ -332,108 +373,209 @@ const LabelPreview = ({
     };
   };
 
+  const getSelectedPreviewBlocks = useMemo(
+    () => previewFields.filter((block) => selectedIds.includes(block.id)),
+    [previewFields, selectedIds],
+  );
+
+  const selectionBounds = useMemo(() => {
+    if (getSelectedPreviewBlocks.length < 2) return null;
+    const boxes = getSelectedPreviewBlocks.map((block) => computeBoundingBox(block));
+    return {
+      left: Math.min(...boxes.map((box) => box.left)),
+      right: Math.max(...boxes.map((box) => box.right)),
+      top: Math.min(...boxes.map((box) => box.top)),
+      bottom: Math.max(...boxes.map((box) => box.bottom)),
+    };
+  }, [getSelectedPreviewBlocks]);
+
+  const getBarcodeWarning = useCallback((block) => {
+    if (!block || block.type !== 'barcode') return null;
+    const box = computeBoundingBox(block);
+    const overflows =
+      box.left < offsetX || box.top < offsetY || box.right > offsetX + width || box.bottom > offsetY + height;
+    if (!overflows) return null;
+    return 'Barcode exceeds the safe label area. Increase label size, move it inward, or reduce module width.';
+  }, [height, offsetX, offsetY, width]);
+
+  const updateSelectedBlocks = useCallback((mutate) => {
+    setContentWithHistory((prev) => {
+      const nextTexts = mutate(prev.texts || []);
+      return { ...prev, texts: nextTexts };
+    });
+  }, [setContentWithHistory]);
+
+  const moveSelectedBy = useCallback((dx, dy) => {
+    updateSelectedBlocks((texts) => texts.map((block) => {
+      if (!selectedIds.includes(block.id) || block.locked) return block;
+      return {
+        ...block,
+        pos: {
+          x: Math.max(0, (block.pos?.x || 0) + dx),
+          y: Math.max(0, (block.pos?.y || 0) + dy),
+        },
+      };
+    }));
+  }, [selectedIds, updateSelectedBlocks]);
+
+  const alignSelected = useCallback((mode) => {
+    if (selectedIds.length < 2) return;
+    const selectedBlocks = (content.texts || []).filter((block) => selectedIds.includes(block.id));
+    const boxes = new Map(selectedBlocks.map((block) => [block.id, computeBoundingBox(block)]));
+    const bounds = {
+      left: Math.min(...selectedBlocks.map((block) => boxes.get(block.id).left)),
+      right: Math.max(...selectedBlocks.map((block) => boxes.get(block.id).right)),
+      top: Math.min(...selectedBlocks.map((block) => boxes.get(block.id).top)),
+      bottom: Math.max(...selectedBlocks.map((block) => boxes.get(block.id).bottom)),
+    };
+    const centerX = (bounds.left + bounds.right) / 2;
+    const centerY = (bounds.top + bounds.bottom) / 2;
+
+    updateSelectedBlocks((texts) => texts.map((block) => {
+      if (!selectedIds.includes(block.id) || block.locked) return block;
+      const box = boxes.get(block.id);
+      let dx = 0;
+      let dy = 0;
+      if (mode === 'left') dx = bounds.left - box.left;
+      if (mode === 'right') dx = bounds.right - box.right;
+      if (mode === 'center-x') dx = centerX - box.centerX;
+      if (mode === 'top') dy = bounds.top - box.top;
+      if (mode === 'bottom') dy = bounds.bottom - box.bottom;
+      if (mode === 'center-y') dy = centerY - box.centerY;
+      return {
+        ...block,
+        pos: {
+          x: Math.max(0, (block.pos?.x || 0) + dx),
+          y: Math.max(0, (block.pos?.y || 0) + dy),
+        },
+      };
+    }));
+  }, [content.texts, selectedIds, updateSelectedBlocks]);
+
+  const distributeSelected = useCallback((axis) => {
+    if (selectedIds.length < 3) return;
+    const selectedBlocks = (content.texts || []).filter((block) => selectedIds.includes(block.id));
+    const boxes = selectedBlocks.map((block) => ({ block, box: computeBoundingBox(block) }));
+    const sorted = [...boxes].sort((a, b) => axis === 'x' ? a.box.left - b.box.left : a.box.top - b.box.top);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const totalSpan = axis === 'x' ? last.box.right - first.box.left : last.box.bottom - first.box.top;
+    const occupied = sorted.reduce((sum, entry) => sum + (axis === 'x' ? entry.box.widthMm : entry.box.heightMm), 0);
+    const gap = (totalSpan - occupied) / (sorted.length - 1);
+    let cursor = axis === 'x' ? first.box.left : first.box.top;
+
+    const shifts = new Map();
+    sorted.forEach((entry, index) => {
+      if (index === 0) {
+        cursor += axis === 'x' ? entry.box.widthMm + gap : entry.box.heightMm + gap;
+        return;
+      }
+      if (index === sorted.length - 1) return;
+      const targetStart = cursor;
+      const currentStart = axis === 'x' ? entry.box.left : entry.box.top;
+      shifts.set(entry.block.id, targetStart - currentStart);
+      cursor += axis === 'x' ? entry.box.widthMm + gap : entry.box.heightMm + gap;
+    });
+
+    updateSelectedBlocks((texts) => texts.map((block) => {
+      if (!selectedIds.includes(block.id) || block.locked || !shifts.has(block.id)) return block;
+      const delta = shifts.get(block.id) || 0;
+      return {
+        ...block,
+        pos: {
+          x: Math.max(0, (block.pos?.x || 0) + (axis === 'x' ? delta : 0)),
+          y: Math.max(0, (block.pos?.y || 0) + (axis === 'y' ? delta : 0)),
+        },
+      };
+    }));
+  }, [content.texts, selectedIds, updateSelectedBlocks]);
+
+  const duplicateSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const timestamp = Date.now();
+    updateSelectedBlocks((texts) => {
+      const selected = texts.filter((block) => selectedIds.includes(block.id));
+      const duplicates = selected.map((block, index) => ({
+        ...JSON.parse(JSON.stringify(block)),
+        id: `${block.id}-dup-${timestamp}-${index}`,
+        locked: false,
+        pos: {
+          x: (block.pos?.x || 0) + 2,
+          y: (block.pos?.y || 0) + 2,
+        },
+      }));
+      setSelectedIds(duplicates.map((block) => block.id));
+      return [...texts, ...duplicates];
+    });
+  }, [selectedIds, updateSelectedBlocks]);
+
+  const reorderSelected = useCallback((direction) => {
+    if (selectedIds.length === 0) return;
+    updateSelectedBlocks((texts) => {
+      const items = [...texts];
+      if (direction === 'backward') {
+        for (let index = 1; index < items.length; index += 1) {
+          if (selectedIds.includes(items[index].id) && !selectedIds.includes(items[index - 1].id)) {
+            [items[index - 1], items[index]] = [items[index], items[index - 1]];
+          }
+        }
+      } else {
+        for (let index = items.length - 2; index >= 0; index -= 1) {
+          if (selectedIds.includes(items[index].id) && !selectedIds.includes(items[index + 1].id)) {
+            [items[index], items[index + 1]] = [items[index + 1], items[index]];
+          }
+        }
+      }
+      return items;
+    });
+  }, [selectedIds, updateSelectedBlocks]);
+
+  const toggleSelectedLock = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const shouldLock = (content.texts || []).some((block) => selectedIds.includes(block.id) && !block.locked);
+    updateSelectedBlocks((texts) => texts.map((block) => (
+      selectedIds.includes(block.id) ? { ...block, locked: shouldLock } : block
+    )));
+  }, [content.texts, selectedIds, updateSelectedBlocks]);
+
+  const toggleSelectedVisibility = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const shouldShow = (content.texts || []).some((block) => selectedIds.includes(block.id) && block.style?.visible === false);
+    updateSelectedBlocks((texts) => texts.map((block) => (
+      selectedIds.includes(block.id)
+        ? { ...block, style: { ...(block.style || {}), visible: shouldShow } }
+        : block
+    )));
+  }, [content.texts, selectedIds, updateSelectedBlocks]);
+
   const blockStyle = (block, selected = false) => {
     const angle = block.angle || 0;
     const pos = block.pos || { x: 0, y: 0 };
-    if (block.type === 'line') {
-      const style = block.style || {};
-      const snapped = snapAngle(angle);
-      const lengthMm = Math.max(0.1, Number(style.lengthMm ?? 20));
-      const thicknessMm = Math.max(0.1, Number(style.thicknessMm ?? 0.6));
-      const horizontal = snapped === 0 || snapped === 180;
-      const widthMm = horizontal ? lengthMm : thicknessMm;
-      const heightMm = horizontal ? thicknessMm : lengthMm;
-      const visible = style.visible !== false;
-      return {
-        position: 'absolute',
-        left: `${mmToPx(pos.x + offsetX)}px`,
-        top: `${mmToPx(pos.y + offsetY)}px`,
-        width: `${mmToPx(widthMm)}px`,
-        height: `${mmToPx(heightMm)}px`,
-        background: '#0f172a',
-        borderRadius: '2px',
-        opacity: visible ? 1 : 0.35,
-        cursor: visible ? 'move' : 'not-allowed',
-        outline: selected ? '1px dashed #818cf8' : 'none',
-        outlineOffset: '4px',
-      };
-    }
-    if (block.type === 'barcode') {
-      const { widthMm, heightMm } = measureBlock(block);
-      return {
-        position: 'absolute',
-        left: `${mmToPx(pos.x + offsetX)}px`,
-        top: `${mmToPx(pos.y + offsetY)}px`,
-        width: `${mmToPx(widthMm)}px`,
-        height: `${mmToPx(heightMm)}px`,
-        transform: `rotate(${snapAngle(angle)}deg)`,
-        transformOrigin: 'top left',
-        backgroundImage:
-          'repeating-linear-gradient(90deg, #0f172a, #0f172a 2px, transparent 2px, transparent 4px)',
-        backgroundSize: '6px 100%',
-        color: '#0f172a',
-        display: 'flex',
-        alignItems: 'flex-end',
-        fontSize: '10px',
-        padding: '2px',
-        borderRadius: '4px',
-        opacity: block.style?.visible === false ? 0.35 : 1,
-        cursor: block.style?.visible === false ? 'not-allowed' : 'move',
-        outline: selected ? '1px dashed #818cf8' : 'none',
-        outlineOffset: '3px',
-      };
-    }
-    const style = block.style || {};
-    const scale = getFontScale(style.size || dimensions.fontSize);
-    const charHeightMm = 3 * scale; // TSPL font 3: 24 dots high -> 3mm @203dpi
-    const charWidthMm = 2 * scale;
-    const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
-    const paddingPx = mmToPx(paddingMm);
-    const textLen = Math.max(1, (block.value || '').length);
-    const safetyMm = style.background?.enabled ? 0.25 : 0; // +2 dots @203dpi
-    const underlineExtraMm = style.underline ? charHeightMm * 0.3 : 0;
-    const widthMm = textLen * charWidthMm + paddingMm * 2 + safetyMm;
-    const heightMm = charHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
-    const backgroundColor = style.background?.enabled ? style.background.color || '#000000' : 'transparent';
-    const textColor = style.background?.enabled ? style.background.textColor || '#ffffff' : '#0f172a';
-    const visualOpacity = style.visible === false ? 0.35 : clampNumber(style.opacity ?? 1, 0, 1);
-    const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(block);
-    const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
-    const shouldWrap = wrapMaxWidthMm && widthMm > wrapMaxWidthMm;
-    const effectiveWidthMm = shouldWrap ? Math.min(widthMm, wrapMaxWidthMm) : widthMm;
-    const availableTextWidthMm = shouldWrap ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm) : null;
-    const lineCount = availableTextWidthMm ? Math.max(1, Math.ceil((textLen * charWidthMm) / availableTextWidthMm)) : 1;
-    const lineStepMm = charHeightMm * 1.05;
-    const totalLineHeightMm = charHeightMm + lineStepMm * Math.max(0, lineCount - 1);
-    const effectiveHeightMm = totalLineHeightMm + paddingMm * 2 + underlineExtraMm + safetyMm;
+    const { widthMm, heightMm } = measureBlock(block);
+    const visible = block.style?.visible !== false;
+    const barcodeWarning = getBarcodeWarning(block);
+    const overlayTint = selected ? 'rgba(99, 102, 241, 0.08)' : visible ? 'transparent' : 'rgba(148, 163, 184, 0.12)';
+
     return {
       position: 'absolute',
       left: `${mmToPx(pos.x + offsetX)}px`,
       top: `${mmToPx(pos.y + offsetY)}px`,
-      transform: `rotate(${snapAngle(angle)}deg)`,
-      transformOrigin: 'top left',
-      whiteSpace: shouldWrap ? 'normal' : 'nowrap',
-      overflowWrap: shouldWrap ? 'anywhere' : undefined,
-      wordBreak: shouldWrap ? 'break-word' : undefined,
-      display: 'inline-block',
       boxSizing: 'border-box',
-      width: `${mmToPx(effectiveWidthMm)}px`,
-      height: `${mmToPx(effectiveHeightMm)}px`,
-      fontSize: `${mmToPx(charHeightMm)}px`,
-      lineHeight: `${mmToPx(charHeightMm * 1.05)}px`,
-      letterSpacing: '0px', // mirror TSPL monospace font spacing
-      fontFamily: '"Courier New", monospace',
-      fontWeight: style.bold ? 700 : 500,
-      fontStyle: style.italic ? 'italic' : 'normal',
-      textDecoration: style.underline ? 'underline' : 'none',
-      opacity: visualOpacity,
-      cursor: style.visible === false ? 'not-allowed' : 'move',
-      outline: selected ? '1px dashed #818cf8' : 'none',
-      outlineOffset: '4px',
-      backgroundColor,
-      color: textColor,
-      padding: `${paddingPx}px`,
-      borderRadius: style.background?.enabled ? '4px' : '0px',
+      width: `${mmToPx(widthMm)}px`,
+      height: `${mmToPx(heightMm)}px`,
+      transform: block.type === 'line' ? undefined : `rotate(${snapAngle(angle)}deg)`,
+      transformOrigin: 'top left',
+      overflow: 'visible',
+      cursor: block.locked ? 'default' : visible ? 'move' : 'not-allowed',
+      border: barcodeWarning
+        ? '1px dashed #f97316'
+        : selected
+          ? '1px dashed #818cf8'
+          : visible
+            ? '1px solid transparent'
+            : '1px dashed rgba(148, 163, 184, 0.55)',
+      background: overlayTint,
+      borderRadius: block.type === 'line' ? '2px' : '4px',
     };
   };
 
@@ -549,19 +691,23 @@ const LabelPreview = ({
       const target = allTexts.find((t) => t.id === activeId);
       if (!target) return prev;
       const origin = dragging.origins[activeId] || { x: 0, y: 0 };
-      const proposed = { x: Math.max(0, origin.x + dxMm), y: Math.max(0, origin.y + dyMm) };
+      const snapToGridValue = (value) => (snapToGrid ? Math.round(value) : value);
+      const proposed = {
+        x: Math.max(0, snapToGridValue(origin.x + dxMm)),
+        y: Math.max(0, snapToGridValue(origin.y + dyMm)),
+      };
       if (!snapEnabled) {
         setGuides({ vertical: null, horizontal: null });
         return {
           ...prev,
           texts: allTexts.map((t) => {
-            if (!dragging.ids.includes(t.id)) return t;
+            if (!dragging.ids.includes(t.id) || t.locked) return t;
             const originPos = dragging.origins[t.id] || { x: t.pos?.x || 0, y: t.pos?.y || 0 };
             return {
               ...t,
               pos: {
-                x: Math.max(0, originPos.x + dxMm),
-                y: Math.max(0, originPos.y + dyMm),
+                x: Math.max(0, snapToGridValue(originPos.x + dxMm)),
+                y: Math.max(0, snapToGridValue(originPos.y + dyMm)),
               },
             };
           }),
@@ -588,13 +734,13 @@ const LabelPreview = ({
       return {
         ...prev,
         texts: allTexts.map((t) => {
-          if (!dragging.ids.includes(t.id)) return t;
+          if (!dragging.ids.includes(t.id) || t.locked) return t;
           const originPos = dragging.origins[t.id] || { x: t.pos?.x || 0, y: t.pos?.y || 0 };
           return {
             ...t,
             pos: {
-              x: Math.max(0, originPos.x + dxMm + snapDeltaX),
-              y: Math.max(0, originPos.y + dyMm + snapDeltaY),
+              x: Math.max(0, snapToGridValue(originPos.x + dxMm + snapDeltaX)),
+              y: Math.max(0, snapToGridValue(originPos.y + dyMm + snapDeltaY)),
             },
           };
         }),
@@ -677,13 +823,13 @@ const LabelPreview = ({
     setContent((prev) => {
       const allTexts = prev.texts || [];
       const target = allTexts.find((t) => t.id === resizing.id);
-      if (!target) return prev;
+      if (!target || target.locked) return prev;
       if (resizing.type === 'barcode') {
         const moduleMmBase = resizing.origin.moduleMm;
         const heightMmBase = resizing.origin.heightMm;
         const modules = Math.max(30, resizing.modules || 30);
-        const nextModuleMm = Math.min(2, Math.max(0.1, moduleMmBase + dxMm / modules));
-        const nextHeightMm = Math.min(80, Math.max(4, heightMmBase + dyMm));
+        const nextModuleMm = Math.min(2, Math.max(0.1, snapToGrid ? Math.round((moduleMmBase + dxMm / modules) * 20) / 20 : moduleMmBase + dxMm / modules));
+        const nextHeightMm = Math.min(80, Math.max(4, snapToGrid ? Math.round(heightMmBase + dyMm) : heightMmBase + dyMm));
         return {
           ...prev,
           texts: allTexts.map((t) => {
@@ -696,8 +842,8 @@ const LabelPreview = ({
       if (resizing.type === 'line') {
         const lengthBase = Number(resizing.origin.lengthMm);
         const thicknessBase = Number(resizing.origin.thicknessMm);
-        const nextLength = Math.min(200, Math.max(0.1, lengthBase + dxMm));
-        const nextThickness = Math.min(10, Math.max(0.1, thicknessBase + dyMm));
+        const nextLength = Math.min(200, Math.max(0.1, snapToGrid ? Math.round(lengthBase + dxMm) : lengthBase + dxMm));
+        const nextThickness = Math.min(10, Math.max(0.1, snapToGrid ? Math.round((thicknessBase + dyMm) * 10) / 10 : thicknessBase + dyMm));
         return {
           ...prev,
           texts: allTexts.map((t) => {
@@ -729,14 +875,16 @@ const LabelPreview = ({
     });
   };
 
-  const renderTextBlock = (text, className, selectedIds, setSelectedIds) => {
-    const pos = text.pos || { x: 0, y: 0 };
+  const renderTextBlock = (text, className, currentSelectedIds) => {
     const angle = snapAngle(text.angle || 0);
-    const style = text.style || {};
-    const isSelected = (selectedIds || []).includes(text.id);
+    const isSelected = (currentSelectedIds || []).includes(text.id);
 
     const onMouseDown = (e) => {
       e.preventDefault();
+      if (text.locked) {
+        setSelectedIds([text.id]);
+        return;
+      }
       const additive = e.shiftKey;
       startDrag(text.id, e.clientX, e.clientY, additive);
     };
@@ -744,79 +892,12 @@ const LabelPreview = ({
     const onTouchStart = (e) => {
       const touch = e.touches[0];
       if (!touch) return;
+      if (text.locked) {
+        setSelectedIds([text.id]);
+        return;
+      }
       startDrag(text.id, touch.clientX, touch.clientY, false);
     };
-
-    if (text.type !== 'barcode' && text.type !== 'line' && style.wrapAtCenter === true) {
-      const scale = getFontScale(style.size || dimensions.fontSize);
-      const charHeightMm = 3 * scale;
-      const charWidthMm = 2 * scale;
-      const paddingMm = style.background?.enabled ? style.background.paddingMm ?? 0.8 : 0;
-      const safetyMm = style.background?.enabled ? 0.25 : 0;
-      const wrapMaxWidthMmRaw = getHalfWrapMaxWidthMm(text);
-      const wrapMaxWidthMm = wrapMaxWidthMmRaw && wrapMaxWidthMmRaw > 1 ? wrapMaxWidthMmRaw : null;
-      const availableTextWidthMm = wrapMaxWidthMm
-        ? Math.max(charWidthMm, wrapMaxWidthMm - paddingMm * 2 - safetyMm)
-        : null;
-      const maxChars = availableTextWidthMm ? Math.max(1, Math.floor(availableTextWidthMm / charWidthMm)) : null;
-      const rawValue = text.value || '';
-      const lines = maxChars && rawValue.length > maxChars ? wrapTextByChars(rawValue, maxChars) : [rawValue];
-      const stepMm = charHeightMm * 1.05;
-      const lineOffset = (i) => {
-        const step = stepMm * i;
-        if (angle === 0) return { dx: 0, dy: step };
-        if (angle === 90) return { dx: -step, dy: 0 };
-        if (angle === 180) return { dx: 0, dy: -step };
-        if (angle === 270) return { dx: step, dy: 0 };
-        return { dx: 0, dy: step };
-      };
-
-      return (
-        <>
-          {lines.map((lineValue, i) => {
-            const { dx, dy } = lineOffset(i);
-            const lineBlock = {
-              ...text,
-              value: lineValue,
-              pos: { x: (pos.x || 0) + dx, y: (pos.y || 0) + dy },
-              style: { ...style, wrapAtCenter: false },
-            };
-            return (
-              <div
-                key={`${text.id}-line-${i}`}
-                style={blockStyle(lineBlock, isSelected)}
-                className={`${className} select-none`}
-                onMouseDown={onMouseDown}
-                onTouchStart={onTouchStart}
-                onClick={() => { }}
-              >
-                {lineValue || ''}
-                {isSelected && i === 0 && (
-                  <div
-                    className="absolute w-7 h-7 bg-white border border-slate-300 rounded-full flex items-center justify-center text-[10px] text-slate-600 shadow-sm cursor-pointer"
-                    style={{ top: '-18px', right: '-18px' }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      cycleRotation(text.id);
-                    }}
-                    onTouchStart={(e) => {
-                      const t = e.touches[0];
-                      if (!t) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      cycleRotation(text.id);
-                    }}
-                  >
-                    {angle}°
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      );
-    }
 
     return (
       <div
@@ -826,13 +907,6 @@ const LabelPreview = ({
         onTouchStart={onTouchStart}
         onClick={() => { }}
       >
-        {text.type === 'barcode' ? (
-          <div className="absolute inset-x-1 bottom-1 text-[10px] font-mono bg-white/80 px-1 rounded">
-            {text.value || ''}
-          </div>
-        ) : text.type === 'line' ? null : (
-          text.value || ''
-        )}
         {isSelected && (
           <div
             className="absolute w-7 h-7 bg-white border border-slate-300 rounded-full flex items-center justify-center text-[10px] text-slate-600 shadow-sm cursor-pointer"
@@ -853,7 +927,7 @@ const LabelPreview = ({
             {angle}°
           </div>
         )}
-        {isSelected && ['barcode', 'line'].includes(text.type) && (
+        {isSelected && ['barcode', 'line'].includes(text.type) && !text.locked && (
           <div
             className="absolute w-3 h-3 bg-white border border-slate-300 rounded-sm shadow-sm cursor-nwse-resize"
             style={{ bottom: '-10px', right: '-10px' }}
@@ -876,6 +950,11 @@ const LabelPreview = ({
   };
 
   const handleMouseMove = (e) => {
+    if (panning && previewScrollRef.current) {
+      previewScrollRef.current.scrollLeft = panning.scrollLeft - (e.clientX - panning.startX);
+      previewScrollRef.current.scrollTop = panning.scrollTop - (e.clientY - panning.startY);
+      return;
+    }
     if (resizing?.id) {
       updateElementResize(e.clientX, e.clientY);
       return;
@@ -885,6 +964,11 @@ const LabelPreview = ({
   const handleTouchMove = (e) => {
     const t = e.touches[0];
     if (!t) return;
+    if (panning && previewScrollRef.current) {
+      previewScrollRef.current.scrollLeft = panning.scrollLeft - (t.clientX - panning.startX);
+      previewScrollRef.current.scrollTop = panning.scrollTop - (t.clientY - panning.startY);
+      return;
+    }
     if (resizing?.id) {
       updateElementResize(t.clientX, t.clientY);
       return;
@@ -893,6 +977,7 @@ const LabelPreview = ({
   };
 
   const stopInteraction = () => {
+    setPanning(null);
     stopElementResize();
     stopDrag();
   };
@@ -952,12 +1037,12 @@ const LabelPreview = ({
       setContentWithHistory((prev) => ({
         ...prev,
         texts: (prev.texts || []).map((t) => {
-          if (!selectedIds.includes(t.id)) return t;
+          if (!selectedIds.includes(t.id) || t.locked) return t;
           return {
             ...t,
             pos: {
-              x: Math.max(0, (t.pos?.x || 0) + dx),
-              y: Math.max(0, (t.pos?.y || 0) + dy),
+              x: Math.max(0, snapToGrid ? Math.round((t.pos?.x || 0) + dx) : (t.pos?.x || 0) + dx),
+              y: Math.max(0, snapToGrid ? Math.round((t.pos?.y || 0) + dy) : (t.pos?.y || 0) + dy),
             },
           };
         }),
@@ -965,89 +1050,191 @@ const LabelPreview = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, setContentWithHistory, orientation, pxToMm, content.texts, clipboard]);
+  }, [selectedIds, setContentWithHistory, orientation, pxToMm, content.texts, clipboard, snapToGrid]);
 
   return (
-    <div className="w-full select-none">
-      <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-        <span>Roll width: {pageWidth} mm</span>
-        <span>
-          Label: {width} × {height} mm · Columns: {columns}
-        </span>
+    <div className="w-full select-none space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <Button size="sm" variant="outline" onClick={() => setZoom((current) => Math.max(0.5, Number((current - 0.1).toFixed(2))))}>-</Button>
+        <Button size="sm" variant="outline" onClick={() => setZoom(1)}>100%</Button>
+        <Button size="sm" variant="outline" onClick={fitToWidth}>Fit</Button>
+        <Button size="sm" variant="outline" onClick={() => setZoom((current) => Math.min(3, Number((current + 0.1).toFixed(2))))}>+</Button>
+        <span className="text-muted-foreground">{Math.round(zoom * 100)}%</span>
+        <Button size="sm" variant={printerMode ? 'default' : 'outline'} onClick={() => setPrinterMode((current) => !current)}>Printer Mode</Button>
+        <Button size="sm" variant={showGrid ? 'default' : 'outline'} onClick={() => setShowGrid((current) => !current)}>Grid</Button>
+        <Button size="sm" variant={snapToGrid ? 'default' : 'outline'} onClick={() => setSnapToGrid((current) => !current)}>Snap Grid</Button>
+        <Button size="sm" variant={showRulers ? 'default' : 'outline'} onClick={() => setShowRulers((current) => !current)}>Rulers</Button>
+        <Button size="sm" variant={showQuietZones ? 'default' : 'outline'} onClick={() => setShowQuietZones((current) => !current)}>Quiet Zones</Button>
+        <span className="text-muted-foreground">Roll: {pageWidth}mm · Label: {width} × {height}mm · Columns: {columns}</span>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <Button size="sm" variant="outline" onClick={() => alignSelected('left')} disabled={selectedIds.length < 2}>Align Left</Button>
+        <Button size="sm" variant="outline" onClick={() => alignSelected('center-x')} disabled={selectedIds.length < 2}>Center X</Button>
+        <Button size="sm" variant="outline" onClick={() => alignSelected('right')} disabled={selectedIds.length < 2}>Align Right</Button>
+        <Button size="sm" variant="outline" onClick={() => alignSelected('top')} disabled={selectedIds.length < 2}>Align Top</Button>
+        <Button size="sm" variant="outline" onClick={() => alignSelected('center-y')} disabled={selectedIds.length < 2}>Center Y</Button>
+        <Button size="sm" variant="outline" onClick={() => alignSelected('bottom')} disabled={selectedIds.length < 2}>Align Bottom</Button>
+        <Button size="sm" variant="outline" onClick={() => distributeSelected('x')} disabled={selectedIds.length < 3}>Distribute X</Button>
+        <Button size="sm" variant="outline" onClick={() => distributeSelected('y')} disabled={selectedIds.length < 3}>Distribute Y</Button>
+        <Button size="sm" variant="outline" onClick={duplicateSelected} disabled={selectedIds.length === 0}>Duplicate</Button>
+        <Button size="sm" variant="outline" onClick={toggleSelectedLock} disabled={selectedIds.length === 0}>Lock</Button>
+        <Button size="sm" variant="outline" onClick={toggleSelectedVisibility} disabled={selectedIds.length === 0}>Hide/Show</Button>
+        <Button size="sm" variant="outline" onClick={() => reorderSelected('backward')} disabled={selectedIds.length === 0}>Back</Button>
+        <Button size="sm" variant="outline" onClick={() => reorderSelected('forward')} disabled={selectedIds.length === 0}>Front</Button>
+      </div>
+
       <div
+        ref={previewScrollRef}
         className="bg-slate-100/80 border border-dashed border-slate-200 rounded-lg p-4 overflow-auto"
-        style={{ minWidth: `${mmToPx(pageWidth)}px`, paddingTop: `${mmToPx(marginTop)}px` }}
+        style={{ minWidth: `${mmToPx(pageWidth)}px` }}
         onMouseMove={handleMouseMove}
         onMouseUp={stopInteraction}
         onMouseLeave={stopInteraction}
         onTouchMove={handleTouchMove}
         onTouchEnd={stopInteraction}
       >
-        <div
-          className="grid"
-          style={{
-            gridTemplateColumns: `repeat(${columns}, ${mmToPx(width)}px)`,
-            columnGap: `${mmToPx(horizontalGap)}px`,
-            rowGap: `${mmToPx(verticalGap)}px`,
-            paddingLeft: `${mmToPx(pagePadding + marginLeft)}px`,
-            paddingRight: `${mmToPx(pagePadding)}px`,
-          }}
-        >
-          {Array.from({ length: columns }).map((_, idx) => (
-            <div key={idx} style={labelWrapperStyle}>
-              <div
-                style={labelBoxStyle}
-                className="shadow-sm"
-                onMouseDown={(e) => {
-                  // blank area deselect
-                  if (e.target === e.currentTarget) {
-                    setSelectedIds([]);
-                  }
-                }}
-                onTouchStart={(e) => {
-                  if (e.target === e.currentTarget) {
-                    setSelectedIds([]);
-                  }
-                }}
-              >
-                {guides.vertical && (
-                  <div
-                    className="absolute top-0 bottom-0 border-l border-indigo-400/80 pointer-events-none"
-                    style={{ left: `${mmToPx(guides.vertical.x)}px` }}
-                  >
-                    <div className="absolute -top-3 left-[-9999px] right-[-9999px] flex justify-center">
-                      <span className="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm">
-                        {Math.abs(guides.vertical.diff ?? 0).toFixed(1)}mm
-                      </span>
-                    </div>
-                  </div>
-                )}
-                {guides.horizontal && (
-                  <div
-                    className="absolute left-0 right-0 border-t border-indigo-400/80 pointer-events-none"
-                    style={{ top: `${mmToPx(guides.horizontal.y)}px` }}
-                  >
-                    <div className="absolute -left-3 top-[-9999px] bottom-[-9999px] flex items-center">
-                      <span className="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm">
-                        {Math.abs(guides.horizontal.diff ?? 0).toFixed(1)}mm
-                      </span>
-                    </div>
-                  </div>
-                )}
-                {applyFlowLayout(content.texts || []).map((text) => (
-                  <React.Fragment key={text.id}>
-                    {renderTextBlock(text, 'text-slate-900', selectedIds, setSelectedIds)}
-                  </React.Fragment>
-                ))}
-                {(!content.texts || content.texts.length === 0) && (
-                  <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-                    Add text or barcode to start designing
-                  </div>
-                )}
-              </div>
+        <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', width: 'max-content' }}>
+          {showRulers && (
+            <div className="mb-2 flex items-end h-5 text-[10px] text-slate-500 relative" style={{ width: `${mmToPx(pageWidth)}px` }}>
+              {Array.from({ length: Math.floor(pageWidth) + 1 }).map((_, mm) => (
+                <div
+                  key={`ruler-top-${mm}`}
+                  className="absolute bottom-0 border-l border-slate-300"
+                  style={{ left: `${mmToPx(mm)}px`, height: `${mm % 10 === 0 ? 18 : mm % 5 === 0 ? 12 : 8}px` }}
+                >
+                  {mm % 10 === 0 ? <span className="absolute -top-4 left-1">{mm}</span> : null}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+          <div
+            className="grid"
+            style={{
+              gridTemplateColumns: `repeat(${columns}, ${mmToPx(width)}px)`,
+              columnGap: `${mmToPx(horizontalGap)}px`,
+              rowGap: `${mmToPx(verticalGap)}px`,
+              paddingLeft: `${mmToPx(pagePadding + marginLeft)}px`,
+              paddingRight: `${mmToPx(pagePadding)}px`,
+              paddingTop: `${mmToPx(marginTop)}px`,
+            }}
+          >
+            {Array.from({ length: columns }).map((_, idx) => (
+              <div key={idx} className="flex gap-2">
+                {showRulers ? (
+                  <div className="relative w-5 text-[10px] text-slate-500">
+                    {Array.from({ length: Math.floor(height) + 1 }).map((__, mm) => (
+                      <div
+                        key={`ruler-left-${idx}-${mm}`}
+                        className="absolute right-0 border-t border-slate-300"
+                        style={{ top: `${mmToPx(mm)}px`, width: `${mm % 10 === 0 ? 18 : mm % 5 === 0 ? 12 : 8}px` }}
+                      >
+                        {mm % 10 === 0 ? <span className="absolute -left-4 -top-2">{mm}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div style={labelWrapperStyle}>
+                  <div
+                    style={labelBoxStyle}
+                    className="shadow-sm"
+                    onMouseDown={(e) => {
+                      if (e.target === e.currentTarget && (e.altKey || e.button === 1) && previewScrollRef.current) {
+                        setPanning({
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          scrollLeft: previewScrollRef.current.scrollLeft,
+                          scrollTop: previewScrollRef.current.scrollTop,
+                        });
+                        return;
+                      }
+                      if (e.target === e.currentTarget) {
+                        setSelectedIds([]);
+                      }
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.target === e.currentTarget) {
+                        setSelectedIds([]);
+                      }
+                    }}
+                  >
+                    {previewRender?.canvas ? <LabelCanvasSurface sourceCanvas={previewRender.canvas} /> : null}
+                    {showGrid ? (
+                      <div
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          backgroundImage:
+                            'linear-gradient(to right, rgba(148,163,184,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.16) 1px, transparent 1px)',
+                          backgroundSize: `${mmToPx(1)}px ${mmToPx(1)}px`,
+                        }}
+                      />
+                    ) : null}
+                    {guides.vertical && (
+                      <div
+                        className="absolute top-0 bottom-0 border-l border-indigo-400/80 pointer-events-none"
+                        style={{ left: `${mmToPx(guides.vertical.x)}px` }}
+                      >
+                        <div className="absolute -top-3 left-[-9999px] right-[-9999px] flex justify-center">
+                          <span className="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm">
+                            {Math.abs(guides.vertical.diff ?? 0).toFixed(1)}mm
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {guides.horizontal && (
+                      <div
+                        className="absolute left-0 right-0 border-t border-indigo-400/80 pointer-events-none"
+                        style={{ top: `${mmToPx(guides.horizontal.y)}px` }}
+                      >
+                        <div className="absolute -left-3 top-[-9999px] bottom-[-9999px] flex items-center">
+                          <span className="bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm">
+                            {Math.abs(guides.horizontal.diff ?? 0).toFixed(1)}mm
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {selectionBounds ? (
+                      <div
+                        className="absolute border border-indigo-500/70 bg-indigo-500/5 pointer-events-none"
+                        style={{
+                          left: `${mmToPx(selectionBounds.left - offsetX)}px`,
+                          top: `${mmToPx(selectionBounds.top - offsetY)}px`,
+                          width: `${mmToPx(selectionBounds.right - selectionBounds.left)}px`,
+                          height: `${mmToPx(selectionBounds.bottom - selectionBounds.top)}px`,
+                        }}
+                      />
+                    ) : null}
+                    {previewFields.map((text) => {
+                      const quietZone = text.type === 'barcode' ? getBarcodeQuietZoneMm(text.style || {}) : null;
+                      return (
+                        <React.Fragment key={text.id}>
+                          {renderTextBlock(text, 'text-slate-900', selectedIds)}
+                          {showQuietZones && quietZone && selectedIds.includes(text.id) ? (
+                            <div
+                              className="absolute pointer-events-none border border-amber-500/70"
+                              style={{
+                                left: `${mmToPx((text.pos?.x || 0) + offsetX + quietZone.left)}px`,
+                                top: `${mmToPx((text.pos?.y || 0) + offsetY + quietZone.top)}px`,
+                                width: `${mmToPx(Math.max(0.1, measureBlock(text).widthMm - quietZone.left - quietZone.right))}px`,
+                                height: `${mmToPx(Math.max(0.1, measureBlock(text).heightMm - quietZone.top - quietZone.bottom))}px`,
+                                transform: `rotate(${snapAngle(text.angle || 0)}deg)`,
+                                transformOrigin: 'top left',
+                              }}
+                            />
+                          ) : null}
+                        </React.Fragment>
+                      );
+                    })}
+                    {(!content.texts || content.texts.length === 0) && (
+                      <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                        Add text or barcode to start designing
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -1202,6 +1389,7 @@ const LabelDesigner = () => {
     targetId: null,
   });
   const [mentionIndex, setMentionIndex] = useState(0);
+  const bitmapPolarity = useMemo(() => getBitmapPolaritySanity(), []);
 
   const cloneContent = (value) => JSON.parse(JSON.stringify(value || {}));
   const serviceToneClass =
@@ -1345,7 +1533,7 @@ const LabelDesigner = () => {
       id: `text-${Date.now()}`,
       value: 'New text',
       pos: { x: 5, y: 5 },
-      style: { size: dimensions.fontSize || 10, bold: false, italic: false, underline: false },
+      style: { size: dimensions.fontSize || 10, fontFamily: 'courier-new', bold: false, italic: false, underline: false },
     });
     setContentWithHistory((prev) => ({ ...prev, texts: [...(prev.texts || []), base] }));
     setSelectedIds([base.id]);
@@ -1357,7 +1545,13 @@ const LabelDesigner = () => {
       type: 'barcode',
       value: '{{barcode}}',
       pos: { x: 5, y: 5 },
-      style: { heightMm: 12, moduleMm: 0.3, humanReadable: true },
+      style: {
+        heightMm: 12,
+        moduleMm: 0.3,
+        humanReadable: true,
+        profile: 'balanced',
+        quietZoneMm: getBarcodeQuietZoneMm({ moduleMm: 0.3, humanReadable: true, profile: 'balanced' }),
+      },
     });
     setContentWithHistory((prev) => ({ ...prev, texts: [...(prev.texts || []), base] }));
     setSelectedIds([base.id]);
@@ -1489,6 +1683,52 @@ const LabelDesigner = () => {
     if (selectedIds.includes(id)) setSelectedIds((prev) => prev.filter((s) => s !== id));
   };
 
+  const duplicateSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const timestamp = Date.now();
+    setContentWithHistory((prev) => {
+      const selected = (prev.texts || []).filter((block) => selectedIds.includes(block.id));
+      const duplicates = selected.map((block, index) => ({
+        ...JSON.parse(JSON.stringify(block)),
+        id: `${block.id}-dup-${timestamp}-${index}`,
+        locked: false,
+        pos: {
+          x: (block.pos?.x || 0) + 2,
+          y: (block.pos?.y || 0) + 2,
+        },
+      }));
+      setSelectedIds(duplicates.map((block) => block.id));
+      return {
+        ...prev,
+        texts: [...(prev.texts || []), ...duplicates],
+      };
+    });
+  }, [selectedIds, setContentWithHistory]);
+
+  const toggleSelectedLock = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const shouldLock = (content.texts || []).some((block) => selectedIds.includes(block.id) && !block.locked);
+    setContentWithHistory((prev) => ({
+      ...prev,
+      texts: (prev.texts || []).map((block) => (
+        selectedIds.includes(block.id) ? { ...block, locked: shouldLock } : block
+      )),
+    }));
+  }, [content.texts, selectedIds, setContentWithHistory]);
+
+  const toggleSelectedVisibility = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const shouldShow = (content.texts || []).some((block) => selectedIds.includes(block.id) && block.style?.visible === false);
+    setContentWithHistory((prev) => ({
+      ...prev,
+      texts: (prev.texts || []).map((block) => (
+        selectedIds.includes(block.id)
+          ? { ...block, style: { ...(block.style || {}), visible: shouldShow } }
+          : block
+      )),
+    }));
+  }, [content.texts, selectedIds, setContentWithHistory]);
+
   const handlePrint = async () => {
     if (!selectedPrinter) {
       setServiceStatus({ state: 'error', message: 'Pick a printer before sending.', tone: 'error' });
@@ -1499,19 +1739,36 @@ const LabelDesigner = () => {
       return;
     }
     const command = buildTspl(dimensions, content);
+    const useBitmap = shouldUseBitmapPrint();
     setLastCommand(command);
     try {
       setServiceStatus({ state: 'working', message: 'Sending job for silent print...', tone: 'muted' });
       const result = await sendToLocalPrinter({
         printer: selectedPrinter,
-        content: command,
+        content: useBitmap
+          ? uint8ArrayToBase64(
+            await buildBitmapTsplFromTemplate({ dimensions, content }, {}, { copies: content.copies || 1 }),
+          )
+          : command,
         type: 'raw',
         serviceBase: printServiceBase || undefined,
+        encoding: useBitmap ? 'base64' : 'text',
       });
       if (result.success) {
-        setServiceStatus({ state: 'connected', message: 'Print job sent via local service.', tone: 'success' });
+        const jobId = result.result?.job?.id;
+        const rawLen = result.result?.job?.raw_len;
+        setServiceStatus({
+          state: 'connected',
+          message: `Print job sent via local service.${jobId ? ` Job ${jobId}` : ''}${rawLen ? ` · ${rawLen} bytes` : ''}`,
+          tone: 'success'
+        });
       } else {
-        setServiceStatus({ state: 'error', message: result.error || 'Failed to send print job.', tone: 'error' });
+        const debugFile = result.result?.job?.debug_file;
+        setServiceStatus({
+          state: 'error',
+          message: `${result.error || 'Failed to send print job.'}${debugFile ? ` Debug: ${debugFile}` : ''}`,
+          tone: 'error'
+        });
       }
     } catch (error) {
       console.error('Error printing:', error);
@@ -1759,11 +2016,17 @@ const LabelDesigner = () => {
                   const selectedTextIds = selectedBlocks
                     .filter((t) => t.type !== 'barcode' && t.type !== 'line')
                     .map((t) => t.id);
+                  const selectedTextFontFamilies = selectedBlocks
+                    .filter((t) => t.type !== 'barcode' && t.type !== 'line')
+                    .map((t) => t.style?.fontFamily || 'courier-new');
                   const selectedTextSizes = selectedBlocks
                     .filter((t) => t.type !== 'barcode' && t.type !== 'line')
                     .map((t) => t.style?.size || dimensions.fontSize);
                   const hasMixedFontSize =
                     selectedTextSizes.length > 1 && new Set(selectedTextSizes.map((v) => String(v))).size > 1;
+                  const hasMixedFontFamily =
+                    selectedTextFontFamilies.length > 1 && new Set(selectedTextFontFamilies).size > 1;
+                  const barcodeWarning = isBarcode ? getBarcodeWarning(text) : null;
                   return (
                     <>
                       <div className="flex items-start gap-2">
@@ -1839,6 +2102,15 @@ const LabelDesigner = () => {
                             )}
                           </div>
                         )}
+                        <Button size="sm" variant="outline" onClick={duplicateSelected}>
+                          Duplicate
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={toggleSelectedLock}>
+                          {selectedBlocks.every((block) => block.locked) ? 'Unlock' : 'Lock'}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={toggleSelectedVisibility}>
+                          {selectedBlocks.every((block) => block.style?.visible === false) ? 'Show' : 'Hide'}
+                        </Button>
                         <Button size="sm" variant="destructive" onClick={() => removeText(text.id)}>
                           Remove
                         </Button>
@@ -1873,6 +2145,17 @@ const LabelDesigner = () => {
                                     })
                                   }
                                 />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Profile</Label>
+                                <select
+                                  value={text.style?.profile || 'balanced'}
+                                  onChange={(e) => updateTextStyle(text.id, { profile: e.target.value })}
+                                  className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  <option value="balanced">Balanced</option>
+                                  <option value="robust">Robust</option>
+                                </select>
                               </div>
                               <div className="flex items-center gap-2">
                                 <Label className="text-xs">Human readable</Label>
@@ -1920,6 +2203,29 @@ const LabelDesigner = () => {
                                 />
                               </div>
                             </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {['left', 'right', 'top', 'bottom'].map((side) => (
+                                <div key={side}>
+                                  <Label className="text-xs">Quiet {side} (mm)</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.1"
+                                    className="h-8"
+                                    value={text.style?.quietZoneMm?.[side] ?? getBarcodeQuietZoneMm(text.style || {})[side]}
+                                    onChange={(e) =>
+                                      updateTextStyle(text.id, {
+                                        quietZoneMm: {
+                                          ...getBarcodeQuietZoneMm(text.style || {}),
+                                          ...(text.style?.quietZoneMm || {}),
+                                          [side]: Math.max(0, parseFloat(e.target.value) || 0),
+                                        },
+                                      })
+                                    }
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                            {barcodeWarning ? <div className="text-[11px] text-amber-600">{barcodeWarning}</div> : null}
                           </div>
                         ) : isLine ? (
                           <div className="space-y-2 text-xs text-muted-foreground">
@@ -1986,6 +2292,24 @@ const LabelDesigner = () => {
                           </div>
                         ) : (
                           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">
+                                Font{hasMixedFontFamily ? ' (mixed)' : ''}
+                              </Label>
+                              <select
+                                value={text.style?.fontFamily || 'courier-new'}
+                                onChange={(e) =>
+                                  updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, {
+                                    fontFamily: e.target.value,
+                                  })
+                                }
+                                className="flex h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                {FONT_FAMILY_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </div>
                             <div className="flex items-center gap-2">
                               <Label className="text-xs">
                                 Font size (pt){hasMixedFontSize ? ' (mixed)' : ''}
@@ -2158,6 +2482,7 @@ const LabelDesigner = () => {
               <LabelPreview
                 dimensions={dimensions}
                 content={content}
+                stageKey={templateStage}
                 setContent={setContent}
                 setContentWithHistory={setContentWithHistory}
                 pushHistory={pushHistory}
@@ -2176,7 +2501,7 @@ const LabelDesigner = () => {
                 onClick={() => setTsplExpanded((prev) => !prev)}
               >
                 <div className="flex items-center gap-2">
-                  <FileCode2 className="w-4 h-4" /> Generated TSPL (sent to local service)
+                  <FileCode2 className="w-4 h-4" /> Generated TSPL (debug / legacy fallback)
                 </div>
                 <ChevronDown className={`w-4 h-4 transition-transform ${tsplExpanded ? 'rotate-180' : ''}`} />
               </button>
@@ -2197,8 +2522,15 @@ const LabelDesigner = () => {
                     {lastCommand || buildTspl(dimensions, content)}
                   </pre>
                   <p className="text-xs text-muted-foreground">
-                    This is sent as a raw job to http://localhost:9090/print for silent printing.
+                    This stays available for inspection and rollback. When bitmap printing is enabled, the actual print
+                    job sent to the local service is a binary `BITMAP` payload instead.
                   </p>
+                  {shouldUseBitmapPrint() ? (
+                    <p className="text-xs text-muted-foreground">
+                      Bitmap sanity: white=`{bitmapPolarity.whiteByte}` black=`{bitmapPolarity.blackByte}` split=`
+                      {bitmapPolarity.reversedByte}`
+                    </p>
+                  ) : null}
                 </>
               )}
             </div>

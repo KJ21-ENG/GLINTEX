@@ -3,8 +3,9 @@
 // placeholder substitution, and posting jobs to the local print service.
 
 import { formatDateDDMMYYYY } from './formatting';
+import { buildBitmapTsplFromTemplate } from './labelBitmap';
 
-const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
+export const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
 const DEFAULT_MATERIAL_CODE = (import.meta.env.VITE_BARCODE_MATERIAL_CODE || 'MET').toUpperCase();
 
 export const LABEL_STAGE_KEYS = {
@@ -212,14 +213,42 @@ export const DEFAULT_CONTENT = {
   texts: [],
 };
 
-const snapAngle = (angle = 0) => {
+export const FONT_FAMILY_OPTIONS = [
+  { value: 'courier-new', label: 'Courier New', cssFamily: '"Courier New", monospace' },
+  { value: 'inter', label: 'Inter', cssFamily: '"Inter", sans-serif' },
+  { value: 'roboto-mono', label: 'Roboto Mono', cssFamily: '"Roboto Mono", monospace' },
+  { value: 'ibm-plex-sans', label: 'IBM Plex Sans', cssFamily: '"IBM Plex Sans", sans-serif' },
+];
+
+export const getFontFamilyCss = (fontFamily = 'courier-new') => {
+  const match = FONT_FAMILY_OPTIONS.find((option) => option.value === fontFamily);
+  return match?.cssFamily || FONT_FAMILY_OPTIONS[0].cssFamily;
+};
+
+export const getBarcodeQuietZoneMm = (style = {}) => {
+  const moduleMm = Math.max(0.1, Number(style.moduleMm ?? 0.3));
+  const profile = style.profile === 'robust' ? 'robust' : 'balanced';
+  const defaultLeftRight = profile === 'robust' ? Math.max(3.5, 12 * moduleMm) : Math.max(2.5, 10 * moduleMm);
+  const defaultTop = 0.5;
+  const defaultBottom = style.humanReadable === false ? 0.5 : 1.5;
+  const quietZone = style.quietZoneMm || {};
+
+  return {
+    left: Math.max(0, Number(quietZone.left ?? defaultLeftRight)),
+    right: Math.max(0, Number(quietZone.right ?? defaultLeftRight)),
+    top: Math.max(0, Number(quietZone.top ?? defaultTop)),
+    bottom: Math.max(0, Number(quietZone.bottom ?? defaultBottom)),
+  };
+};
+
+export const snapAngle = (angle = 0) => {
   const normalized = ((angle % 360) + 360) % 360;
   const steps = [0, 90, 180, 270];
   return steps.reduce((best, step) => (Math.abs(step - normalized) < Math.abs(best - normalized) ? step : best), 0);
 };
 
-const mmToDots = (mm) => Math.round(mm * DOTS_PER_MM);
-const sanitizeText = (text = '') => text.replace(/"/g, "'");
+export const mmToDots = (mm) => Math.round(mm * DOTS_PER_MM);
+export const sanitizeText = (text = '') => text.replace(/"/g, "'");
 
 export const substitutePlaceholders = (value = '', data = {}) => {
   if (!value || typeof value !== 'string') return value;
@@ -254,7 +283,7 @@ export const substitutePlaceholders = (value = '', data = {}) => {
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)));
 
-const wrapTextByChars = (text = '', maxChars = 0) => {
+export const wrapTextByChars = (text = '', maxChars = 0) => {
   const max = Math.max(1, Math.floor(maxChars || 0));
   const inputLines = String(text ?? '').split(/\r?\n/);
   const out = [];
@@ -273,12 +302,233 @@ const wrapTextByChars = (text = '', maxChars = 0) => {
   return out.length ? out : [''];
 };
 
+export const wrapTextByWords = (text = '', maxWidth = 0, measureWidth = () => 0) => {
+  const limit = Math.max(0, Number(maxWidth) || 0);
+  const inputLines = String(text ?? '').split(/\r?\n/);
+  const out = [];
+
+  inputLines.forEach((lineRaw) => {
+    const trimmed = String(lineRaw ?? '').trim();
+    if (!trimmed) {
+      out.push('');
+      return;
+    }
+
+    const words = trimmed.split(/\s+/);
+    let current = '';
+
+    words.forEach((word) => {
+      const candidate = current ? `${current} ${word}` : word;
+      if (!current) {
+        current = word;
+        return;
+      }
+      if (limit > 0 && measureWidth(candidate) > limit) {
+        out.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    });
+
+    if (current) out.push(current);
+  });
+
+  return out.length ? out : [''];
+};
+
 // Font size is stored as a "pt-like" number where 10 => scale 1.
 // Use fractional scale to avoid visible jumps (1-14 all mapping to 1, etc.).
-const getFontScale = (fontSize) => {
+export const getFontScale = (fontSize) => {
   const numeric = Number(fontSize);
   if (!Number.isFinite(numeric) || numeric <= 0) return 1;
   return clampNumber(numeric / 10, 0.1, 10);
+};
+
+export const getWrapMaxChars = (field, dimensions, options = {}) => {
+  if (!field || field.type !== 'text') return null;
+
+  const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
+  const stageKey = options.stageKey || '';
+  const angle = snapAngle(field.angle);
+  const fieldScale = getFontScale(field.style?.size || dims.fontSize);
+  const charWidthMm = 2 * fieldScale;
+  const originX = dims.offsetX + (field.pos?.x || 0);
+  const originY = dims.offsetY + (field.pos?.y || 0);
+  const left = dims.offsetX;
+  const right = dims.offsetX + dims.width;
+  const top = dims.offsetY;
+  const bottom = dims.offsetY + dims.height;
+  const centerX = (left + right) / 2;
+  const centerY = (top + bottom) / 2;
+  const wrapAtCenter = field.style?.wrapAtCenter === true;
+  const useFullWidth = wrapAtCenter && stageKey === LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
+
+  let axisMaxMm = null;
+  if (wrapAtCenter && !useFullWidth) {
+    if (angle === 0) axisMaxMm = (originX < centerX ? centerX : right) - originX;
+    else if (angle === 180) axisMaxMm = originX - (originX > centerX ? centerX : left);
+    else if (angle === 90) axisMaxMm = (originY < centerY ? centerY : bottom) - originY;
+    else if (angle === 270) axisMaxMm = originY - (originY > centerY ? centerY : top);
+  } else {
+    if (angle === 0) axisMaxMm = right - originX;
+    else if (angle === 180) axisMaxMm = originX - left;
+    else if (angle === 90) axisMaxMm = bottom - originY;
+    else if (angle === 270) axisMaxMm = originY - top;
+  }
+
+  if (!axisMaxMm || axisMaxMm <= 0) return null;
+  const maxChars = Math.floor(axisMaxMm / Math.max(0.1, charWidthMm));
+  return maxChars >= 1 ? maxChars : 1;
+};
+
+export const getWrappedTextLines = (field, dimensions, value = '', options = {}) => {
+  if (!field || field.type !== 'text') return [String(value ?? '')];
+
+  const maxChars = getWrapMaxChars(field, dimensions, options);
+  if (!maxChars) return [String(value ?? '')];
+
+  if (typeof document === 'undefined') {
+    return wrapTextByChars(value, maxChars);
+  }
+
+  const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
+  const fieldScale = getFontScale(field.style?.size || dims.fontSize);
+  const fontSizePx = Math.max(1, Math.round(3 * fieldScale * 10));
+  const context = document.createElement('canvas').getContext('2d');
+  if (!context) return wrapTextByChars(value, maxChars);
+  context.font = `${field.style?.italic ? 'italic ' : ''}${field.style?.bold ? '700 ' : '500 '}${fontSizePx}px ${getFontFamilyCss(field.style?.fontFamily)}`;
+  context.textBaseline = 'top';
+
+  const averageCharWidth = Math.max(1, context.measureText('MMMMMMMMMM').width / 10);
+  return wrapTextByWords(value, maxChars * averageCharWidth, (line) => context.measureText(line).width);
+};
+
+export const applyFlowLayout = (fields = [], dimensions, options = {}) => {
+  const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
+  const AFTER_WRAP_GAP_LINES = 1;
+  const FLOW_LANE_CLUSTER_MM = 10;
+  const groups = new Map();
+  const laneKeyById = new Map();
+  const laneMeta = fields
+    .filter((field) => field?.style?.visible !== false)
+    .map((field) => {
+      const angle = snapAngle(field.angle);
+      const pos = field.pos || { x: 0, y: 0 };
+      const originX = dims.offsetX + (pos.x || 0);
+      const originY = dims.offsetY + (pos.y || 0);
+      const centerX = (dims.offsetX + dims.offsetX + dims.width) / 2;
+      const centerY = (dims.offsetY + dims.offsetY + dims.height) / 2;
+      const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
+      const laneRaw = angle === 0 || angle === 180 ? originX : originY;
+      return { id: field.id, angle, half, laneRaw };
+    });
+
+  const clusteredByStream = new Map();
+  laneMeta.forEach((meta) => {
+    const streamKey = `${meta.angle}:${meta.half}`;
+    const list = clusteredByStream.get(streamKey) || [];
+    list.push(meta);
+    clusteredByStream.set(streamKey, list);
+  });
+
+  clusteredByStream.forEach((list, streamKey) => {
+    const sorted = [...list].sort((a, b) => a.laneRaw - b.laneRaw);
+    let clusterIndex = -1;
+    let previousLane = null;
+    sorted.forEach((meta) => {
+      if (previousLane === null || Math.abs(meta.laneRaw - previousLane) > FLOW_LANE_CLUSTER_MM) {
+        clusterIndex += 1;
+      }
+      laneKeyById.set(meta.id, `${streamKey}:${clusterIndex}`);
+      previousLane = meta.laneRaw;
+    });
+  });
+
+  const keyFor = (field) => {
+    const angle = snapAngle(field.angle);
+    const pos = field.pos || { x: 0, y: 0 };
+    const originX = dims.offsetX + (pos.x || 0);
+    const originY = dims.offsetY + (pos.y || 0);
+    const centerX = (dims.offsetX + dims.offsetX + dims.width) / 2;
+    const centerY = (dims.offsetY + dims.offsetY + dims.height) / 2;
+    const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
+    return laneKeyById.get(field.id) || `${angle}:${half}:fallback`;
+  };
+
+  fields.forEach((field) => {
+    if (field?.style?.visible === false) return;
+    const key = keyFor(field);
+    const group = groups.get(key) || [];
+    group.push(field);
+    groups.set(key, group);
+  });
+
+  const shifts = new Map();
+  const getAxis = (field) => {
+    const pos = field.pos || { x: 0, y: 0 };
+    const angle = snapAngle(field.angle);
+    return angle === 0 || angle === 180 ? (pos.y || 0) : (pos.x || 0);
+  };
+  const setShiftAlongAxis = (field, delta) => {
+    if (!delta) return;
+    const angle = snapAngle(field.angle);
+    const current = shifts.get(field.id) || { dx: 0, dy: 0 };
+    if (angle === 0 || angle === 180) shifts.set(field.id, { ...current, dy: (current.dy || 0) + delta });
+    else shifts.set(field.id, { ...current, dx: (current.dx || 0) + delta });
+  };
+  const dirSign = (angle) => {
+    if (angle === 0) return 1;
+    if (angle === 180) return -1;
+    if (angle === 270) return 1;
+    if (angle === 90) return -1;
+    return 1;
+  };
+
+  for (const list of groups.values()) {
+    if (!list || list.length < 2) continue;
+    const angle = snapAngle(list[0]?.angle);
+    const sign = dirSign(angle);
+    const sorted = [...list].sort((a, b) => (sign >= 0 ? getAxis(a) - getAxis(b) : getAxis(b) - getAxis(a)));
+    let cursor = null;
+
+    sorted.forEach((field) => {
+      const baseAxis = getAxis(field);
+      const currentShift = shifts.get(field.id);
+      const axis = baseAxis + (angle === 0 || angle === 180 ? currentShift?.dy || 0 : currentShift?.dx || 0);
+      if (cursor !== null) {
+        if (sign >= 0 && axis < cursor) setShiftAlongAxis(field, cursor - axis);
+        if (sign < 0 && axis > cursor) setShiftAlongAxis(field, cursor - axis);
+      }
+
+      const style = field.style || {};
+      const fieldScale = getFontScale(style.size || dims.fontSize);
+      const charHeightMm = 3 * fieldScale;
+      const stepMm = charHeightMm * 1.05;
+      const raw = field._computedValue ?? field.value ?? '';
+      const effectiveLines = field.type === 'text' ? getWrappedTextLines(field, dims, raw, options) : [raw];
+      const lineCount = Math.max(1, effectiveLines.length);
+      const extraGap = field.type === 'text' && style.wrapAtCenter === true && lineCount > 1 ? AFTER_WRAP_GAP_LINES : 0;
+      const advanceLines = field.type === 'text' ? lineCount + extraGap : 1;
+
+      const newShift = shifts.get(field.id);
+      const axisAfterShift = baseAxis + (angle === 0 || angle === 180 ? newShift?.dy || 0 : newShift?.dx || 0);
+      cursor = axisAfterShift + sign * stepMm * advanceLines;
+    });
+  }
+
+  return fields.map((field) => {
+    const delta = shifts.get(field.id);
+    if (!delta) return field;
+    return {
+      ...field,
+      pos: {
+        ...(field.pos || {}),
+        x: (field.pos?.x || 0) + (delta.dx || 0),
+        y: (field.pos?.y || 0) + (delta.dy || 0),
+      },
+    };
+  });
 };
 
 export const normalizeBlock = (block = {}, fallbackId = 0) => {
@@ -288,6 +538,8 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
     heightMm: baseStyle.heightMm ?? 12,
     moduleMm: baseStyle.moduleMm ?? 0.3,
     humanReadable: baseStyle.humanReadable !== false,
+    profile: baseStyle.profile === 'robust' ? 'robust' : 'balanced',
+    quietZoneMm: getBarcodeQuietZoneMm(baseStyle),
     bold: false,
     italic: false,
     underline: false,
@@ -301,6 +553,7 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
   return {
     id: block.id || `text-${Date.now()}-${fallbackId}`,
     type,
+    locked: block.locked === true,
     value: block.value ?? '',
     pos: {
       x: block.pos?.x ?? 5,
@@ -314,6 +567,9 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
           ? defaultLineStyle
           : {
             size: baseStyle.size ?? 10,
+            fontFamily: FONT_FAMILY_OPTIONS.some((option) => option.value === baseStyle.fontFamily)
+              ? baseStyle.fontFamily
+              : 'courier-new',
             bold: baseStyle.bold ?? false,
             italic: baseStyle.italic ?? false,
             underline: baseStyle.underline ?? false,
@@ -410,188 +666,77 @@ export const parseReceiveCrateIndex = (barcode) => {
   return Number.isFinite(num) ? num : null;
 };
 
-export const buildTspl = (dimensions, content, data = {}, options = {}) => {
-  const stageKey = options.stageKey || '';
-  const copiesOverride = options.copies || null;
-  const splitCopies = options.splitCopies !== false;
+export const normalizeCopies = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 1;
+  return Math.max(1, Math.round(num));
+};
+
+export const getTsplPreambleLines = (dimensions) => {
   const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
   const baseDensity = clampInt(dims.density ?? 8, 0, 15);
+  const totalWidth = Math.max(dims.pageWidth, dims.width * dims.columns + dims.horizontalGap * (dims.columns - 1));
+  const lines = [
+    'CLS',
+    `SIZE ${totalWidth.toFixed(2)} mm,${dims.height.toFixed(2)} mm`,
+    `GAP ${dims.verticalGap.toFixed(2)} mm,0`,
+    `DENSITY ${baseDensity}`,
+    'SPEED 4',
+    `DIRECTION ${dims.orientation === 'landscape' ? 1 : 0}`,
+    'REFERENCE 0,0',
+    'CLS',
+  ];
+
+  return { dims, baseDensity, totalWidth, lines };
+};
+
+export const prepareTemplateFields = (dimensions, content, data = {}, options = {}) => {
+  const dims = { ...DEFAULT_DIMENSIONS, ...(dimensions || {}) };
+  const mergedContent = migrateContent(content);
+  const fontName = options.fontName || '3';
+  const baseFields = (mergedContent.texts || []).map((text, idx) => ({
+    ...normalizeBlock(text, idx),
+    font: fontName,
+  }));
+  const fields = applyFlowLayout(
+    baseFields.map((field) => {
+      if (field?.style?.visible === false) return field;
+      const substituted = substitutePlaceholders(field.value ?? '', data);
+      const finalValue = field.type === 'barcode' ? substituted || data.barcode || '' : substituted;
+      return { ...field, _computedValue: finalValue };
+    }),
+    dims,
+    options,
+  );
+
+  return {
+    dims,
+    mergedContent,
+    fields,
+  };
+};
+
+export const buildTspl = (dimensions, content, data = {}, options = {}) => {
+  const copiesOverride = options.copies || null;
+  const splitCopies = options.splitCopies !== false;
+  const { dims, baseDensity, lines } = getTsplPreambleLines(dimensions);
   const {
     width,
     height,
-    pageWidth,
     horizontalGap,
-    verticalGap,
     columns,
     marginLeft,
     marginTop,
     offsetX,
     offsetY,
-    orientation,
   } = dims;
-  const totalWidth = Math.max(pageWidth, width * columns + horizontalGap * (columns - 1));
-  // Enhanced buffer clearing sequence to prevent ghosting from previous print jobs
-  // This addresses printer buffer conflicts when multiple jobs are sent rapidly
-  const lines = [
-    'CLS',            // Clear image buffer first to discard any pending data
-    `SIZE ${totalWidth.toFixed(2)} mm,${height.toFixed(2)} mm`,
-    `GAP ${verticalGap.toFixed(2)} mm,0`,
-    `DENSITY ${baseDensity}`,
-    'SPEED 4',
-    `DIRECTION ${orientation === 'landscape' ? 1 : 0}`,
-    'REFERENCE 0,0',
-    'CLS',            // Clear image buffer again after setup for clean slate
-  ];
-
-  const fontName = '3';
-  const mergedContent = migrateContent(content);
-  const baseFields = (mergedContent.texts || []).map((t, idx) => ({
-    ...normalizeBlock(t, idx),
-    font: fontName,
-  }));
-
-  const getHalfWrapMaxChars = (field, fieldScale) => {
-    if (!field || field.type !== 'text') return null;
-    if (field.style?.wrapAtCenter !== true) return null;
-    const angle = snapAngle(field.angle);
-    const charWidthMm = 2 * fieldScale;
-
-    const originX = offsetX + (field.pos?.x || 0);
-    const originY = offsetY + (field.pos?.y || 0);
-    const left = offsetX;
-    const right = offsetX + width;
-    const top = offsetY;
-    const bottom = offsetY + height;
-    const centerX = (left + right) / 2;
-    const centerY = (top + bottom) / 2;
-
-    // For cutter_issue_small stage, wrap at full label width instead of half
-    const useFullWidth = stageKey === LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
-
-    let axisMaxMm = null;
-    if (useFullWidth) {
-      // Full width wrapping - wrap at edge of label
-      if (angle === 0) axisMaxMm = right - originX;
-      else if (angle === 180) axisMaxMm = originX - left;
-      else if (angle === 90) axisMaxMm = bottom - originY;
-      else if (angle === 270) axisMaxMm = originY - top;
-    } else {
-      // Half width wrapping (default behavior)
-      if (angle === 0) axisMaxMm = (originX < centerX ? centerX : right) - originX;
-      else if (angle === 180) axisMaxMm = originX - (originX > centerX ? centerX : left);
-      else if (angle === 90) axisMaxMm = (originY < centerY ? centerY : bottom) - originY;
-      else if (angle === 270) axisMaxMm = originY - (originY > centerY ? centerY : top);
-    }
-
-    if (!axisMaxMm || axisMaxMm <= 0) return null;
-    const maxChars = Math.floor(axisMaxMm / Math.max(0.1, charWidthMm));
-    return maxChars >= 1 ? maxChars : 1;
-  };
-
-  const applyFlowLayout = (fields) => {
-    const AFTER_WRAP_GAP_LINES = 1;
-    const groups = new Map();
-    const keyFor = (f) => {
-      const angle = snapAngle(f.angle);
-      const pos = f.pos || { x: 0, y: 0 };
-      const originX = offsetX + (pos.x || 0);
-      const originY = offsetY + (pos.y || 0);
-      const centerX = (offsetX + offsetX + width) / 2;
-      const centerY = (offsetY + offsetY + height) / 2;
-      const half = angle === 0 || angle === 180 ? (originX < centerX ? 'A' : 'B') : originY < centerY ? 'A' : 'B';
-      const laneRaw = angle === 0 || angle === 180 ? originX : originY;
-      const lane = Math.round(laneRaw * 2) / 2;
-      return `${angle}:${half}:${lane}`;
-    };
-
-    (fields || []).forEach((f) => {
-      if (f?.style?.visible === false) return;
-      const k = keyFor(f);
-      const arr = groups.get(k) || [];
-      arr.push(f);
-      groups.set(k, arr);
-    });
-
-    const shifts = new Map();
-    const getAxis = (f) => {
-      const pos = f.pos || { x: 0, y: 0 };
-      const angle = snapAngle(f.angle);
-      return angle === 0 || angle === 180 ? (pos.y || 0) : (pos.x || 0);
-    };
-    const setShiftAlongAxis = (f, delta) => {
-      if (!delta) return;
-      const angle = snapAngle(f.angle);
-      const cur = shifts.get(f.id) || { dx: 0, dy: 0 };
-      if (angle === 0 || angle === 180) shifts.set(f.id, { ...cur, dy: (cur.dy || 0) + delta });
-      else shifts.set(f.id, { ...cur, dx: (cur.dx || 0) + delta });
-    };
-    const dirSign = (angle) => {
-      if (angle === 0) return 1;
-      if (angle === 180) return -1;
-      if (angle === 270) return 1;
-      if (angle === 90) return -1;
-      return 1;
-    };
-
-    for (const [_, list] of groups.entries()) {
-      if (!list || list.length < 2) continue;
-      const angle = snapAngle(list[0]?.angle);
-      const sign = dirSign(angle);
-      const sorted = [...list].sort((a, b) => (sign >= 0 ? getAxis(a) - getAxis(b) : getAxis(b) - getAxis(a)));
-      let cursor = null;
-      sorted.forEach((f) => {
-        const baseAxis = getAxis(f);
-        const currentShift = shifts.get(f.id);
-        const axis = baseAxis + (angle === 0 || angle === 180 ? currentShift?.dy || 0 : currentShift?.dx || 0);
-        if (cursor !== null) {
-          if (sign >= 0 && axis < cursor) setShiftAlongAxis(f, cursor - axis);
-          if (sign < 0 && axis > cursor) setShiftAlongAxis(f, cursor - axis);
-        }
-
-        const style = f.style || {};
-        const fieldScale = getFontScale(style.size || dims.fontSize);
-        const charHeightMm = 3 * fieldScale;
-        const stepMm = charHeightMm * 1.05;
-
-        const maxChars = getHalfWrapMaxChars(f, fieldScale);
-        const raw = f._computedValue ?? f.value ?? '';
-        const effectiveLines =
-          f.type === 'text' && maxChars && sanitizeText(raw).length > maxChars ? wrapTextByChars(raw, maxChars) : [raw];
-        const lineCount = Math.max(1, effectiveLines.length);
-        const extraGap = f.type === 'text' && style.wrapAtCenter === true && lineCount > 1 ? AFTER_WRAP_GAP_LINES : 0;
-        const advanceLines = f.type === 'text' && style.wrapAtCenter === true ? lineCount + extraGap : 1;
-
-        const newShift = shifts.get(f.id);
-        const axisAfterShift = baseAxis + (angle === 0 || angle === 180 ? newShift?.dy || 0 : newShift?.dx || 0);
-        cursor = axisAfterShift + sign * stepMm * advanceLines;
-      });
-    }
-
-    return (fields || []).map((f) => {
-      const delta = shifts.get(f.id);
-      if (!delta) return f;
-      return {
-        ...f,
-        pos: { ...(f.pos || {}), x: (f.pos?.x || 0) + (delta.dx || 0), y: (f.pos?.y || 0) + (delta.dy || 0) },
-      };
-    });
-  };
+  const { mergedContent, fields: baseFields } = prepareTemplateFields(dimensions, content, data, options);
 
   for (let col = 0; col < columns; col += 1) {
     const columnOffset = marginLeft + (width + horizontalGap) * col + offsetX;
     const baseY = marginTop + offsetY;
 
-    const fields = applyFlowLayout(
-      baseFields.map((field) => {
-        if (field?.style?.visible === false) return field;
-        const valueRaw = field.value ?? '';
-        const substituted = substitutePlaceholders(valueRaw, data);
-        const finalValue = field.type === 'barcode' ? substituted || data.barcode || '' : substituted;
-        return { ...field, _computedValue: finalValue };
-      }),
-    );
-
-    fields.forEach((field) => {
+    baseFields.forEach((field) => {
       if (field?.style?.visible === false) return;
       const angle = snapAngle(field.angle);
       if (field.type === 'line') {
@@ -642,11 +787,7 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
       const paddingMm = style.background?.paddingMm ?? 0.8;
       const charHeightMm = 3 * fieldScale;
       const charWidthMm = 2 * fieldScale;
-      const wrapMaxChars = getHalfWrapMaxChars(field, fieldScale);
-      const valueLines =
-        wrapMaxChars && sanitizeText(finalValue).length > wrapMaxChars
-          ? wrapTextByChars(finalValue, wrapMaxChars)
-          : [finalValue];
+      const valueLines = getWrappedTextLines(field, dims, finalValue, options);
 
       const lineStepMm = charHeightMm * 1.05;
       const lineOffset = (i) => {
@@ -739,11 +880,6 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
     });
   }
 
-  const normalizeCopies = (val) => {
-    const num = Number(val);
-    if (!Number.isFinite(num) || num <= 0) return 1;
-    return Math.max(1, Math.round(num));
-  };
   const finalCopies = normalizeCopies(copiesOverride || mergedContent.copies || 1);
   if (splitCopies && finalCopies > 1) {
     lines.push('PRINT 1');
@@ -913,15 +1049,58 @@ const waitForPrintQueue = () => {
   return Promise.resolve();
 };
 
+export const shouldUseBitmapPrint = () => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem('useBitmapPrint') !== 'false';
+  } catch (e) {
+    return true;
+  }
+};
+
+export const uint8ArrayToBase64 = (bytes) => {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return '';
+  let binary = '';
+  const chunkSize = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+};
+
+const concatUint8Arrays = (chunks = []) => {
+  const totalLength = chunks.reduce((sum, chunk) => sum + (chunk?.length || 0), 0);
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+
+  chunks.forEach((chunk) => {
+    if (!(chunk instanceof Uint8Array) || chunk.length === 0) return;
+    out.set(chunk, offset);
+    offset += chunk.length;
+  });
+
+  return out;
+};
+
 export const sendToLocalPrinter = async ({
   printer,
   content,
   type = 'raw',
   serviceBase,
+  encoding = 'text',
 }) => {
   if (!content) {
     return { success: false, error: 'Missing print content' };
   }
+  const requestMeta = {
+    printer,
+    type,
+    encoding,
+    contentLength: typeof content === 'string' ? content.length : 0,
+  };
 
   // Queue this print job to ensure sequential execution with delay
   // This prevents printer buffer conflicts when users create multiple issues rapidly
@@ -935,21 +1114,22 @@ export const sendToLocalPrinter = async ({
       if (!resolved.success) return { success: false, error: resolved.error || 'Local print service not reachable' };
       const base = resolved.serviceBase;
 
+      console.info('Sending local print job', { ...requestMeta, serviceBase: base });
       const response = await fetch(`${base}/print`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ printer, content, type }),
+        body: JSON.stringify({ printer, content, type, encoding }),
       });
 
       lastPrintJobTime = Date.now(); // Record time after job is sent
 
       const result = await response.json();
       if (result.success) {
-        return { success: true, result };
+        return { success: true, result, requestMeta: { ...requestMeta, serviceBase: base } };
       }
-      return { success: false, error: result.error || 'Failed to send print job', result };
+      return { success: false, error: result.error || 'Failed to send print job', result, requestMeta: { ...requestMeta, serviceBase: base } };
     } catch (err) {
-      return { success: false, error: err.message || 'Failed to send print job' };
+      return { success: false, error: err.message || 'Failed to send print job', requestMeta };
     }
   };
 
@@ -991,19 +1171,31 @@ export const printStageTemplatesBatch = async (stageKey, dataArray = [], options
     return { success: false, skipped: true, reason: 'Template not found' };
   }
 
-  // Generate TSPL for each item and concatenate
+  const copies = options.copies || template.content?.copies || 1;
   let combinedTspl = '';
   for (const data of dataArray) {
-    const copies = options.copies || template.content?.copies || 1;
     combinedTspl += buildTsplFromTemplate(template, data, { stageKey, copies });
   }
 
   const printer = options.printer || getPreferredPrinter();
+  let printPayload = combinedTspl;
+  let encoding = 'text';
+
+  if (shouldUseBitmapPrint()) {
+    const jobs = await Promise.all(
+      dataArray.map((data) => buildBitmapTsplFromTemplate(template, data, { stageKey, copies })),
+    );
+    const combinedBytes = concatUint8Arrays(jobs);
+    printPayload = uint8ArrayToBase64(combinedBytes);
+    encoding = 'base64';
+  }
+
   const result = await sendToLocalPrinter({
     printer,
-    content: combinedTspl,
+    content: printPayload,
     type: 'raw',
-    serviceBase: options.serviceBase
+    serviceBase: options.serviceBase,
+    encoding,
   });
 
   return { ...result, tspl: combinedTspl };
@@ -1018,15 +1210,21 @@ export default {
   STAGE_VARIABLES,
   DEFAULT_DIMENSIONS,
   DEFAULT_CONTENT,
+  FONT_FAMILY_OPTIONS,
   substitutePlaceholders,
   normalizeBlock,
   migrateContent,
+  getBarcodeQuietZoneMm,
+  getFontFamilyCss,
+  prepareTemplateFields,
   buildTspl,
   buildTsplFromTemplate,
   loadTemplate,
   saveTemplate,
   printStageTemplate,
   sendToLocalPrinter,
+  shouldUseBitmapPrint,
+  uint8ArrayToBase64,
   getPreferredPrinter,
   setPreferredPrinter,
   makeReceiveBarcode,

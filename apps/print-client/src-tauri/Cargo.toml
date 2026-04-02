@@ -26,4 +26,4 @@ actix-web = "4.12.1"
 actix-cors = "0.7.1"
 tauri-plugin-autostart = "2.5.1"
 chrono = "0.4.42"
-
+base64 = "0.22"

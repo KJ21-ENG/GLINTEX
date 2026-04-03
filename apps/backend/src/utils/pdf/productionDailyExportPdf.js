@@ -598,13 +598,25 @@ export async function createProductionDailyExportPdfDocument(data) {
   });
 
   if (data.process === 'holo') {
-    const holoHoursWastageRows = (data.holoHoursWastageSummary || []).map((entry) => ({
+    const holoEntries = data.holoHoursWastageSummary || [];
+    const holoHoursWastageRows = holoEntries.map((entry) => ({
       cells: [
         { text: entry.machine || 'Unassigned', align: 'left', wrap: true },
         { text: formatOptionalHours(entry.hours), align: 'right' },
         { text: formatOptionalWeight(entry.wastage), align: 'right' },
       ],
     }));
+
+    const totalHours = holoEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0);
+    const totalWastage = holoEntries.reduce((sum, e) => sum + (Number(e.wastage) || 0), 0);
+    holoHoursWastageRows.push({
+      isTotal: true,
+      cells: [
+        { text: 'TOTAL', align: 'left' },
+        { text: formatOptionalHours(totalHours), align: 'right' },
+        { text: formatOptionalWeight(totalWastage), align: 'right' },
+      ],
+    });
 
     y = drawTable(doc, {
       y,

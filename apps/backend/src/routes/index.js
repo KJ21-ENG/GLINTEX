@@ -8586,13 +8586,20 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
 
-    // Extract cutId from source cutter rows (use first non-null cutId)
-    let resolvedCutId = receiveRows.map(r => r.cutId).find(Boolean) || null;
+    // Keep issue-level cut in sync with source cutter crates.
+    const sourceCutIds = new Set(receiveRows.map((r) => r.cutId).filter(Boolean));
+    if (sourceCutIds.size > 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single cut' });
+    }
+    let resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
     if (!resolvedCutId) {
-      // Fallback: if source rows only have cut name as string, try resolving ID from master
-      const cutName = receiveRows.map(r => r.cut).find(Boolean);
-      if (cutName) {
-        const cutRec = await prisma.cut.findUnique({ where: { name: cutName } });
+      // Fallback for legacy rows that may only carry plain-text cut.
+      const sourceCutNames = Array.from(new Set(receiveRows.map((r) => String(r.cut || '').trim()).filter(Boolean)));
+      if (sourceCutNames.length > 1) {
+        return res.status(400).json({ error: 'Crates must belong to a single cut' });
+      }
+      if (sourceCutNames.length === 1) {
+        const cutRec = await prisma.cut.findUnique({ where: { name: sourceCutNames[0] } });
         if (cutRec) resolvedCutId = cutRec.id;
       }
     }
@@ -11544,6 +11551,8 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
           select: {
             id: true,
             pieceId: true,
+            cutId: true,
+            cut: true,
             bobbinQuantity: true,
             netWt: true,
             issuedBobbins: true,
@@ -11582,6 +11591,21 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
         }
         const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
         const itemId = Array.from(itemSet)[0];
+        const sourceCutIds = new Set(receiveRows.map((row) => row.cutId).filter(Boolean));
+        if (sourceCutIds.size > 1) {
+          throw new Error('Crates must belong to a single cut');
+        }
+        let resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+        if (!resolvedCutId) {
+          const sourceCutNames = Array.from(new Set(receiveRows.map((row) => String(row.cut || '').trim()).filter(Boolean)));
+          if (sourceCutNames.length > 1) {
+            throw new Error('Crates must belong to a single cut');
+          }
+          if (sourceCutNames.length === 1) {
+            const cutRecord = await tx.cut.findUnique({ where: { name: sourceCutNames[0] } });
+            if (cutRecord) resolvedCutId = cutRecord.id;
+          }
+        }
 
         const resolvedTwistId = twistId !== undefined ? (twistId || null) : issueRecord.twistId;
         if (!resolvedTwistId) {
@@ -11694,6 +11718,7 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
 
         data.itemId = itemId;
         data.lotNo = lotNo;
+        data.cutId = resolvedCutId || null;
         data.twistId = resolvedTwistId;
         data.yarnId = resolvedYarnId || null;
         data.metallicBobbins = totalBobbins;
@@ -12103,9 +12128,10 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
 
         data.itemId = itemId;
         data.lotNo = lotNo;
-        if (resolvedCutId) data.cutId = resolvedCutId;
-        if (resolvedYarnId) data.yarnId = resolvedYarnId;
-        if (resolvedTwistId) data.twistId = resolvedTwistId;
+        // Keep parent issue metadata aligned with the selected source crates.
+        data.cutId = resolvedCutId || null;
+        data.yarnId = resolvedYarnId || null;
+        data.twistId = resolvedTwistId || null;
         data.rollsIssued = Number(totalRolls || 0);
         data.requiredPerConeNetWeight = resolvedPerCone;
         data.expectedCones = expectedCones;

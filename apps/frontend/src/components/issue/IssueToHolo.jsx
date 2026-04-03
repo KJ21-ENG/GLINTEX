@@ -94,6 +94,16 @@ export function IssueToHolo() {
             return;
         }
 
+        const scannedCut = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || db.cuts?.find(c => c.id === row.cutId)?.name || '';
+        if (crates.length > 0) {
+            const existingCut = String(crates[0]?.cut || '').trim().toLowerCase();
+            const nextCut = String(scannedCut || '').trim().toLowerCase();
+            if (existingCut && nextCut && existingCut !== nextCut) {
+                alert('Mixed cuts not allowed');
+                return;
+            }
+        }
+
         // Calculate Default Issue Qty (Available), factoring in dispatch
         const totalCount = Number(row.bobbinQuantity || 0);
         const issuedCount = Number(row.issuedBobbins || 0);

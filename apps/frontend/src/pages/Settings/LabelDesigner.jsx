@@ -5,6 +5,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label }
 import {
   DEFAULT_DIMENSIONS,
   DEFAULT_CONTENT,
+  DEFAULT_STAGE_TEMPLATES,
   FONT_FAMILY_OPTIONS,
   getBarcodeQuietZoneMm,
   LABEL_STAGE_KEYS,
@@ -1454,8 +1455,14 @@ const LabelDesigner = () => {
         setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
         setContent(migrateContent(tpl.content || tpl));
       } else {
-        setDimensions({ ...DEFAULT_DIMENSIONS });
-        setContent({ ...DEFAULT_CONTENT });
+        const stageDef = DEFAULT_STAGE_TEMPLATES[templateStage];
+        if (stageDef) {
+          setDimensions({ ...DEFAULT_DIMENSIONS, ...(stageDef.dimensions || {}) });
+          setContent(migrateContent(stageDef.content || {}));
+        } else {
+          setDimensions({ ...DEFAULT_DIMENSIONS });
+          setContent({ ...DEFAULT_CONTENT });
+        }
       }
       setSelectedIds([]);
       undoStack.current = [];
@@ -1526,6 +1533,20 @@ const LabelDesigner = () => {
     const result = await saveTemplate(templateStage, { dimensions, content });
     if (result?.success) alert(`Template saved for ${templateStage}`);
     else alert(result?.error || 'Failed to save template');
+  };
+
+  const handleResetToDefault = () => {
+    const stageDef = DEFAULT_STAGE_TEMPLATES[templateStage];
+    if (!stageDef) {
+      alert('No default template available for this stage');
+      return;
+    }
+    if (!window.confirm(`Reset "${templateStage}" template to factory default? Any unsaved changes will be lost.`)) return;
+    setDimensions({ ...DEFAULT_DIMENSIONS, ...(stageDef.dimensions || {}) });
+    setContent(migrateContent(stageDef.content || {}));
+    setSelectedIds([]);
+    undoStack.current = [];
+    redoStack.current = [];
   };
 
   const addTextBlock = () => {
@@ -1811,6 +1832,10 @@ const LabelDesigner = () => {
           </select>
           <Button size="sm" variant="outline" onClick={handleSaveTemplateStage}>
             Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={handleResetToDefault} title="Reset to factory default">
+            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+            Reset
           </Button>
         </CardContent>
       </Card>

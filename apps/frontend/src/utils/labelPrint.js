@@ -213,6 +213,261 @@ export const DEFAULT_CONTENT = {
   texts: [],
 };
 
+// ---------------------------------------------------------------------------
+// Redesigned default sticker templates for all 8 stages.
+// Coordinate system for 75x125 landscape (angle=270):
+//   pos.x = vertical position on label (0=top, increasing=down)
+//   pos.y = horizontal start (higher=further right; text reads right-to-left at 270)
+// ---------------------------------------------------------------------------
+
+const _textBase = (id, x, y, value, size = 19, extra = {}) => ({
+  id, type: 'text', angle: 270, pos: { x, y },
+  style: {
+    bold: true, size, italic: false, opacity: 1, visible: true, underline: false,
+    background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+    wrapAtCenter: false,
+    ...extra,
+  },
+  value,
+});
+
+const _titleBar = (id, value, { size = 21, y = 123, paddingMm = 0.9 } = {}) => ({
+  id, type: 'text', angle: 270, pos: { x: 0, y },
+  style: {
+    bold: true, size, italic: false, opacity: 1, visible: true, underline: false,
+    background: { color: '#000000', enabled: true, paddingMm, textColor: '#ffffff' },
+    wrapAtCenter: false,
+  },
+  value,
+});
+
+const _barcode = (id, x, y, { heightMm = 10, moduleMm = 0.45 } = {}) => ({
+  id, type: 'barcode', angle: 270, pos: { x, y },
+  style: { bold: false, italic: false, heightMm, moduleMm, underline: false, humanReadable: true },
+  value: '{{barcode}}',
+});
+
+const _vLine = (id, x = 6, lengthMm = 135) => ({
+  id, type: 'line', angle: 90, pos: { x, y: 0 },
+  style: { visible: true, lengthMm, thicknessMm: 0.1 },
+  value: '',
+});
+
+const _hLine = (id, x, y, lengthMm = 45) => ({
+  id, type: 'line', angle: 0, pos: { x, y },
+  style: { visible: true, lengthMm, thicknessMm: 0.5 },
+  value: '',
+});
+
+const _dims75x125 = (offsetX = 3) => ({
+  width: 75, height: 125, columns: 1, offsetX, offsetY: 0,
+  fontSize: 10, marginTop: 0, pageWidth: 75, marginLeft: 0,
+  orientation: 'landscape', verticalGap: 2, horizontalGap: 2,
+});
+
+export const DEFAULT_STAGE_TEMPLATES = {
+  // ── INBOUND ──────────────────────────────────────────────────────────
+  // 75x125 landscape, no offset. Full-width single column.
+  [LABEL_STAGE_KEYS.INBOUND]: {
+    dimensions: { ..._dims75x125(0) },
+    content: {
+      copies: 1,
+      texts: [
+        _titleBar('t-inb-title', 'INBOUND', { size: 28, y: 123, paddingMm: 1.0 }),
+        _vLine('l-inb-vline', 7, 125),
+        _textBase('t-inb-date', 14, 122, 'DATE : @date', 18),
+        _textBase('t-inb-item', 22, 122, 'METALLIC : @itemName', 18, { wrapAtCenter: true }),
+        _textBase('t-inb-roll', 30, 122, 'ROLL NO : @seq', 18),
+        _textBase('t-inb-wt', 38, 122, 'WEIGHT : @weight KG', 18),
+        _hLine('l-inb-hline', 45, 0, 75),
+        _barcode('bc-inb', 53, 100, { heightMm: 12, moduleMm: 0.35 }),
+      ],
+    },
+  },
+
+  // ── CUTTER ISSUE ─────────────────────────────────────────────────────
+  // Full-width single column. 7 data fields + barcode.
+  [LABEL_STAGE_KEYS.CUTTER_ISSUE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 1,
+      texts: [
+        _titleBar('t-ci-title', 'ISSUE TO CUTTER MACHINE', { size: 19, y: 123, paddingMm: 0.8 }),
+        _vLine('l-ci-vline', 6, 125),
+        _textBase('t-ci-date', 10, 122, 'DATE : @date', 19),
+        _textBase('t-ci-item', 17, 122, 'ITEM : @itemName - @seq', 19, { wrapAtCenter: true }),
+        _textBase('t-ci-cut', 24, 122, 'CUT : @cut', 19),
+        _textBase('t-ci-lot', 31, 122, 'LOT : @inboundDate', 19),
+        _hLine('l-ci-hline', 37, 0, 125),
+        _textBase('t-ci-machine', 41, 122, 'MACHINE : @machineName', 19),
+        _textBase('t-ci-weight', 48, 122, 'WEIGHT : @totalWeight KG', 19),
+        _barcode('bc-ci', 58, 100, { heightMm: 10, moduleMm: 0.45 }),
+      ],
+    },
+  },
+
+  // ── CUTTER ISSUE SMALL ───────────────────────────────────────────────
+  // 50x25 portrait, 2-column. Compact layout.
+  [LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL]: {
+    dimensions: {
+      width: 50, height: 25, columns: 2, offsetX: 1, offsetY: -1,
+      fontSize: 10, marginTop: 0, pageWidth: 105, marginLeft: 0,
+      orientation: 'portrait', verticalGap: 2, horizontalGap: 2,
+    },
+    content: {
+      copies: 1,
+      texts: [
+        { id: 't-cis-item', type: 'text', angle: 0, pos: { x: 3, y: 3 },
+          style: { bold: true, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: true },
+          value: '@itemName' },
+        { id: 't-cis-operator', type: 'text', angle: 0, pos: { x: 3, y: 8 },
+          style: { bold: false, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: false },
+          value: '@operatorName' },
+        { id: 't-cis-empty', type: 'text', angle: 0, pos: { x: 3, y: 15 },
+          style: { bold: false, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: false },
+          value: '' },
+        { id: 'bc-cis', type: 'barcode', angle: 0, pos: { x: 5, y: 14 },
+          style: { bold: false, italic: false, heightMm: 7, moduleMm: 0.25, underline: false, humanReadable: true },
+          value: '{{barcode}}' },
+        { id: 't-cis-cut', type: 'text', angle: 0, pos: { x: 29, y: 3 },
+          style: { bold: true, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: false },
+          value: '(@cut)' },
+      ],
+    },
+  },
+
+  // ── CUTTER RECEIVE ───────────────────────────────────────────────────
+  // Full-width single column. 10 data fields at size 16.
+  [LABEL_STAGE_KEYS.CUTTER_RECEIVE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 2,
+      texts: [
+        _titleBar('t-cr-title', 'RECEIVE FROM CUTTER', { size: 21, y: 123, paddingMm: 0.8 }),
+        _vLine('l-cr-vline', 7, 125),
+        _textBase('t-cr-date', 10, 122, 'DATE : @date', 17),
+        _textBase('t-cr-item', 16, 122, 'ITEM : @itemName', 17, { wrapAtCenter: true }),
+        _textBase('t-cr-cut', 22, 122, 'CUT : @cut', 17),
+        _textBase('t-cr-machine', 28, 122, 'MACHINE : @machineName', 17),
+        _textBase('t-cr-bob', 34, 122, 'BOB : @bobbinName  QTY : @bobbinQty', 17),
+        _hLine('l-cr-hline', 39, 0, 125),
+        _textBase('t-cr-gross', 42, 122, 'GROSS : @grossWeight', 17),
+        _textBase('t-cr-tare', 48, 122, 'TARE : @tareWeight', 17),
+        _textBase('t-cr-net', 54, 122, 'NET : @netWeight KG', 17),
+        _textBase('t-cr-operator', 42, 58, 'OPR : @operatorName', 14, { wrapAtCenter: true }),
+        _barcode('bc-cr', 61, 100, { heightMm: 8, moduleMm: 0.42 }),
+      ],
+    },
+  },
+
+  // ── HOLO ISSUE ───────────────────────────────────────────────────────
+  // Full-width single column. 11 data fields at size 15, ~5mm spacing.
+  [LABEL_STAGE_KEYS.HOLO_ISSUE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 2,
+      texts: [
+        _titleBar('t-hi-title', 'ISSUE TO HOLO MACHINE', { size: 19, y: 123, paddingMm: 0.8 }),
+        _vLine('l-hi-vline', 7, 125),
+        _textBase('t-hi-date', 10, 122, 'DATE : @date', 16),
+        _textBase('t-hi-shift', 10, 55, 'SHIFT : @shift', 14),
+        _textBase('t-hi-item', 16, 122, 'ITEM : @itemName', 16, { wrapAtCenter: true }),
+        _textBase('t-hi-cut', 22, 122, 'CUT : @cut', 16),
+        _textBase('t-hi-yarn', 28, 122, 'YARN : @yarnName', 16, { wrapAtCenter: true }),
+        _textBase('t-hi-machine', 34, 122, 'M/C : @machineName', 16),
+        _textBase('t-hi-worker', 34, 55, 'WORKER : @operatorName', 14, { wrapAtCenter: true }),
+        _hLine('l-hi-hline', 39, 0, 125),
+        _textBase('t-hi-bob', 42, 122, 'BOB : @bobbinType  QTY : @bobbinQty', 16),
+        _textBase('t-hi-twist', 48, 122, 'TWIST : @twistName', 16),
+        _textBase('t-hi-netwt', 54, 122, 'NET WT : @netWeight KG', 17),
+        _barcode('bc-hi', 62, 105, { heightMm: 8, moduleMm: 0.55 }),
+      ],
+    },
+  },
+
+  // ── HOLO RECEIVE ─────────────────────────────────────────────────────
+  // Full-width single column. Weight section below divider.
+  [LABEL_STAGE_KEYS.HOLO_RECEIVE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 2,
+      texts: [
+        _titleBar('t-hr-title', 'RECEIVE FROM HOLO', { size: 21, y: 123, paddingMm: 0.8 }),
+        _vLine('l-hr-vline', 7, 125),
+        _textBase('t-hr-date', 10, 122, 'DATE : @date', 17),
+        _textBase('t-hr-item', 16, 122, 'ITEM : @itemName', 17, { wrapAtCenter: true }),
+        _textBase('t-hr-cut', 22, 122, 'CUT : @cut', 17),
+        _textBase('t-hr-yarn', 28, 122, 'YARN : @yarnName', 17, { wrapAtCenter: true }),
+        _textBase('t-hr-rolls', 34, 122, 'ROLLS : @rollType (@rollCount)', 17),
+        _textBase('t-hr-operator', 28, 55, 'OPR : @operatorName', 14, { wrapAtCenter: true }),
+        _textBase('t-hr-machine', 34, 55, 'M/C : @machineName', 14),
+        _hLine('l-hr-hline', 39, 0, 125),
+        _textBase('t-hr-gross', 42, 122, 'GROSS : @grossWeight', 17),
+        _textBase('t-hr-tare', 48, 122, 'TARE : @tareWeight', 17),
+        _textBase('t-hr-net', 54, 122, 'NET : @netWeight KG', 17),
+        _textBase('t-hr-twist', 42, 55, 'TWIST : @twist', 14),
+        _barcode('bc-hr', 61, 105, { heightMm: 8, moduleMm: 0.55 }),
+      ],
+    },
+  },
+
+  // ── CONING ISSUE ─────────────────────────────────────────────────────
+  // Full-width single column. Dense — 13 data fields at size 14, ~4.5mm spacing.
+  [LABEL_STAGE_KEYS.CONING_ISSUE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 1,
+      texts: [
+        _titleBar('t-coi-title', 'ISSUE TO CONING MACHINE', { size: 16, y: 123, paddingMm: 0.7 }),
+        _vLine('l-coi-vline', 6, 125),
+        _textBase('t-coi-date', 9, 122, 'DATE : @date', 14),
+        _textBase('t-coi-worker', 9, 55, 'WORKER : @operatorName', 12, { wrapAtCenter: true }),
+        _textBase('t-coi-item', 14, 122, 'ITEM : @itemName (@cut)', 14, { wrapAtCenter: true }),
+        _textBase('t-coi-yarn', 20, 122, 'YARN : @yarnName', 14, { wrapAtCenter: true }),
+        _textBase('t-coi-shift', 20, 55, 'SHIFT : @shift', 12),
+        _textBase('t-coi-rolls', 26, 122, 'ROLLS : @rollType (@rollCount)', 14),
+        _textBase('t-coi-theli', 26, 55, 'THELI : @wrapperName', 12),
+        _hLine('l-coi-hline', 31, 0, 125),
+        _textBase('t-coi-cone', 34, 122, 'CONE : @coneType (@perConeTargetG G)', 14, { wrapAtCenter: true }),
+        _textBase('t-coi-expcone', 34, 55, 'EXP : @expectedCones pcs', 12),
+        _textBase('t-coi-netwt', 40, 122, 'NET WT : @netWeight KG', 15),
+        _barcode('bc-coi', 49, 95, { heightMm: 10, moduleMm: 0.35 }),
+      ],
+    },
+  },
+
+  // ── CONING RECEIVE ───────────────────────────────────────────────────
+  // Full-width single column. 10 data fields at size 14.
+  [LABEL_STAGE_KEYS.CONING_RECEIVE]: {
+    dimensions: { ..._dims75x125(3) },
+    content: {
+      copies: 1,
+      texts: [
+        _titleBar('t-cor-title', 'RECEIVE FROM CONING', { size: 16, y: 123, paddingMm: 0.7 }),
+        _vLine('l-cor-vline', 6, 125),
+        _textBase('t-cor-date', 9, 122, 'DATE : @date', 14),
+        _textBase('t-cor-operator', 9, 55, 'OPR : @operatorName', 12, { wrapAtCenter: true }),
+        _textBase('t-cor-item', 15, 122, 'ITEM : @itemName (@cut)', 14, { wrapAtCenter: true }),
+        _textBase('t-cor-yarn', 21, 122, 'YARN : @yarnName', 14, { wrapAtCenter: true }),
+        _textBase('t-cor-theli', 21, 55, 'THELI : @wrapperName', 12),
+        _textBase('t-cor-cone', 27, 122, 'CONE : @coneCount (@coneType)', 14),
+        _textBase('t-cor-machine', 27, 55, 'M/C : @machineName', 12),
+        _hLine('l-cor-hline', 32, 0, 125),
+        _textBase('t-cor-net', 35, 122, 'NET WT : @netWeight KG', 15),
+        _barcode('bc-cor', 45, 95, { heightMm: 10, moduleMm: 0.35 }),
+      ],
+    },
+  },
+};
+
 export const FONT_FAMILY_OPTIONS = [
   { value: 'courier-new', label: 'Courier New', cssFamily: '"Courier New", monospace' },
   { value: 'inter', label: 'Inter', cssFamily: '"Inter", sans-serif' },
@@ -896,25 +1151,34 @@ export const buildTsplFromTemplate = (template = {}, data = {}, options = {}) =>
   return buildTspl(dimensions, content, data, options);
 };
 
+export const getDefaultTemplate = (stageKey) => {
+  const def = DEFAULT_STAGE_TEMPLATES[stageKey];
+  if (!def) return null;
+  return {
+    dimensions: { ...DEFAULT_DIMENSIONS, ...(def.dimensions || {}) },
+    content: migrateContent(def.content || {}),
+  };
+};
+
 export const loadTemplate = async (stageKey, options = {}) => {
   const apiBase = options.apiBase || API_BASE_DEFAULT;
-  if (!stageKey) return null;
+  if (!stageKey) return getDefaultTemplate(stageKey);
   try {
     const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, {
       credentials: 'include',
     });
     notifyUnauthorized(response);
-    if (response.status === 404) return null;
+    if (response.status === 404) return getDefaultTemplate(stageKey);
     const payload = await safeReadJson(response);
     const tpl = payload?.template;
-    if (!tpl) return null;
+    if (!tpl) return getDefaultTemplate(stageKey);
     return {
       dimensions: { ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) },
       content: migrateContent(tpl.content || {}),
     };
   } catch (err) {
     console.error('Failed to load template', stageKey, err);
-    return null;
+    return getDefaultTemplate(stageKey);
   }
 };
 
@@ -1210,6 +1474,7 @@ export default {
   STAGE_VARIABLES,
   DEFAULT_DIMENSIONS,
   DEFAULT_CONTENT,
+  DEFAULT_STAGE_TEMPLATES,
   FONT_FAMILY_OPTIONS,
   substitutePlaceholders,
   normalizeBlock,
@@ -1219,6 +1484,7 @@ export default {
   prepareTemplateFields,
   buildTspl,
   buildTsplFromTemplate,
+  getDefaultTemplate,
   loadTemplate,
   saveTemplate,
   printStageTemplate,

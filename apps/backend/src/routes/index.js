@@ -13358,6 +13358,336 @@ router.get('/api/dispatch/:id', requirePermission('dispatch', PERM_READ), async 
   }
 });
 
+function normalizeDispatchCountInput(raw) {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num <= 0) {
+    throw new Error('Count must be a positive number');
+  }
+  return Math.floor(num);
+}
+
+async function getDispatchSourceAvailability(tx, stage, stageItemId) {
+  if (stage === 'inbound') {
+    const sourceItem = await tx.inboundItem.findUnique({ where: { id: stageItemId } });
+    if (!sourceItem) throw new Error('Inbound item not found');
+    const availableWeight = Math.max(0, Number(sourceItem.weight || 0) - Number(sourceItem.dispatchedWeight || 0) - Number(sourceItem.issuedToCutterWeight || 0));
+    return { availableWeight, availableCount: null };
+  }
+
+  if (stage === 'cutter') {
+    const sourceItem = await tx.receiveFromCutterMachineRow.findUnique({ where: { id: stageItemId } });
+    if (!sourceItem || sourceItem.isDeleted) throw new Error('Cutter receive row not found');
+    const issuedToHolo = Number(sourceItem.issuedBobbinWeight || 0);
+    const totalWeight = Number(sourceItem.netWt || 0);
+    const availableWeight = Math.max(0, totalWeight - Number(sourceItem.dispatchedWeight || 0) - issuedToHolo);
+    const availableCount = calcAvailableCountFromWeight({
+      totalCount: Number(sourceItem.bobbinQuantity || 0),
+      issuedCount: Number(sourceItem.issuedBobbins || 0),
+      dispatchedCount: Number(sourceItem.dispatchedCount || 0),
+      totalWeight,
+      availableWeight,
+    }) || 0;
+    return { availableWeight, availableCount };
+  }
+
+  if (stage === 'holo') {
+    const sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
+    if (!sourceItem || sourceItem.isDeleted) throw new Error('Holo receive row not found');
+    const netWeight = Number(sourceItem.rollWeight || (Number(sourceItem.grossWeight || 0) - Number(sourceItem.tareWeight || 0)));
+    const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
+    const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
+    const availableWeight = Math.max(0, netWeight - Number(sourceItem.dispatchedWeight || 0) - Number(issuedToConing.issuedWeight || 0));
+    const availableCount = calcAvailableCountFromWeight({
+      totalCount: Number(sourceItem.rollCount || 0),
+      issuedCount: Number(issuedToConing.issuedRolls || 0),
+      dispatchedCount: Number(sourceItem.dispatchedCount || 0),
+      totalWeight: netWeight,
+      availableWeight,
+    }) || 0;
+    return { availableWeight, availableCount };
+  }
+
+  if (stage === 'coning') {
+    const sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
+    if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
+    const totalWeight = Number(sourceItem.netWeight || 0);
+    const availableWeight = Math.max(0, totalWeight - Number(sourceItem.dispatchedWeight || 0));
+    const availableCount = calcAvailableCountFromWeight({
+      totalCount: Number(sourceItem.coneCount || 0),
+      issuedCount: 0,
+      dispatchedCount: Number(sourceItem.dispatchedCount || 0),
+      totalWeight,
+      availableWeight,
+    }) || 0;
+    return { availableWeight, availableCount };
+  }
+
+  throw new Error('Invalid stage');
+}
+
+async function applyDispatchSourceDelta(tx, { stage, stageItemId, deltaWeight, deltaCount }) {
+  const roundedDeltaWeight = roundTo3Decimals(Number(deltaWeight || 0));
+  const normalizedDeltaCount = Math.trunc(Number(deltaCount || 0));
+  if (Math.abs(roundedDeltaWeight) <= 0.000001 && normalizedDeltaCount === 0) return;
+
+  const updateData = {};
+  if (Math.abs(roundedDeltaWeight) > 0.000001) {
+    updateData.dispatchedWeight = { increment: roundedDeltaWeight };
+  }
+  if (stage !== 'inbound' && normalizedDeltaCount !== 0) {
+    updateData.dispatchedCount = { increment: normalizedDeltaCount };
+  }
+
+  if (Object.keys(updateData).length === 0) return;
+
+  if (stage === 'inbound') {
+    await tx.inboundItem.update({ where: { id: stageItemId }, data: updateData });
+  } else if (stage === 'cutter') {
+    await tx.receiveFromCutterMachineRow.update({ where: { id: stageItemId }, data: updateData });
+  } else if (stage === 'holo') {
+    await tx.receiveFromHoloMachineRow.update({ where: { id: stageItemId }, data: updateData });
+  } else if (stage === 'coning') {
+    await tx.receiveFromConingMachineRow.update({ where: { id: stageItemId }, data: updateData });
+  } else {
+    throw new Error('Invalid stage');
+  }
+}
+
+router.put('/api/dispatch/:id', requireEditPermission('dispatch'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Dispatch id is required' });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.dispatch.findUnique({ where: { id } });
+      if (!existing) throw new Error('Dispatch not found');
+
+      if (req.body?.stage !== undefined && String(req.body.stage) !== String(existing.stage)) {
+        throw new Error('Dispatch stage cannot be changed');
+      }
+      if (req.body?.stageItemId !== undefined && String(req.body.stageItemId) !== String(existing.stageItemId)) {
+        throw new Error('Dispatch source item cannot be changed');
+      }
+
+      const newCustomerId = req.body?.customerId !== undefined ? String(req.body.customerId || '').trim() : existing.customerId;
+      const newDate = req.body?.date !== undefined ? String(req.body.date || '').trim() : existing.date;
+      const newNotes = req.body?.notes !== undefined ? (String(req.body.notes || '').trim() || null) : (existing.notes || null);
+      const newWeight = req.body?.weight !== undefined ? Number(req.body.weight) : Number(existing.weight || 0);
+      const parsedCount = normalizeDispatchCountInput(req.body?.count);
+      const newCount = parsedCount === undefined ? (existing.count ?? null) : parsedCount;
+
+      if (!newCustomerId) throw new Error('Customer is required');
+      if (!newDate) throw new Error('Date is required');
+      if (!Number.isFinite(newWeight) || newWeight <= 0) throw new Error('Weight must be a positive number');
+      if (existing.stage === 'inbound' && newCount !== null) throw new Error('Count is not supported for inbound dispatch rows');
+
+      const customer = await tx.customer.findUnique({ where: { id: newCustomerId } });
+      if (!customer) throw new Error('Customer not found');
+
+      const oldWeight = Number(existing.weight || 0);
+      const oldCount = Number(existing.count || 0);
+      const nextCount = Number(newCount || 0);
+      const deltaWeight = roundTo3Decimals(newWeight - oldWeight);
+      const deltaCount = Math.trunc(nextCount - oldCount);
+
+      const availability = await getDispatchSourceAvailability(tx, existing.stage, existing.stageItemId);
+      if (deltaWeight > Number(availability.availableWeight || 0) + 0.001) {
+        throw new Error(`Dispatch weight increase (${deltaWeight.toFixed(3)}) exceeds available weight (${Number(availability.availableWeight || 0).toFixed(3)})`);
+      }
+      if (deltaCount > 0) {
+        if (availability.availableCount == null) throw new Error('Count dispatch is not supported for this stage');
+        if (deltaCount > Number(availability.availableCount || 0)) {
+          throw new Error(`Dispatch count increase (${deltaCount}) exceeds available count (${Number(availability.availableCount || 0)})`);
+        }
+      }
+
+      await applyDispatchSourceDelta(tx, {
+        stage: existing.stage,
+        stageItemId: existing.stageItemId,
+        deltaWeight,
+        deltaCount,
+      });
+
+      return await tx.dispatch.update({
+        where: { id: existing.id },
+        data: {
+          customerId: newCustomerId,
+          date: newDate,
+          notes: newNotes,
+          weight: roundTo3Decimals(newWeight),
+          count: newCount,
+          ...actorUpdateFields(actor?.userId),
+        },
+        include: { customer: true },
+      });
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: updated.id,
+      action: 'update',
+      payload: {
+        challanNo: updated.challanNo,
+        stage: updated.stage,
+        customerId: updated.customerId,
+        date: updated.date,
+        weight: updated.weight,
+        count: updated.count,
+      },
+    });
+
+    return res.json({ dispatch: updated });
+  } catch (err) {
+    console.error('Failed to update dispatch', err);
+    return res.status(400).json({ error: err.message || 'Failed to update dispatch' });
+  }
+});
+
+router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch'), async (req, res) => {
+  try {
+    const actor = getActor(req);
+    const challanNo = String(req.params.challanNo || '').trim();
+    if (!challanNo) return res.status(400).json({ error: 'Challan number is required' });
+
+    const payloadRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (payloadRows.length === 0) return res.status(400).json({ error: 'rows must be a non-empty array' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existingRows = await tx.dispatch.findMany({
+        where: { challanNo },
+        include: { customer: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (!existingRows.length) throw new Error('Challan not found');
+
+      const existingById = new Map(existingRows.map((r) => [r.id, r]));
+      if (payloadRows.length !== existingRows.length) {
+        throw new Error('All challan rows must be included in the edit payload');
+      }
+
+      const seen = new Set();
+      const normalizedRows = payloadRows.map((row) => {
+        const id = String(row?.id || '').trim();
+        if (!id) throw new Error('Each row requires id');
+        if (seen.has(id)) throw new Error(`Duplicate row id in payload: ${id}`);
+        seen.add(id);
+        const existing = existingById.get(id);
+        if (!existing) throw new Error(`Row ${id} does not belong to challan ${challanNo}`);
+        if (row?.stage !== undefined && String(row.stage) !== String(existing.stage)) {
+          throw new Error('Dispatch stage cannot be changed');
+        }
+        if (row?.stageItemId !== undefined && String(row.stageItemId) !== String(existing.stageItemId)) {
+          throw new Error('Dispatch source item cannot be changed');
+        }
+        const parsedCount = normalizeDispatchCountInput(row?.count);
+        const newCount = parsedCount === undefined ? (existing.count ?? null) : parsedCount;
+        const newWeight = row?.weight !== undefined ? Number(row.weight) : Number(existing.weight || 0);
+        if (!Number.isFinite(newWeight) || newWeight <= 0) {
+          throw new Error(`Weight must be a positive number for row ${id}`);
+        }
+        if (existing.stage === 'inbound' && newCount !== null) {
+          throw new Error(`Count is not supported for inbound row ${id}`);
+        }
+        const oldWeight = Number(existing.weight || 0);
+        const oldCount = Number(existing.count || 0);
+        const nextCount = Number(newCount || 0);
+        return {
+          id,
+          existing,
+          newWeight,
+          newCount,
+          deltaWeight: roundTo3Decimals(newWeight - oldWeight),
+          deltaCount: Math.trunc(nextCount - oldCount),
+        };
+      });
+
+      const newCustomerId = req.body?.customerId !== undefined
+        ? String(req.body.customerId || '').trim()
+        : existingRows[0].customerId;
+      const newDate = req.body?.date !== undefined
+        ? String(req.body.date || '').trim()
+        : existingRows[0].date;
+      const hasNotes = req.body?.notes !== undefined;
+      const sharedNotes = hasNotes ? (String(req.body.notes || '').trim() || null) : undefined;
+
+      if (!newCustomerId) throw new Error('Customer is required');
+      if (!newDate) throw new Error('Date is required');
+      const customer = await tx.customer.findUnique({ where: { id: newCustomerId } });
+      if (!customer) throw new Error('Customer not found');
+
+      const deltaBySource = new Map();
+      normalizedRows.forEach((row) => {
+        const key = `${row.existing.stage}:${row.existing.stageItemId}`;
+        const current = deltaBySource.get(key) || {
+          stage: row.existing.stage,
+          stageItemId: row.existing.stageItemId,
+          deltaWeight: 0,
+          deltaCount: 0,
+        };
+        current.deltaWeight += Number(row.deltaWeight || 0);
+        current.deltaCount += Number(row.deltaCount || 0);
+        deltaBySource.set(key, current);
+      });
+
+      for (const entry of deltaBySource.values()) {
+        const availability = await getDispatchSourceAvailability(tx, entry.stage, entry.stageItemId);
+        if (entry.deltaWeight > Number(availability.availableWeight || 0) + 0.001) {
+          throw new Error(`Dispatch weight increase (${entry.deltaWeight.toFixed(3)}) exceeds available weight (${Number(availability.availableWeight || 0).toFixed(3)}) for ${entry.stageItemId}`);
+        }
+        if (entry.deltaCount > 0) {
+          if (availability.availableCount == null) throw new Error(`Count dispatch is not supported for source ${entry.stageItemId}`);
+          if (entry.deltaCount > Number(availability.availableCount || 0)) {
+            throw new Error(`Dispatch count increase (${entry.deltaCount}) exceeds available count (${Number(availability.availableCount || 0)}) for ${entry.stageItemId}`);
+          }
+        }
+      }
+
+      for (const row of normalizedRows) {
+        await tx.dispatch.update({
+          where: { id: row.id },
+          data: {
+            customerId: newCustomerId,
+            date: newDate,
+            notes: hasNotes ? sharedNotes : row.existing.notes,
+            weight: roundTo3Decimals(row.newWeight),
+            count: row.newCount,
+            ...actorUpdateFields(actor?.userId),
+          },
+        });
+      }
+
+      for (const entry of deltaBySource.values()) {
+        await applyDispatchSourceDelta(tx, entry);
+      }
+
+      const dispatches = await tx.dispatch.findMany({
+        where: { challanNo },
+        include: { customer: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      return { dispatches };
+    });
+
+    await logCrudWithActor(req, {
+      entityType: 'dispatch',
+      entityId: challanNo,
+      action: 'update_challan',
+      payload: {
+        challanNo,
+        rows: result.dispatches.length,
+      },
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error('Failed to update dispatch challan', err);
+    return res.status(400).json({ error: err.message || 'Failed to update dispatch challan' });
+  }
+});
+
 // Create dispatch
 router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (req, res) => {
   try {

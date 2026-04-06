@@ -8,7 +8,7 @@ import {
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, formatDateDDMMYYYY, estimateWeightFromCount } from '../utils';
 import { exportHistoryToExcel, exportHistoryToCsv } from '../services';
-import { Truck, Plus, Search, History, Package, X, ChevronRight, ChevronDown, Trash2, Printer, ScanLine, Download } from 'lucide-react';
+import { Truck, Plus, Search, History, Package, X, ChevronRight, ChevronDown, Trash2, Printer, ScanLine, Download, Pencil } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { printDispatchChallan } from '../utils/printDispatchChallan';
 import { useMobileDetect } from '../utils/useMobileDetect';
@@ -40,7 +40,7 @@ const STAGE_RECEIVE_ROUTES = {
 
 export function Dispatch() {
     const { db, patchDb, refreshProcessData, refreshModuleData } = useInventory();
-    const { canRead, canWrite, canDelete } = usePermission('dispatch');
+    const { canRead, canWrite, canEdit, canDelete } = usePermission('dispatch');
     const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [activeTab, setActiveTab] = useState('dispatch'); // 'dispatch' | 'history'
@@ -89,6 +89,11 @@ export function Dispatch() {
         mode: 'weight', // 'weight' | 'count'
     });
     const [submitting, setSubmitting] = useState(false);
+    const [editSubmitting, setEditSubmitting] = useState(false);
+    const [editDispatchOpen, setEditDispatchOpen] = useState(false);
+    const [editDispatchForm, setEditDispatchForm] = useState(null);
+    const [editChallanOpen, setEditChallanOpen] = useState(false);
+    const [editChallanForm, setEditChallanForm] = useState(null);
 
     // New customer modal
     const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
@@ -224,6 +229,8 @@ export function Dispatch() {
                 totalWeight: 0,
                 totalCount: 0,
                 items: [],
+                createdByUser: d.createdByUser || null,
+                createdAt: d.createdAt || '',
             };
             existing.items.push(d);
             existing.totalWeight += Number(d.weight || 0);
@@ -632,6 +639,162 @@ export function Dispatch() {
             await refreshAfterDispatch(stageToRefresh);
         } catch (err) {
             alert(err.message || 'Failed to delete dispatch');
+        }
+    }
+
+    async function getStageAvailabilityMap(stage) {
+        const res = await api.getDispatchAvailable(stage);
+        const rows = Array.isArray(res?.items) ? res.items : [];
+        return new Map(rows.map((r) => [r.id, r]));
+    }
+
+    async function openEditDispatch(row, challan) {
+        if (!canEdit) return;
+        try {
+            const availabilityMap = await getStageAvailabilityMap(row.stage);
+            const available = availabilityMap.get(row.stageItemId);
+            setEditDispatchForm({
+                id: row.id,
+                challanNo: row.challanNo || challan?.challanNo || '',
+                stage: row.stage,
+                stageItemId: row.stageItemId,
+                stageBarcode: row.stageBarcode || '',
+                customerId: row.customerId || challan?.customer?.id || '',
+                date: row.date ? String(row.date).slice(0, 10) : todayISO(),
+                notes: (row.notes ?? challan?.notes ?? '') || '',
+                weight: String(row.weight ?? ''),
+                count: row.count != null ? String(row.count) : '',
+                availableWeight: Number(available?.availableWeight || 0),
+                availableCount: Number(available?.availableCount || 0),
+            });
+            setEditDispatchOpen(true);
+        } catch (err) {
+            alert(err.message || 'Failed to load dispatch edit form');
+        }
+    }
+
+    async function saveEditDispatch() {
+        if (!editDispatchForm) return;
+        if (!editDispatchForm.customerId) {
+            alert('Customer is required');
+            return;
+        }
+        const weight = Number(editDispatchForm.weight);
+        if (!Number.isFinite(weight) || weight <= 0) {
+            alert('Enter a valid weight');
+            return;
+        }
+        const count = editDispatchForm.stage === 'inbound'
+            ? null
+            : (editDispatchForm.count === '' ? null : Number(editDispatchForm.count));
+        if (count !== null && (!Number.isFinite(count) || count <= 0)) {
+            alert('Enter a valid count');
+            return;
+        }
+        setEditSubmitting(true);
+        try {
+            await api.updateDispatch(editDispatchForm.id, {
+                customerId: editDispatchForm.customerId,
+                date: editDispatchForm.date,
+                notes: editDispatchForm.notes || null,
+                weight,
+                count,
+            });
+            setEditDispatchOpen(false);
+            setEditDispatchForm(null);
+            const dispatchRes = await api.listDispatches();
+            setDispatches(dispatchRes.dispatches || []);
+            await refreshAfterDispatch(editDispatchForm.stage);
+            if (selectedStage === editDispatchForm.stage) {
+                const availRes = await api.getDispatchAvailable(selectedStage);
+                setAvailableItems(availRes.items || []);
+            }
+        } catch (err) {
+            alert(err.message || 'Failed to update dispatch');
+        } finally {
+            setEditSubmitting(false);
+        }
+    }
+
+    async function openEditChallan(challan) {
+        if (!canEdit) return;
+        try {
+            const availabilityMap = await getStageAvailabilityMap(challan.stage);
+            const rows = (challan.items || []).map((row) => {
+                const available = availabilityMap.get(row.stageItemId);
+                return {
+                    id: row.id,
+                    stage: row.stage,
+                    stageItemId: row.stageItemId,
+                    stageBarcode: row.stageBarcode || '',
+                    weight: String(row.weight ?? ''),
+                    count: row.count != null ? String(row.count) : '',
+                    availableWeight: Number(available?.availableWeight || 0),
+                    availableCount: Number(available?.availableCount || 0),
+                };
+            });
+            setEditChallanForm({
+                challanNo: challan.challanNo,
+                stage: challan.stage,
+                customerId: challan.customer?.id || '',
+                date: challan.date ? String(challan.date).slice(0, 10) : todayISO(),
+                notes: challan.notes || '',
+                rows,
+            });
+            setEditChallanOpen(true);
+        } catch (err) {
+            alert(err.message || 'Failed to load challan edit form');
+        }
+    }
+
+    async function saveEditChallan() {
+        if (!editChallanForm) return;
+        if (!editChallanForm.customerId) {
+            alert('Customer is required');
+            return;
+        }
+        const rows = [];
+        for (const row of editChallanForm.rows || []) {
+            const weight = Number(row.weight);
+            if (!Number.isFinite(weight) || weight <= 0) {
+                alert(`Enter valid weight for ${row.stageBarcode || row.id}`);
+                return;
+            }
+            const count = editChallanForm.stage === 'inbound'
+                ? null
+                : (row.count === '' ? null : Number(row.count));
+            if (count !== null && (!Number.isFinite(count) || count <= 0)) {
+                alert(`Enter valid count for ${row.stageBarcode || row.id}`);
+                return;
+            }
+            rows.push({
+                id: row.id,
+                weight,
+                count,
+            });
+        }
+
+        setEditSubmitting(true);
+        try {
+            await api.updateDispatchChallan(editChallanForm.challanNo, {
+                customerId: editChallanForm.customerId,
+                date: editChallanForm.date,
+                notes: editChallanForm.notes || null,
+                rows,
+            });
+            setEditChallanOpen(false);
+            setEditChallanForm(null);
+            const dispatchRes = await api.listDispatches();
+            setDispatches(dispatchRes.dispatches || []);
+            await refreshAfterDispatch(editChallanForm.stage);
+            if (selectedStage === editChallanForm.stage) {
+                const availRes = await api.getDispatchAvailable(selectedStage);
+                setAvailableItems(availRes.items || []);
+            }
+        } catch (err) {
+            alert(err.message || 'Failed to update dispatch challan');
+        } finally {
+            setEditSubmitting(false);
         }
     }
 
@@ -1323,6 +1486,20 @@ export function Dispatch() {
                                                             <UserBadge user={d.createdByUser} timestamp={d.createdAt} />
                                                         </TableCell>
                                                         <TableCell className="text-right whitespace-nowrap">
+                                                            <DisabledWithTooltip
+                                                                disabled={!canEdit}
+                                                                tooltip="You do not have permission to edit dispatches."
+                                                            >
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    className="h-8 w-8 p-0 mr-1"
+                                                                    onClick={(e) => { e.stopPropagation(); openEditChallan(d); }}
+                                                                    title="Edit Challan"
+                                                                >
+                                                                    <Pencil className="w-4 h-4" />
+                                                                </Button>
+                                                            </DisabledWithTooltip>
                                                             <Button
                                                                 size="sm"
                                                                 variant="ghost"
@@ -1358,6 +1535,7 @@ export function Dispatch() {
                                                                                 <TableHead>Barcode</TableHead>
                                                                                 <TableHead className="text-right">Count</TableHead>
                                                                                 <TableHead className="text-right">Weight</TableHead>
+                                                                                <TableHead className="text-right">Actions</TableHead>
                                                                             </TableRow>
                                                                         </TableHeader>
                                                                         <TableBody>
@@ -1366,6 +1544,25 @@ export function Dispatch() {
                                                                                     <TableCell className="font-mono text-xs">{item.stageBarcode || '—'}</TableCell>
                                                                                     <TableCell className="text-right">{item.count || '—'}</TableCell>
                                                                                     <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
+                                                                                    <TableCell className="text-right">
+                                                                                        <DisabledWithTooltip
+                                                                                            disabled={!canEdit}
+                                                                                            tooltip="You do not have permission to edit dispatches."
+                                                                                        >
+                                                                                            <Button
+                                                                                                size="sm"
+                                                                                                variant="ghost"
+                                                                                                className="h-7 w-7 p-0"
+                                                                                                onClick={(e) => {
+                                                                                                    e.stopPropagation();
+                                                                                                    openEditDispatch(item, d);
+                                                                                                }}
+                                                                                                title="Edit row"
+                                                                                            >
+                                                                                                <Pencil className="w-3.5 h-3.5" />
+                                                                                            </Button>
+                                                                                        </DisabledWithTooltip>
+                                                                                    </TableCell>
                                                                                 </TableRow>
                                                                             ))}
                                                                         </TableBody>
@@ -1404,12 +1601,20 @@ export function Dispatch() {
                                                     <span className="font-medium">{formatKg(d.totalWeight)}</span>
                                                 </div>
                                             </div>
-                                            <div className="mt-3 flex items-center justify-between">
-                                                <span className="text-xs text-muted-foreground">{d.items.length} items</span>
-                                                <div className="flex gap-1">
-                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
-                                                        <Printer className="w-4 h-4" />
-                                                    </Button>
+                                                <div className="mt-3 flex items-center justify-between">
+                                                    <span className="text-xs text-muted-foreground">{d.items.length} items</span>
+                                                    <div className="flex gap-1">
+                                                        <DisabledWithTooltip
+                                                            disabled={!canEdit}
+                                                            tooltip="You do not have permission to edit dispatches."
+                                                        >
+                                                            <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => openEditChallan(d)}>
+                                                                <Pencil className="w-4 h-4" />
+                                                            </Button>
+                                                        </DisabledWithTooltip>
+                                                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => handlePrintChallan(d)}>
+                                                            <Printer className="w-4 h-4" />
+                                                        </Button>
                                                     <DisabledWithTooltip
                                                         disabled={!canDelete}
                                                         tooltip="You do not have permission to delete dispatches."

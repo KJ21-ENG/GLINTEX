@@ -60,6 +60,15 @@ export function OnMachineTable({ db, process }) {
         });
         return map;
     }, [db.bobbins]);
+    const coneTypeById = useMemo(() => {
+        const map = new Map();
+        (db.cone_types || []).forEach((coneType) => {
+            const id = String(coneType?.id || '').trim();
+            if (!id) return;
+            map.set(id, coneType);
+        });
+        return map;
+    }, [db.cone_types]);
     const roundTakeBackWeight = (value) => {
         const num = Number(value || 0);
         if (!Number.isFinite(num) || num <= 0) return 0;
@@ -84,12 +93,16 @@ export function OnMachineTable({ db, process }) {
         const net = gross - ((count * bobbinWeight) + boxWeight);
         return roundTakeBackWeight(Math.max(0, net));
     };
-    const calcConingTakeBackNetWeight = (line, grossWeightInput, nextBoxId) => {
+    const calcConingTakeBackNetWeight = (line, nextCount, grossWeightInput, nextBoxId) => {
+        const count = Math.max(0, Number(nextCount || 0));
         const gross = Number(grossWeightInput || 0);
-        if (!Number.isFinite(gross) || gross <= 0) return 0;
+        if (!Number.isFinite(gross) || gross <= 0 || count <= 0) return 0;
         const boxWeight = Number(boxById.get(nextBoxId)?.weight || 0);
         if (!Number.isFinite(boxWeight) || boxWeight < 0) return 0;
-        const net = gross - boxWeight;
+        const coneUnitWeight = Number(line?.coneUnitWeight || 0);
+        if (!Number.isFinite(coneUnitWeight) || coneUnitWeight <= 0) return 0;
+        const tareWeight = boxWeight + (coneUnitWeight * count);
+        const net = gross - tareWeight;
         const maxWeight = Math.max(0, Number(line?.maxWeight || 0));
         return roundTakeBackWeight(Math.max(0, Math.min(maxWeight, net)));
     };
@@ -530,6 +543,7 @@ export function OnMachineTable({ db, process }) {
             const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
             const holoRow = process === 'coning' ? holoReceiveById.get(sourceId) : null;
             const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
+            const coneType = process === 'coning' ? coneTypeById.get(String(ref?.coneTypeId || '').trim()) : null;
             sourceMap.set(sourceId, {
                 sourceId,
                 label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
@@ -541,6 +555,7 @@ export function OnMachineTable({ db, process }) {
                 pieceTypeId: process === 'holo' ? String(cutterRow?.bobbinId || '').trim() : '',
                 pieceTypeName: process === 'holo' ? (bobbin?.name || '—') : '',
                 pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
+                coneUnitWeight: process === 'coning' ? Number(coneType?.weight || 0) : 0,
             });
         });
 
@@ -577,7 +592,7 @@ export function OnMachineTable({ db, process }) {
                 const tareEstimate = process === 'holo'
                     ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
                     : (process === 'coning'
-                        ? Number(boxById.get(boxId)?.weight || 0)
+                        ? (Number(boxById.get(boxId)?.weight || 0) + (Number(line.coneUnitWeight || 0) * Number(count || 0)))
                         : 0);
                 const grossWeight = process === 'holo'
                     ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
@@ -585,7 +600,7 @@ export function OnMachineTable({ db, process }) {
                 const weight = process === 'holo'
                     ? calcHoloTakeBackNetWeight(line, count, grossWeight, boxId)
                     : (process === 'coning'
-                        ? calcConingTakeBackNetWeight(line, grossWeight, boxId)
+                        ? calcConingTakeBackNetWeight(line, count, grossWeight, boxId)
                         : (process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, count)));
                 return {
                     sourceId: line.sourceId,
@@ -599,6 +614,7 @@ export function OnMachineTable({ db, process }) {
                     pieceTypeId: line.pieceTypeId || '',
                     pieceTypeName: line.pieceTypeName || '',
                     pieceUnitWeight: Number(line.pieceUnitWeight || 0),
+                    coneUnitWeight: Number(line.coneUnitWeight || 0),
                 };
             }),
         );
@@ -629,6 +645,13 @@ export function OnMachineTable({ db, process }) {
             if (invalidBox) {
                 alert(`Select box for source ${invalidBox.sourceBarcode || invalidBox.sourceId}`);
                 return;
+            }
+            if (process === 'coning') {
+                const invalidConeWeight = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.coneUnitWeight || 0) <= 0);
+                if (invalidConeWeight) {
+                    alert(`Cone type weight missing for source ${invalidConeWeight.sourceBarcode || invalidConeWeight.sourceId}`);
+                    return;
+                }
             }
             const exceedsMax = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.weight || 0) - Number(line.maxWeight || 0) > 0.001);
             if (exceedsMax) {
@@ -1766,7 +1789,7 @@ export function OnMachineTable({ db, process }) {
                                                                     const nextWeight = process === 'holo'
                                                                         ? calcHoloTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
                                                                         : (process === 'coning'
-                                                                            ? calcConingTakeBackNetWeight(l, l.grossWeight, l.boxId)
+                                                                            ? calcConingTakeBackNetWeight(l, nextCount, l.grossWeight, l.boxId)
                                                                             : calcAutoTakeBackWeight(l, nextCount));
                                                                     return {
                                                                         ...l,
@@ -1792,7 +1815,7 @@ export function OnMachineTable({ db, process }) {
                                                                         boxId: nextBoxId,
                                                                         weight: process === 'holo'
                                                                             ? calcHoloTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId)
-                                                                            : calcConingTakeBackNetWeight(l, l.grossWeight, nextBoxId),
+                                                                            : calcConingTakeBackNetWeight(l, l.count, l.grossWeight, nextBoxId),
                                                                     };
                                                                 }));
                                                             }}
@@ -1820,7 +1843,7 @@ export function OnMachineTable({ db, process }) {
                                                                     if (i !== idx) return l;
                                                                     const rawWeight = process === 'holo'
                                                                         ? calcHoloTakeBackNetWeight(l, l.count, grossWeight, l.boxId)
-                                                                        : calcConingTakeBackNetWeight(l, grossWeight, l.boxId);
+                                                                        : calcConingTakeBackNetWeight(l, l.count, grossWeight, l.boxId);
                                                                     return { ...l, grossWeight, weight: rawWeight };
                                                                 }));
                                                             }}

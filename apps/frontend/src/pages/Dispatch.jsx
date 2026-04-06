@@ -1927,6 +1927,219 @@ export function Dispatch() {
                 </DialogContent>
             </Dialog>
 
+            {/* Edit Dispatch Row Modal */}
+            <Dialog
+                open={editDispatchOpen}
+                onOpenChange={(open) => {
+                    setEditDispatchOpen(open);
+                    if (!open) setEditDispatchForm(null);
+                }}
+            >
+                <DialogContent
+                    title={`Edit Dispatch ${editDispatchForm?.challanNo ? `(${editDispatchForm.challanNo})` : ''}`}
+                    onOpenChange={(open) => {
+                        setEditDispatchOpen(open);
+                        if (!open) setEditDispatchForm(null);
+                    }}
+                >
+                    {editDispatchForm && (
+                        <div className="space-y-4">
+                            <div className="bg-muted p-4 rounded-lg">
+                                <div className="text-sm text-muted-foreground mb-1">Editing item</div>
+                                <div className="font-medium">{editDispatchForm.stageBarcode || '—'}</div>
+                                <div className="text-xs text-muted-foreground mt-1 capitalize">
+                                    Stage: {editDispatchForm.stage}
+                                </div>
+                            </div>
+
+                            <div>
+                                <Label>Customer *</Label>
+                                <Select
+                                    value={editDispatchForm.customerId}
+                                    onChange={(e) => setEditDispatchForm((prev) => ({ ...prev, customerId: e.target.value }))}
+                                >
+                                    <option value="">Select Customer</option>
+                                    {customers.map((c) => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </Select>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                {editDispatchForm.stage !== 'inbound' && (
+                                    <div>
+                                        <Label>Count</Label>
+                                        <Input
+                                            type="number"
+                                            step="1"
+                                            value={editDispatchForm.count}
+                                            onChange={(e) => setEditDispatchForm((prev) => ({ ...prev, count: e.target.value }))}
+                                        />
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            Available now: {editDispatchForm.availableCount || 0} {getStageUnitLabel(editDispatchForm.stage)}
+                                        </p>
+                                    </div>
+                                )}
+                                <div>
+                                    <Label>Weight (kg) *</Label>
+                                    <Input
+                                        type="number"
+                                        step="0.001"
+                                        value={editDispatchForm.weight}
+                                        onChange={(e) => setEditDispatchForm((prev) => ({ ...prev, weight: e.target.value }))}
+                                    />
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Available now: {formatKg(editDispatchForm.availableWeight || 0)}
+                                    </p>
+                                </div>
+                                <div>
+                                    <Label>Date</Label>
+                                    <Input
+                                        type="date"
+                                        value={editDispatchForm.date || ''}
+                                        onChange={(e) => setEditDispatchForm((prev) => ({ ...prev, date: e.target.value }))}
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <Label>Notes (Optional)</Label>
+                                <Input
+                                    value={editDispatchForm.notes || ''}
+                                    onChange={(e) => setEditDispatchForm((prev) => ({ ...prev, notes: e.target.value }))}
+                                    placeholder="Any additional notes..."
+                                />
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-4">
+                                <Button variant="outline" onClick={() => { setEditDispatchOpen(false); setEditDispatchForm(null); }}>
+                                    Cancel
+                                </Button>
+                                <Button onClick={saveEditDispatch} disabled={editSubmitting || !editDispatchForm.customerId}>
+                                    {editSubmitting ? 'Saving...' : 'Save Changes'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Edit Challan Modal */}
+            <Dialog
+                open={editChallanOpen}
+                onOpenChange={(open) => {
+                    setEditChallanOpen(open);
+                    if (!open) setEditChallanForm(null);
+                }}
+            >
+                <DialogContent
+                    title={`Edit Challan ${editChallanForm?.challanNo || ''}`}
+                    onOpenChange={(open) => {
+                        setEditChallanOpen(open);
+                        if (!open) setEditChallanForm(null);
+                    }}
+                    className="max-h-[85vh] overflow-hidden"
+                >
+                    {editChallanForm && (
+                        <div className="space-y-4 max-h-[70vh] overflow-auto pr-2">
+                            <div>
+                                <Label>Customer *</Label>
+                                <Select
+                                    value={editChallanForm.customerId}
+                                    onChange={(e) => setEditChallanForm((prev) => ({ ...prev, customerId: e.target.value }))}
+                                >
+                                    <option value="">Select Customer</option>
+                                    {customers.map((c) => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </Select>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <Label>Date</Label>
+                                    <Input
+                                        type="date"
+                                        value={editChallanForm.date || ''}
+                                        onChange={(e) => setEditChallanForm((prev) => ({ ...prev, date: e.target.value }))}
+                                    />
+                                </div>
+                                <div>
+                                    <Label>Notes (Optional)</Label>
+                                    <Input
+                                        value={editChallanForm.notes || ''}
+                                        onChange={(e) => setEditChallanForm((prev) => ({ ...prev, notes: e.target.value }))}
+                                        placeholder="Any additional notes..."
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="border rounded-md overflow-hidden">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Barcode</TableHead>
+                                            {editChallanForm.stage !== 'inbound' && (
+                                                <TableHead className="text-right">Count</TableHead>
+                                            )}
+                                            <TableHead className="text-right">Weight (kg)</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {(editChallanForm.rows || []).map((row) => (
+                                            <TableRow key={row.id}>
+                                                <TableCell className="font-mono text-xs">{row.stageBarcode || '—'}</TableCell>
+                                                {editChallanForm.stage !== 'inbound' && (
+                                                    <TableCell className="text-right">
+                                                        <Input
+                                                            type="number"
+                                                            step="1"
+                                                            className="h-8 w-24 ml-auto"
+                                                            value={row.count}
+                                                            onChange={(e) => {
+                                                                const nextCount = e.target.value;
+                                                                setEditChallanForm((prev) => ({
+                                                                    ...prev,
+                                                                    rows: (prev.rows || []).map((r) => (r.id === row.id ? { ...r, count: nextCount } : r)),
+                                                                }));
+                                                            }}
+                                                        />
+                                                    </TableCell>
+                                                )}
+                                                <TableCell className="text-right">
+                                                    <Input
+                                                        type="number"
+                                                        step="0.001"
+                                                        className="h-8 w-28 ml-auto"
+                                                        value={row.weight}
+                                                        onChange={(e) => {
+                                                            const nextWeight = e.target.value;
+                                                            setEditChallanForm((prev) => ({
+                                                                ...prev,
+                                                                rows: (prev.rows || []).map((r) => (r.id === row.id ? { ...r, weight: nextWeight } : r)),
+                                                            }));
+                                                        }}
+                                                    />
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <Button variant="outline" onClick={() => { setEditChallanOpen(false); setEditChallanForm(null); }}>
+                                    Cancel
+                                </Button>
+                                <Button onClick={saveEditChallan} disabled={editSubmitting || !editChallanForm.customerId}>
+                                    {editSubmitting ? 'Saving...' : 'Save Changes'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
             {/* New Customer Modal */}
             <Dialog open={newCustomerModalOpen} onOpenChange={setNewCustomerModalOpen}>
                 <DialogContent title="Add New Customer" onOpenChange={setNewCustomerModalOpen}>

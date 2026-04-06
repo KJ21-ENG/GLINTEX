@@ -801,8 +801,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         let totalRolls = 0;
         let totalWeight = 0;
         let netWeight = 0;
-        let grossWeight = 0;
-        let tareWeight = 0;
+        let grossWeight = null;
+        let tareWeight = null;
 
         try {
           const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
@@ -820,8 +820,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               totalWeight += Number(ref.issueWeight || 0);
             });
             netWeight = totalWeight;
-            grossWeight = totalWeight;
-            tareWeight = 0;
+            grossWeight = null;
+            tareWeight = null;
 
             const names = resolveIssueNames(row);
             cut = names.cutName === '—' ? '' : names.cutName;
@@ -838,8 +838,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             }
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
-        if (!grossWeight && totalWeight) grossWeight = totalWeight;
-        if (!tareWeight) tareWeight = 0;
 
         data = {
           lotNo: lotLabel,

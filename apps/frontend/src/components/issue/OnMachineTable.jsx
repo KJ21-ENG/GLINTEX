@@ -60,15 +60,15 @@ export function OnMachineTable({ db, process }) {
         });
         return map;
     }, [db.bobbins]);
-    const coneTypeById = useMemo(() => {
+    const rollTypeById = useMemo(() => {
         const map = new Map();
-        (db.cone_types || []).forEach((coneType) => {
-            const id = String(coneType?.id || '').trim();
+        (db.roll_types || []).forEach((rollType) => {
+            const id = String(rollType?.id || '').trim();
             if (!id) return;
-            map.set(id, coneType);
+            map.set(id, rollType);
         });
         return map;
-    }, [db.cone_types]);
+    }, [db.roll_types]);
     const roundTakeBackWeight = (value) => {
         const num = Number(value || 0);
         if (!Number.isFinite(num) || num <= 0) return 0;
@@ -99,9 +99,9 @@ export function OnMachineTable({ db, process }) {
         if (!Number.isFinite(gross) || gross <= 0 || count <= 0) return 0;
         const boxWeight = Number(boxById.get(nextBoxId)?.weight || 0);
         if (!Number.isFinite(boxWeight) || boxWeight < 0) return 0;
-        const coneUnitWeight = Number(line?.coneUnitWeight || 0);
-        if (!Number.isFinite(coneUnitWeight) || coneUnitWeight <= 0) return 0;
-        const tareWeight = boxWeight + (coneUnitWeight * count);
+        const rollUnitWeight = Number(line?.rollUnitWeight || 0);
+        if (!Number.isFinite(rollUnitWeight) || rollUnitWeight <= 0) return 0;
+        const tareWeight = boxWeight + (rollUnitWeight * count);
         const net = gross - tareWeight;
         const maxWeight = Math.max(0, Number(line?.maxWeight || 0));
         return roundTakeBackWeight(Math.max(0, Math.min(maxWeight, net)));
@@ -543,7 +543,13 @@ export function OnMachineTable({ db, process }) {
             const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
             const holoRow = process === 'coning' ? holoReceiveById.get(sourceId) : null;
             const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
-            const coneType = process === 'coning' ? coneTypeById.get(String(ref?.coneTypeId || '').trim()) : null;
+            const rollType = process === 'coning' ? rollTypeById.get(String(holoRow?.rollTypeId || '').trim()) : null;
+            const sourceBoxWeight = process === 'coning' ? Number(boxById.get(String(holoRow?.boxId || '').trim())?.weight || 0) : 0;
+            const rollCount = process === 'coning' ? Number(holoRow?.rollCount || 0) : 0;
+            const tareWeight = process === 'coning' ? Number(holoRow?.tareWeight || 0) : 0;
+            const derivedRollUnitWeight = (process === 'coning' && rollCount > 0 && Number.isFinite(tareWeight))
+                ? Math.max(0, (tareWeight - sourceBoxWeight) / rollCount)
+                : 0;
             sourceMap.set(sourceId, {
                 sourceId,
                 label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
@@ -555,7 +561,7 @@ export function OnMachineTable({ db, process }) {
                 pieceTypeId: process === 'holo' ? String(cutterRow?.bobbinId || '').trim() : '',
                 pieceTypeName: process === 'holo' ? (bobbin?.name || '—') : '',
                 pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
-                coneUnitWeight: process === 'coning' ? Number(coneType?.weight || 0) : 0,
+                rollUnitWeight: process === 'coning' ? Number(rollType?.weight || derivedRollUnitWeight || 0) : 0,
             });
         });
 
@@ -592,7 +598,7 @@ export function OnMachineTable({ db, process }) {
                 const tareEstimate = process === 'holo'
                     ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
                     : (process === 'coning'
-                        ? (Number(boxById.get(boxId)?.weight || 0) + (Number(line.coneUnitWeight || 0) * Number(count || 0)))
+                        ? (Number(boxById.get(boxId)?.weight || 0) + (Number(line.rollUnitWeight || 0) * Number(count || 0)))
                         : 0);
                 const grossWeight = process === 'holo'
                     ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
@@ -614,7 +620,7 @@ export function OnMachineTable({ db, process }) {
                     pieceTypeId: line.pieceTypeId || '',
                     pieceTypeName: line.pieceTypeName || '',
                     pieceUnitWeight: Number(line.pieceUnitWeight || 0),
-                    coneUnitWeight: Number(line.coneUnitWeight || 0),
+                    rollUnitWeight: Number(line.rollUnitWeight || 0),
                 };
             }),
         );
@@ -647,9 +653,9 @@ export function OnMachineTable({ db, process }) {
                 return;
             }
             if (process === 'coning') {
-                const invalidConeWeight = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.coneUnitWeight || 0) <= 0);
-                if (invalidConeWeight) {
-                    alert(`Cone type weight missing for source ${invalidConeWeight.sourceBarcode || invalidConeWeight.sourceId}`);
+                const invalidRollWeight = (takeBackLinesDraft || []).find((line) => Number(line.count || 0) > 0 && Number(line.rollUnitWeight || 0) <= 0);
+                if (invalidRollWeight) {
+                    alert(`Roll tare weight missing for source ${invalidRollWeight.sourceBarcode || invalidRollWeight.sourceId}`);
                     return;
                 }
             }

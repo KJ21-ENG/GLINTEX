@@ -9,6 +9,8 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 
+const RECEIVED_OVER_ISSUED_EPSILON_KG = 0.001;
+
 export function ConingReceiveForm() {
     const { db, patchDb, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -230,7 +232,8 @@ export function ConingReceiveForm() {
     const totalReceivedWeight = Number(issueMetrics.received || 0) + cartTotals.totalNetWeight;
     const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
-    const isReceivedOverIssued = issueMetrics.netIssued > 0 && totalReceivedWeight > issueMetrics.netIssued + 0.001;
+    const isReceivedOverIssued = issueMetrics.netIssued > 0
+        && totalReceivedWeight > issueMetrics.netIssued + RECEIVED_OVER_ISSUED_EPSILON_KG;
 
     const issueDetails = useMemo(() => {
         if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
@@ -259,6 +262,19 @@ export function ConingReceiveForm() {
         if (!issue || cart.length === 0) return;
         setSubmitting(true);
         try {
+            const exceedsIssuedQty = issueMetrics.netIssued > 0
+                && totalReceivedWeight > issueMetrics.netIssued + RECEIVED_OVER_ISSUED_EPSILON_KG;
+            if (exceedsIssuedQty) {
+                const excessWeight = Math.max(0, totalReceivedWeight - issueMetrics.netIssued);
+                const confirmed = window.confirm(
+                    `This will exceed issued quantity. Continue?\n\n`
+                    + `Net Issued: ${formatKg(issueMetrics.netIssued)}\n`
+                    + `New Total Received: ${formatKg(totalReceivedWeight)}\n`
+                    + `Excess: ${formatKg(excessWeight)}`
+                );
+                if (!confirmed) return;
+            }
+
             // Separate receive entries from wastage entries
             const receiveEntries = cart.filter(r => !r.isWastage);
             const wastageEntries = cart.filter(r => r.isWastage);

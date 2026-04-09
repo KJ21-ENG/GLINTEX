@@ -14447,6 +14447,30 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       const dispatchNodes = await treeBuildDispatches(recv.barcode || recv.vchNo, 'cutter');
       node.children.push(...dispatchNodes);
 
+      // Forward: holo issues that reference this cutter receive via receivedRowRefs
+      if (recv.id && treeNodeCount < MAX_TREE_NODES) {
+        const recvIdArray = [recv.id];
+        const holoIssueIds = await prisma.$queryRaw`
+          SELECT id FROM "IssueToHoloMachine"
+          WHERE "isDeleted" = false
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+              WHERE elem->>'rowId' = ANY (${recvIdArray}::text[])
+            )
+        `;
+        if (holoIssueIds && holoIssueIds.length > 0) {
+          const childPromises = holoIssueIds.filter(() => treeNodeCount < MAX_TREE_NODES).map(async (row) => {
+            const holoIssue = await prisma.issueToHoloMachine.findUnique({
+              where: { id: row.id },
+              include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+            });
+            return holoIssue ? treeBuildHoloIssue(holoIssue) : null;
+          });
+          const children = await Promise.all(childPromises);
+          node.children.push(...children.filter(Boolean));
+        }
+      }
+
       return node;
     }
 
@@ -14768,7 +14792,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
 
     async function treeTraceFromCutterReceive(recv) {
       const inboundItem = await prisma.inboundItem.findUnique({ where: { id: recv.pieceId } });
-      if (inboundItem) return treeBuildFromInbound(inboundItem, recv.id);
+      if (inboundItem) return treeBuildFromInbound(inboundItem);  // no directCutterReceiveId — build full tree
       return treeBuildCutterReceive(recv);
     }
 

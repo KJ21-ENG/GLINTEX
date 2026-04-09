@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
+import { BarcodeTreeView } from './BarcodeTreeView';
 
 const STAGE_ICONS = {
     inbound: Package,
@@ -78,10 +79,10 @@ export function MobileBarcodeHistory() {
         setSearching(true);
         setHistory(null);
         try {
-            const res = await api.getBarcodeHistory(barcode);
+            const res = await api.getBarcodeHistory(barcode, { tree: true });
             setHistory(res.history);
-            // Expand all stages by default
-            if (res.history?.lineage) {
+            // Expand all stages by default (for flat fallback)
+            if (res.history?.lineage && !res.history?.tree) {
                 setExpandedStages(new Set(res.history.lineage.map((_, i) => i)));
             }
         } catch (err) {
@@ -183,7 +184,7 @@ export function MobileBarcodeHistory() {
                             {history?.found ? 'Barcode Journey' : 'Scan Results'}
                         </span>
                     </div>
-                    {history?.lineage?.length > 0 && (
+                    {!history?.tree && history?.lineage?.length > 0 && (
                         <Button
                             size="sm"
                             variant="ghost"
@@ -222,6 +223,12 @@ export function MobileBarcodeHistory() {
                                 Barcode: <span className="font-mono">{history.barcode}</span>
                             </p>
                         </div>
+                    ) : history.tree ? (
+                        <BarcodeTreeView
+                            tree={history.tree}
+                            stats={history.stats}
+                            searchedBarcode={history.barcode}
+                        />
                     ) : (
                         <div className="space-y-3">
                             {history.lineage.map((stage, index) => {

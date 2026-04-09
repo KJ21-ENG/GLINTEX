@@ -14279,6 +14279,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
   try {
     const { barcode } = req.params;
     const normalizedBarcode = normalizeBarcodeInput(barcode);
+    const treeMode = req.query.tree === '1';
 
     const history = {
       barcode: normalizedBarcode,
@@ -14313,6 +14314,495 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       return resolved;
     };
 
+    // ============ TREE MODE HELPERS ============
+    const MAX_TREE_NODES = 200;
+    let treeNodeCount = 0;
+    const visitedNodeIds = new Set();
+
+    function createTreeNode(stage, date, barcode, data) {
+      return {
+        id: `${stage}_${data.pieceId || data.issueId || data.receiveId || data.dispatchId || 'unknown'}`,
+        stage, date, barcode, data, children: [], isSearched: false,
+      };
+    }
+
+    function computeTreeStats(root) {
+      if (!root) return { totalNodes: 0, totalBranches: 0, maxDepth: 0, stageBreakdown: {} };
+      let totalNodes = 0, totalBranches = 0, maxDepth = 0;
+      const stageBreakdown = {};
+      function walk(node, depth) {
+        totalNodes++;
+        if (depth > maxDepth) maxDepth = depth;
+        stageBreakdown[node.stage] = (stageBreakdown[node.stage] || 0) + 1;
+        if (node.children.length > 1) totalBranches += node.children.length - 1;
+        for (const child of node.children) walk(child, depth + 1);
+      }
+      walk(root, 1);
+      return { totalNodes, totalBranches, maxDepth, stageBreakdown };
+    }
+
+    // ---- Tree-mode forward trace functions ----
+
+    async function treeBuildFromInbound(item, directCutterReceiveId = null) {
+      const lot = await prisma.lot.findUnique({ where: { lotNo: item.lotNo } });
+      const itemMaster = lot?.itemId ? await prisma.item.findUnique({ where: { id: lot.itemId } }) : null;
+      const firm = lot?.firmId ? await prisma.firm.findUnique({ where: { id: lot.firmId } }) : null;
+      const supplier = lot?.supplierId ? await prisma.supplier.findUnique({ where: { id: lot.supplierId } }) : null;
+
+      const nodeData = {
+        pieceId: item.id, lotNo: item.lotNo,
+        itemName: itemMaster?.name || null, firmName: firm?.name || null,
+        supplierName: supplier?.name || null, weight: item.weight,
+        status: item.status, dispatchedWeight: item.dispatchedWeight || 0,
+      };
+      const node = createTreeNode('inbound', lot?.date || null, item.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      // Forward: cutter issues
+      const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+        where: { pieceIds: { contains: item.id }, isDeleted: false },
+        include: { machine: true, operator: true, cut: true },
+      });
+      if (cutterIssue && treeNodeCount < MAX_TREE_NODES) {
+        const childNode = await treeBuildCutterIssue(cutterIssue, item.id, directCutterReceiveId);
+        if (childNode) node.children.push(childNode);
+      }
+
+      // Dispatches
+      const dispatchNodes = await treeBuildDispatches(item.barcode, 'inbound');
+      node.children.push(...dispatchNodes);
+
+      return node;
+    }
+
+    async function treeBuildCutterIssue(issue, pieceId, directCutterReceiveId = null) {
+      const nodeData = {
+        issueId: issue.id, machineName: issue.machine?.name || null,
+        operatorName: issue.operator?.name || null, cutName: issue.cut?.name || null,
+        totalWeight: issue.totalWeight, pieceCount: issue.count, lotNo: issue.lotNo,
+      };
+      const node = createTreeNode('cutter_issue', issue.date, issue.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      if (treeNodeCount >= MAX_TREE_NODES) {
+        node.children.push({ truncated: true, hiddenCount: 0 });
+        return node;
+      }
+
+      if (directCutterReceiveId) {
+        const recv = await prisma.receiveFromCutterMachineRow.findFirst({
+          where: { id: directCutterReceiveId, isDeleted: false },
+          include: { bobbin: true, operator: true, challan: true },
+        });
+        if (recv) {
+          const childNode = await treeBuildCutterReceive(recv);
+          if (childNode) node.children.push(childNode);
+        }
+      } else {
+        // findMany — all cutter receives for this piece
+        const cutterReceives = await prisma.receiveFromCutterMachineRow.findMany({
+          where: { pieceId: pieceId, isDeleted: false },
+          include: { bobbin: true, operator: true, challan: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const childPromises = cutterReceives.filter(() => treeNodeCount < MAX_TREE_NODES).map(recv => treeBuildCutterReceive(recv));
+        const children = await Promise.all(childPromises);
+        node.children.push(...children.filter(Boolean));
+      }
+
+      return node;
+    }
+
+    async function treeBuildCutterReceive(recv) {
+      let itemName = null, cutName = null;
+      if (recv.pieceId) {
+        const piece = await prisma.inboundItem.findUnique({ where: { id: recv.pieceId } });
+        if (piece?.lotNo) {
+          const lot = await prisma.lot.findUnique({ where: { lotNo: piece.lotNo }, include: { item: true } });
+          itemName = lot?.item?.name || null;
+        }
+        const cutterIssue = await prisma.issueToCutterMachine.findFirst({
+          where: { pieceIds: { contains: recv.pieceId }, isDeleted: false }, include: { cut: true },
+        });
+        cutName = cutterIssue?.cut?.name || null;
+      }
+
+      const nodeData = {
+        receiveId: recv.id, itemName, cutName,
+        challanNo: recv.challan?.challanNo || null, bobbinQuantity: recv.bobbinQuantity,
+        netWeight: recv.netWt, operatorName: recv.operator?.name || null,
+        bobbinName: recv.bobbin?.name || null, dispatchedWeight: recv.dispatchedWeight || 0,
+        issuedToHoloWeight: recv.issuedBobbinWeight || 0,
+      };
+      const node = createTreeNode('cutter_receive', recv.date || recv.challan?.date, recv.barcode || recv.vchNo, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      // Dispatches
+      const dispatchNodes = await treeBuildDispatches(recv.barcode || recv.vchNo, 'cutter');
+      node.children.push(...dispatchNodes);
+
+      return node;
+    }
+
+    async function treeBuildHoloIssue(issue, directHoloReceiveId = null) {
+      const resolved = await resolveHoloTrace(issue);
+      const nodeData = {
+        issueId: issue.id, lotNo: issue.lotNo,
+        machineName: issue.machine?.name || null, operatorName: issue.operator?.name || null,
+        yarnName: resolved.yarnName || null, twistName: resolved.twistName || null,
+        cutName: resolved.cutName || null,
+        yarnKg: resolved.yarnKg != null ? resolved.yarnKg : (Number.isFinite(Number(issue.yarnKg)) ? Number(issue.yarnKg) : null),
+        metallicBobbins: issue.metallicBobbins, metallicBobbinsWeight: issue.metallicBobbinsWeight, shift: issue.shift,
+      };
+      const node = createTreeNode('holo_issue', issue.date, issue.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      if (treeNodeCount >= MAX_TREE_NODES) {
+        node.children.push({ truncated: true, hiddenCount: 0 });
+        return node;
+      }
+
+      if (directHoloReceiveId) {
+        const recv = await prisma.receiveFromHoloMachineRow.findFirst({
+          where: { id: directHoloReceiveId, isDeleted: false },
+          include: { operator: true, rollType: true, box: true },
+        });
+        if (recv) {
+          const childNode = await treeBuildHoloReceive(recv);
+          if (childNode) node.children.push(childNode);
+        }
+      } else {
+        // findMany — all holo receives for this issue
+        const holoReceives = await prisma.receiveFromHoloMachineRow.findMany({
+          where: { issueId: issue.id, isDeleted: false },
+          include: { operator: true, rollType: true, box: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const childPromises = holoReceives.filter(() => treeNodeCount < MAX_TREE_NODES).map(recv => treeBuildHoloReceive(recv));
+        const children = await Promise.all(childPromises);
+        node.children.push(...children.filter(Boolean));
+      }
+
+      return node;
+    }
+
+    async function treeBuildHoloReceive(recv) {
+      const netWeight = recv.rollWeight || ((recv.grossWeight || 0) - (recv.tareWeight || 0));
+      let itemName = null, cutName = null, yarnName = null, twistName = null;
+      if (recv.issueId) {
+        const holoIssue = await prisma.issueToHoloMachine.findUnique({
+          where: { id: recv.issueId }, include: { cut: true },
+        });
+        if (holoIssue) {
+          const resolved = await resolveHoloTrace(holoIssue);
+          cutName = resolved.cutName || null;
+          yarnName = resolved.yarnName || null;
+          twistName = resolved.twistName || null;
+        }
+        if (holoIssue?.lotNo) {
+          const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+          itemName = lot?.item?.name || null;
+        }
+      }
+
+      const nodeData = {
+        receiveId: recv.id, itemName, cutName, yarnName, twistName,
+        rollCount: recv.rollCount, netWeight,
+        rollTypeName: recv.rollType?.name || null, operatorName: recv.operator?.name || null,
+        boxName: recv.box?.name || null, dispatchedWeight: recv.dispatchedWeight || 0,
+      };
+      const node = createTreeNode('holo_receive', recv.date, recv.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      // Dispatches
+      if (recv.barcode) {
+        const dispatchNodes = await treeBuildDispatches(recv.barcode, 'holo');
+        node.children.push(...dispatchNodes);
+      }
+
+      if (treeNodeCount >= MAX_TREE_NODES) {
+        node.children.push({ truncated: true, hiddenCount: 0 });
+        return node;
+      }
+
+      // Forward: coning issues referencing this holo receive
+      if (recv.id || recv.barcode) {
+        const rowIdArray = recv.id ? [recv.id] : ["__none__"];
+        const barcodeArray = recv.barcode ? [recv.barcode] : ["__none__"];
+        const coningIssueIds = await prisma.$queryRaw`
+          SELECT id FROM "IssueToConingMachine"
+          WHERE "isDeleted" = false
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
+              WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
+                 OR elem->>'barcode' = ANY (${barcodeArray}::text[])
+            )
+        `;
+        if (coningIssueIds && coningIssueIds.length > 0) {
+          const childPromises = coningIssueIds.filter(() => treeNodeCount < MAX_TREE_NODES).map(async (row) => {
+            const coningIssue = await prisma.issueToConingMachine.findUnique({
+              where: { id: row.id },
+              include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+            });
+            return coningIssue ? treeBuildConingIssue(coningIssue) : null;
+          });
+          const children = await Promise.all(childPromises);
+          node.children.push(...children.filter(Boolean));
+        }
+      }
+
+      return node;
+    }
+
+    async function treeBuildConingIssue(issue, directConingReceiveId = null) {
+      let itemName = null, cutName = null;
+      try {
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+        refs = refs || [];
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        if (refIds.length > 0) {
+          const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
+            where: { id: { in: refIds }, isDeleted: false },
+          });
+          if (holoRecv?.issueId) {
+            const holoIssue = await prisma.issueToHoloMachine.findUnique({
+              where: { id: holoRecv.issueId }, include: { cut: true },
+            });
+            cutName = holoIssue?.cut?.name || null;
+            if (holoIssue?.lotNo) {
+              const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+              itemName = lot?.item?.name || null;
+            }
+          }
+        }
+      } catch { }
+
+      const resolved = await resolveConingTrace(issue);
+      const nodeData = {
+        issueId: issue.id, itemName, cutName: resolved.cutName || cutName,
+        yarnName: resolved.yarnName || null, twistName: resolved.twistName || null,
+        yarnKg: resolved.yarnKg != null ? resolved.yarnKg : null,
+        lotNo: issue.lotNo, machineName: issue.machine?.name || null,
+        operatorName: issue.operator?.name || null, rollsIssued: issue.rollsIssued,
+        expectedCones: issue.expectedCones, shift: issue.shift,
+      };
+      const node = createTreeNode('coning_issue', issue.date, issue.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      if (treeNodeCount >= MAX_TREE_NODES) {
+        node.children.push({ truncated: true, hiddenCount: 0 });
+        return node;
+      }
+
+      if (directConingReceiveId) {
+        const recv = await prisma.receiveFromConingMachineRow.findFirst({
+          where: { id: directConingReceiveId, isDeleted: false },
+          include: { operator: true, box: true },
+        });
+        if (recv) {
+          const childNode = await treeBuildConingReceive(recv);
+          if (childNode) node.children.push(childNode);
+        }
+      } else {
+        // findMany — all coning receives
+        const coningReceives = await prisma.receiveFromConingMachineRow.findMany({
+          where: { issueId: issue.id, isDeleted: false },
+          include: { operator: true, box: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        const childPromises = coningReceives.filter(() => treeNodeCount < MAX_TREE_NODES).map(recv => treeBuildConingReceive(recv));
+        const children = await Promise.all(childPromises);
+        node.children.push(...children.filter(Boolean));
+      }
+
+      return node;
+    }
+
+    async function treeBuildConingReceive(recv) {
+      let itemName = null, cutName = null, yarnName = null, twistName = null;
+      if (recv.issueId) {
+        const coningIssue = await prisma.issueToConingMachine.findUnique({ where: { id: recv.issueId } });
+        if (coningIssue) {
+          try {
+            let refs = coningIssue.receivedRowRefs;
+            if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+            refs = refs || [];
+            const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+            if (refIds.length > 0) {
+              const holoRecv = await prisma.receiveFromHoloMachineRow.findFirst({
+                where: { id: { in: refIds }, isDeleted: false },
+              });
+              if (holoRecv?.issueId) {
+                const holoIssue = await prisma.issueToHoloMachine.findUnique({
+                  where: { id: holoRecv.issueId }, include: { cut: true },
+                });
+                if (holoIssue) {
+                  const resolved = await resolveHoloTrace(holoIssue);
+                  cutName = resolved.cutName || null;
+                  yarnName = resolved.yarnName || null;
+                  twistName = resolved.twistName || null;
+                }
+                if (holoIssue?.lotNo) {
+                  const lot = await prisma.lot.findUnique({ where: { lotNo: holoIssue.lotNo }, include: { item: true } });
+                  itemName = lot?.item?.name || null;
+                }
+              }
+            }
+          } catch { }
+
+          const resolvedConing = await resolveConingTrace(coningIssue);
+          cutName = resolvedConing.cutName || cutName;
+          yarnName = resolvedConing.yarnName || yarnName;
+          twistName = resolvedConing.twistName || twistName;
+        }
+      }
+
+      const nodeData = {
+        receiveId: recv.id, itemName, cutName, yarnName, twistName,
+        coneCount: recv.coneCount, netWeight: recv.netWeight,
+        coneWeight: recv.coneWeight, operatorName: recv.operator?.name || null,
+        boxName: recv.box?.name || null, dispatchedWeight: recv.dispatchedWeight || 0,
+      };
+      const node = createTreeNode('coning_receive', recv.date, recv.barcode, nodeData);
+      if (visitedNodeIds.has(node.id)) return node;
+      visitedNodeIds.add(node.id);
+      treeNodeCount++;
+
+      // Dispatches
+      if (recv.barcode) {
+        const dispatchNodes = await treeBuildDispatches(recv.barcode, 'coning');
+        node.children.push(...dispatchNodes);
+      }
+
+      return node;
+    }
+
+    async function treeBuildDispatches(barcode, stage) {
+      if (!barcode) return [];
+      const dispatches = await prisma.dispatch.findMany({
+        where: { stageBarcode: { equals: barcode, mode: 'insensitive' }, stage },
+        include: { customer: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      return dispatches.filter(() => treeNodeCount < MAX_TREE_NODES).map(d => {
+        const nodeData = {
+          dispatchId: d.id, challanNo: d.challanNo,
+          customerName: d.customer?.name || null, weight: d.weight, sourceStage: d.stage,
+        };
+        const n = createTreeNode('dispatch', d.date, d.stageBarcode, nodeData);
+        if (!visitedNodeIds.has(n.id)) {
+          visitedNodeIds.add(n.id);
+          treeNodeCount++;
+        }
+        return n;
+      });
+    }
+
+    // ---- Tree-mode backward trace (traces back to root, then builds full tree forward) ----
+
+    async function treeTraceFromConingReceive(recv) {
+      const issue = await prisma.issueToConingMachine.findFirst({
+        where: { id: recv.issueId, isDeleted: false },
+        include: { machine: true, operator: true },
+      });
+      if (issue) return treeTraceFromConingIssue(issue, recv.id);
+      return treeBuildConingReceive(recv);
+    }
+
+    async function treeTraceFromConingIssue(issue, directConingReceiveId = null) {
+      try {
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+        refs = refs || [];
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        if (refIds.length > 0) {
+          const holoReceive = await prisma.receiveFromHoloMachineRow.findFirst({
+            where: { id: { in: refIds }, isDeleted: false },
+            include: { operator: true, rollType: true, box: true },
+          });
+          if (holoReceive) return treeTraceFromHoloReceive(holoReceive);
+        }
+      } catch (err) { console.error('treeTraceFromConingIssue error:', err); }
+      // Can't go further back — build forward from this issue
+      return treeBuildConingIssue(issue, directConingReceiveId);
+    }
+
+    async function treeTraceFromHoloReceive(recv) {
+      const issue = await prisma.issueToHoloMachine.findFirst({
+        where: { id: recv.issueId, isDeleted: false },
+        include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
+      });
+      if (issue) return treeTraceFromHoloIssue(issue);
+      return treeBuildHoloReceive(recv);
+    }
+
+    async function treeTraceFromHoloIssue(issue, directHoloReceiveId = null) {
+      try {
+        let refs = issue.receivedRowRefs;
+        if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+        refs = refs || [];
+        const refIds = Array.isArray(refs) ? refs.map(r => r.rowId || r).filter(Boolean) : [];
+        if (refIds.length > 0) {
+          const cutterReceive = await prisma.receiveFromCutterMachineRow.findFirst({
+            where: { id: { in: refIds }, isDeleted: false },
+            include: { bobbin: true, operator: true, challan: true },
+          });
+          if (cutterReceive) return treeTraceFromCutterReceive(cutterReceive);
+        }
+      } catch (err) { console.error('treeTraceFromHoloIssue error:', err); }
+      return treeBuildHoloIssue(issue, directHoloReceiveId);
+    }
+
+    async function treeTraceFromCutterReceive(recv) {
+      const inboundItem = await prisma.inboundItem.findUnique({ where: { id: recv.pieceId } });
+      if (inboundItem) return treeBuildFromInbound(inboundItem, recv.id);
+      return treeBuildCutterReceive(recv);
+    }
+
+    async function treeTraceFromCutterIssue(issue) {
+      const pieceIds = issue.pieceIds.split(',').map(p => p.trim()).filter(Boolean);
+      if (pieceIds.length > 0) {
+        const firstPiece = await prisma.inboundItem.findUnique({ where: { id: pieceIds[0] } });
+        if (firstPiece) return treeBuildFromInbound(firstPiece);
+      }
+      return treeBuildCutterIssue(issue, null);
+    }
+
+    function markSearchedNode(root, searchedBarcode, searchedStage) {
+      if (!root) return;
+      function walk(node) {
+        if (node.barcode && node.barcode.toUpperCase() === searchedBarcode.toUpperCase() &&
+            (!searchedStage || node.stage === searchedStage)) {
+          node.isSearched = true;
+        }
+        if (node.children) node.children.forEach(walk);
+      }
+      walk(root);
+    }
+
+    // Helper to send response (adds tree data when in treeMode)
+    async function sendTreeResponse(treeRoot) {
+      if (treeRoot) {
+        markSearchedNode(treeRoot, history.resolvedBarcode || normalizedBarcode, history.searchedStage);
+        history.tree = treeRoot;
+        history.stats = computeTreeStats(treeRoot);
+      }
+      return res.json({ history });
+    }
+
     // ============ STEP 1: IDENTIFY WHICH STAGE THE BARCODE BELONGS TO ============
 
     // Legacy receive barcode resolution (opening stock labels)
@@ -14326,6 +14816,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         history.found = true;
         history.searchedStage = 'coning_receive';
         history.resolvedBarcode = legacyResolved.row.barcode;
+        if (treeMode) {
+          const tree = await treeTraceFromConingReceive(legacyResolved.row);
+          return sendTreeResponse(tree);
+        }
         await traceFromConingReceive(legacyResolved.row, history);
         return res.json({ history });
       }
@@ -14339,6 +14833,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
         history.found = true;
         history.searchedStage = 'holo_receive';
         history.resolvedBarcode = legacyResolved.row.barcode;
+        if (treeMode) {
+          const tree = await treeTraceFromHoloReceive(legacyResolved.row);
+          return sendTreeResponse(tree);
+        }
         await traceFromHoloReceive(legacyResolved.row, history);
         return res.json({ history });
       }
@@ -14353,6 +14851,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (coningRecv) {
       history.found = true;
       history.searchedStage = 'coning_receive';
+      if (treeMode) {
+        const tree = await treeTraceFromConingReceive(coningRecv);
+        return sendTreeResponse(tree);
+      }
       await traceFromConingReceive(coningRecv, history);
       return res.json({ history });
     }
@@ -14366,6 +14868,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (coningIssue) {
       history.found = true;
       history.searchedStage = 'coning_issue';
+      if (treeMode) {
+        const tree = await treeTraceFromConingIssue(coningIssue);
+        return sendTreeResponse(tree);
+      }
       await traceFromConingIssue(coningIssue, history);
       return res.json({ history });
     }
@@ -14385,6 +14891,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (holoRecv) {
       history.found = true;
       history.searchedStage = 'holo_receive';
+      if (treeMode) {
+        const tree = await treeTraceFromHoloReceive(holoRecv);
+        return sendTreeResponse(tree);
+      }
       await traceFromHoloReceive(holoRecv, history);
       return res.json({ history });
     }
@@ -14398,6 +14908,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (holoIssue) {
       history.found = true;
       history.searchedStage = 'holo_issue';
+      if (treeMode) {
+        const tree = await treeTraceFromHoloIssue(holoIssue);
+        return sendTreeResponse(tree);
+      }
       await traceFromHoloIssue(holoIssue, history);
       return res.json({ history });
     }
@@ -14417,6 +14931,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (cutterRecv) {
       history.found = true;
       history.searchedStage = 'cutter_receive';
+      if (treeMode) {
+        const tree = await treeTraceFromCutterReceive(cutterRecv);
+        return sendTreeResponse(tree);
+      }
       await traceFromCutterReceive(cutterRecv, history);
       return res.json({ history });
     }
@@ -14430,6 +14948,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (cutterIssue) {
       history.found = true;
       history.searchedStage = 'cutter_issue';
+      if (treeMode) {
+        const tree = await treeTraceFromCutterIssue(cutterIssue);
+        return sendTreeResponse(tree);
+      }
       await traceFromCutterIssue(cutterIssue, history);
       return res.json({ history });
     }
@@ -14442,6 +14964,10 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
     if (inboundItem) {
       history.found = true;
       history.searchedStage = 'inbound';
+      if (treeMode) {
+        const tree = await treeBuildFromInbound(inboundItem);
+        return sendTreeResponse(tree);
+      }
       await traceFromInbound(inboundItem, history);
       return res.json({ history });
     }

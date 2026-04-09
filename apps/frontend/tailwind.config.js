@@ -62,6 +62,15 @@ export default {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      keyframes: {
+        'pulse-once': {
+          '0%, 100%': { boxShadow: '0 0 0 0 hsl(var(--primary) / 0)' },
+          '50%': { boxShadow: '0 0 0 6px hsl(var(--primary) / 0.3)' },
+        },
+      },
+      animation: {
+        'pulse-once': 'pulse-once 1s ease-in-out 1',
+      },
     },
   },
   plugins: [],

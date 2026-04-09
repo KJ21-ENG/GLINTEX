@@ -365,7 +365,10 @@ export async function boxTransferHistory(params = {}) {
 export async function boxTransferReverse(id) { return await request(`/api/box-transfer/${id}/reverse`, { method: 'POST' }); }
 
 // Reports
-export async function getBarcodeHistory(barcode) { return await request(`/api/reports/barcode-history/${encodeURIComponent(barcode)}`); }
+export async function getBarcodeHistory(barcode, opts = {}) {
+  const params = opts.tree ? '?tree=1' : '';
+  return await request(`/api/reports/barcode-history/${encodeURIComponent(barcode)}${params}`);
+}
 export async function getProductionReport(params = {}) {
   const query = new URLSearchParams(params).toString();
   return await request(`/api/reports/production${query ? '?' + query : ''}`);

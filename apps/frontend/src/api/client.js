@@ -266,6 +266,10 @@ export async function listHoloProductionPerHours() { return await request('/api/
 export async function createHoloProductionPerHour(payload) { return await request('/api/holo_production_per_hours', { method: 'POST', body: payload }); }
 export async function updateHoloProductionPerHour(id, payload) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'PUT', body: payload }); }
 export async function deleteHoloProductionPerHour(id) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'DELETE' }); }
+export async function listHoloOtherWastageItems() { return await request('/api/holo_other_wastage_items'); }
+export async function createHoloOtherWastageItem(name) { return await request('/api/holo_other_wastage_items', { method: 'POST', body: { name } }); }
+export async function updateHoloOtherWastageItem(id, name) { return await request(`/api/holo_other_wastage_items/${id}`, { method: 'PUT', body: { name } }); }
+export async function deleteHoloOtherWastageItem(id) { return await request(`/api/holo_other_wastage_items/${id}`, { method: 'DELETE' }); }
 export async function listConeTypes() { return await request('/api/cone_types'); }
 export async function createConeType(name, weight) { return await request('/api/cone_types', { method: 'POST', body: { name, weight } }); }
 export async function deleteConeType(id) { return await request(`/api/cone_types/${id}`, { method: 'DELETE' }); }
@@ -376,6 +380,13 @@ export async function getHoloProductionMetrics(params = {}) {
 }
 export async function saveHoloProductionMetrics(entries = []) {
   return await request('/api/reports/production/holo-metrics', { method: 'PUT', body: { entries } });
+}
+export async function getHoloOtherWastageMetrics(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  return await request(`/api/reports/production/holo-other-wastage${query ? '?' + query : ''}`);
+}
+export async function saveHoloOtherWastageMetrics(entries = []) {
+  return await request('/api/reports/production/holo-other-wastage', { method: 'PUT', body: { entries } });
 }
 
 // Summary
@@ -572,6 +583,10 @@ export default {
   createHoloProductionPerHour,
   updateHoloProductionPerHour,
   deleteHoloProductionPerHour,
+  listHoloOtherWastageItems,
+  createHoloOtherWastageItem,
+  updateHoloOtherWastageItem,
+  deleteHoloOtherWastageItem,
   listBoxes,
   createBox,
   deleteBox,
@@ -596,6 +611,8 @@ export default {
   downloadProductionWeeklyExport,
   getHoloProductionMetrics,
   saveHoloProductionMetrics,
+  getHoloOtherWastageMetrics,
+  saveHoloOtherWastageMetrics,
   updateDispatch,
   updateDispatchChallan,
 };

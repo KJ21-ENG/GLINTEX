@@ -28,6 +28,7 @@ const BOOTSTRAP_KEYS = [
   'boxes',
   'roll_types',
   'holo_production_per_hours',
+  'holo_other_wastage_items',
   'cone_types',
   'wrappers',
   'settings',
@@ -49,6 +50,7 @@ const buildRawFromDb = (db) => ({
   inbound_items: db?.inbound_items || [],
   roll_types: db?.rollTypes || [],
   holo_production_per_hours: db?.holo_production_per_hours || [],
+  holo_other_wastage_items: db?.holo_other_wastage_items || [],
   cone_types: db?.cone_types || [],
   wrappers: db?.wrappers || [],
   issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
@@ -517,6 +519,11 @@ export const InventoryProvider = ({ children }) => {
     createHoloProductionPerHour: async (payload) => { await api.createHoloProductionPerHour(payload); await refreshDb(); },
     updateHoloProductionPerHour: async (id, payload) => { await api.updateHoloProductionPerHour(id, payload); await refreshDb(); },
     deleteHoloProductionPerHour: async (id) => { await api.deleteHoloProductionPerHour(id); await refreshDb(); },
+
+    // Masters - Holo Other Wastage
+    createHoloOtherWastageItem: async (name) => { await api.createHoloOtherWastageItem(name); await refreshDb(); },
+    updateHoloOtherWastageItem: async (id, name) => { await api.updateHoloOtherWastageItem(id, name); await refreshDb(); },
+    deleteHoloOtherWastageItem: async (id) => { await api.deleteHoloOtherWastageItem(id); await refreshDb(); },
 
     // Masters - ConeTypes
     createConeType: async (name, weight) => { await api.createConeType(name, weight); await refreshDb(); },

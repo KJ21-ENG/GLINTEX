@@ -78,6 +78,33 @@ function buildHoloMetricsDraft({ from, to, baseMachines, savedRows = [] }) {
     return draft;
 }
 
+function buildHoloOtherWastageDraft({ from, to, items, savedRows = [] }) {
+    const dates = [];
+    if (from && to && from <= to) {
+        const current = new Date(`${from}T00:00:00Z`);
+        const end = new Date(`${to}T00:00:00Z`);
+        while (current.getTime() <= end.getTime()) {
+            dates.push(current.toISOString().slice(0, 10));
+            current.setUTCDate(current.getUTCDate() + 1);
+        }
+    }
+
+    const savedMap = new Map((savedRows || []).map((row) => [`${row.date}::${row.otherWastageItemId}`, row]));
+    const draft = [];
+    dates.forEach((date) => {
+        (items || []).forEach((item) => {
+            const saved = savedMap.get(`${date}::${item.id}`);
+            draft.push({
+                date,
+                otherWastageItemId: item.id,
+                itemName: item.name || '',
+                wastage: saved && saved.wastage !== null && saved.wastage !== undefined ? String(saved.wastage) : '',
+            });
+        });
+    });
+    return draft;
+}
+
 function formatWeeklyExportError(err) {
     const details = err?.details?.details || err?.details;
     if (details?.error === 'missing_spindle' && Array.isArray(details.machines)) {
@@ -358,6 +385,12 @@ function ProductionReport() {
     const [metricsSaving, setMetricsSaving] = useState(false);
     const [metricsError, setMetricsError] = useState('');
     const [metricsLoadedRange, setMetricsLoadedRange] = useState({ from: '', to: '' });
+    const [otherWastageModalOpen, setOtherWastageModalOpen] = useState(false);
+    const [otherWastageDraftRows, setOtherWastageDraftRows] = useState([]);
+    const [otherWastageLoading, setOtherWastageLoading] = useState(false);
+    const [otherWastageSaving, setOtherWastageSaving] = useState(false);
+    const [otherWastageError, setOtherWastageError] = useState('');
+    const [otherWastageLoadedRange, setOtherWastageLoadedRange] = useState({ from: '', to: '' });
     const [weeklyModalOpen, setWeeklyModalOpen] = useState(false);
     const [weeklyFrom, setWeeklyFrom] = useState('');
     const [weeklyTo, setWeeklyTo] = useState('');
@@ -370,6 +403,9 @@ function ProductionReport() {
     const [loadingDetails, setLoadingDetails] = useState(new Set()); // Set of keys being fetched
 
     const holoBaseMachines = useMemo(() => getSortedBaseMachineNames(db?.machines || [], { processType: 'holo', includeShared: false }), [db?.machines]);
+    const holoOtherWastageItems = useMemo(() => (
+        [...(db?.holo_other_wastage_items || [])].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }))
+    ), [db?.holo_other_wastage_items]);
 
     const getDefaultExportProcess = () => (
         process === 'cutter' || process === 'holo' || process === 'coning'
@@ -466,6 +502,55 @@ function ProductionReport() {
         if (exportProcess !== 'holo') return;
         setMetricsModalOpen(true);
         await loadHoloMetricsDraft(exportFrom, exportTo);
+    };
+
+    const loadOtherWastageDraft = async (from, to) => {
+        setOtherWastageLoading(true);
+        setOtherWastageError('');
+        try {
+            const res = await api.getHoloOtherWastageMetrics({ from, to });
+            const draft = buildHoloOtherWastageDraft({
+                from,
+                to,
+                items: holoOtherWastageItems,
+                savedRows: res?.rows || [],
+            });
+            setOtherWastageDraftRows(draft);
+            setOtherWastageLoadedRange({ from, to });
+        } catch (err) {
+            setOtherWastageError(err.message || 'Failed to load Other Wastage.');
+        } finally {
+            setOtherWastageLoading(false);
+        }
+    };
+
+    const saveOtherWastageDraft = async () => {
+        if (otherWastageDraftRows.length === 0) return;
+        setOtherWastageSaving(true);
+        setOtherWastageError('');
+        try {
+            await api.saveHoloOtherWastageMetrics(otherWastageDraftRows.map((row) => ({
+                date: row.date,
+                otherWastageItemId: row.otherWastageItemId,
+                wastage: row.wastage,
+            })));
+        } catch (err) {
+            setOtherWastageError(err.message || 'Failed to save Other Wastage.');
+            throw err;
+        } finally {
+            setOtherWastageSaving(false);
+        }
+    };
+
+    const openOtherWastageModal = async () => {
+        const validationError = validateExportForm();
+        if (validationError) {
+            setExportError(validationError);
+            return;
+        }
+        if (exportProcess !== 'holo') return;
+        setOtherWastageModalOpen(true);
+        await loadOtherWastageDraft(exportFrom, exportTo);
     };
 
     async function loadReport() {
@@ -1121,20 +1206,38 @@ function ProductionReport() {
                             </div>
                         )}
                         {exportProcess === 'holo' && (
-                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 space-y-2">
-                                <div className="font-medium text-slate-900">Holo Hours & Wastage</div>
-                                <p>
-                                    Holo daily metrics are captured per date and base machine. Saved values are reused by the weekly Holo report.
-                                </p>
-                                <div className="flex flex-col sm:flex-row gap-2">
-                                    <Button type="button" variant="outline" onClick={openMetricsModal} disabled={exporting || metricsLoading}>
-                                        Add Hours & Wastage
-                                    </Button>
-                                    {metricsLoadedRange.from === exportFrom && metricsLoadedRange.to === exportTo && metricsDraftRows.length > 0 && (
-                                        <span className="text-xs text-muted-foreground self-center">
-                                            {metricsDraftRows.length} date/machine entries loaded for this range.
-                                        </span>
-                                    )}
+                            <div className="space-y-3">
+                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 space-y-2">
+                                    <div className="font-medium text-slate-900">Holo Hours & Wastage</div>
+                                    <p>
+                                        Holo daily metrics are captured per date and base machine. Saved values are reused by the weekly Holo report.
+                                    </p>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <Button type="button" variant="outline" onClick={openMetricsModal} disabled={exporting || metricsLoading}>
+                                            Add Hours & Wastage
+                                        </Button>
+                                        {metricsLoadedRange.from === exportFrom && metricsLoadedRange.to === exportTo && metricsDraftRows.length > 0 && (
+                                            <span className="text-xs text-muted-foreground self-center">
+                                                {metricsDraftRows.length} date/machine entries loaded for this range.
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 space-y-2">
+                                    <div className="font-medium text-slate-900">Other Wastage</div>
+                                    <p>
+                                        Other wastage entries are captured per date and item. Saved values are added to the Holo daily export PDF for the selected date.
+                                    </p>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <Button type="button" variant="outline" onClick={openOtherWastageModal} disabled={exporting || otherWastageLoading}>
+                                            Add Other Wastage
+                                        </Button>
+                                        {otherWastageLoadedRange.from === exportFrom && otherWastageLoadedRange.to === exportTo && otherWastageDraftRows.length > 0 && (
+                                            <span className="text-xs text-muted-foreground self-center">
+                                                {otherWastageDraftRows.length} date/item entries loaded for this range.
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -1266,6 +1369,74 @@ function ProductionReport() {
                             <Button variant="outline" onClick={() => setWeeklyModalOpen(false)} disabled={weeklyExporting}>Cancel</Button>
                             <Button onClick={handleWeeklyExport} disabled={weeklyExporting}>
                                 {weeklyExporting ? 'Preparing Download...' : 'Download Weekly PDF'}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={otherWastageModalOpen} onOpenChange={setOtherWastageModalOpen}>
+                <DialogContent
+                    title="Other Wastage"
+                    onOpenChange={setOtherWastageModalOpen}
+                    className="max-w-4xl"
+                >
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                            Enter wastage for every date and Other Wastage item in the selected range. Leave values blank to keep them missing.
+                        </p>
+                        <div className="text-sm text-muted-foreground">
+                            Range: {exportFrom ? formatDateDDMMYYYY(exportFrom) : '—'} to {exportTo ? formatDateDDMMYYYY(exportTo) : '—'}
+                        </div>
+                        {otherWastageError && (
+                            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                {otherWastageError}
+                            </div>
+                        )}
+                        {otherWastageLoading ? (
+                            <div className="py-10 text-center text-sm text-muted-foreground">Loading Other Wastage...</div>
+                        ) : otherWastageDraftRows.length === 0 ? (
+                            <div className="py-10 text-center text-sm text-muted-foreground">
+                                No Other Wastage items are available in Masters for the selected range.
+                            </div>
+                        ) : (
+                            <div className="rounded-md border max-h-[60vh] overflow-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Item</TableHead>
+                                            <TableHead className="text-right">Wastage</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {otherWastageDraftRows.map((row, index) => (
+                                            <TableRow key={`${row.date}-${row.otherWastageItemId}`}>
+                                                <TableCell>{formatDateDDMMYYYY(row.date)}</TableCell>
+                                                <TableCell>{row.itemName}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <Input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.001"
+                                                        value={row.wastage}
+                                                        onChange={(e) => {
+                                                            const nextValue = e.target.value;
+                                                            setOtherWastageDraftRows(prev => prev.map((entry, entryIndex) => entryIndex === index ? { ...entry, wastage: nextValue } : entry));
+                                                        }}
+                                                        className="h-8 w-28 ml-auto"
+                                                    />
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                            <Button variant="outline" onClick={() => setOtherWastageModalOpen(false)}>Close</Button>
+                            <Button onClick={saveOtherWastageDraft} disabled={otherWastageLoading || otherWastageSaving || otherWastageDraftRows.length === 0}>
+                                {otherWastageSaving ? 'Saving...' : 'Save Other Wastage'}
                             </Button>
                         </div>
                     </div>

@@ -26,6 +26,8 @@ function createDbStub({
   lots = [],
   machines = [],
   holoDailyMetrics = [],
+  holoOtherWastageItems = [],
+  holoOtherWastageMetrics = [],
   cutterRows = [],
   holoRows = [],
   coningRows = [],
@@ -60,6 +62,15 @@ function createDbStub({
       findMany: async ({ where } = {}) => {
         if (!where?.date) return holoDailyMetrics;
         return holoDailyMetrics.filter((row) => row.date === where.date);
+      },
+    },
+    holoOtherWastageItem: {
+      findMany: async () => holoOtherWastageItems,
+    },
+    holoOtherWastageMetric: {
+      findMany: async ({ where } = {}) => {
+        if (!where?.date) return holoOtherWastageMetrics;
+        return holoOtherWastageMetrics.filter((row) => row.date === where.date);
       },
     },
     receiveFromCutterMachineRow: {
@@ -290,6 +301,13 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     holoDailyMetrics: [
       { date: '2026-03-09', baseMachine: 'H1', hours: 12, wastage: 0.25 },
     ],
+    holoOtherWastageItems: [
+      { id: 'other-2', name: 'Core Waste' },
+      { id: 'other-1', name: 'Packing Damage' },
+    ],
+    holoOtherWastageMetrics: [
+      { date: '2026-03-09', otherWastageItemId: 'other-1', wastage: 0.75 },
+    ],
     holoRows: [
       {
         grossWeight: 8,
@@ -338,6 +356,10 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
   assert.deepEqual(data.holoHoursWastageSummary, [
     { machine: 'H1', hours: 12, wastage: 0.25 },
     { machine: 'H2', hours: 0, wastage: 0 },
+  ]);
+  assert.deepEqual(data.otherWastageSummary, [
+    { item: 'Core Waste', wastage: 0 },
+    { item: 'Packing Damage', wastage: 0.75 },
   ]);
 });
 
@@ -467,6 +489,7 @@ test('createProductionDailyExportPdfDocument renders yarn/item headers and all t
   assert.match(pdfText, /Yarn Summary/);
   assert.ok((pdfText.match(/QTY/g) || []).length >= 3);
   assert.doesNotMatch(pdfText, /OVERVIEW/);
+  assert.doesNotMatch(pdfText, /Others/);
   assert.doesNotMatch(pdfText, /Production Details/);
   assert.match(pdfText, /H1-A1/);
   assert.match(pdfText, /H1-A2/);
@@ -503,6 +526,10 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
       { machine: 'H1', hours: 12, wastage: 0.25 },
       { machine: 'H2', hours: 0, wastage: 0 },
     ],
+    otherWastageSummary: [
+      { item: 'Core Waste', wastage: 0.15 },
+      { item: 'Packing Damage', wastage: 0.35 },
+    ],
     meta: {
       noData: false,
       rowCount: 1,
@@ -518,6 +545,9 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
   assert.match(pdfText, /HOURS/);
   assert.match(pdfText, /WASTAGE/);
   assert.match(pdfText, /H1/);
+  assert.match(pdfText, /Others/);
+  assert.match(pdfText, /Core Waste/);
+  assert.match(pdfText, /Packing Damage/);
 });
 
 test('createProductionDailyExportPdfDocument renders empty-state exports', async () => {

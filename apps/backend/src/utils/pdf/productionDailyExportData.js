@@ -413,6 +413,24 @@ async function buildHoloHoursWastageSummary({ date, db }) {
   });
 }
 
+async function buildHoloOtherWastageSummary({ date, db }) {
+  const [items, metrics] = await Promise.all([
+    db.holoOtherWastageItem.findMany({
+      orderBy: { name: 'asc' },
+    }),
+    db.holoOtherWastageMetric.findMany({
+      where: { date },
+      orderBy: { date: 'asc' },
+    }),
+  ]);
+
+  const metricMap = new Map(metrics.map((row) => [row.otherWastageItemId, row]));
+  return items.map((item) => ({
+    item: asTrimmedText(item.name, 'Unassigned'),
+    wastage: roundTo3Decimals(metricMap.get(item.id)?.wastage || 0),
+  }));
+}
+
 export async function buildProductionDailyExportData({ process, date, helpers = {}, db } = {}) {
   const normalizedProcess = String(process || '').trim().toLowerCase();
   const loader = PROCESS_LOADERS[normalizedProcess];
@@ -438,6 +456,9 @@ export async function buildProductionDailyExportData({ process, date, helpers = 
     yarnSummary: buildYarnSummary(sortedRows),
     holoHoursWastageSummary: normalizedProcess === 'holo'
       ? await buildHoloHoursWastageSummary({ date, db: activeDb })
+      : [],
+    otherWastageSummary: normalizedProcess === 'holo'
+      ? await buildHoloOtherWastageSummary({ date, db: activeDb })
       : [],
     meta: buildMeta(sortedRows),
   };

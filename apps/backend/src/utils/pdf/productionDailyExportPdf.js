@@ -636,6 +636,43 @@ export async function createProductionDailyExportPdfDocument(data) {
       bottomMargin: SUMMARY_BOTTOM_MARGIN,
       pageStartY: COMPACT_PAGE_START_Y,
     });
+
+    const otherWastageEntries = data.otherWastageSummary || [];
+    if (otherWastageEntries.length > 0) {
+      const otherWastageRows = otherWastageEntries.map((entry) => ({
+        cells: [
+          { text: entry.item || 'Unassigned', align: 'left', wrap: true },
+          { text: formatOptionalWeight(entry.wastage), align: 'right' },
+        ],
+      }));
+
+      const totalOtherWastage = otherWastageEntries.reduce((sum, entry) => sum + (Number(entry.wastage) || 0), 0);
+      otherWastageRows.push({
+        isTotal: true,
+        cells: [
+          { text: 'TOTAL', align: 'left' },
+          { text: formatOptionalWeight(totalOtherWastage), align: 'right' },
+        ],
+      });
+
+      y = drawTable(doc, {
+        y,
+        title: 'Others',
+        headers: [
+          { text: 'ITEM', align: 'left', wrap: true },
+          { text: 'WASTAGE', align: 'right' },
+        ],
+        rows: otherWastageRows,
+        colWidths: [100, 36],
+        pageWidth,
+        rowHeight: 5,
+        headerHeight: 7,
+        padding: 1.2,
+        lineHeight: 2.6,
+        bottomMargin: SUMMARY_BOTTOM_MARGIN,
+        pageStartY: COMPACT_PAGE_START_Y,
+      });
+    }
   }
 
   drawFooterOnAllPages(doc, pageHeight);

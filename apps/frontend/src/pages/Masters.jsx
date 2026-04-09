@@ -33,6 +33,7 @@ export function Masters() {
         createBobbin, updateBobbin, deleteBobbin,
         createRollType, updateRollType, deleteRollType,
         createHoloProductionPerHour, updateHoloProductionPerHour, deleteHoloProductionPerHour,
+        createHoloOtherWastageItem, updateHoloOtherWastageItem, deleteHoloOtherWastageItem,
         createConeType, updateConeType, deleteConeType,
         createWrapper, updateWrapper, deleteWrapper,
         createBox, updateBox, deleteBox,
@@ -66,6 +67,7 @@ export function Masters() {
             case 'bobbins': return <WeightMasterCrud title="Bobbins" data={db.bobbins} onCreate={createBobbin} onUpdate={updateBobbin} onDelete={deleteBobbin} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'rollTypes': return <WeightMasterCrud title="Roll Types" data={db.rollTypes} onCreate={createRollType} onUpdate={updateRollType} onDelete={deleteRollType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'holoProductionPerHour': return <HoloProductionPerHourCrud data={db.holo_production_per_hours || []} yarns={db.yarns || []} cuts={db.cuts || []} onCreate={createHoloProductionPerHour} onUpdate={updateHoloProductionPerHour} onDelete={deleteHoloProductionPerHour} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'holoOtherWastageItems': return <SimpleMasterCrud title="Other Wastage" data={db.holo_other_wastage_items || []} onCreate={createHoloOtherWastageItem} onUpdate={updateHoloOtherWastageItem} onDelete={deleteHoloOtherWastageItem} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
@@ -115,6 +117,7 @@ export function Masters() {
                         <TabButton id="twists" label="Twists" />
                         <TabButton id="rollTypes" label="Roll Types" />
                         <TabButton id="holoProductionPerHour" label="Production Per Hour" />
+                        <TabButton id="holoOtherWastageItems" label="Other Wastage" />
 
                         <SectionDivider label="Coning" />
                         <TabButton id="coneTypes" label="Cone Types" />

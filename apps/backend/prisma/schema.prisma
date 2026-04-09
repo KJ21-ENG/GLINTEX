@@ -250,6 +250,30 @@ model HoloDailyMetric {
   @@unique([date, baseMachine])
 }
 
+model HoloOtherWastageItem {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  metrics         HoloOtherWastageMetric[]
+}
+
+model HoloOtherWastageMetric {
+  id                  String                @id @default(cuid())
+  date                String
+  otherWastageItemId  String
+  wastage             Float
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @default(now()) @updatedAt
+  createdByUserId     String?
+  updatedByUserId     String?
+  otherWastageItem    HoloOtherWastageItem  @relation(fields: [otherWastageItemId], references: [id])
+
+  @@unique([date, otherWastageItemId])
+}
+
 model RollType {
   id        String   @id @default(cuid())
   name      String   @unique

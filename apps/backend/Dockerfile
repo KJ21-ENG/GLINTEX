@@ -50,6 +50,7 @@ COPY --from=deps /app/package*.json ./
 COPY prisma ./prisma
 COPY src ./src
 COPY whatsapp ./whatsapp
+COPY telegram ./telegram
 COPY scripts ./scripts
 COPY backups ./backups
 

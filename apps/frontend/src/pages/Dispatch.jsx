@@ -798,6 +798,40 @@ export function Dispatch() {
         }
     }
 
+    async function deleteChallanRow(rowId, barcode) {
+        if (!canDelete || !editChallanForm) return;
+        const remaining = (editChallanForm.rows || []).filter((r) => r.id !== rowId);
+        const isLast = remaining.length === 0;
+        const label = barcode || rowId;
+        const message = isLast
+            ? `Remove "${label}" from this challan? This is the last item — the challan will be removed entirely.`
+            : `Remove "${label}" from this challan? The dispatched weight/count will be restored to the source item.`;
+        if (!confirm(message)) return;
+
+        setEditSubmitting(true);
+        try {
+            await api.deleteDispatch(rowId);
+            const stageToRefresh = editChallanForm.stage;
+            const dispatchRes = await api.listDispatches();
+            setDispatches(dispatchRes.dispatches || []);
+            await refreshAfterDispatch(stageToRefresh);
+            if (selectedStage === stageToRefresh) {
+                const availRes = await api.getDispatchAvailable(selectedStage);
+                setAvailableItems(availRes.items || []);
+            }
+            if (isLast) {
+                setEditChallanOpen(false);
+                setEditChallanForm(null);
+            } else {
+                setEditChallanForm((prev) => (prev ? { ...prev, rows: remaining } : prev));
+            }
+        } catch (err) {
+            alert(err.message || 'Failed to remove dispatch row');
+        } finally {
+            setEditSubmitting(false);
+        }
+    }
+
     async function handleCreateCustomer() {
         if (readOnly) return;
         if (!newCustomerForm.name.trim()) {
@@ -2083,6 +2117,7 @@ export function Dispatch() {
                                                 <TableHead className="text-right">Count</TableHead>
                                             )}
                                             <TableHead className="text-right">Weight (kg)</TableHead>
+                                            {canDelete && <TableHead className="w-12" />}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -2121,6 +2156,20 @@ export function Dispatch() {
                                                         }}
                                                     />
                                                 </TableCell>
+                                                {canDelete && (
+                                                    <TableCell className="text-right">
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                            disabled={editSubmitting}
+                                                            onClick={() => deleteChallanRow(row.id, row.stageBarcode)}
+                                                            title="Remove from challan"
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </Button>
+                                                    </TableCell>
+                                                )}
                                             </TableRow>
                                         ))}
                                     </TableBody>

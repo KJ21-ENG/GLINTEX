@@ -29,6 +29,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [editingIssue, setEditingIssue] = useState(null);
   const [issueDraft, setIssueDraft] = useState(null);
   const [issueScanInput, setIssueScanInput] = useState('');
+  const [issueScanLoading, setIssueScanLoading] = useState(false);
   const scrollRootRef = useRef(null);
   const takeBackScrollRef = useRef(null);
   const [savingIssue, setSavingIssue] = useState(false);
@@ -341,6 +342,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     setEditingIssue(null);
     setIssueDraft(null);
     setIssueScanInput('');
+    setIssueScanLoading(false);
   };
 
   const updateIssueDraftField = (field, value) => {
@@ -481,32 +483,52 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }));
   };
 
-  const handleAddConingCrate = () => {
+  const handleAddConingCrate = async () => {
     if (!issueDraft) return;
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
 
     const normalizeValue = (val) => String(val || '').trim().toUpperCase();
-    const holoMatches = (db.receive_from_holo_machine_rows || []).filter(r => {
-      return !r.isDeleted && (normalizeValue(r.barcode) === normalized
-        || normalizeValue(r.notes) === normalized
-        || normalizeValue(r.legacyBarcode) === normalized);
-    });
-    const coningMatches = (db.receive_from_coning_machine_rows || []).filter(r => {
-      return !r.isDeleted && normalizeValue(r.barcode) === normalized;
-    });
-    const matches = [...holoMatches, ...coningMatches];
+    let row = null;
+    let availability = null;
+    setIssueScanLoading(true);
+    try {
+      const holoMatches = (db.receive_from_holo_machine_rows || []).filter(r => {
+        return !r.isDeleted && (normalizeValue(r.barcode) === normalized
+          || normalizeValue(r.notes) === normalized
+          || normalizeValue(r.legacyBarcode) === normalized);
+      });
+      const coningMatches = (db.receive_from_coning_machine_rows || []).filter(r => {
+        return !r.isDeleted && normalizeValue(r.barcode) === normalized;
+      });
+      const matches = [...holoMatches, ...coningMatches];
 
-    if (matches.length === 0) {
-      alert('Barcode not found in receive rows');
-      return;
-    }
-    if (matches.length > 1) {
-      alert('Multiple rows match this barcode. Please use the new barcode instead.');
-      return;
+      if (matches.length > 1) {
+        alert('Multiple rows match this barcode. Please use the new barcode instead.');
+        return;
+      }
+
+      if (matches.length === 1) {
+        row = matches[0];
+      } else {
+        try {
+          const result = await api.lookupConingSourceRowByBarcode(normalized);
+          if (result?.outcome !== 'found') {
+            alert(result?.error || 'Barcode not found in receive rows');
+            return;
+          }
+          row = result.row;
+          availability = result.availability || null;
+        } catch (err) {
+          alert(err.message || 'Barcode not found in receive rows');
+          return;
+        }
+      }
+    } finally {
+      setIssueScanLoading(false);
     }
 
-    const row = matches[0];
+    if (!row) return;
     if (issueDraft.crates.some(c => c.rowId === row.id)) {
       alert('Crate already added');
       return;
@@ -534,8 +556,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
     }
 
-    const baseRolls = row.rollCount ?? row.coneCount ?? 0;
-    const baseWeight = row.rollWeight ?? row.coneWeight ?? 0;
+    const baseRolls = availability?.availableRolls ?? row.availableRolls ?? row.rollCount ?? row.coneCount ?? 0;
+    const baseWeight = availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0;
     const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
 
     setIssueDraft((prev) => ({
@@ -2644,16 +2666,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           value={issueScanInput}
                           onChange={(e) => setIssueScanInput(e.target.value)}
                           placeholder="Scan Holo/Coning Receive Barcode"
-                          disabled={editingIssue.hasReceives}
+                          disabled={editingIssue.hasReceives || issueScanLoading}
                         />
                       </div>
                       <Button
                         onClick={handleAddConingCrate}
-                        disabled={editingIssue.hasReceives}
+                        disabled={editingIssue.hasReceives || issueScanLoading}
                         className="h-9"
                       >
                         <Plus className="w-4 h-4 mr-1" />
-                        Add
+                        {issueScanLoading ? 'Adding...' : 'Add'}
                       </Button>
                     </div>
                     <div className="text-xs text-muted-foreground">

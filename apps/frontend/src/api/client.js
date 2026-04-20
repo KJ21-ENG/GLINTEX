@@ -147,6 +147,9 @@ export async function createCutterPurchaseInbound(payload) {
 }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function lookupConingSourceRowByBarcode(barcode) {
+  return await request(`/api/issue_to_coning_machine/source-row/lookup?barcode=${encodeURIComponent(barcode)}`);
+}
 export async function createIssueTakeBack(process, issueId, payload) {
   const stage = String(process || '').toLowerCase();
   const encodedId = encodeURIComponent(issueId);

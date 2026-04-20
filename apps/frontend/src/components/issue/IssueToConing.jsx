@@ -46,6 +46,7 @@ export function IssueToConing() {
 
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
+    const [scanLoading, setScanLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
@@ -77,80 +78,20 @@ export function IssueToConing() {
 
     // --- Handlers ---
 
-    async function addBarcode(raw) {
-        const normalized = String(raw || '').trim().toUpperCase();
-        if (!normalized) return;
-        const normalizeValue = (val) => String(val || '').trim().toUpperCase();
+    const normalizeValue = (val) => String(val || '').trim().toUpperCase();
+    const findItemName = (itemId, fallback = '') => (db.items || []).find(i => i.id === itemId)?.name || fallback || 'Unknown';
+    const findYarnName = (yarnId, fallback = '') => (db.yarns || []).find(y => y.id === yarnId)?.name || fallback || 'Unknown';
 
-        // Find in Holo Receive Rows
-        const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
-            return normalizeValue(r.barcode) === normalized
-                || normalizeValue(r.notes) === normalized
-                || normalizeValue(r.legacyBarcode) === normalized;
-        });
-
-        if (matches.length === 0) {
-            alert('Barcode not found in Holo Receive rows');
-            return;
-        }
-
-        if (matches.length > 1) {
-            alert('Multiple rows match this legacy barcode. Please use the new barcode instead.');
-            return;
-        }
-
-        const row = matches[0];
-
-        if (crates.some(c => c.rowId === row.id)) {
-            alert('Crate already added');
-            return;
-        }
-
-        // Check Lot and get issue info
+    function buildLocalLookup(row) {
         const issue = db.issue_to_holo_machine.find(i => i.id === row.issueId);
-        const rowLot = issue?.lotNo;
-        if (!rowLot) {
-            alert('Lot not found for this crate');
-            return;
-        }
+        if (!issue) return { error: 'Lot not found for this crate' };
 
-        // Resolve Item & Cut first (needed for mixed lot validation)
-        const holoIssue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
-        const scannedItemId = holoIssue?.itemId;
-        const scannedYarnId = holoIssue?.yarnId || null;
-        let cutName = '';
-        if (holoIssue) {
-            const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
-            cutName = resolved.cutName === '—' ? '' : resolved.cutName;
-        }
-
-        // Allow mixed lots only if item and cut are the same
-        if (crates.length > 0 && rowLot !== meta.lotNo) {
-            // Check if item and cut match
-            if (scannedItemId !== meta.itemId || cutName !== meta.cut) {
-                const existingItemName = db.items?.find(i => i.id === meta.itemId)?.name || 'Unknown';
-                const scannedItemName = db.items?.find(i => i.id === scannedItemId)?.name || 'Unknown';
-                alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${meta.cut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
-                return;
-            }
-        }
-
-        // Yarn consistency check
-        if (crates.length > 0 && scannedYarnId && meta.yarnId && scannedYarnId !== meta.yarnId) {
-            const existingYarnName = db.yarns?.find(y => y.id === meta.yarnId)?.name || 'Unknown';
-            const scannedYarnName = db.yarns?.find(y => y.id === scannedYarnId)?.name || 'Unknown';
-            alert(`Crates must belong to a single yarn.\n\nExisting: "${existingYarnName}"\nScanned: "${scannedYarnName}"`);
-            return;
-        }
-
-        // Defaults (factor in dispatch AND already issued to coning)
+        const resolved = resolveHoloTrace(issue, holoTraceContext);
         const totalRolls = Number(row.rollCount || 0);
-        const totalWeight = Number(row.rollWeight || 0);
+        const totalWeight = Number(row.rollWeight || row.netWeight || (Number(row.grossWeight || 0) - Number(row.tareWeight || 0)) || 0);
         const dispatchedRolls = Number(row.dispatchedCount || 0);
         const dispatchedWeight = Number(row.dispatchedWeight || 0);
 
-        // Calculate net issued-to-coning for this specific holo receive row:
-        // historical issue refs minus active take-backs.
         let issuedToConingRolls = 0;
         let issuedToConingWeight = 0;
         const rawIssuedByIssueSource = new Map();
@@ -161,7 +102,7 @@ export function IssueToConing() {
                     ? JSON.parse(coningIssue.receivedRowRefs || '[]')
                     : (coningIssue.receivedRowRefs || []);
                 refs.forEach(ref => {
-                    if (ref.rowId === row.id || ref.barcode === row.barcode) {
+                    if (ref.rowId === row.id || normalizeValue(ref.barcode) === normalizeValue(row.barcode)) {
                         const key = `${coningIssue.id}::${row.id}`;
                         const current = rawIssuedByIssueSource.get(key) || { rolls: 0, weight: 0 };
                         current.rolls += Number(ref.issueRolls || 0);
@@ -177,51 +118,160 @@ export function IssueToConing() {
             issuedToConingWeight += Math.max(0, Number(rawIssued.weight || 0) - Number(takeBack.weight || 0));
         });
 
-        const totalUsedRolls = dispatchedRolls + issuedToConingRolls;
-        const totalUsedWeight = dispatchedWeight + issuedToConingWeight;
-        const availableWeight = Math.max(0, totalWeight - totalUsedWeight);
-        const availableRolls = Math.max(0, totalRolls - totalUsedRolls);
-
-        if (availableRolls <= 0 || availableWeight <= 0) {
-            alert('No rolls available for issue (may have been dispatched).');
-            setScanInput('');
-            return;
+        let pieceIds = Array.isArray(row.computedPieceIds) ? row.computedPieceIds.filter(Boolean) : [];
+        if (!pieceIds.length) {
+            try {
+                const hRefs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
+                if (Array.isArray(hRefs)) {
+                    const ids = new Set();
+                    hRefs.forEach(hRef => {
+                        const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
+                        if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
+                    });
+                    pieceIds = Array.from(ids);
+                }
+            } catch (e) { /* ignore parse errors */ }
         }
 
-        const unitWeight = totalRolls > 0 ? (totalWeight / totalRolls) : 0;
-        const defaultIssueWeight = Number((availableRolls * unitWeight).toFixed(3));
+        return {
+            row,
+            issue,
+            trace: { cutName: resolved.cutName === '—' ? '' : resolved.cutName },
+            pieceIds,
+            itemName: findItemName(issue.itemId, ''),
+            yarnName: findYarnName(issue.yarnId, ''),
+            availability: {
+                totalRolls,
+                totalWeight,
+                availableRolls: Math.max(0, totalRolls - dispatchedRolls - issuedToConingRolls),
+                availableWeight: Math.max(0, totalWeight - dispatchedWeight - issuedToConingWeight),
+            },
+        };
+    }
 
-        // Trace piece IDs
-        let pieceIds = [];
+    function normalizeServerLookup(result) {
+        if (!result || result.outcome !== 'found') {
+            return { error: result?.error || 'Barcode not found in Holo Receive rows' };
+        }
+        const row = result.row || {};
+        const issue = result.issue || row.issue || null;
+        return {
+            row: { ...row, issueId: row.issueId || issue?.id },
+            issue,
+            trace: result.trace || {},
+            pieceIds: Array.isArray(result.pieceIds) ? result.pieceIds : (row.computedPieceIds || []),
+            itemName: issue?.itemName || findItemName(issue?.itemId, ''),
+            yarnName: result.trace?.yarnName || findYarnName(issue?.yarnId, ''),
+            availability: result.availability || {
+                totalRolls: row.rollCount || 0,
+                totalWeight: row.rollWeight || 0,
+                availableRolls: row.availableRolls || 0,
+                availableWeight: row.availableWeight || 0,
+            },
+        };
+    }
+
+    async function resolveScannedCrate(normalized) {
+        const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
+            return normalizeValue(r.barcode) === normalized
+                || normalizeValue(r.notes) === normalized
+                || normalizeValue(r.legacyBarcode) === normalized;
+        });
+
+        if (matches.length > 1) {
+            return { error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' };
+        }
+
+        if (matches.length === 1) return buildLocalLookup(matches[0]);
+
         try {
-            const hRefs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-            if (Array.isArray(hRefs)) {
-                const ids = new Set();
-                hRefs.forEach(hRef => {
-                    const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
-                    if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
-                });
-                pieceIds = Array.from(ids);
+            const result = await api.lookupConingSourceRowByBarcode(normalized);
+            return normalizeServerLookup(result);
+        } catch (e) {
+            return { error: e.message || 'Barcode not found in Holo Receive rows' };
+        }
+    }
+
+    async function addBarcode(raw) {
+        if (scanLoading) return;
+        const normalized = normalizeValue(raw);
+        if (!normalized) return;
+
+        setScanLoading(true);
+        try {
+            const lookup = await resolveScannedCrate(normalized);
+            if (lookup?.error) {
+                alert(lookup.error);
+                return;
             }
-        } catch (e) { }
 
-        const pieceIdsDisplay = pieceIds.join(', ') || rowLot;
+            const { row, issue, availability, trace, pieceIds, itemName, yarnName } = lookup;
 
-        setCrates(prev => [...prev, {
-            rowId: row.id,
-            barcode: row.barcode,
-            lotNo: rowLot,
-            pieceIdsDisplay, // Show piece IDs in the 'Piece' column
-            availRolls: availableRolls,
-            unitWeight,
-            issueRolls: availableRolls, // Default all available
-            issueWeight: defaultIssueWeight,
-            itemId: scannedItemId,
-            cut: cutName,
-            yarnId: scannedYarnId
-        }]);
-        setScanInput('');
-        setScanFeedback(`Added ${normalized}`);
+            if (crates.some(c => c.rowId === row.id)) {
+                alert('Crate already added');
+                return;
+            }
+
+            const rowLot = issue?.lotNo || row.issue?.lotNo;
+            if (!rowLot) {
+                alert('Lot not found for this crate');
+                return;
+            }
+
+            const scannedItemId = issue?.itemId || row.issue?.itemId;
+            const scannedYarnId = issue?.yarnId || row.issue?.yarnId || null;
+            const cutName = trace?.cutName && trace.cutName !== '—' ? trace.cutName : '';
+
+            if (crates.length > 0 && rowLot !== meta.lotNo) {
+                if (scannedItemId !== meta.itemId || cutName !== meta.cut) {
+                    const existingItemName = findItemName(meta.itemId);
+                    const scannedItemName = itemName || findItemName(scannedItemId);
+                    alert(`Mixed lots are only allowed for same Item and Cut.\n\nExisting: Item="${existingItemName}", Cut="${meta.cut || 'N/A'}"\nScanned: Item="${scannedItemName}", Cut="${cutName || 'N/A'}"`);
+                    return;
+                }
+            }
+
+            if (crates.length > 0 && scannedYarnId && meta.yarnId && scannedYarnId !== meta.yarnId) {
+                const existingYarnName = findYarnName(meta.yarnId);
+                const scannedYarnName = yarnName || findYarnName(scannedYarnId);
+                alert(`Crates must belong to a single yarn.\n\nExisting: "${existingYarnName}"\nScanned: "${scannedYarnName}"`);
+                return;
+            }
+
+            const totalRolls = Number(availability?.totalRolls || row.rollCount || 0);
+            const totalWeight = Number(availability?.totalWeight || row.rollWeight || row.netWeight || 0);
+            const availableRolls = Number(availability?.availableRolls || row.availableRolls || 0);
+            const availableWeight = Number(availability?.availableWeight || row.availableWeight || 0);
+
+            if (availableRolls <= 0 || availableWeight <= 0) {
+                alert('No rolls available for issue (may have been dispatched or already issued).');
+                setScanInput('');
+                return;
+            }
+
+            const unitWeight = totalRolls > 0 ? (totalWeight / totalRolls) : 0;
+            const defaultIssueWeight = Number(availableWeight.toFixed(3));
+            const pieceIdsDisplay = (pieceIds || []).join(', ') || rowLot;
+
+            setCrates(prev => [...prev, {
+                rowId: row.id,
+                barcode: row.barcode,
+                lotNo: rowLot,
+                pieceIdsDisplay,
+                availRolls: availableRolls,
+                unitWeight,
+                issueRolls: availableRolls,
+                issueWeight: defaultIssueWeight,
+                itemId: scannedItemId,
+                itemName,
+                cut: cutName,
+                yarnId: scannedYarnId
+            }]);
+            setScanInput('');
+            setScanFeedback(`Added ${normalized}`);
+        } finally {
+            setScanLoading(false);
+        }
     }
 
     async function handleScan() {
@@ -442,10 +492,11 @@ export function IssueToConing() {
                             value={scanInput}
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
+                            disabled={scanLoading}
                             className="flex-1 sm:w-48"
                         />
-                        <Button onClick={handleScan}>Add</Button>
-                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
+                        <Button onClick={handleScan} disabled={scanLoading}>{scanLoading ? 'Adding...' : 'Add'}</Button>
+                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)} disabled={scanLoading}>
                             Scan
                         </Button>
                     </div>
@@ -474,7 +525,7 @@ export function IssueToConing() {
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
-                                        <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
+                                        <TableCell>{c.itemName || (db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
                                         <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceIdsDisplay || c.lotNo}</TableCell>
                                         <TableCell className="">{c.availRolls}</TableCell>

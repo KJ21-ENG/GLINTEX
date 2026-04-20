@@ -2492,6 +2492,98 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
   return map;
 }
 
+function getHoloRowNetWeight(row) {
+  const rollWeight = Number(row?.rollWeight);
+  if (Number.isFinite(rollWeight) && rollWeight > 0) return rollWeight;
+  const gross = Number(row?.grossWeight || 0);
+  const tare = Number(row?.tareWeight || 0);
+  return Math.max(0, gross - tare);
+}
+
+async function buildConingSourceLookupPayload(row) {
+  if (!row) return null;
+
+  const issue = row.issue || null;
+  const totalWeight = getHoloRowNetWeight(row);
+  const totalRolls = Number(row.rollCount || 0);
+  const dispatchedCount = Number(row.dispatchedCount || 0);
+  const dispatchedWeight = Number(row.dispatchedWeight || 0);
+  const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [row.id]);
+  const issuedToConing = issuedToConingMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
+  const availableWeight = Math.max(0, totalWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+  const availableRolls = calcAvailableCountFromWeight({
+    totalCount: totalRolls,
+    issuedCount: issuedToConing.issuedRolls || 0,
+    dispatchedCount,
+    totalWeight,
+    availableWeight,
+  }) || 0;
+  const trace = await resolveHoloIssueDetails(issue, createTraceCaches());
+  const pieceIds = await resolveHoloIssuePieceIds(issue);
+  const item = issue?.itemId
+    ? await prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
+    : null;
+  const crateIndex = parseReceiveCrateIndex(row.barcode);
+  const legacyBarcode = buildLegacyReceiveBarcode('RHO', issue?.lotNo, crateIndex);
+
+  const outcome = (availableRolls > 0 && availableWeight > TAKE_BACK_EPSILON) ? 'found' : 'unavailable';
+
+  return {
+    outcome,
+    ...(outcome === 'unavailable' ? { error: 'No rolls available for issue (may have been dispatched or already issued).' } : {}),
+    row: {
+      id: row.id,
+      date: row.date,
+      issueId: row.issueId,
+      pieceId: row.pieceId,
+      rollCount: totalRolls,
+      rollWeight: totalWeight,
+      grossWeight: Number(row.grossWeight || 0),
+      tareWeight: Number(row.tareWeight || 0),
+      barcode: row.barcode,
+      legacyBarcode,
+      notes: row.notes || '',
+      dispatchedCount,
+      dispatchedWeight,
+      issuedToConingRolls: issuedToConing.issuedRolls || 0,
+      issuedToConingWeight: issuedToConing.issuedWeight || 0,
+      availableRolls,
+      availableWeight: roundTo3Decimals(availableWeight),
+      computedPieceIds: pieceIds,
+      issue: issue ? {
+        id: issue.id,
+        lotNo: issue.lotNo,
+        itemId: issue.itemId,
+        yarnId: issue.yarnId,
+        twistId: issue.twistId,
+        cutId: issue.cutId,
+        cut: issue.cut ? { name: issue.cut.name } : null,
+      } : null,
+    },
+    issue: issue ? {
+      id: issue.id,
+      lotNo: issue.lotNo,
+      itemId: issue.itemId,
+      itemName: item?.name || '',
+      yarnId: issue.yarnId,
+      twistId: issue.twistId,
+      cutId: issue.cutId,
+    } : null,
+    trace,
+    pieceIds,
+    availability: {
+      totalRolls,
+      totalWeight: roundTo3Decimals(totalWeight),
+      dispatchedCount,
+      dispatchedWeight,
+      issuedToConingRolls: issuedToConing.issuedRolls || 0,
+      issuedToConingWeight: issuedToConing.issuedWeight || 0,
+      availableRolls,
+      availableWeight: roundTo3Decimals(availableWeight),
+    },
+  };
+}
+
 async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRowPieceMap, includeAll = false }) {
   const receive_from_holo_machine_rows_raw = await prisma.receiveFromHoloMachineRow.findMany({
     where: { isDeleted: false },
@@ -9228,6 +9320,85 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
   }
 });
 
+router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query?.barcode);
+    if (!barcode) {
+      return res.status(400).json({ outcome: 'not_found', error: 'barcode query parameter is required' });
+    }
+
+    const include = {
+      issue: {
+        include: {
+          cut: { select: { name: true } },
+          yarn: { select: { name: true } },
+          twist: { select: { name: true } },
+        },
+      },
+    };
+
+    const barcodeRows = await prisma.receiveFromHoloMachineRow.findMany({
+      where: { barcode: { equals: barcode, mode: 'insensitive' } },
+      include,
+      orderBy: { createdAt: 'desc' },
+    });
+    if (barcodeRows.length > 0) {
+      const activeRows = barcodeRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
+      if (activeRows.length === 1) {
+        const payload = await buildConingSourceLookupPayload(activeRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      if (activeRows.length > 1) {
+        return res.status(409).json({
+          outcome: 'duplicate_legacy_match',
+          error: 'Multiple rows match this barcode. Please use the new barcode instead.',
+        });
+      }
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Holo Receive row' });
+    }
+
+    const noteRows = await prisma.receiveFromHoloMachineRow.findMany({
+      where: { notes: { equals: barcode, mode: 'insensitive' } },
+      include,
+      orderBy: { createdAt: 'desc' },
+    });
+    if (noteRows.length > 0) {
+      const activeRows = noteRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
+      if (activeRows.length === 1) {
+        const payload = await buildConingSourceLookupPayload(activeRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      if (activeRows.length > 1) {
+        return res.status(409).json({
+          outcome: 'duplicate_legacy_match',
+          error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+        });
+      }
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Holo Receive row' });
+    }
+
+    const legacyResolved = await resolveLegacyReceiveRow(barcode, { include });
+    if (legacyResolved?.stage === 'holo' && legacyResolved.row) {
+      const payload = await buildConingSourceLookupPayload(legacyResolved.row);
+      const status = payload.outcome === 'found' ? 200 : 409;
+      return res.status(status).json(payload);
+    }
+    if (legacyResolved?.stage === 'holo' && legacyResolved.error === 'ambiguous') {
+      return res.status(409).json({
+        outcome: 'duplicate_legacy_match',
+        error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+      });
+    }
+
+    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Holo Receive rows' });
+  } catch (err) {
+    console.error('Failed to lookup coning source row', err);
+    res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
+  }
+});
+
 router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
@@ -9435,6 +9606,8 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         issueWeight,
         baseRolls,
         baseWeight,
+        dispatchedCount: c.dispatchedCount,
+        dispatchedWeight: c.dispatchedWeight,
       };
     });
 

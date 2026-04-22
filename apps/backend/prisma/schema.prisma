@@ -126,6 +126,7 @@ model Machine {
   issueToCutterMachines IssueToCutterMachine[]
   issueToHoloMachines   IssueToHoloMachine[]
   issueToConingMachines IssueToConingMachine[]
+  boilerSteamLogs       BoilerSteamLog[]       @relation("BoilerSteamLogMachine")
 }
 
 model Operator {
@@ -862,9 +863,14 @@ model BoilerSteamLog {
   id               String   @id @default(cuid())
   barcode          String   @unique  // The holo receive row barcode
   holoReceiveRowId String?           // Reference to the original receive row
+  boilerMachineId  String?
+  boilerMachine    Machine? @relation("BoilerSteamLogMachine", fields: [boilerMachineId], references: [id], onDelete: Restrict)
+  boilerNumber     Int?
   steamedAt        DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @default(now()) @updatedAt
   createdByUserId  String?
   updatedByUserId  String?
+
+  @@index([boilerMachineId])
 }

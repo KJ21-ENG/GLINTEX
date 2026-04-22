@@ -2102,13 +2102,22 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
             COALESCE(r."dispatchedWeight", 0)::numeric AS dispatched_weight,
             (COALESCE(iss.issue_rolls, 0) + COALESCE(tb.tb_rolls, 0))::numeric AS issued_rolls,
             (COALESCE(iss.issue_weight, 0) + COALESCE(tb.tb_weight, 0))::numeric AS issued_weight,
-            (st.id IS NOT NULL) AS is_steamed
+            (st.id IS NOT NULL) AS is_steamed,
+            st."boilerNumber" AS boiler_number,
+            bm.name AS boiler_machine_name,
+            CASE
+              WHEN bm.name IS NULL AND st."boilerNumber" IS NULL THEN NULL
+              WHEN bm.name IS NULL THEN 'No. ' || st."boilerNumber"::text
+              WHEN st."boilerNumber" IS NULL THEN bm.name
+              ELSE bm.name || ' • No. ' || st."boilerNumber"::text
+            END AS boiler_label
           FROM "ReceiveFromHoloMachineRow" r
           JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
           LEFT JOIN issued iss ON iss.row_id = r.id
           LEFT JOIN takeback tb ON tb.row_id = r.id
           LEFT JOIN "BoilerSteamLog" st
             ON st."holoReceiveRowId" = r.id OR (st."barcode" IS NOT NULL AND upper(st."barcode") = upper(r."barcode"))
+          LEFT JOIN "Machine" bm ON bm.id = st."boilerMachineId"
           WHERE r."isDeleted" = false
         )
         SELECT
@@ -2131,7 +2140,9 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
           SUM(GREATEST(0, rc.net_weight - rc.dispatched_weight - rc.issued_weight)) AS total_weight,
           SUM(GREATEST(0, rc.roll_count - rc.dispatched_count - rc.issued_rolls)) AS total_rolls,
           SUM(CASE WHEN rc.is_steamed THEN GREATEST(0, rc.net_weight - rc.dispatched_weight - rc.issued_weight) ELSE 0 END) AS steamed_weight,
-          SUM(CASE WHEN rc.is_steamed THEN GREATEST(0, rc.roll_count - rc.dispatched_count - rc.issued_rolls) ELSE 0 END) AS steamed_rolls
+          SUM(CASE WHEN rc.is_steamed THEN GREATEST(0, rc.roll_count - rc.dispatched_count - rc.issued_rolls) ELSE 0 END) AS steamed_rolls,
+          array_remove(array_agg(DISTINCT rc.boiler_machine_name), NULL) AS boiler_machine_names,
+          array_remove(array_agg(DISTINCT rc.boiler_label), NULL) AS boiler_labels
         FROM row_calc rc
         JOIN "IssueToHoloMachine" i ON i.id = rc.issue_id
         JOIN issue_labels il ON il.issue_id = i.id
@@ -2158,6 +2169,12 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
         const steamedStatusType = steamedRolls === 0 ? 'not_steamed'
           : (steamedRolls >= totalRolls ? 'steamed' : 'partial');
         const lotNos = Array.isArray(r.lot_nos) ? r.lot_nos.filter(Boolean) : [];
+        const boilerMachineNames = Array.isArray(r.boiler_machine_names)
+          ? r.boiler_machine_names.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))
+          : [];
+        const boilerLabels = Array.isArray(r.boiler_labels)
+          ? r.boiler_labels.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))
+          : [];
         const isMixed = !!r.is_mixed;
         const firmName = isMixed ? 'Mixed' : (r.firm_name || '—');
         const supplierName = isMixed ? 'Mixed' : (r.supplier_name || '—');
@@ -2198,6 +2215,10 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
           steamedRolls,
           steamedWeight: Number(r.steamed_weight || 0),
           steamedStatusType,
+          boilerMachineNames,
+          boilerMachineNamesStr: boilerMachineNames.join(', '),
+          boilerLabels,
+          boilerLabelsStr: boilerLabels.join(', '),
           statusType: Number(r.total_weight || 0) > 0.000000001 ? 'active' : 'inactive',
           date: r.max_date || '',
           rows: [],
@@ -2364,6 +2385,9 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           GREATEST(0, COALESCE(r."rollCount", 0)::numeric - COALESCE(r."dispatchedCount", 0)::numeric - (COALESCE(iss.issue_rolls, 0) + COALESCE(tb.tb_rolls, 0))::numeric) AS available_rolls,
           GREATEST(0, COALESCE(r."rollWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))::numeric - COALESCE(r."dispatchedWeight", 0)::numeric - (COALESCE(iss.issue_weight, 0) + COALESCE(tb.tb_weight, 0))::numeric) AS available_weight,
           (st.id IS NOT NULL) AS is_steamed,
+          st."boilerMachineId" AS boiler_machine_id,
+          bm.name AS boiler_machine_name,
+          st."boilerNumber" AS boiler_number,
           r."notes"
         FROM "ReceiveFromHoloMachineRow" r
         JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
@@ -2375,6 +2399,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
         LEFT JOIN "RollType" rt ON rt.id = r."rollTypeId"
         LEFT JOIN "BoilerSteamLog" st
           ON st."holoReceiveRowId" = r.id OR (st."barcode" IS NOT NULL AND upper(st."barcode") = upper(r."barcode"))
+        LEFT JOIN "Machine" bm ON bm.id = st."boilerMachineId"
         WHERE r."isDeleted" = false
           AND il.lot_label = ${lotLabel}
           AND i."itemId" = ${itemId}
@@ -2397,6 +2422,9 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
         grossWeight: Number(r.gross_weight || 0),
         netWeight: Number(r.net_weight || 0),
         isSteamed: !!r.is_steamed,
+        boilerMachineId: r.boiler_machine_id || null,
+        boilerMachineName: r.boiler_machine_name || null,
+        boilerNumber: r.boiler_number ? Number(r.boiler_number) : null,
         notes: r.notes || '',
       }));
 

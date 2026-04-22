@@ -16,6 +16,11 @@ const PROCESS_OPTIONS = [
     { value: 'coning', label: 'Coning' },
 ];
 
+const MACHINE_PROCESS_OPTIONS = [
+    ...PROCESS_OPTIONS,
+    { value: 'boiler', label: 'Boiler' },
+];
+
 
 
 export function Masters() {
@@ -592,7 +597,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                         value={newProcessType}
                         onChange={e => setNewProcessType(e.target.value)}
                         className="w-full sm:w-40"
-                        options={PROCESS_OPTIONS}
+                        options={MACHINE_PROCESS_OPTIONS}
                         searchable={false}
                         disabled={!allowCreate}
                     />
@@ -625,13 +630,13 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                                 value={editProcessType}
                                                 onChange={e => setEditProcessType(e.target.value)}
                                                 className="h-8"
-                                                options={PROCESS_OPTIONS}
+                                                options={MACHINE_PROCESS_OPTIONS}
                                                 searchable={false}
                                                 disabled={!allowEdit}
                                             />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">
-                                                {PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
+                                                {MACHINE_PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All Processes'}
                                             </span>
                                         )}
                                     </TableCell>
@@ -677,7 +682,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                             {editingId === item.id ? (
                                 <div className="space-y-2">
                                     <Input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Machine Name" disabled={!allowEdit} />
-                                    <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
+                                    <Select value={editProcessType} onChange={e => setEditProcessType(e.target.value)} options={MACHINE_PROCESS_OPTIONS} searchable={false} disabled={!allowEdit} />
                                     <Input type="number" min="0" step="1" value={editSpindle} onChange={e => setEditSpindle(e.target.value)} placeholder="Spindle" disabled={!allowEdit} />
                                     <div className="flex justify-end gap-1">
                                         <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
@@ -690,7 +695,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                                 <div className="flex items-center justify-between gap-2">
                                     <div>
                                         <span className="font-medium">{item.name}</span>
-                                        <span className="text-xs text-muted-foreground ml-2">({PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'})</span>
+                                        <span className="text-xs text-muted-foreground ml-2">({MACHINE_PROCESS_OPTIONS.find(o => o.value === item.processType)?.label || 'All'})</span>
                                         <span className="text-xs text-muted-foreground ml-2">Spindle: {item.spindle ?? '—'}</span>
                                     </div>
                                     <div className="flex gap-1">

@@ -10,17 +10,19 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
+import { BoilerMachineDialog } from './BoilerMachineDialog';
 
 /**
  * Mobile-optimized boiler view with barcode scanning
  * Split screen: camera on top, scanned items list on bottom
  */
-export function MobileBoilerView({ onSteamComplete }) {
+export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     const [scannedItems, setScannedItems] = useState([]);
     const [isManualMode, setIsManualMode] = useState(false);
     const [manualBarcode, setManualBarcode] = useState('');
     const [lookingUp, setLookingUp] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
 
     // Look up a barcode and add to scanned items
     const handleBarcodeScan = useCallback(async (barcode) => {
@@ -87,24 +89,31 @@ export function MobileBoilerView({ onSteamComplete }) {
     // Get items ready to steam (found and not already steamed)
     const steamableItems = scannedItems.filter(item => item.status === 'found');
 
-    // Mark all as steamed
-    const handleMarkSteamed = async () => {
+    // Open boiler machine dialog before steaming
+    const handleMarkSteamed = () => {
         if (steamableItems.length === 0) {
             alert('No items available to steam');
             return;
         }
+        if (boilerMachines.length === 0) {
+            alert('No Boiler machines configured. Add BOILER machines in Masters > Machines first.');
+            return;
+        }
+        setShowBoilerMachineDialog(true);
+    };
 
+    // Confirm steam with selected boiler machine
+    const confirmSteam = async (boilerMachineId, boilerNumber) => {
         setSubmitting(true);
         try {
-            // Use the actual barcode from the API response, not the scanned barcode
             const barcodes = steamableItems.map(item => item.barcode || item.scannedBarcode);
-            const result = await api.boilerMarkSteamed(barcodes);
+            const result = await api.boilerMarkSteamed(barcodes, boilerMachineId, boilerNumber);
 
             if (result.ok) {
-                // Remove steamed items from list
                 setScannedItems(prev =>
                     prev.filter(item => item.status !== 'found')
                 );
+                setShowBoilerMachineDialog(false);
                 onSteamComplete?.(result.steamedCount);
             }
         } catch (err) {
@@ -281,6 +290,16 @@ export function MobileBoilerView({ onSteamComplete }) {
                     )}
                 </div>
             </div>
+
+            {/* Boiler Machine Dialog */}
+            <BoilerMachineDialog
+                open={showBoilerMachineDialog}
+                onOpenChange={setShowBoilerMachineDialog}
+                onConfirm={confirmSteam}
+                submitting={submitting}
+                itemCount={steamableItems.length}
+                boilerMachines={boilerMachines}
+            />
         </div>
     );
 }

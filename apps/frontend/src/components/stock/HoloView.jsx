@@ -38,6 +38,67 @@ const normalizeLotKeyIdentity = (rawKey) => {
   }
 };
 
+const formatBoilerSteamLabel = (machineName, boilerNumber) => {
+  if (machineName && boilerNumber) return `${machineName} • No. ${boilerNumber}`;
+  if (machineName) return machineName;
+  if (boilerNumber) return `No. ${boilerNumber}`;
+  return '';
+};
+
+const getSteamPillTone = (statusType) => {
+  if (statusType === 'steamed') return 'bg-green-50 text-green-700 border-green-200';
+  if (statusType === 'partial') return 'bg-orange-50 text-orange-700 border-orange-200';
+  return 'bg-gray-50 text-gray-500 border-gray-200';
+};
+
+function SteamSummaryPill({ statusType, steamedRolls, totalRolls, label, compact = false }) {
+  const Icon = statusType === 'partial' ? FlameKindling : Flame;
+  const showIcon = statusType === 'steamed' || statusType === 'partial';
+
+  return (
+    <Badge
+      variant="outline"
+      title={label ? `${steamedRolls}/${totalRolls} steamed - ${label}` : `${steamedRolls}/${totalRolls} steamed`}
+      className={cn(
+        "inline-flex flex-col items-center justify-center rounded-full border shadow-sm",
+        "px-3 py-1.5 text-center leading-none",
+        compact ? "max-w-[11.5rem] text-[10px]" : "min-w-[9rem] max-w-[15rem] text-xs",
+        getSteamPillTone(statusType)
+      )}
+    >
+      <span className="flex max-w-full items-center justify-center gap-1.5 whitespace-nowrap font-bold tabular-nums leading-none">
+        {showIcon && <Icon className={cn("shrink-0", compact ? "w-3 h-3" : "w-3.5 h-3.5")} />}
+        <span>{steamedRolls}/{totalRolls}</span>
+        <span>steamed</span>
+      </span>
+      {label && (
+        <span className={cn("mt-1 block max-w-full truncate whitespace-nowrap font-semibold leading-none", compact ? "text-[10px]" : "text-[11px]")}>
+          {label}
+        </span>
+      )}
+    </Badge>
+  );
+}
+
+function BoilerRowPill({ label, compact = false }) {
+  const [machineLabel, numberLabel] = String(label || '').split(' • ');
+
+  return (
+    <Badge
+      variant="outline"
+      title={label || 'Steamed'}
+      className={cn(
+        "inline-grid max-w-[13rem] grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1.5 rounded-full border-green-200 bg-green-50 text-green-700 shadow-sm",
+        compact ? "px-2.5 py-1 text-[10px]" : "px-3 py-1.5 text-xs"
+      )}
+    >
+      <Flame className={cn("row-span-2 shrink-0", compact ? "w-3 h-3" : "w-3.5 h-3.5")} />
+      <span className="truncate whitespace-nowrap font-bold leading-none">{machineLabel || 'Steamed'}</span>
+      {numberLabel && <span className="truncate whitespace-nowrap font-semibold leading-none opacity-90">{numberLabel}</span>}
+    </Badge>
+  );
+}
+
 export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, ensureProcessData = null, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
@@ -170,6 +231,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         issuedToConingWeight,
         isSteamed: !!row.isSteamed,
         steamedAt: row.steamedAt || null,
+        boilerMachineId: row.boilerMachineId || null,
+        boilerMachineName: row.boilerMachineName || null,
+        boilerNumber: row.boilerNumber || null,
       };
     });
   }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId, v2Lots]);
@@ -183,6 +247,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         const cutNamesSet = new Set(cutNamesArr.length ? cutNamesArr : [lot.cutName].filter(Boolean));
         return {
           ...lot,
+          boilerLabelsStr: Array.isArray(lot.boilerLabels)
+            ? lot.boilerLabels.filter(Boolean).join(', ')
+            : (lot.boilerLabelsStr || ''),
+          boilerMachineNamesStr: Array.isArray(lot.boilerMachineNames)
+            ? lot.boilerMachineNames.filter(Boolean).join(', ')
+            : (lot.boilerMachineNamesStr || ''),
           lotNos: lotNosArr,
           lotSearch: lotNosArr.join(' '),
           barcodeStr: '',
@@ -220,6 +290,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         totalWeight: 0,
         steamedRolls: 0,
         steamedWeight: 0,
+        boilerLabels: new Set(),
+        boilerMachineNames: new Set(),
         lotNos: new Set(),
         rows: [],
         barcodes: [],
@@ -238,6 +310,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         existing.steamedRolls += row.availableRolls;
         existing.steamedWeight += row.availableWeight;
       }
+      const boilerLabel = formatBoilerSteamLabel(row.boilerMachineName, row.boilerNumber);
+      if (boilerLabel) existing.boilerLabels.add(boilerLabel);
+      if (row.boilerMachineName) existing.boilerMachineNames.add(row.boilerMachineName);
       map.set(lotKey, existing);
     });
     return Array.from(map.values()).map((lot) => {
@@ -259,6 +334,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         notesStr: (lot.notes || []).join(' '),
         statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
         steamedStatusType,
+        boilerLabelsStr: Array.from(lot.boilerLabels).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
+        boilerMachineNamesStr: Array.from(lot.boilerMachineNames).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
         date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
       };
     });
@@ -527,19 +604,12 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       <TableCell className="">{l.totalRolls}</TableCell>
                       <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "text-xs",
-                            l.steamedStatusType === 'steamed' && "bg-green-500/10 text-green-600 border-green-500/50",
-                            l.steamedStatusType === 'partial' && "bg-orange-500/10 text-orange-600 border-orange-500/50",
-                            l.steamedStatusType === 'not_steamed' && "bg-gray-500/10 text-gray-500 border-gray-500/30"
-                          )}
-                        >
-                          {l.steamedStatusType === 'steamed' && <Flame className="w-3 h-3 mr-1" />}
-                          {l.steamedStatusType === 'partial' && <FlameKindling className="w-3 h-3 mr-1" />}
-                          {l.steamedRolls} / {l.totalRolls}
-                        </Badge>
+                        <SteamSummaryPill
+                          statusType={l.steamedStatusType}
+                          steamedRolls={l.steamedRolls}
+                          totalRolls={l.totalRolls}
+                          label={l.boilerLabelsStr}
+                        />
                       </TableCell>
                     </TableRow>
                     {isExpanded && (
@@ -584,10 +654,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                       <TableCell>{r.machineNo}</TableCell>
                                       <TableCell>
                                         {r.isSteamed ? (
-                                          <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/50">
-                                            <Flame className="w-3 h-3 mr-1" />
-                                            Steamed
-                                          </Badge>
+                                          <BoilerRowPill label={formatBoilerSteamLabel(r.boilerMachineName, r.boilerNumber)} />
                                         ) : (
                                           <span className="text-xs text-muted-foreground">—</span>
                                         )}
@@ -689,18 +756,15 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                     <div className="text-right">
                       <div className="font-mono font-semibold">{formatKg(l.totalWeight)}</div>
                       <div className="text-[10px] text-muted-foreground uppercase">{l.totalRolls} rolls</div>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "text-[10px] mt-1",
-                          l.steamedStatusType === 'steamed' && "bg-green-500/10 text-green-600 border-green-500/50",
-                          l.steamedStatusType === 'partial' && "bg-orange-500/10 text-orange-600 border-orange-500/50",
-                          l.steamedStatusType === 'not_steamed' && "bg-gray-500/10 text-gray-500 border-gray-500/30"
-                        )}
-                      >
-                        {l.steamedStatusType === 'steamed' && <Flame className="w-3 h-3 mr-1" />}
-                        {l.steamedRolls}/{l.totalRolls} steamed
-                      </Badge>
+                      <div className="mt-1 flex justify-end">
+                        <SteamSummaryPill
+                          statusType={l.steamedStatusType}
+                          steamedRolls={l.steamedRolls}
+                          totalRolls={l.totalRolls}
+                          label={l.boilerLabelsStr}
+                          compact
+                        />
+                      </div>
                     </div>
                   </div>
                   <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
@@ -733,7 +797,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                           <div className="flex justify-between text-[11px] text-muted-foreground">
                             <span>{(r.rollType?.name || r.rollTypeName || '—')} • Rolls: {r.availableRolls}</span>
                             <span className="flex items-center gap-1">
-                              {r.isSteamed && <Flame className="w-3 h-3 text-green-600" />}
+                              {formatBoilerSteamLabel(r.boilerMachineName, r.boilerNumber) && <BoilerRowPill label={formatBoilerSteamLabel(r.boilerMachineName, r.boilerNumber)} compact />}
                               Mac: {r.machineNo}
                             </span>
                           </div>

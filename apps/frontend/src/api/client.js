@@ -492,8 +492,8 @@ export async function downloadProductionWeeklyExport({ process, from, to, signal
 export async function boilerLookup(barcode) {
   return await request(`/api/boiler/lookup?barcode=${encodeURIComponent(barcode)}`);
 }
-export async function boilerMarkSteamed(barcodes) {
-  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes } });
+export async function boilerMarkSteamed(barcodes, boilerMachineId, boilerNumber) {
+  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes, boilerMachineId, boilerNumber } });
 }
 export async function boilerListSteamed(date) {
   const params = date ? `?date=${date}` : '';

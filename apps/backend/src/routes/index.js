@@ -2622,7 +2622,14 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
         { barcode: { in: holoBarcodes } }
       ]
     },
-    select: { barcode: true, steamedAt: true, holoReceiveRowId: true }
+    select: {
+      barcode: true,
+      steamedAt: true,
+      holoReceiveRowId: true,
+      boilerMachineId: true,
+      boilerNumber: true,
+      boilerMachine: { select: { name: true } },
+    }
   });
   const steamedByBarcode = new Map(steamLogs.map(s => [s.barcode?.toUpperCase(), s]));
   const steamedByRowId = new Map(steamLogs.filter(s => s.holoReceiveRowId).map(s => [s.holoReceiveRowId, s]));
@@ -2667,6 +2674,9 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
       legacyBarcode,
       isSteamed: !!steamLog,
       steamedAt: steamLog?.steamedAt || null,
+      boilerMachineId: steamLog?.boilerMachineId || null,
+      boilerMachineName: steamLog?.boilerMachine?.name || null,
+      boilerNumber: steamLog?.boilerNumber || null,
       issuedToConingRolls: issuedToConing.issuedRolls || 0,
       issuedToConingWeight: issuedToConing.issuedWeight || 0,
     };
@@ -10825,11 +10835,16 @@ router.put('/api/suppliers/:id', requireEditPermission('masters'), async (req, r
   }
 });
 
+const MACHINE_PROCESS_TYPES = new Set(['all', 'cutter', 'holo', 'coning', 'boiler']);
+
 router.get('/api/machines', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.machine.findMany()); });
 router.post('/api/machines', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
   const { name, processType = 'all', spindle } = req.body;
   if (!name) return res.status(400).json({ error: 'Missing name' });
+  if (!MACHINE_PROCESS_TYPES.has(processType)) {
+    return res.status(400).json({ error: 'Invalid machine process type' });
+  }
   const spindleValue = spindle === undefined || spindle === null || spindle === ''
     ? null
     : toNumber(spindle);
@@ -10844,7 +10859,13 @@ router.delete('/api/machines/:id', requireDeletePermission('masters'), async (re
   const { id } = req.params;
   const existingMachine = await prisma.machine.findUnique({ where: { id } });
   if (!existingMachine) return res.status(404).json({ error: 'Machine not found' });
-  const usage = await prisma.issueToCutterMachine.count({ where: { machineId: id, isDeleted: false } });
+  const [cutterUsage, holoUsage, coningUsage, boilerUsage] = await Promise.all([
+    prisma.issueToCutterMachine.count({ where: { machineId: id, isDeleted: false } }),
+    prisma.issueToHoloMachine.count({ where: { machineId: id, isDeleted: false } }),
+    prisma.issueToConingMachine.count({ where: { machineId: id, isDeleted: false } }),
+    prisma.boilerSteamLog.count({ where: { boilerMachineId: id } }),
+  ]);
+  const usage = cutterUsage + holoUsage + coningUsage + boilerUsage;
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
@@ -10862,7 +10883,12 @@ router.put('/api/machines/:id', requireEditPermission('masters'), async (req, re
     const existing = await prisma.machine.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Machine not found' });
     const data = { name };
-    if (processType !== undefined) data.processType = processType;
+    if (processType !== undefined) {
+      if (!MACHINE_PROCESS_TYPES.has(processType)) {
+        return res.status(400).json({ error: 'Invalid machine process type' });
+      }
+      data.processType = processType;
+    }
     if (spindle !== undefined) {
       const spindleValue = spindle === null || spindle === ''
         ? null
@@ -18549,6 +18575,7 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
     // Check if already steamed
     const existingSteamLog = await prisma.boilerSteamLog.findUnique({
       where: { barcode },
+      include: { boilerMachine: { select: { id: true, name: true } } },
     });
 
     // Try legacy barcode resolution first
@@ -18581,6 +18608,9 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
           date: holoRow.date || null,
           isSteamed: Boolean(existingSteamLog),
           steamedAt: existingSteamLog?.steamedAt || null,
+          boilerMachineId: existingSteamLog?.boilerMachineId || null,
+          boilerMachineName: existingSteamLog?.boilerMachine?.name || null,
+          boilerNumber: existingSteamLog?.boilerNumber || null,
         });
       }
     }
@@ -18605,9 +18635,13 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
       const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
       // Check if already steamed by actual barcode
       const steamedByActualBarcode = holoRow.barcode
-        ? await prisma.boilerSteamLog.findUnique({ where: { barcode: holoRow.barcode } })
+        ? await prisma.boilerSteamLog.findUnique({
+          where: { barcode: holoRow.barcode },
+          include: { boilerMachine: { select: { id: true, name: true } } },
+        })
         : null;
-      const isSteamed = Boolean(existingSteamLog || steamedByActualBarcode);
+      const steamLog = existingSteamLog || steamedByActualBarcode;
+      const isSteamed = Boolean(steamLog);
       return res.json({
         found: true,
         itemId: holoRow.id,
@@ -18620,7 +18654,10 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
         machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
         date: holoRow.date || null,
         isSteamed,
-        steamedAt: existingSteamLog?.steamedAt || steamedByActualBarcode?.steamedAt || null,
+        steamedAt: steamLog?.steamedAt || null,
+        boilerMachineId: steamLog?.boilerMachineId || null,
+        boilerMachineName: steamLog?.boilerMachine?.name || null,
+        boilerNumber: steamLog?.boilerNumber || null,
       });
     }
 
@@ -18636,13 +18673,32 @@ router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async 
   try {
     const actor = getActor(req);
     const barcodes = req.body?.barcodes;
+    const boilerMachineId = typeof req.body?.boilerMachineId === 'string' ? req.body.boilerMachineId.trim() : '';
+    const boilerNumberRaw = req.body?.boilerNumber;
+    const boilerNumber = boilerNumberRaw === null || boilerNumberRaw === undefined || boilerNumberRaw === ''
+      ? null
+      : Number(boilerNumberRaw);
     if (!Array.isArray(barcodes) || barcodes.length === 0) {
       return res.status(400).json({ error: 'barcodes array is required' });
+    }
+    if (!boilerMachineId) {
+      return res.status(400).json({ error: 'boilerMachineId is required' });
+    }
+    if (!Number.isInteger(boilerNumber) || boilerNumber < 1) {
+      return res.status(400).json({ error: 'boilerNumber must be a positive integer' });
     }
 
     const normalizedBarcodes = barcodes.map(b => normalizeBarcodeInput(b)).filter(Boolean);
     if (normalizedBarcodes.length === 0) {
       return res.status(400).json({ error: 'No valid barcodes provided' });
+    }
+
+    const boilerMachine = await prisma.machine.findUnique({
+      where: { id: boilerMachineId },
+      select: { id: true, name: true, processType: true },
+    });
+    if (!boilerMachine || boilerMachine.processType !== 'boiler') {
+      return res.status(400).json({ error: 'Selected machine must be a Boiler machine' });
     }
 
     // Check which are already steamed
@@ -18690,6 +18746,8 @@ router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async 
     const steamLogs = normalizedBarcodes.map(barcode => ({
       barcode,
       holoReceiveRowId: barcodeToHoloId.get(barcode.toUpperCase()) || null,
+      boilerMachineId,
+      boilerNumber,
       steamedAt: new Date(),
       ...actorCreateFields(actor?.userId),
     }));
@@ -18704,6 +18762,9 @@ router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async 
       ok: true,
       steamedCount: created.count,
       barcodes: normalizedBarcodes,
+      boilerMachineId: boilerMachine.id,
+      boilerMachineName: boilerMachine.name,
+      boilerNumber,
     });
   } catch (err) {
     console.error('Failed to mark barcodes as steamed', err);
@@ -18730,6 +18791,7 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
 
     const steamLogs = await prisma.boilerSteamLog.findMany({
       where,
+      include: { boilerMachine: { select: { id: true, name: true } } },
       orderBy: { steamedAt: 'desc' },
       take: 500,
     });
@@ -18764,6 +18826,9 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
         boxName: holoRow?.box?.name || null,
         rollTypeName: holoRow?.rollType?.name || null,
         machineName: holoRow?.issue?.machine?.name || holoRow?.machineNo || null,
+        boilerMachineId: log.boilerMachineId || null,
+        boilerMachineName: log.boilerMachine?.name || null,
+        boilerNumber: log.boilerNumber || null,
         createdByUserId: log.createdByUserId || null,
         createdAt: log.createdAt || null,
       };

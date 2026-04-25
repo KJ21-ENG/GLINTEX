@@ -62,6 +62,7 @@ export function ConingReceiveForm() {
     useEffect(() => {
         const barcodeFromUrl = searchParams.get('barcode');
         if (!barcodeFromUrl || issue) return;
+        setScanInput(barcodeFromUrl);
         let cancelled = false;
         (async () => {
             try {
@@ -162,8 +163,6 @@ export function ConingReceiveForm() {
         } catch (e) {
             alert(e.message);
             setIssue(null);
-        } finally {
-            setScanInput('');
         }
     }
 

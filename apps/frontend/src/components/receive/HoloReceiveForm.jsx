@@ -53,6 +53,7 @@ export function HoloReceiveForm() {
     useEffect(() => {
         const barcodeFromUrl = searchParams.get('barcode');
         if (barcodeFromUrl && !issue) {
+            setScanInput(barcodeFromUrl);
             // Auto-load the issue
             api.getIssueByHoloBarcode(barcodeFromUrl)
                 .then(result => {
@@ -159,8 +160,6 @@ export function HoloReceiveForm() {
         } catch (e) {
             alert(e.message);
             setIssue(null);
-        } finally {
-            setScanInput('');
         }
     }
 

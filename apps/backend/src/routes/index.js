@@ -26,6 +26,22 @@ import { buildHoloWeeklyExportData } from '../utils/holoWeeklyExport.js';
 import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
+import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
+
+async function timedTransaction(label, lineCount, fn) {
+  if (!isPerfLogEnabled()) return prisma.$transaction(fn);
+  const startNs = process.hrtime.bigint();
+  try {
+    const result = await prisma.$transaction(fn);
+    const durationMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+    perfLog('txn', { label, lineCount, durationMs: Math.round(durationMs * 1000) / 1000, ok: true });
+    return result;
+  } catch (err) {
+    const durationMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+    perfLog('txn', { label, lineCount, durationMs: Math.round(durationMs * 1000) / 1000, ok: false, error: String(err?.message || err).slice(0, 200) });
+    throw err;
+  }
+}
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -7097,7 +7113,8 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
     const cutRecord = await prisma.cut.findUnique({ where: { id: cutId } });
     if (!cutRecord) return res.status(404).json({ error: 'Cut not found' });
 
-    const { issueRecord, issueLines } = await prisma.$transaction(async (tx) => {
+    const cutterLineCount = (explicitPieceLines.length > 0 ? explicitPieceLines.length : fallbackPieceIds.length);
+    const { issueRecord, issueLines } = await timedTransaction('issue_to_cutter_machine.create', cutterLineCount, async (tx) => {
       const sourceLines = explicitPieceLines.length > 0
         ? explicitPieceLines
         : fallbackPieceIds.map((pieceId) => ({ pieceId, issuedWeight: null, count: 1 }));
@@ -8786,7 +8803,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     const totalWeight = computedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
     const normalizedYarnKg = Number(yarnKg || 0);
 
-    const created = await prisma.$transaction(async (tx) => {
+    const created = await timedTransaction('issue_to_holo_machine.create', computedCrates.length, async (tx) => {
       await ensureHoloIssueSequence(tx, actorUserId);
       // Get next Holo issue series number
       const holoSeq = await tx.holoIssueSequence.upsert({
@@ -9736,7 +9753,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
       : 0;
 
-    const created = await prisma.$transaction(async (tx) => {
+    const created = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
       await ensureConingIssueSequence(tx, actorUserId);
       // Get next Coning issue series number
       const coningSeq = await tx.coningIssueSequence.upsert({

@@ -445,24 +445,41 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         yarnName: lot.yarnName,
         twistName: lot.twistName,
         cutNames: new Set(),
+        boilerLabels: new Set(),
+        boilerMachineNames: new Set(),
         totalRolls: 0,
         totalWeight: 0,
+        steamedRolls: 0,
+        steamedWeight: 0,
         rows: [],
         lots: [],
         statusType: lot.statusType,
       };
       existing.totalRolls += lot.totalRolls;
       existing.totalWeight += lot.totalWeight;
+      existing.steamedRolls += lot.steamedRolls || 0;
+      existing.steamedWeight += lot.steamedWeight || 0;
       existing.statusType = existing.totalWeight > EPSILON ? 'active' : 'inactive';
       existing.rows = []; // collapse detail when grouped
       existing.lots.push(lot.lotNo);
       existing.cutNames.add(lot.cutName || '—');
+      (lot.boilerLabelsStr || '').split(',').map(label => label.trim()).filter(Boolean).forEach(label => existing.boilerLabels.add(label));
+      (lot.boilerMachineNamesStr || '').split(',').map(name => name.trim()).filter(Boolean).forEach(name => existing.boilerMachineNames.add(name));
       map.set(key, existing);
     });
     return Array.from(map.values()).map((lot) => {
       const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
-      const { cutNames, ...rest } = lot;
-      return { ...rest, cutName };
+      const steamedStatusType = lot.steamedRolls === 0 ? 'not_steamed'
+        : lot.steamedRolls >= lot.totalRolls ? 'steamed'
+          : 'partial';
+      const { cutNames, boilerLabels, boilerMachineNames, ...rest } = lot;
+      return {
+        ...rest,
+        cutName,
+        steamedStatusType,
+        boilerLabelsStr: Array.from(boilerLabels).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
+        boilerMachineNamesStr: Array.from(boilerMachineNames).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
+      };
     });
   }, [filteredLots, groupBy]);
 

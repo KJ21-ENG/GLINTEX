@@ -191,6 +191,8 @@ model IssueToHoloMachine {
   twist               Twist?     @relation(fields: [twistId], references: [id])
   cut                 Cut?       @relation(fields: [cutId], references: [id])
   receiveRows         ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
+
+  @@index([isDeleted, createdAt])
 }
 
 model ReceiveFromHoloMachineRow {
@@ -224,6 +226,8 @@ model ReceiveFromHoloMachineRow {
   box         Box?               @relation(fields: [boxId], references: [id])
   operator    Operator?           @relation("OperatorHoloReceive", fields: [operatorId], references: [id])
   helper      Operator?           @relation("HelperHoloReceive", fields: [helperId], references: [id])
+
+  @@index([issueId, isDeleted])
 }
 
 model ReceiveFromHoloMachinePieceTotal {
@@ -363,6 +367,8 @@ model IssueToConingMachine {
   twist           Twist?    @relation(fields: [twistId], references: [id])
   cut             Cut?      @relation(fields: [cutId], references: [id])
   receiveRows     ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
+
+  @@index([isDeleted, createdAt])
 }
 
 model ReceiveFromConingMachineRow {
@@ -396,6 +402,8 @@ model ReceiveFromConingMachineRow {
   box         Box?                 @relation(fields: [boxId], references: [id])
   dispatchedWeight Float            @default(0)
   dispatchedCount  Int               @default(0)
+
+  @@index([issueId, isDeleted])
 }
 
 model ReceiveFromConingMachinePieceTotal {
@@ -523,6 +531,9 @@ model ReceiveFromCutterMachineRow {
   issue         IssueToCutterMachine?                @relation(fields: [issueId], references: [id])
   dispatchedWeight Float                             @default(0)
   dispatchedCount  Int                               @default(0)
+
+  @@index([issueId, isDeleted])
+  @@index([pieceId, isDeleted])
 }
 
 model ReceiveFromCutterMachineChallan {
@@ -550,6 +561,8 @@ model ReceiveFromCutterMachineChallan {
   createdByUserId String?
   updatedByUserId String?
   rows            ReceiveFromCutterMachineRow[]
+
+  @@index([pieceId, isDeleted])
 }
 
 model ReceiveFromCutterMachinePieceTotal {

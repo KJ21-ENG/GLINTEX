@@ -27,6 +27,7 @@ import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
+import { computeIssueBalancesBatch } from '../services/issueBalances.js';
 
 async function timedTransaction(label, lineCount, fn) {
   if (!isPerfLogEnabled()) return prisma.$transaction(fn);
@@ -901,25 +902,12 @@ async function computeConingReceiveSourceRowRefs(client, issue, netWeight, exclu
 }
 
 async function buildIssueBalancesByStage(client, stage, issues = []) {
+  if (!Array.isArray(issues) || issues.length === 0) return {};
+  const balances = await computeIssueBalancesBatch(client, stage, issues);
   const map = {};
   for (const issue of issues) {
-    const pending = await getIssuePending(client, stage, issue);
-    map[issue.id] = {
-      stage,
-      issueId: issue.id,
-      originalCount: pending.original.totalCount,
-      originalWeight: pending.original.totalWeight,
-      takeBackCount: pending.takeBack.activeCount,
-      takeBackWeight: pending.takeBack.activeWeight,
-      netIssuedCount: pending.netIssuedCount,
-      netIssuedWeight: pending.netIssuedWeight,
-      receivedCount: pending.received.receivedCount,
-      receivedWeight: pending.received.receivedWeight,
-      wastageCount: pending.received.wastageCount,
-      wastageWeight: pending.received.wastageWeight,
-      pendingCount: pending.pendingCount,
-      pendingWeight: pending.pendingWeight,
-    };
+    const balance = balances.get(issue.id);
+    if (balance) map[issue.id] = balance;
   }
   return map;
 }
@@ -2788,23 +2776,34 @@ async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw, incl
 
 async function buildProcessData(process, options = {}) {
   const includeAll = Boolean(options.includeAll);
-  const { lots, inbound_items } = await fetchInboundBasics();
-  const issue_to_cutter_machine_raw = process === 'cutter'
-    ? await prisma.issueToCutterMachine.findMany({ where: { isDeleted: false } })
-    : [];
-  const issue_to_holo_machine_raw = (process === 'holo' || process === 'coning')
-    ? await prisma.issueToHoloMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
-    : [];
-  const issue_to_coning_machine_raw = process === 'coning'
-    ? await prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
-    : [];
-  const issue_take_backs_raw = await prisma.issueTakeBack.findMany({
-    where: { stage: process },
-    include: { lines: true },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  const cutterData = await fetchCutterReceiveData({ includeAll });
+  // Independent reads — fan out in parallel; previously they ran sequentially
+  // and each `findMany` waited for the prior one's network round-trip.
+  const [
+    inboundBasics,
+    issue_to_cutter_machine_raw,
+    issue_to_holo_machine_raw,
+    issue_to_coning_machine_raw,
+    issue_take_backs_raw,
+    cutterData,
+  ] = await Promise.all([
+    fetchInboundBasics(),
+    process === 'cutter'
+      ? prisma.issueToCutterMachine.findMany({ where: { isDeleted: false } })
+      : Promise.resolve([]),
+    (process === 'holo' || process === 'coning')
+      ? prisma.issueToHoloMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
+      : Promise.resolve([]),
+    process === 'coning'
+      ? prisma.issueToConingMachine.findMany({ where: { isDeleted: false }, orderBy: { createdAt: 'desc' } })
+      : Promise.resolve([]),
+    prisma.issueTakeBack.findMany({
+      where: { stage: process },
+      include: { lines: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+    fetchCutterReceiveData({ includeAll }),
+  ]);
+  const { lots, inbound_items } = inboundBasics;
   const cutterRowPieceMap = new Map(cutterData.receive_from_cutter_machine_rows.map(r => [r.id, r.pieceId]));
   const issue_take_backs = await resolveUserFields(issue_take_backs_raw);
 

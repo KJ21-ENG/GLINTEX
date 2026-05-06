@@ -1,5 +1,10 @@
 import { perfLog, isPerfLogEnabled, getSlowRequestThresholdMs } from '../lib/perfLog.js';
 
+// Any HTTP request slower than this surfaces a separate `slow_route` line in
+// perf.log so future regressions are visible without re-running the full
+// investigation. Tunable via env (PERF_SLOW_ROUTE_MS), defaults to 5 s.
+const SLOW_ROUTE_MS = Number(process.env.PERF_SLOW_ROUTE_MS || 5000);
+
 const ISSUE_SAVE_ROUTES = [
   { method: 'POST', match: /^\/api\/issue_to_cutter_machine\/?$/, label: 'issue_to_cutter_machine.create' },
   { method: 'POST', match: /^\/api\/issue_to_holo_machine\/?$/, label: 'issue_to_holo_machine.create' },
@@ -50,18 +55,31 @@ export function perfLoggerMiddleware(req, res, next) {
 
   res.on('finish', () => {
     const durationMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+    const rounded = Math.round(durationMs * 1000) / 1000;
     const threshold = getSlowRequestThresholdMs();
     const isInteresting = !!label;
-    if (!isInteresting && threshold > 0 && durationMs < threshold) return;
+    const isSlow = Number.isFinite(SLOW_ROUTE_MS) && SLOW_ROUTE_MS > 0 && durationMs >= SLOW_ROUTE_MS;
 
-    perfLog('http', {
-      method: req.method,
-      url,
-      status: res.statusCode,
-      durationMs: Math.round(durationMs * 1000) / 1000,
-      label: label || undefined,
-      ...summary,
-    });
+    if (isInteresting || (threshold > 0 && durationMs >= threshold) || threshold === 0) {
+      perfLog('http', {
+        method: req.method,
+        url,
+        status: res.statusCode,
+        durationMs: rounded,
+        label: label || undefined,
+        ...summary,
+      });
+    }
+
+    if (isSlow) {
+      perfLog('slow_route', {
+        method: req.method,
+        url,
+        status: res.statusCode,
+        durationMs: rounded,
+        label: label || undefined,
+      });
+    }
   });
 
   next();

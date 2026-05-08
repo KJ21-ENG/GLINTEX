@@ -43,6 +43,20 @@ const formatHistoryTime = (value) => {
     return date.toLocaleTimeString();
 };
 
+const getHistoryDateKey = (value) => {
+    if (!value) return '';
+    const raw = String(value);
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+};
+
+const formatHistoryDate = (value) => {
+    const dateKey = getHistoryDateKey(value);
+    return dateKey ? formatDateDDMMYYYY(dateKey) : DISPLAY_EMPTY;
+};
+
 const formatUniqueValues = (values) => {
     const list = Array.from(values || [])
         .map(cleanText)
@@ -52,6 +66,7 @@ const formatUniqueValues = (values) => {
 };
 
 const buildBoilerHistoryGroupKey = (item) => [
+    getHistoryDateKey(item?.steamedAt) || DISPLAY_EMPTY,
     displayText(item?.itemName),
     displayText(item?.twistName),
     displayText(item?.cutName),
@@ -132,8 +147,6 @@ export function Boiler() {
         { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => r.cutName || '' },
         { id: 'rolls', label: 'Rolls', kind: 'number', getValue: (r) => r.rollCount || 0 },
         { id: 'weight', label: 'Net Weight', kind: 'number', getValue: (r) => r.netWeight || 0 },
-        { id: 'box', label: 'Box', kind: 'values', getValue: (r) => r.boxName || '' },
-        { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineName || '' },
         { id: 'boiler', label: 'Boiler', kind: 'values', getValue: (r) => r.boilerMachineName || '' },
         { id: 'boilerNo', label: 'Boiler No', kind: 'values', getValue: (r) => r.boilerNumber || '' },
         { id: 'steamedAt', label: 'Steamed At', kind: 'date', getValue: (r) => r.steamedAt || '' },
@@ -178,9 +191,7 @@ export function Boiler() {
                 item.itemName,
                 item.twistName,
                 item.cutName,
-                item.boxName,
                 item.rollTypeName,
-                item.machineName,
                 item.boilerMachineName,
                 item.boilerNumber,
                 getBoilerLabel(item),
@@ -196,6 +207,7 @@ export function Boiler() {
             const key = buildBoilerHistoryGroupKey(item);
             const existing = groups.get(key) || {
                 key,
+                date: formatHistoryDate(item.steamedAt),
                 itemName: displayText(item.itemName),
                 twistName: displayText(item.twistName),
                 cutName: displayText(item.cutName),
@@ -204,8 +216,6 @@ export function Boiler() {
                 totalNetWeight: 0,
                 latestSteamedAt: null,
                 lots: new Set(),
-                boxes: new Set(),
-                machines: new Set(),
                 boilers: new Set(),
                 rows: [],
             };
@@ -216,8 +226,6 @@ export function Boiler() {
             const itemTime = item.steamedAt ? new Date(item.steamedAt).getTime() : 0;
             if (itemTime > currentLatest) existing.latestSteamedAt = item.steamedAt;
             if (item.lotNo) existing.lots.add(item.lotNo);
-            if (item.boxName) existing.boxes.add(item.boxName);
-            if (item.machineName) existing.machines.add(item.machineName);
             const boilerLabel = getBoilerLabel(item);
             if (boilerLabel) existing.boilers.add(boilerLabel);
             existing.rows.push(item);
@@ -663,12 +671,11 @@ export function Boiler() {
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead className="w-[42px]"></TableHead>
+                                        {renderHistoryHeader('Date', 'steamedAt')}
                                         {renderHistoryHeader('Item', 'item')}
                                         {renderHistoryHeader('Twist', 'twist')}
                                         {renderHistoryHeader('Cut', 'cut')}
                                         {renderHistoryHeader('Lots', 'lotNo')}
-                                        {renderHistoryHeader('Boxes', 'box')}
-                                        {renderHistoryHeader('Machines', 'machine')}
                                         {renderHistoryHeader('Boilers', 'boiler')}
                                         {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
                                         {renderHistoryHeader('Net Weight', 'weight', 'text-right')}
@@ -678,13 +685,13 @@ export function Boiler() {
                                 <TableBody>
                                     {loadingHistory ? (
                                         <TableRow>
-                                            <TableCell colSpan={11} className="h-24 text-center">
+                                            <TableCell colSpan={10} className="h-24 text-center">
                                                 <Loader2 className="w-6 h-6 mx-auto animate-spin text-muted-foreground" />
                                             </TableCell>
                                         </TableRow>
                                     ) : groupedHistory.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                                                 <div className="flex flex-col items-center gap-2">
                                                     <History className="w-8 h-8 opacity-50" />
                                                     <span>No items steamed on this date</span>
@@ -695,8 +702,6 @@ export function Boiler() {
                                         groupedHistory.map(group => {
                                             const isExpanded = expandedHistoryGroups.has(group.key);
                                             const lots = formatUniqueValues(group.lots);
-                                            const boxes = formatUniqueValues(group.boxes);
-                                            const machines = formatUniqueValues(group.machines);
                                             const boilers = formatUniqueValues(group.boilers);
                                             return (
                                                 <React.Fragment key={group.key}>
@@ -711,6 +716,7 @@ export function Boiler() {
                                                                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
                                                             )}
                                                         </TableCell>
+                                                        <TableCell>{group.date}</TableCell>
                                                         <TableCell className="font-medium">
                                                             <div className="flex items-center gap-2">
                                                                 <span>{group.itemName}</span>
@@ -722,8 +728,6 @@ export function Boiler() {
                                                         <TableCell>{group.twistName}</TableCell>
                                                         <TableCell>{group.cutName}</TableCell>
                                                         <TableCell className="max-w-[180px] truncate" title={lots}>{lots}</TableCell>
-                                                        <TableCell className="max-w-[180px] truncate" title={boxes}>{boxes}</TableCell>
-                                                        <TableCell className="max-w-[180px] truncate" title={machines}>{machines}</TableCell>
                                                         <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
                                                         <TableCell className="text-right">{group.totalRolls}</TableCell>
                                                         <TableCell className="text-right">{formatKg(group.totalNetWeight)}</TableCell>
@@ -731,20 +735,19 @@ export function Boiler() {
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={11} className="p-4">
+                                                            <TableCell colSpan={10} className="p-4">
                                                                 <div className="rounded-md border bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>
                                                                             <TableRow className="bg-muted/50">
                                                                                 {renderHistoryHeader('Barcode', 'barcode')}
+                                                                                {renderHistoryHeader('Date', 'steamedAt')}
                                                                                 {renderHistoryHeader('Lot No', 'lotNo')}
                                                                                 {renderHistoryHeader('Item', 'item')}
                                                                                 {renderHistoryHeader('Twist', 'twist')}
                                                                                 {renderHistoryHeader('Cut', 'cut')}
                                                                                 {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
                                                                                 {renderHistoryHeader('Net Weight', 'weight', 'text-right')}
-                                                                                {renderHistoryHeader('Box', 'box')}
-                                                                                {renderHistoryHeader('Machine', 'machine')}
                                                                                 {renderHistoryHeader('Boiler', 'boiler')}
                                                                                 {renderHistoryHeader('Boiler No', 'boilerNo')}
                                                                                 {renderHistoryHeader('Steamed At', 'steamedAt')}
@@ -755,6 +758,7 @@ export function Boiler() {
                                                                             {group.rows.map(item => (
                                                                                 <TableRow key={item.id}>
                                                                                     <TableCell className="font-mono text-sm">{displayText(item.barcode)}</TableCell>
+                                                                                    <TableCell>{formatHistoryDate(item.steamedAt)}</TableCell>
                                                                                     <TableCell>{displayText(item.lotNo)}</TableCell>
                                                                                     <TableCell>{displayText(item.itemName)}</TableCell>
                                                                                     <TableCell>{displayText(item.twistName)}</TableCell>
@@ -763,8 +767,6 @@ export function Boiler() {
                                                                                     <TableCell className="text-right">
                                                                                         {item.netWeight != null ? formatKg(item.netWeight) : DISPLAY_EMPTY}
                                                                                     </TableCell>
-                                                                                    <TableCell>{displayText(item.boxName)}</TableCell>
-                                                                                    <TableCell>{displayText(item.machineName)}</TableCell>
                                                                                     <TableCell>{displayText(item.boilerMachineName)}</TableCell>
                                                                                     <TableCell>{displayText(item.boilerNumber)}</TableCell>
                                                                                     <TableCell>{formatHistoryTime(item.steamedAt)}</TableCell>
@@ -786,14 +788,13 @@ export function Boiler() {
                                     {!loadingHistory && groupedHistory.length > 0 && (
                                         <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                                             <TableCell></TableCell>
+                                            <TableCell></TableCell>
                                             <TableCell className="font-bold text-primary">
                                                 Grand Total
                                                 <Badge variant="outline" className="ml-2 text-[11px]">
                                                     {historyTotals.records} record{historyTotals.records === 1 ? '' : 's'}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell></TableCell>
-                                            <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>

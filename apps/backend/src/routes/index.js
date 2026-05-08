@@ -18582,6 +18582,36 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
 
 // ========== BOILER (STEAMING) FEATURE ==========
 
+async function buildBoilerLookupResponse(holoRow, steamLog) {
+  const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
+  const issue = holoRow.issue || null;
+  const item = issue?.itemId
+    ? await prisma.item.findUnique({ where: { id: issue.itemId }, select: { name: true } })
+    : null;
+  const issueDetails = issue ? await resolveHoloIssueDetails(issue, createTraceCaches()) : null;
+
+  return {
+    found: true,
+    itemId: holoRow.id,
+    barcode: holoRow.barcode,
+    lotNo: issue?.lotNo || null,
+    itemName: item?.name || null,
+    twistName: issueDetails?.twistName || null,
+    cutName: issueDetails?.cutName || null,
+    rollCount: holoRow.rollCount,
+    netWeight: roundTo3Decimals(totalNetWeight),
+    boxName: holoRow.box?.name || null,
+    rollTypeName: holoRow.rollType?.name || null,
+    machineName: issue?.machine?.name || holoRow.machineNo || null,
+    date: holoRow.date || null,
+    isSteamed: Boolean(steamLog),
+    steamedAt: steamLog?.steamedAt || null,
+    boilerMachineId: steamLog?.boilerMachineId || null,
+    boilerMachineName: steamLog?.boilerMachine?.name || null,
+    boilerNumber: steamLog?.boilerNumber || null,
+  };
+}
+
 // Lookup barcode for boiler steaming
 router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (req, res) => {
   try {
@@ -18604,30 +18634,27 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
       const holoRow = await prisma.receiveFromHoloMachineRow.findUnique({
         where: { id: legacyResolved.row.id },
         include: {
-          issue: { include: { machine: true } },
+          issue: {
+            select: {
+              id: true,
+              lotNo: true,
+              itemId: true,
+              yarnId: true,
+              twistId: true,
+              cutId: true,
+              receivedRowRefs: true,
+              machine: { select: { name: true } },
+              cut: { select: { name: true } },
+              yarn: { select: { name: true } },
+              twist: { select: { name: true } },
+            },
+          },
           box: true,
           rollType: true,
         },
       });
       if (holoRow && !holoRow.isDeleted) {
-        const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
-        return res.json({
-          found: true,
-          itemId: holoRow.id,
-          barcode: holoRow.barcode,
-          lotNo: holoRow.issue?.lotNo || null,
-          rollCount: holoRow.rollCount,
-          netWeight: roundTo3Decimals(totalNetWeight),
-          boxName: holoRow.box?.name || null,
-          rollTypeName: holoRow.rollType?.name || null,
-          machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
-          date: holoRow.date || null,
-          isSteamed: Boolean(existingSteamLog),
-          steamedAt: existingSteamLog?.steamedAt || null,
-          boilerMachineId: existingSteamLog?.boilerMachineId || null,
-          boilerMachineName: existingSteamLog?.boilerMachine?.name || null,
-          boilerNumber: existingSteamLog?.boilerNumber || null,
-        });
+        return res.json(await buildBoilerLookupResponse(holoRow, existingSteamLog));
       }
     }
 
@@ -18641,14 +18668,27 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
         isDeleted: false,
       },
       include: {
-        issue: { include: { machine: true } },
+        issue: {
+          select: {
+            id: true,
+            lotNo: true,
+            itemId: true,
+            yarnId: true,
+            twistId: true,
+            cutId: true,
+            receivedRowRefs: true,
+            machine: { select: { name: true } },
+            cut: { select: { name: true } },
+            yarn: { select: { name: true } },
+            twist: { select: { name: true } },
+          },
+        },
         box: true,
         rollType: true,
       },
     });
 
     if (holoRow) {
-      const totalNetWeight = holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0));
       // Check if already steamed by actual barcode
       const steamedByActualBarcode = holoRow.barcode
         ? await prisma.boilerSteamLog.findUnique({
@@ -18657,24 +18697,7 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
         })
         : null;
       const steamLog = existingSteamLog || steamedByActualBarcode;
-      const isSteamed = Boolean(steamLog);
-      return res.json({
-        found: true,
-        itemId: holoRow.id,
-        barcode: holoRow.barcode,
-        lotNo: holoRow.issue?.lotNo || null,
-        rollCount: holoRow.rollCount,
-        netWeight: roundTo3Decimals(totalNetWeight),
-        boxName: holoRow.box?.name || null,
-        rollTypeName: holoRow.rollType?.name || null,
-        machineName: holoRow.issue?.machine?.name || holoRow.machineNo || null,
-        date: holoRow.date || null,
-        isSteamed,
-        steamedAt: steamLog?.steamedAt || null,
-        boilerMachineId: steamLog?.boilerMachineId || null,
-        boilerMachineName: steamLog?.boilerMachine?.name || null,
-        boilerNumber: steamLog?.boilerNumber || null,
-      });
+      return res.json(await buildBoilerLookupResponse(holoRow, steamLog));
     }
 
     return res.json({ found: false });

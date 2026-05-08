@@ -18,6 +18,12 @@ import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { BoilerMachineDialog } from '../components/boiler/BoilerMachineDialog';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
+import {
+    buildBoilerScanGroups,
+    formatScanGroupValues,
+    getScanGroupStatusParts,
+    getScanGroupTone,
+} from '../components/boiler/scanGrouping';
 
 const DISPLAY_EMPTY = '—';
 
@@ -78,6 +84,43 @@ const buildBoilerHistoryGroupKey = (item) => [
     displayText(item?.cutName),
 ].join('::');
 
+const getScanStatusIcon = (status, className = "w-4 h-4") => {
+    if (status === 'loading') return <Loader2 className={cn(className, "text-blue-500 animate-spin")} />;
+    if (status === 'found') return <CheckCircle2 className={cn(className, "text-green-500")} />;
+    if (status === 'already_steamed') return <Ban className={cn(className, "text-orange-500")} />;
+    if (status === 'not_found' || status === 'error') return <AlertCircle className={cn(className, "text-red-500")} />;
+    return null;
+};
+
+const scanStatusBadgeClass = (status) => {
+    if (status === 'found') return 'border-green-600 text-green-600';
+    if (status === 'loading') return 'border-blue-500 text-blue-500';
+    if (status === 'already_steamed') return 'border-orange-500 text-orange-500';
+    if (status === 'not_found') return 'border-yellow-600 text-yellow-600';
+    if (status === 'error') return 'border-red-600 text-red-600';
+    return '';
+};
+
+const scanGroupRowClass = (group) => {
+    const tone = getScanGroupTone(group);
+    if (tone === 'found') return 'bg-green-500/5';
+    if (tone === 'loading') return 'bg-blue-500/5';
+    if (tone === 'already_steamed') return 'bg-orange-500/5';
+    if (tone === 'not_found') return 'bg-yellow-500/5';
+    if (tone === 'error') return 'bg-red-500/5';
+    return '';
+};
+
+const renderScanGroupStatus = (group) => (
+    <div className="flex flex-wrap items-center gap-1">
+        {getScanGroupStatusParts(group).map(part => (
+            <Badge key={part.key} variant="outline" className={cn("text-[11px]", scanStatusBadgeClass(part.key))}>
+                {part.label}: {part.count}
+            </Badge>
+        ))}
+    </div>
+);
+
 /**
  * Boiler (Steaming) Module
  * Track which crates from Holo have been steamed
@@ -113,6 +156,7 @@ export function Boiler() {
     const [historySheetFilters, setHistorySheetFilters] = useState({});
     const [openHistoryFilterId, setOpenHistoryFilterId] = useState(null);
     const [expandedHistoryGroups, setExpandedHistoryGroups] = useState(() => new Set());
+    const [expandedScanGroups, setExpandedScanGroups] = useState(() => new Set());
 
     // Auto-enable mobile mode on mobile devices
     useEffect(() => {
@@ -254,6 +298,15 @@ export function Boiler() {
 
     const toggleHistoryGroup = useCallback((key) => {
         setExpandedHistoryGroups((prev) => {
+            if (prev.has(key)) return new Set();
+            return new Set([key]);
+        });
+    }, []);
+
+    const scannedItemGroups = useMemo(() => buildBoilerScanGroups(scannedItems), [scannedItems]);
+
+    const toggleScanGroup = useCallback((key) => {
+        setExpandedScanGroups((prev) => {
             if (prev.has(key)) return new Set();
             return new Set([key]);
         });
@@ -581,19 +634,21 @@ export function Boiler() {
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
-                                            <TableHead className="w-[50px]">Status</TableHead>
-                                            <TableHead>Barcode</TableHead>
-                                            <TableHead>Lot No</TableHead>
+                                            <TableHead className="w-[42px]"></TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead>Item</TableHead>
+                                            <TableHead>Twist</TableHead>
+                                            <TableHead>Cut</TableHead>
+                                            <TableHead className="text-right">Records</TableHead>
+                                            <TableHead>Lots</TableHead>
                                             <TableHead className="text-right">Rolls</TableHead>
                                             <TableHead className="text-right">Net Weight</TableHead>
-                                            <TableHead>Box</TableHead>
-                                            <TableHead className="w-[80px]"></TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {scannedItems.length === 0 ? (
                                             <TableRow>
-                                                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                                <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                                     <div className="flex flex-col items-center gap-2">
                                                         <Flame className="w-8 h-8 opacity-50" />
                                                         <span>Scan barcodes to add items for steaming</span>
@@ -601,38 +656,86 @@ export function Boiler() {
                                                 </TableCell>
                                             </TableRow>
                                         ) : (
-                                            scannedItems.map(item => (
-                                                <TableRow key={item.scannedBarcode} className={cn(
-                                                    item.status === 'found' && 'bg-green-500/5',
-                                                    item.status === 'already_steamed' && 'bg-orange-500/5',
-                                                    item.status === 'not_found' && 'bg-red-500/5'
-                                                )}>
-                                                    <TableCell>
-                                                        {item.status === 'loading' && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
-                                                        {item.status === 'found' && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                                                        {item.status === 'already_steamed' && <Ban className="w-4 h-4 text-orange-500" />}
-                                                        {(item.status === 'not_found' || item.status === 'error') && <AlertCircle className="w-4 h-4 text-red-500" />}
-                                                    </TableCell>
-                                                    <TableCell className="font-mono text-sm">{item.scannedBarcode}</TableCell>
-                                                    <TableCell>{item.lotNo || '—'}</TableCell>
-                                                    <TableCell className="text-right">{item.rollCount || '—'}</TableCell>
-                                                    <TableCell className="text-right">
-                                                        {item.netWeight != null ? formatKg(item.netWeight) : '—'}
-                                                    </TableCell>
-                                                    <TableCell>{item.boxName || '—'}</TableCell>
-                                                    <TableCell>
-                                                        <Button
-                                                            size="sm"
-                                                            variant="ghost"
-                                                            className="text-destructive hover:text-destructive"
-                                                            onClick={() => { if (!readOnly) removeItem(item.scannedBarcode); }}
-                                                            disabled={readOnly}
+                                            scannedItemGroups.map(group => {
+                                                const isExpanded = expandedScanGroups.has(group.key);
+                                                const lots = formatScanGroupValues(group.lots);
+                                                return (
+                                                    <React.Fragment key={group.key}>
+                                                        <TableRow
+                                                            className={cn("cursor-pointer hover:bg-muted/50", scanGroupRowClass(group))}
+                                                            onClick={() => toggleScanGroup(group.key)}
                                                         >
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </Button>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
+                                                            <TableCell>
+                                                                {isExpanded ? (
+                                                                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                                                ) : (
+                                                                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                                                                )}
+                                                            </TableCell>
+                                                            <TableCell>{renderScanGroupStatus(group)}</TableCell>
+                                                            <TableCell className="font-medium">{group.itemName}</TableCell>
+                                                            <TableCell>{group.twistName}</TableCell>
+                                                            <TableCell>{group.cutName}</TableCell>
+                                                            <TableCell className="text-right">{group.recordCount}</TableCell>
+                                                            <TableCell className="max-w-[180px] truncate" title={lots}>{lots}</TableCell>
+                                                            <TableCell className="text-right">{group.totalRolls}</TableCell>
+                                                            <TableCell className="text-right">{formatKg(group.totalNetWeight)}</TableCell>
+                                                        </TableRow>
+                                                        {isExpanded && (
+                                                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                                <TableCell colSpan={9} className="p-4">
+                                                                    <div className="rounded-md border bg-background overflow-x-auto">
+                                                                        <Table>
+                                                                            <TableHeader>
+                                                                                <TableRow className="bg-muted/50">
+                                                                                    <TableHead className="w-[50px]">Status</TableHead>
+                                                                                    <TableHead>Barcode</TableHead>
+                                                                                    <TableHead>Lot No</TableHead>
+                                                                                    <TableHead className="text-right">Rolls</TableHead>
+                                                                                    <TableHead className="text-right">Net Weight</TableHead>
+                                                                                    <TableHead>Box</TableHead>
+                                                                                    <TableHead className="w-[80px]"></TableHead>
+                                                                                </TableRow>
+                                                                            </TableHeader>
+                                                                            <TableBody>
+                                                                                {group.rows.map(item => (
+                                                                                    <TableRow key={item.scannedBarcode} className={cn(
+                                                                                        item.status === 'found' && 'bg-green-500/5',
+                                                                                        item.status === 'already_steamed' && 'bg-orange-500/5',
+                                                                                        item.status === 'not_found' && 'bg-red-500/5',
+                                                                                        item.status === 'error' && 'bg-red-500/5',
+                                                                                        item.status === 'loading' && 'bg-blue-500/5'
+                                                                                    )}>
+                                                                                        <TableCell>{getScanStatusIcon(item.status)}</TableCell>
+                                                                                        <TableCell className="font-mono text-sm">{item.scannedBarcode}</TableCell>
+                                                                                        <TableCell>{item.lotNo || DISPLAY_EMPTY}</TableCell>
+                                                                                        <TableCell className="text-right">{item.rollCount || DISPLAY_EMPTY}</TableCell>
+                                                                                        <TableCell className="text-right">
+                                                                                            {item.netWeight != null ? formatKg(item.netWeight) : DISPLAY_EMPTY}
+                                                                                        </TableCell>
+                                                                                        <TableCell>{item.boxName || DISPLAY_EMPTY}</TableCell>
+                                                                                        <TableCell>
+                                                                                            <Button
+                                                                                                size="sm"
+                                                                                                variant="ghost"
+                                                                                                className="text-destructive hover:text-destructive"
+                                                                                                onClick={() => { if (!readOnly) removeItem(item.scannedBarcode); }}
+                                                                                                disabled={readOnly}
+                                                                                            >
+                                                                                                <Trash2 className="w-4 h-4" />
+                                                                                            </Button>
+                                                                                        </TableCell>
+                                                                                    </TableRow>
+                                                                                ))}
+                                                                            </TableBody>
+                                                                        </Table>
+                                                                    </div>
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        )}
+                                                    </React.Fragment>
+                                                );
+                                            })
                                         )}
                                     </TableBody>
                                 </Table>

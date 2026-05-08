@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { BarcodeScanner } from '../scanner/BarcodeScanner';
 import {
     Button, Input, Card, CardContent, Badge
@@ -6,11 +6,46 @@ import {
 import { formatKg } from '../../utils';
 import {
     Trash2, Package, Keyboard, ScanLine, Flame,
-    Loader2, AlertCircle, CheckCircle2, Ban
+    Loader2, AlertCircle, CheckCircle2, Ban, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
 import { BoilerMachineDialog } from './BoilerMachineDialog';
+import {
+    buildBoilerScanGroups,
+    formatScanGroupValues,
+    getScanGroupStatusParts,
+    getScanGroupTone,
+} from './scanGrouping';
+
+const scanStatusBadgeClass = (status) => {
+    if (status === 'found') return 'border-green-600 text-green-600';
+    if (status === 'loading') return 'border-blue-500 text-blue-500';
+    if (status === 'already_steamed') return 'border-orange-500 text-orange-500';
+    if (status === 'not_found') return 'border-yellow-600 text-yellow-600';
+    if (status === 'error') return 'border-red-600 text-red-600';
+    return '';
+};
+
+const scanGroupCardClass = (group) => {
+    const tone = getScanGroupTone(group);
+    if (tone === 'found') return 'border-green-500/50 bg-green-500/5';
+    if (tone === 'loading') return 'border-blue-500/50 bg-blue-500/5';
+    if (tone === 'already_steamed') return 'border-orange-500/50 bg-orange-500/5';
+    if (tone === 'not_found') return 'border-yellow-500/50 bg-yellow-500/5';
+    if (tone === 'error') return 'border-red-500/50 bg-red-500/5';
+    return 'bg-card';
+};
+
+const renderGroupStatus = (group) => (
+    <div className="flex flex-wrap items-center gap-1">
+        {getScanGroupStatusParts(group).map(part => (
+            <Badge key={part.key} variant="outline" className={cn("text-[10px]", scanStatusBadgeClass(part.key))}>
+                {part.label}: {part.count}
+            </Badge>
+        ))}
+    </div>
+);
 
 /**
  * Mobile-optimized boiler view with barcode scanning
@@ -23,6 +58,7 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     const [lookingUp, setLookingUp] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
+    const [expandedScanGroups, setExpandedScanGroups] = useState(() => new Set());
 
     // Look up a barcode and add to scanned items
     const handleBarcodeScan = useCallback(async (barcode) => {
@@ -88,6 +124,14 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
 
     // Get items ready to steam (found and not already steamed)
     const steamableItems = scannedItems.filter(item => item.status === 'found');
+    const scannedItemGroups = useMemo(() => buildBoilerScanGroups(scannedItems), [scannedItems]);
+
+    const toggleScanGroup = useCallback((key) => {
+        setExpandedScanGroups((prev) => {
+            if (prev.has(key)) return new Set();
+            return new Set([key]);
+        });
+    }, []);
 
     // Open boiler machine dialog before steaming
     const handleMarkSteamed = () => {
@@ -126,6 +170,73 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
             setSubmitting(false);
         }
     };
+
+    const renderScannedItem = (item) => (
+        <div
+            key={item.scannedBarcode}
+            className={cn(
+                "flex items-center gap-3 p-3 rounded-lg border bg-card",
+                item.status === 'found' && "border-green-500/50 bg-green-500/5",
+                item.status === 'already_steamed' && "border-orange-500/50 bg-orange-500/5",
+                item.status === 'not_found' && "border-yellow-500/50 bg-yellow-500/5",
+                item.status === 'error' && "border-red-500/50 bg-red-500/5",
+                item.status === 'loading' && "border-blue-500/50 bg-blue-500/5"
+            )}
+        >
+            <div className="shrink-0">
+                {item.status === 'loading' && (
+                    <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                )}
+                {item.status === 'found' && (
+                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                )}
+                {item.status === 'already_steamed' && (
+                    <Ban className="w-5 h-5 text-orange-500" />
+                )}
+                {(item.status === 'not_found' || item.status === 'error') && (
+                    <AlertCircle className="w-5 h-5 text-yellow-500" />
+                )}
+            </div>
+
+            <div className="flex-1 min-w-0">
+                <p className="font-mono text-sm font-medium truncate">
+                    {item.scannedBarcode}
+                </p>
+                {(item.status === 'found' || item.status === 'already_steamed') && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                        {item.lotNo && <span>Lot: {item.lotNo}</span>}
+                        {item.rollCount && <span>Rolls: {item.rollCount}</span>}
+                        {item.boxName && <span>Box: {item.boxName}</span>}
+                        {item.netWeight != null && (
+                            <Badge variant="outline" className={cn(
+                                item.status === 'found' ? "text-green-600 border-green-600" : "text-orange-600 border-orange-600"
+                            )}>
+                                {formatKg(item.netWeight)}
+                            </Badge>
+                        )}
+                    </div>
+                )}
+                {item.status === 'already_steamed' && (
+                    <p className="text-xs text-orange-600 mt-1">Already steamed</p>
+                )}
+                {item.status === 'not_found' && (
+                    <p className="text-xs text-yellow-600">Not found in Holo receive</p>
+                )}
+                {item.status === 'error' && (
+                    <p className="text-xs text-red-600">{item.error}</p>
+                )}
+            </div>
+
+            <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive hover:text-destructive shrink-0"
+                onClick={() => removeItem(item.scannedBarcode)}
+            >
+                <Trash2 className="w-4 h-4" />
+            </Button>
+        </div>
+    );
 
     return (
         <div className="flex flex-col h-[calc(100vh-120px)] bg-background">
@@ -219,74 +330,58 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
                             <p className="text-sm">Scan barcodes to add items</p>
                         </div>
                     ) : (
-                        scannedItems.map((item) => (
-                            <div
-                                key={item.scannedBarcode}
-                                className={cn(
-                                    "flex items-center gap-3 p-3 rounded-lg border bg-card",
-                                    item.status === 'found' && "border-green-500/50 bg-green-500/5",
-                                    item.status === 'already_steamed' && "border-orange-500/50 bg-orange-500/5",
-                                    item.status === 'not_found' && "border-yellow-500/50 bg-yellow-500/5",
-                                    item.status === 'error' && "border-red-500/50 bg-red-500/5",
-                                    item.status === 'loading' && "border-blue-500/50 bg-blue-500/5"
-                                )}
-                            >
-                                {/* Status icon */}
-                                <div className="shrink-0">
-                                    {item.status === 'loading' && (
-                                        <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
-                                    )}
-                                    {item.status === 'found' && (
-                                        <CheckCircle2 className="w-5 h-5 text-green-500" />
-                                    )}
-                                    {item.status === 'already_steamed' && (
-                                        <Ban className="w-5 h-5 text-orange-500" />
-                                    )}
-                                    {(item.status === 'not_found' || item.status === 'error') && (
-                                        <AlertCircle className="w-5 h-5 text-yellow-500" />
-                                    )}
-                                </div>
-
-                                {/* Item info */}
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-mono text-sm font-medium truncate">
-                                        {item.scannedBarcode}
-                                    </p>
-                                    {(item.status === 'found' || item.status === 'already_steamed') && (
-                                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
-                                            {item.lotNo && <span>Lot: {item.lotNo}</span>}
-                                            {item.rollCount && <span>Rolls: {item.rollCount}</span>}
-                                            {item.netWeight != null && (
-                                                <Badge variant="outline" className={cn(
-                                                    item.status === 'found' ? "text-green-600 border-green-600" : "text-orange-600 border-orange-600"
-                                                )}>
-                                                    {formatKg(item.netWeight)}
-                                                </Badge>
+                        scannedItemGroups.map((group) => {
+                            const isExpanded = expandedScanGroups.has(group.key);
+                            const lots = formatScanGroupValues(group.lots);
+                            return (
+                                <div key={group.key} className={cn("rounded-lg border overflow-hidden", scanGroupCardClass(group))}>
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        className="flex items-start gap-3 p-3 cursor-pointer"
+                                        onClick={() => toggleScanGroup(group.key)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                toggleScanGroup(group.key);
+                                            }
+                                        }}
+                                    >
+                                        <div className="shrink-0 pt-0.5">
+                                            {isExpanded ? (
+                                                <ChevronDown className="w-5 h-5 text-muted-foreground" />
+                                            ) : (
+                                                <ChevronRight className="w-5 h-5 text-muted-foreground" />
                                             )}
                                         </div>
-                                    )}
-                                    {item.status === 'already_steamed' && (
-                                        <p className="text-xs text-orange-600 mt-1">Already steamed</p>
-                                    )}
-                                    {item.status === 'not_found' && (
-                                        <p className="text-xs text-yellow-600">Not found in Holo receive</p>
-                                    )}
-                                    {item.status === 'error' && (
-                                        <p className="text-xs text-red-600">{item.error}</p>
+                                        <div className="flex-1 min-w-0 space-y-2">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-semibold truncate">{group.itemName}</p>
+                                                    <p className="text-xs text-muted-foreground truncate">
+                                                        Twist: {group.twistName} • Cut: {group.cutName}
+                                                    </p>
+                                                </div>
+                                                <Badge variant="outline" className="shrink-0 text-[10px]">
+                                                    {group.recordCount} record{group.recordCount === 1 ? '' : 's'}
+                                                </Badge>
+                                            </div>
+                                            {renderGroupStatus(group)}
+                                            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                                <span>Lots: {lots}</span>
+                                                <span>Rolls: {group.totalRolls}</span>
+                                                <span>Net: {formatKg(group.totalNetWeight)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {isExpanded && (
+                                        <div className="border-t bg-background/70 p-2 space-y-2">
+                                            {group.rows.map(renderScannedItem)}
+                                        </div>
                                     )}
                                 </div>
-
-                                {/* Remove button */}
-                                <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-destructive hover:text-destructive shrink-0"
-                                    onClick={() => removeItem(item.scannedBarcode)}
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </Button>
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                 </div>
             </div>

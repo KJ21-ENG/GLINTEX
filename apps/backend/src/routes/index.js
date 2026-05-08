@@ -18818,37 +18818,73 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
       ? await prisma.receiveFromHoloMachineRow.findMany({
         where: { id: { in: holoRowIds } },
         include: {
-          issue: { select: { lotNo: true, machine: { select: { name: true } } } },
+          issue: {
+            select: {
+              id: true,
+              lotNo: true,
+              itemId: true,
+              yarnId: true,
+              twistId: true,
+              cutId: true,
+              receivedRowRefs: true,
+              machine: { select: { name: true } },
+              cut: { select: { name: true } },
+              yarn: { select: { name: true } },
+              twist: { select: { name: true } },
+            },
+          },
           box: { select: { name: true } },
           rollType: { select: { name: true } },
         },
       })
       : [];
     const holoRowMap = new Map(holoRows.map(r => [r.id, r]));
+    const itemIds = Array.from(new Set(holoRows.map(r => r.issue?.itemId).filter(Boolean)));
+    const itemsById = itemIds.length > 0
+      ? new Map((await prisma.item.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, name: true },
+      })).map(item => [item.id, item]))
+      : new Map();
+    const traceCaches = createTraceCaches();
+    const issueDetailsById = new Map();
 
-    const items = steamLogs.map(log => {
+    const items = await Promise.all(steamLogs.map(async (log) => {
       const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
       const totalNetWeight = holoRow
         ? (holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0)))
         : null;
+      const issue = holoRow?.issue || null;
+      let issueDetails = null;
+      if (issue?.id) {
+        issueDetails = issueDetailsById.get(issue.id);
+        if (!issueDetails) {
+          issueDetails = await resolveHoloIssueDetails(issue, traceCaches);
+          issueDetailsById.set(issue.id, issueDetails);
+        }
+      }
       return {
         id: log.id,
         barcode: log.barcode,
         steamedAt: log.steamedAt,
         holoReceiveRowId: log.holoReceiveRowId,
-        lotNo: holoRow?.issue?.lotNo || null,
+        itemId: issue?.itemId || null,
+        itemName: issue?.itemId ? (itemsById.get(issue.itemId)?.name || null) : null,
+        twistName: issueDetails?.twistName || null,
+        cutName: issueDetails?.cutName || null,
+        lotNo: issue?.lotNo || null,
         rollCount: holoRow?.rollCount || null,
         netWeight: totalNetWeight != null ? roundTo3Decimals(totalNetWeight) : null,
         boxName: holoRow?.box?.name || null,
         rollTypeName: holoRow?.rollType?.name || null,
-        machineName: holoRow?.issue?.machine?.name || holoRow?.machineNo || null,
+        machineName: issue?.machine?.name || holoRow?.machineNo || null,
         boilerMachineId: log.boilerMachineId || null,
         boilerMachineName: log.boilerMachine?.name || null,
         boilerNumber: log.boilerNumber || null,
         createdByUserId: log.createdByUserId || null,
         createdAt: log.createdAt || null,
       };
-    });
+    }));
 
     // Resolve user fields for display
     const itemsWithUsers = await resolveUserFields(items);

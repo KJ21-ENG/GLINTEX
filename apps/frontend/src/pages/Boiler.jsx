@@ -8,7 +8,7 @@ import {
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
 import {
     Flame, Trash2, Loader2, AlertCircle, CheckCircle2, Ban,
-    Search, History, Package, ScanLine, RefreshCw, X
+    Search, History, Package, ScanLine, RefreshCw, X, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
@@ -17,6 +17,45 @@ import { usePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { BoilerMachineDialog } from '../components/boiler/BoilerMachineDialog';
+import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
+
+const DISPLAY_EMPTY = '—';
+
+const cleanText = (value) => String(value ?? '').trim();
+
+const displayText = (value) => cleanText(value) || DISPLAY_EMPTY;
+
+const getUserDisplayName = (user) => cleanText(user?.displayName) || cleanText(user?.username);
+
+const getBoilerLabel = (item) => {
+    const machine = cleanText(item?.boilerMachineName);
+    const boilerNo = cleanText(item?.boilerNumber);
+    if (machine && boilerNo) return `${machine} • No. ${boilerNo}`;
+    if (machine) return machine;
+    if (boilerNo) return `No. ${boilerNo}`;
+    return '';
+};
+
+const formatHistoryTime = (value) => {
+    if (!value) return DISPLAY_EMPTY;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return DISPLAY_EMPTY;
+    return date.toLocaleTimeString();
+};
+
+const formatUniqueValues = (values) => {
+    const list = Array.from(values || [])
+        .map(cleanText)
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    return list.length ? list.join(', ') : DISPLAY_EMPTY;
+};
+
+const buildBoilerHistoryGroupKey = (item) => [
+    displayText(item?.itemName),
+    displayText(item?.twistName),
+    displayText(item?.cutName),
+].join('::');
 
 /**
  * Boiler (Steaming) Module
@@ -49,6 +88,9 @@ export function Boiler() {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [historyDate, setHistoryDate] = useState(todayISO());
     const [historySearch, setHistorySearch] = useState('');
+    const [historySheetFilters, setHistorySheetFilters] = useState({});
+    const [openHistoryFilterId, setOpenHistoryFilterId] = useState(null);
+    const [expandedHistoryGroups, setExpandedHistoryGroups] = useState(() => new Set());
 
     // Auto-enable mobile mode on mobile devices
     useEffect(() => {
@@ -56,13 +98,6 @@ export function Boiler() {
             setUseMobileMode(true);
         }
     }, [isMobile, isTouchDevice]);
-
-    // Load history when tab changes or date changes
-    useEffect(() => {
-        if (activeTab === 'history') {
-            loadHistory();
-        }
-    }, [activeTab, historyDate]);
 
     const loadHistory = useCallback(async () => {
         setLoadingHistory(true);
@@ -77,22 +112,137 @@ export function Boiler() {
         }
     }, [historyDate]);
 
-    // Filter history based on search
+    // Load history when tab changes or date changes
+    useEffect(() => {
+        if (activeTab === 'history') {
+            loadHistory();
+        }
+    }, [activeTab, loadHistory]);
+
+    useEffect(() => {
+        setExpandedHistoryGroups(new Set());
+        setOpenHistoryFilterId(null);
+    }, [historyDate]);
+
+    const historyFilterColumns = useMemo(() => [
+        { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
+        { id: 'lotNo', label: 'Lot No', kind: 'values', getValue: (r) => r.lotNo || '' },
+        { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || '' },
+        { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => r.twistName || '' },
+        { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => r.cutName || '' },
+        { id: 'rolls', label: 'Rolls', kind: 'number', getValue: (r) => r.rollCount || 0 },
+        { id: 'weight', label: 'Net Weight', kind: 'number', getValue: (r) => r.netWeight || 0 },
+        { id: 'box', label: 'Box', kind: 'values', getValue: (r) => r.boxName || '' },
+        { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineName || '' },
+        { id: 'boiler', label: 'Boiler', kind: 'values', getValue: (r) => r.boilerMachineName || '' },
+        { id: 'boilerNo', label: 'Boiler No', kind: 'values', getValue: (r) => r.boilerNumber || '' },
+        { id: 'steamedAt', label: 'Steamed At', kind: 'date', getValue: (r) => r.steamedAt || '' },
+        { id: 'addedBy', label: 'Added By', kind: 'values', getValue: (r) => getUserDisplayName(r.createdByUser) },
+    ], []);
+
+    const historyColumnFor = useCallback(
+        (id) => historyFilterColumns.find(column => column.id === id),
+        [historyFilterColumns]
+    );
+
+    const renderHistoryHeader = useCallback((label, columnId, className = '') => {
+        const column = historyColumnFor(columnId);
+        return (
+            <TableHead className={className}>
+                <div className={cn("flex items-center gap-1", className.includes('text-right') ? 'justify-end' : 'justify-between')}>
+                    <span>{label}</span>
+                    {column && (
+                        <SheetColumnFilter
+                            column={column}
+                            rows={steamedHistory}
+                            filters={historySheetFilters}
+                            setFilters={setHistorySheetFilters}
+                            openId={openHistoryFilterId}
+                            setOpenId={setOpenHistoryFilterId}
+                        />
+                    )}
+                </div>
+            </TableHead>
+        );
+    }, [historyColumnFor, historySheetFilters, openHistoryFilterId, steamedHistory]);
+
+    // Filter individual rows first, then group the filtered rows.
     const filteredHistory = useMemo(() => {
-        if (!historySearch.trim()) return steamedHistory;
+        const rows = applySheetFilters(steamedHistory, historyFilterColumns, historySheetFilters);
         const terms = historySearch.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
-        return steamedHistory.filter(item => {
+        if (!terms.length) return rows;
+        return rows.filter(item => {
             const searchable = [
                 item.barcode,
                 item.lotNo,
+                item.itemName,
+                item.twistName,
+                item.cutName,
                 item.boxName,
                 item.rollTypeName,
+                item.machineName,
                 item.boilerMachineName,
                 item.boilerNumber,
+                getBoilerLabel(item),
+                getUserDisplayName(item.createdByUser),
             ].filter(Boolean).join(' ').toLowerCase();
             return terms.every(term => searchable.includes(term));
         });
-    }, [steamedHistory, historySearch]);
+    }, [steamedHistory, historyFilterColumns, historySheetFilters, historySearch]);
+
+    const groupedHistory = useMemo(() => {
+        const groups = new Map();
+        filteredHistory.forEach((item) => {
+            const key = buildBoilerHistoryGroupKey(item);
+            const existing = groups.get(key) || {
+                key,
+                itemName: displayText(item.itemName),
+                twistName: displayText(item.twistName),
+                cutName: displayText(item.cutName),
+                recordCount: 0,
+                totalRolls: 0,
+                totalNetWeight: 0,
+                latestSteamedAt: null,
+                lots: new Set(),
+                boxes: new Set(),
+                machines: new Set(),
+                boilers: new Set(),
+                rows: [],
+            };
+            existing.recordCount += 1;
+            existing.totalRolls += Number(item.rollCount || 0);
+            existing.totalNetWeight += Number(item.netWeight || 0);
+            const currentLatest = existing.latestSteamedAt ? new Date(existing.latestSteamedAt).getTime() : 0;
+            const itemTime = item.steamedAt ? new Date(item.steamedAt).getTime() : 0;
+            if (itemTime > currentLatest) existing.latestSteamedAt = item.steamedAt;
+            if (item.lotNo) existing.lots.add(item.lotNo);
+            if (item.boxName) existing.boxes.add(item.boxName);
+            if (item.machineName) existing.machines.add(item.machineName);
+            const boilerLabel = getBoilerLabel(item);
+            if (boilerLabel) existing.boilers.add(boilerLabel);
+            existing.rows.push(item);
+            groups.set(key, existing);
+        });
+
+        return Array.from(groups.values()).sort((a, b) => {
+            const aTime = a.latestSteamedAt ? new Date(a.latestSteamedAt).getTime() : 0;
+            const bTime = b.latestSteamedAt ? new Date(b.latestSteamedAt).getTime() : 0;
+            return bTime - aTime;
+        });
+    }, [filteredHistory]);
+
+    const historyTotals = useMemo(() => filteredHistory.reduce((acc, item) => ({
+        records: acc.records + 1,
+        rolls: acc.rolls + Number(item.rollCount || 0),
+        netWeight: acc.netWeight + Number(item.netWeight || 0),
+    }), { records: 0, rolls: 0, netWeight: 0 }), [filteredHistory]);
+
+    const toggleHistoryGroup = useCallback((key) => {
+        setExpandedHistoryGroups((prev) => {
+            if (prev.has(key)) return new Set();
+            return new Set([key]);
+        });
+    }, []);
 
     // Add barcode to list
     const handleAddBarcode = async () => {
@@ -487,7 +637,7 @@ export function Boiler() {
                                 <div className="relative w-full sm:w-64">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                     <Input
-                                        placeholder="Search by barcode, lot..."
+                                        placeholder="Search barcode, lot, item, twist, cut..."
                                         className="pl-10 h-9"
                                         value={historySearch}
                                         onChange={e => setHistorySearch(e.target.value)}
@@ -512,28 +662,29 @@ export function Boiler() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Barcode</TableHead>
-                                        <TableHead>Lot No</TableHead>
-                                        <TableHead className="text-right">Rolls</TableHead>
-                                        <TableHead className="text-right">Net Weight</TableHead>
-                                        <TableHead>Box</TableHead>
-                                        <TableHead>Machine</TableHead>
-                                        <TableHead>Boiler</TableHead>
-                                        <TableHead>Boiler No</TableHead>
-                                        <TableHead>Steamed At</TableHead>
-                                        <TableHead>Added By</TableHead>
+                                        <TableHead className="w-[42px]"></TableHead>
+                                        {renderHistoryHeader('Item', 'item')}
+                                        {renderHistoryHeader('Twist', 'twist')}
+                                        {renderHistoryHeader('Cut', 'cut')}
+                                        {renderHistoryHeader('Lots', 'lotNo')}
+                                        {renderHistoryHeader('Boxes', 'box')}
+                                        {renderHistoryHeader('Machines', 'machine')}
+                                        {renderHistoryHeader('Boilers', 'boiler')}
+                                        {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
+                                        {renderHistoryHeader('Net Weight', 'weight', 'text-right')}
+                                        {renderHistoryHeader('Latest Steam', 'steamedAt')}
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {loadingHistory ? (
                                         <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center">
+                                            <TableCell colSpan={11} className="h-24 text-center">
                                                 <Loader2 className="w-6 h-6 mx-auto animate-spin text-muted-foreground" />
                                             </TableCell>
                                         </TableRow>
-                                    ) : filteredHistory.length === 0 ? (
+                                    ) : groupedHistory.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
                                                 <div className="flex flex-col items-center gap-2">
                                                     <History className="w-8 h-8 opacity-50" />
                                                     <span>No items steamed on this date</span>
@@ -541,32 +692,122 @@ export function Boiler() {
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        filteredHistory.map(item => (
-                                            <TableRow key={item.id}>
-                                                <TableCell className="font-mono text-sm">{item.barcode}</TableCell>
-                                                <TableCell>{item.lotNo || '—'}</TableCell>
-                                                <TableCell className="text-right">{item.rollCount || '—'}</TableCell>
-                                                <TableCell className="text-right">
-                                                    {item.netWeight != null ? formatKg(item.netWeight) : '—'}
-                                                </TableCell>
-                                                <TableCell>{item.boxName || '—'}</TableCell>
-                                                <TableCell>{item.machineName || '—'}</TableCell>
-                                                <TableCell>{item.boilerMachineName || '—'}</TableCell>
-                                                <TableCell>{item.boilerNumber || '—'}</TableCell>
-                                                <TableCell>
-                                                    {new Date(item.steamedAt).toLocaleTimeString()}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
+                                        groupedHistory.map(group => {
+                                            const isExpanded = expandedHistoryGroups.has(group.key);
+                                            const lots = formatUniqueValues(group.lots);
+                                            const boxes = formatUniqueValues(group.boxes);
+                                            const machines = formatUniqueValues(group.machines);
+                                            const boilers = formatUniqueValues(group.boilers);
+                                            return (
+                                                <React.Fragment key={group.key}>
+                                                    <TableRow
+                                                        className="cursor-pointer hover:bg-muted/50"
+                                                        onClick={() => toggleHistoryGroup(group.key)}
+                                                    >
+                                                        <TableCell>
+                                                            {isExpanded ? (
+                                                                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                                            ) : (
+                                                                <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell className="font-medium">
+                                                            <div className="flex items-center gap-2">
+                                                                <span>{group.itemName}</span>
+                                                                <Badge variant="outline" className="text-[11px]">
+                                                                    {group.recordCount} record{group.recordCount === 1 ? '' : 's'}
+                                                                </Badge>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell>{group.twistName}</TableCell>
+                                                        <TableCell>{group.cutName}</TableCell>
+                                                        <TableCell className="max-w-[180px] truncate" title={lots}>{lots}</TableCell>
+                                                        <TableCell className="max-w-[180px] truncate" title={boxes}>{boxes}</TableCell>
+                                                        <TableCell className="max-w-[180px] truncate" title={machines}>{machines}</TableCell>
+                                                        <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
+                                                        <TableCell className="text-right">{group.totalRolls}</TableCell>
+                                                        <TableCell className="text-right">{formatKg(group.totalNetWeight)}</TableCell>
+                                                        <TableCell>{formatHistoryTime(group.latestSteamedAt)}</TableCell>
+                                                    </TableRow>
+                                                    {isExpanded && (
+                                                        <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                            <TableCell colSpan={11} className="p-4">
+                                                                <div className="rounded-md border bg-background overflow-x-auto">
+                                                                    <Table>
+                                                                        <TableHeader>
+                                                                            <TableRow className="bg-muted/50">
+                                                                                {renderHistoryHeader('Barcode', 'barcode')}
+                                                                                {renderHistoryHeader('Lot No', 'lotNo')}
+                                                                                {renderHistoryHeader('Item', 'item')}
+                                                                                {renderHistoryHeader('Twist', 'twist')}
+                                                                                {renderHistoryHeader('Cut', 'cut')}
+                                                                                {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
+                                                                                {renderHistoryHeader('Net Weight', 'weight', 'text-right')}
+                                                                                {renderHistoryHeader('Box', 'box')}
+                                                                                {renderHistoryHeader('Machine', 'machine')}
+                                                                                {renderHistoryHeader('Boiler', 'boiler')}
+                                                                                {renderHistoryHeader('Boiler No', 'boilerNo')}
+                                                                                {renderHistoryHeader('Steamed At', 'steamedAt')}
+                                                                                {renderHistoryHeader('Added By', 'addedBy')}
+                                                                            </TableRow>
+                                                                        </TableHeader>
+                                                                        <TableBody>
+                                                                            {group.rows.map(item => (
+                                                                                <TableRow key={item.id}>
+                                                                                    <TableCell className="font-mono text-sm">{displayText(item.barcode)}</TableCell>
+                                                                                    <TableCell>{displayText(item.lotNo)}</TableCell>
+                                                                                    <TableCell>{displayText(item.itemName)}</TableCell>
+                                                                                    <TableCell>{displayText(item.twistName)}</TableCell>
+                                                                                    <TableCell>{displayText(item.cutName)}</TableCell>
+                                                                                    <TableCell className="text-right">{item.rollCount || DISPLAY_EMPTY}</TableCell>
+                                                                                    <TableCell className="text-right">
+                                                                                        {item.netWeight != null ? formatKg(item.netWeight) : DISPLAY_EMPTY}
+                                                                                    </TableCell>
+                                                                                    <TableCell>{displayText(item.boxName)}</TableCell>
+                                                                                    <TableCell>{displayText(item.machineName)}</TableCell>
+                                                                                    <TableCell>{displayText(item.boilerMachineName)}</TableCell>
+                                                                                    <TableCell>{displayText(item.boilerNumber)}</TableCell>
+                                                                                    <TableCell>{formatHistoryTime(item.steamedAt)}</TableCell>
+                                                                                    <TableCell>
+                                                                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
+                                                                                    </TableCell>
+                                                                                </TableRow>
+                                                                            ))}
+                                                                        </TableBody>
+                                                                    </Table>
+                                                                </div>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    )}
+                                                </React.Fragment>
+                                            );
+                                        })
+                                    )}
+                                    {!loadingHistory && groupedHistory.length > 0 && (
+                                        <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                                            <TableCell></TableCell>
+                                            <TableCell className="font-bold text-primary">
+                                                Grand Total
+                                                <Badge variant="outline" className="ml-2 text-[11px]">
+                                                    {historyTotals.records} record{historyTotals.records === 1 ? '' : 's'}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell></TableCell>
+                                            <TableCell className="text-right font-bold text-primary">{historyTotals.rolls}</TableCell>
+                                            <TableCell className="text-right font-bold text-primary">{formatKg(historyTotals.netWeight)}</TableCell>
+                                            <TableCell></TableCell>
+                                        </TableRow>
                                     )}
                                 </TableBody>
                             </Table>
                         </div>
                         <div className="mt-4 text-center text-sm text-muted-foreground">
-                            Total: <strong>{filteredHistory.length}</strong> items steamed
+                            Total: <strong>{historyTotals.records}</strong> records in <strong>{groupedHistory.length}</strong> group{groupedHistory.length === 1 ? '' : 's'}
                         </div>
                     </CardContent>
                 </Card>

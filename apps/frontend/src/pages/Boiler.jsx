@@ -21,6 +21,12 @@ import { SheetColumnFilter, applySheetFilters } from '../components/common/Sheet
 
 const DISPLAY_EMPTY = '—';
 
+const isoNDaysAgo = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+};
+
 const cleanText = (value) => String(value ?? '').trim();
 
 const displayText = (value) => cleanText(value) || DISPLAY_EMPTY;
@@ -101,7 +107,7 @@ export function Boiler() {
     // History state
     const [steamedHistory, setSteamedHistory] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
-    const [historyFrom, setHistoryFrom] = useState(todayISO());
+    const [historyFrom, setHistoryFrom] = useState(() => isoNDaysAgo(6));
     const [historyTo, setHistoryTo] = useState(todayISO());
     const [historySearch, setHistorySearch] = useState('');
     const [historySheetFilters, setHistorySheetFilters] = useState({});
@@ -687,6 +693,7 @@ export function Boiler() {
                                         {renderHistoryHeader('Item', 'item')}
                                         {renderHistoryHeader('Twist', 'twist')}
                                         {renderHistoryHeader('Cut', 'cut')}
+                                        <TableHead className="text-right">Records</TableHead>
                                         {renderHistoryHeader('Lots', 'lotNo')}
                                         {renderHistoryHeader('Boilers', 'boiler')}
                                         {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
@@ -697,16 +704,16 @@ export function Boiler() {
                                 <TableBody>
                                     {loadingHistory ? (
                                         <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center">
+                                            <TableCell colSpan={11} className="h-24 text-center">
                                                 <Loader2 className="w-6 h-6 mx-auto animate-spin text-muted-foreground" />
                                             </TableCell>
                                         </TableRow>
                                     ) : groupedHistory.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
                                                 <div className="flex flex-col items-center gap-2">
                                                     <History className="w-8 h-8 opacity-50" />
-                                                    <span>No items steamed on this date</span>
+                                                    <span>No items steamed in this range</span>
                                                 </div>
                                             </TableCell>
                                         </TableRow>
@@ -729,16 +736,10 @@ export function Boiler() {
                                                             )}
                                                         </TableCell>
                                                         <TableCell>{group.date}</TableCell>
-                                                        <TableCell className="font-medium">
-                                                            <div className="flex items-center gap-2">
-                                                                <span>{group.itemName}</span>
-                                                                <Badge variant="outline" className="text-[11px]">
-                                                                    {group.recordCount} record{group.recordCount === 1 ? '' : 's'}
-                                                                </Badge>
-                                                            </div>
-                                                        </TableCell>
+                                                        <TableCell className="font-medium">{group.itemName}</TableCell>
                                                         <TableCell>{group.twistName}</TableCell>
                                                         <TableCell>{group.cutName}</TableCell>
+                                                        <TableCell className="text-right">{group.recordCount}</TableCell>
                                                         <TableCell className="max-w-[180px] truncate" title={lots}>{lots}</TableCell>
                                                         <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
                                                         <TableCell className="text-right">{group.totalRolls}</TableCell>
@@ -747,7 +748,7 @@ export function Boiler() {
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={10} className="p-4">
+                                                            <TableCell colSpan={11} className="p-4">
                                                                 <div className="rounded-md border bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>
@@ -801,14 +802,10 @@ export function Boiler() {
                                         <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
-                                            <TableCell className="font-bold text-primary">
-                                                Grand Total
-                                                <Badge variant="outline" className="ml-2 text-[11px]">
-                                                    {historyTotals.records} record{historyTotals.records === 1 ? '' : 's'}
-                                                </Badge>
-                                            </TableCell>
+                                            <TableCell className="font-bold text-primary">Grand Total</TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
+                                            <TableCell className="text-right font-bold text-primary">{historyTotals.records}</TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell className="text-right font-bold text-primary">{historyTotals.rolls}</TableCell>

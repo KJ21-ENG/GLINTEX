@@ -495,9 +495,12 @@ export async function boilerLookup(barcode) {
 export async function boilerMarkSteamed(barcodes, boilerMachineId, boilerNumber) {
   return await request('/api/boiler/steam', { method: 'POST', body: { barcodes, boilerMachineId, boilerNumber } });
 }
-export async function boilerListSteamed(date) {
-  const params = date ? `?date=${date}` : '';
-  return await request(`/api/boiler/steamed${params}`);
+export async function boilerListSteamed(from, to) {
+  const qs = new URLSearchParams();
+  if (from) qs.set('from', from);
+  if (to) qs.set('to', to);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return await request(`/api/boiler/steamed${suffix}`);
 }
 
 export default {

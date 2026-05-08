@@ -101,7 +101,8 @@ export function Boiler() {
     // History state
     const [steamedHistory, setSteamedHistory] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
-    const [historyDate, setHistoryDate] = useState(todayISO());
+    const [historyFrom, setHistoryFrom] = useState(todayISO());
+    const [historyTo, setHistoryTo] = useState(todayISO());
     const [historySearch, setHistorySearch] = useState('');
     const [historySheetFilters, setHistorySheetFilters] = useState({});
     const [openHistoryFilterId, setOpenHistoryFilterId] = useState(null);
@@ -117,7 +118,7 @@ export function Boiler() {
     const loadHistory = useCallback(async () => {
         setLoadingHistory(true);
         try {
-            const result = await api.boilerListSteamed(historyDate);
+            const result = await api.boilerListSteamed(historyFrom, historyTo);
             setSteamedHistory(result.items || []);
         } catch (err) {
             console.error('Failed to load steamed history:', err);
@@ -125,7 +126,7 @@ export function Boiler() {
         } finally {
             setLoadingHistory(false);
         }
-    }, [historyDate]);
+    }, [historyFrom, historyTo]);
 
     // Load history when tab changes or date changes
     useEffect(() => {
@@ -137,7 +138,7 @@ export function Boiler() {
     useEffect(() => {
         setExpandedHistoryGroups(new Set());
         setOpenHistoryFilterId(null);
-    }, [historyDate]);
+    }, [historyFrom, historyTo]);
 
     const historyFilterColumns = useMemo(() => [
         { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
@@ -654,9 +655,20 @@ export function Boiler() {
                                 <div className="flex items-center gap-2">
                                     <Input
                                         type="date"
-                                        value={historyDate}
-                                        onChange={e => setHistoryDate(e.target.value)}
+                                        value={historyFrom}
+                                        max={historyTo || undefined}
+                                        onChange={e => setHistoryFrom(e.target.value)}
                                         className="h-9 w-36"
+                                        aria-label="From date"
+                                    />
+                                    <span className="text-muted-foreground text-sm">to</span>
+                                    <Input
+                                        type="date"
+                                        value={historyTo}
+                                        min={historyFrom || undefined}
+                                        onChange={e => setHistoryTo(e.target.value)}
+                                        className="h-9 w-36"
+                                        aria-label="To date"
                                     />
                                     <Button size="sm" variant="outline" onClick={loadHistory} disabled={loadingHistory}>
                                         <RefreshCw className={cn("w-4 h-4", loadingHistory && "animate-spin")} />

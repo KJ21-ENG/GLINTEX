@@ -18791,18 +18791,14 @@ router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async 
 // List steamed items
 router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async (req, res) => {
   try {
-    const date = req.query?.date; // Optional date filter (YYYY-MM-DD)
+    const from = req.query?.from; // Optional inclusive start date (YYYY-MM-DD)
+    const to = req.query?.to;     // Optional inclusive end date (YYYY-MM-DD)
 
-    let where = {};
-    if (date) {
-      const startOfDay = new Date(`${date}T00:00:00.000Z`);
-      const endOfDay = new Date(`${date}T23:59:59.999Z`);
-      where = {
-        steamedAt: {
-          gte: startOfDay,
-          lte: endOfDay,
-        },
-      };
+    const where = {};
+    if (from || to) {
+      where.steamedAt = {};
+      if (from) where.steamedAt.gte = new Date(`${from}T00:00:00.000Z`);
+      if (to) where.steamedAt.lte = new Date(`${to}T23:59:59.999Z`);
     }
 
     const steamLogs = await prisma.boilerSteamLog.findMany({

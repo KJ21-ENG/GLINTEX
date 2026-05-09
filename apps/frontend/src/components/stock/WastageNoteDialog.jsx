@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2, AlertTriangle } from 'lucide-react';
 import { Button, Label } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
@@ -66,7 +67,9 @@ export function WastageNoteDialog({
     onConfirm({ note: trimmedNote || null });
   }
 
-  return (
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title={title} onOpenChange={onOpenChange}>
         <div className="flex flex-col gap-4">
@@ -158,6 +161,7 @@ export function WastageNoteDialog({
           </div>
         </div>
       </DialogContent>
-    </Dialog>
+    </Dialog>,
+    document.body
   );
 }

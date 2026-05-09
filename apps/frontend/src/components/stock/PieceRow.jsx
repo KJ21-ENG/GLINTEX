@@ -95,7 +95,9 @@ export function PieceRow({
   return (
     <tr className={cn(
       "border-t transition-colors hover:bg-muted/50",
-      isWastageMarked && "opacity-50 bg-muted",
+      // Dim text via inheritance (not opacity) so the action menu stays at full opacity.
+      // CSS opacity creates a stacking context that descendants cannot override.
+      isWastageMarked && "bg-muted text-muted-foreground",
       barcodeMatch && "bg-primary/10"
     )}>
       <td className="py-2 pr-2 pl-4">
@@ -195,7 +197,7 @@ export function PieceRow({
               </DisabledWithTooltip>
               {allowRevertWastage && (
                 <button
-                  className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-amber-100 text-amber-700"
+                  className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm font-medium text-amber-900 hover:bg-amber-100 hover:text-amber-950"
                   onClick={() => { setRevertDialogOpen(true); setMenuOpen(false); }}
                 >
                   <Undo2 className="mr-2 h-3 w-3" /> Revert wastage

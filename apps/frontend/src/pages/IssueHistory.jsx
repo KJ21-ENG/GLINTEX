@@ -3,9 +3,10 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryC
 import { formatKg, formatDateDDMMYYYY } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { Trash2, Printer, Download, Edit2, Plus, Search, X } from 'lucide-react';
+import { Trash2, Printer, Download, Edit2, Plus, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../api';
 import { HighlightMatch } from '../components/common/HighlightMatch';
+import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
@@ -33,6 +34,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const scrollRootRef = useRef(null);
   const takeBackScrollRef = useRef(null);
   const [savingIssue, setSavingIssue] = useState(false);
+  const [revertTarget, setRevertTarget] = useState(null);
+  const [revertBusy, setRevertBusy] = useState(false);
   const traceContext = useMemo(() => (v2Enabled ? null : buildConingTraceContext(db)), [db, v2Enabled]);
   const holoTraceContext = useMemo(() => (v2Enabled ? null : buildHoloTraceContext(db)), [db, v2Enabled]);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
@@ -1492,6 +1495,22 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       });
     }
 
+    // Revert wastage: cutter only, and only when this issue line has wastage marked.
+    // Coning/holo wastage revert flows live elsewhere (see ConingReceiveForm and ReceiveHistoryTable).
+    if (process === 'cutter' && Number(row?.wastageWeight || 0) > 0) {
+      const pieceIds = parseIssuePieceIds(row);
+      const targetPieceId = pieceIds.length === 1 ? pieceIds[0] : null;
+      actions.push({
+        label: 'Revert wastage',
+        icon: <Undo2 className="w-4 h-4" />,
+        onClick: () => setRevertTarget({ row, pieceId: targetPieceId }),
+        disabled: !canEdit || !targetPieceId,
+        disabledReason: !canEdit
+          ? 'You do not have permission to revert wastage.'
+          : 'Cannot identify a single piece for this issue.',
+      });
+    }
+
     actions.push({
       label: 'Delete',
       icon: <Trash2 className="w-4 h-4" />,
@@ -1504,6 +1523,21 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     });
 
     return actions;
+  };
+
+  const confirmRevertWastage = async ({ reason, note }) => {
+    if (!revertTarget?.pieceId || revertBusy) return;
+    setRevertBusy(true);
+    try {
+      await api.revertCutterWastage({ pieceId: revertTarget.pieceId, reason, note });
+      setRevertTarget(null);
+      await refreshProcessData('cutter');
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), { source: 'revertCutterWastage', pieceId: revertTarget.pieceId });
+    } catch (err) {
+      alert(err.message || 'Failed to revert wastage');
+    } finally {
+      setRevertBusy(false);
+    }
   };
 
   const handleExport = async () => {
@@ -2740,6 +2774,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           )}
         </DialogContent>
       </Dialog>
+
+      <WastageNoteDialog
+        open={!!revertTarget}
+        onOpenChange={(open) => { if (!open) setRevertTarget(null); }}
+        mode="revert"
+        stage="cutter"
+        contextLine={revertTarget ? `Piece ${revertTarget.pieceId || '—'} • Issue ${revertTarget.row?.barcode || revertTarget.row?.id || ''}` : ''}
+        weight={Number(revertTarget?.row?.wastageWeight || 0)}
+        busy={revertBusy}
+        onConfirm={confirmRevertWastage}
+      />
     </div>
   );
 }

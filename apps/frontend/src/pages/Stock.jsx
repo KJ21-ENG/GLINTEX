@@ -8,7 +8,7 @@ import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
+import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY, extractUserWastageNote } from '../utils';
 import * as api from '../api';
 import { exportStockXlsx, exportStockPdf, exportStockDetailedXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
@@ -245,6 +245,25 @@ export function Stock() {
     return map;
   }, [db, receiveTotalsKey, receiveWeightField, receiveUnitField]);
 
+  // Latest active cutter wastage note per piece (from challans). Only entries with an
+  // actual user-supplied note (after the em-dash separator) are included; auto-only
+  // notes like "Wastage marked: 7.794 kg" are skipped so the (i) tooltip surfaces only
+  // when there is real operator-written context to read.
+  const cutterWastageNoteByPieceId = useMemo(() => {
+    if (!isCutter) return new Map();
+    const challans = Array.isArray(db?.receive_from_cutter_machine_challans) ? db.receive_from_cutter_machine_challans : [];
+    const map = new Map();
+    const sorted = [...challans].sort((a, b) => (b?.createdAt || '').localeCompare(a?.createdAt || ''));
+    for (const ch of sorted) {
+      if (!ch || ch.isDeleted) continue;
+      if (!(Number(ch.wastageNetWeight || 0) > 0)) continue;
+      if (!ch.pieceId || map.has(ch.pieceId)) continue;
+      const userNote = extractUserWastageNote(ch.wastageNote);
+      if (userNote) map.set(ch.pieceId, userNote);
+    }
+    return map;
+  }, [db?.receive_from_cutter_machine_challans, isCutter]);
+
   const cutterIssueByPieceId = useMemo(() => {
     if (!isCutter) return new Map();
     const issues = Array.isArray(db?.issue_to_cutter_machine) ? db.issue_to_cutter_machine : [];
@@ -337,6 +356,7 @@ export function Stock() {
         pendingWeight: pendingForPiece,
         receivedWeight,
         wastageWeight,
+        wastageNote: cutterWastageNoteByPieceId.get(piece.id) || null,
         totalUnits: pieceTotalUnits,
         issueableWeight,
         cutName,
@@ -1173,6 +1193,7 @@ export function Stock() {
                                         onSaved={() => refreshProcessData(processId)}
                                         pendingWeight={p.pendingWeight}
                                         wastageWeight={p.wastageWeight}
+                                        wastageNote={p.wastageNote}
                                         totalUnits={p.totalUnits}
                                         issuedLabel={p.issuedLabel}
                                         onDelete={handleDeletePiece}

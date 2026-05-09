@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils';
 import { DisabledWithTooltip } from '../common/DisabledWithTooltip';
 import { HighlightMatch } from '../../components/common/HighlightMatch';
 import { WastageNoteDialog } from './WastageNoteDialog';
+import { InfoPopover } from '../common/InfoPopover';
 
 export function PieceRow({
   p,
@@ -17,6 +18,7 @@ export function PieceRow({
   isIssued = false,
   issuedLabel = '',
   wastageWeight = 0,
+  wastageNote = null,
   totalUnits = 0,
   onDelete,
   isDeleting = false,
@@ -158,6 +160,19 @@ export function PieceRow({
               <span className="text-xs text-muted-foreground flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3 text-amber-500" />
                 {formatKg(wastageWeight)} kg ({((p.weight && p.weight > 0) ? ((wastageWeight / p.weight) * 100) : 0).toFixed(1)}%)
+                {wastageNote && (
+                  <InfoPopover
+                    title="Wastage note"
+                    items={[wastageNote]}
+                    renderContent={() => (
+                      <div className="text-xs whitespace-pre-wrap break-words">{wastageNote}</div>
+                    )}
+                    widthClassName="w-72"
+                    bodyClassName="text-xs"
+                    buttonClassName="h-4 w-4 rounded-full hover:bg-muted inline-flex p-0"
+                    align="right"
+                  />
+                )}
               </span>
             )}
           </div>

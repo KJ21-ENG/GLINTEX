@@ -10,3 +10,4 @@ export * from './weightScale.js';
 export * from './search.js';
 export * from './searchHelpers.js';
 export * from './machineGrouping.js';
+export * from './wastageNote.js';

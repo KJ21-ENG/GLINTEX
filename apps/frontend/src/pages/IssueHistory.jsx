@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
-import { formatKg, formatDateDDMMYYYY } from '../utils';
+import { formatKg, formatDateDDMMYYYY, extractUserWastageNote } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { Trash2, Printer, Download, Edit2, Plus, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../api';
 import { HighlightMatch } from '../components/common/HighlightMatch';
 import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
+import { InfoPopover } from '../components/common/InfoPopover';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
@@ -193,6 +194,49 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const issuedBase = Number(row?.netIssuedWeight ?? row?.totalWeight ?? 0);
     const wastagePercent = issuedBase > 0 ? ((wastageWeight / issuedBase) * 100) : 0;
     return `${formatKg(wastageWeight)} (${wastagePercent.toFixed(1)}%)`;
+  };
+
+  // Latest active wastage note per piece, sourced from cutter challans. Only entries
+  // with an actual user-supplied note (after the em-dash separator) are included;
+  // auto-only notes like "Wastage marked: 7.794 kg" are skipped so the (i) tooltip
+  // surfaces only when there is real operator-written context to read.
+  const cutterWastageNoteByPieceId = useMemo(() => {
+    if (process !== 'cutter') return new Map();
+    const challans = Array.isArray(db?.receive_from_cutter_machine_challans) ? db.receive_from_cutter_machine_challans : [];
+    const map = new Map();
+    const sorted = [...challans].sort((a, b) => (b?.createdAt || '').localeCompare(a?.createdAt || ''));
+    for (const ch of sorted) {
+      if (!ch || ch.isDeleted) continue;
+      if (!(Number(ch.wastageNetWeight || 0) > 0)) continue;
+      if (!ch.pieceId || map.has(ch.pieceId)) continue;
+      const userNote = extractUserWastageNote(ch.wastageNote);
+      if (userNote) map.set(ch.pieceId, userNote);
+    }
+    return map;
+  }, [db?.receive_from_cutter_machine_challans, process]);
+
+  const renderCutterWastageCell = (row) => {
+    const text = formatCutterWastageDisplay(row);
+    if (Number(row?.wastageWeight || 0) <= 0) return text;
+    const pieceIds = parseIssuePieceIds(row);
+    const note = pieceIds.length > 0 ? cutterWastageNoteByPieceId.get(pieceIds[0]) : null;
+    if (!note) return text;
+    return (
+      <span className="inline-flex items-center gap-1">
+        {text}
+        <InfoPopover
+          title="Wastage note"
+          items={[note]}
+          renderContent={() => (
+            <div className="text-xs whitespace-pre-wrap break-words">{note}</div>
+          )}
+          widthClassName="w-72"
+          bodyClassName="text-xs"
+          buttonClassName="h-4 w-4 rounded-full hover:bg-muted inline-flex p-0"
+          align="left"
+        />
+      </span>
+    );
   };
 
   const handleDelete = async (issueId) => {
@@ -2079,7 +2123,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           <TableCell>{formatKg(r.totalWeight)}</TableCell>
                           <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
                           <TableCell>{formatKg(r.netIssuedWeight ?? r.totalWeight ?? 0)}</TableCell>
-                          <TableCell>{formatCutterWastageDisplay(r)}</TableCell>
+                          <TableCell>{renderCutterWastageCell(r)}</TableCell>
                           <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>

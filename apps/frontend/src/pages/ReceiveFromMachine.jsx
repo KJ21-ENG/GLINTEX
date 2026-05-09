@@ -246,7 +246,7 @@ export function ReceiveFromMachine() {
         </>
       )}
 
-      <ReceiveHistoryTable canEdit={canEdit} canDelete={canDelete} />
+      <ReceiveHistoryTable canEdit={canEdit} canDelete={canDelete} canWrite={canWrite} />
     </div>
   );
 }

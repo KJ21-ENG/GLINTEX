@@ -1486,6 +1486,66 @@ async function logCrudWithActor(req, args) {
   });
 }
 
+const WASTAGE_NOTE_MAX = 500;
+const WASTAGE_REASON_MAX = 200;
+const WASTAGE_REASON_MIN = 3;
+
+function normalizeWastageNote(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, WASTAGE_NOTE_MAX);
+}
+
+function normalizeWastageReason(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, WASTAGE_REASON_MAX);
+}
+
+async function insertWastageMarkEvent(tx, req, { stage, pieceId, weight, note, holoRowId = null, challanId = null }) {
+  const actor = getActor(req);
+  const event = await tx.wastageEvent.create({
+    data: {
+      stage,
+      pieceId,
+      eventType: 'mark',
+      weight: Number(weight) || 0,
+      note: normalizeWastageNote(note),
+      reason: null,
+      synthetic: false,
+      holoRowId,
+      challanId,
+      actorUserId: actor?.userId || null,
+      actorUsername: actor?.username || null,
+      actorRoleKey: actor?.roleKey || null,
+    },
+  });
+  return event;
+}
+
+async function insertWastageRevertEvent(tx, req, { stage, pieceId, weight, reason, note, reversedEventId, holoRowId = null }) {
+  const actor = getActor(req);
+  const event = await tx.wastageEvent.create({
+    data: {
+      stage,
+      pieceId,
+      eventType: 'revert',
+      weight: Number(weight) || 0,
+      note: normalizeWastageNote(note),
+      reason: normalizeWastageReason(reason),
+      reversedEventId: reversedEventId || null,
+      synthetic: false,
+      holoRowId,
+      actorUserId: actor?.userId || null,
+      actorUsername: actor?.username || null,
+      actorRoleKey: actor?.roleKey || null,
+    },
+  });
+  return event;
+}
+
 function getFiscalYearLabel(dateInput) {
   const date = dateInput ? new Date(dateInput) : new Date();
   if (Number.isNaN(date.getTime())) return getFiscalYearLabel();
@@ -7427,6 +7487,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
   try {
     const actorUserId = req.user?.id;
     const { pieceId } = req.body || {};
+    const note = normalizeWastageNote(req.body?.note);
     if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
 
     // Check inbound item exists
@@ -7458,14 +7519,19 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
     ));
     if (remaining <= 0) return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
 
-    // Upsert wastage increment inside transaction
-    const updated = await prisma.$transaction(async (tx) => {
+    // Upsert wastage increment + record event inside transaction
+    const { updated, event } = await prisma.$transaction(async (tx) => {
       await tx.receiveFromCutterMachinePieceTotal.upsert({
         where: { pieceId },
         update: { wastageNetWeight: { increment: remaining }, ...actorUpdateFields(actorUserId) },
         create: { pieceId, totalNetWeight: 0, wastageNetWeight: remaining, ...actorCreateFields(actorUserId) },
       });
-      return tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
+      const eventRow = await insertWastageMarkEvent(tx, req, { stage: 'cutter', pieceId, weight: remaining, note });
+      const after = await tx.receiveFromCutterMachinePieceTotal.update({
+        where: { pieceId },
+        data: { lastWastageEventId: eventRow.id },
+      });
+      return { updated: after, event: eventRow };
     });
 
     // Send notification
@@ -7476,7 +7542,7 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
       const wastageFormatted = Number(remaining).toFixed(3);
       const inboundWeight = Number(inbound.weight || 0);
       const wastagePercent = inboundWeight > 0 ? ((remaining / inboundWeight) * 100).toFixed(2) : '0.00';
-      sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent, createdByUserId: updated?.createdByUserId || actorUserId || null });
+      sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo, itemName, wastage: wastageFormatted, wastagePercent, note: note || '', createdByUserId: updated?.createdByUserId || actorUserId || null });
     } catch (e) { console.error('notify piece wastage error', e); }
 
     await logCrudWithActor(req, {
@@ -7485,13 +7551,143 @@ router.post('/api/receive_from_cutter_machine/mark_wastage', requirePermission('
       action: 'update',
       before: currentTotal,
       after: updated,
-      payload: { action: 'mark_wastage', marked: remaining },
+      payload: { action: 'mark_wastage', marked: remaining, note, eventId: event.id },
     });
 
-    res.json({ ok: true, pieceId, marked: remaining, updated });
+    res.json({ ok: true, pieceId, marked: remaining, note, updated, eventId: event.id });
   } catch (err) {
     console.error('Failed to mark wastage', err);
     res.status(500).json({ error: err.message || 'Failed to mark wastage' });
+  }
+});
+
+// Revert a previously marked cutter wastage. Restores pending weight by decrementing
+// the piece total's wastageNetWeight by the most recent mark event's amount.
+router.post('/api/receive_from_cutter_machine/revert_wastage', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
+  try {
+    const { pieceId } = req.body || {};
+    if (!pieceId || typeof pieceId !== 'string') return res.status(400).json({ error: 'Missing pieceId' });
+    const reason = normalizeWastageReason(req.body?.reason);
+    if (!reason || reason.length < WASTAGE_REASON_MIN) {
+      return res.status(400).json({ error: `Reason is required (min ${WASTAGE_REASON_MIN} chars)` });
+    }
+    const note = normalizeWastageNote(req.body?.note);
+
+    const currentTotal = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
+    if (!currentTotal) return res.status(404).json({ error: 'Piece total not found' });
+    if (Number(currentTotal.wastageNetWeight || 0) <= 0) return res.status(400).json({ error: 'No wastage to revert' });
+
+    const markEvent = await prisma.wastageEvent.findFirst({
+      where: { stage: 'cutter', pieceId, eventType: 'mark', reversedEventId: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!markEvent) return res.status(400).json({ error: 'No open wastage mark event found for this piece' });
+
+    // Downstream-consumption guard: block if any receive row was added after the mark.
+    const sinceConsumption = await prisma.receiveFromCutterMachineRow.count({
+      where: { pieceId, isDeleted: false, createdAt: { gt: markEvent.createdAt } },
+    });
+    if (sinceConsumption > 0) {
+      return res.status(409).json({ error: 'Cannot revert: piece has received new entries after wastage was marked' });
+    }
+
+    const decrementBy = Number(markEvent.weight) || 0;
+
+    let updated;
+    let revertEvent;
+    try {
+      ({ updated, revertEvent } = await prisma.$transaction(async (tx) => {
+        // Optimistic check: pointer must still match the mark event we loaded
+        const guard = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
+        if (!guard || guard.lastWastageEventId !== markEvent.id) {
+          if (markEvent.synthetic && (!guard?.lastWastageEventId)) {
+            // Legacy row had no pointer; tolerated.
+          } else {
+            throw new Error('Wastage state changed; please refresh and retry');
+          }
+        }
+        const nextWastage = Math.max(0, Number(guard?.wastageNetWeight || 0) - decrementBy);
+        const after = await tx.receiveFromCutterMachinePieceTotal.update({
+          where: { pieceId },
+          data: {
+            wastageNetWeight: nextWastage,
+            lastWastageEventId: null,
+            ...actorUpdateFields(req.user?.id),
+          },
+        });
+        // If the mark event is linked to a challan, zero its wastage and append to changeLog
+        // so the cutter balance loader (which sums challan.wastageNetWeight) reflects the revert.
+        if (markEvent.challanId) {
+          const challan = await tx.receiveFromCutterMachineChallan.findUnique({ where: { id: markEvent.challanId } });
+          if (challan && !challan.isDeleted && Number(challan.wastageNetWeight || 0) > 0) {
+            const prevLog = Array.isArray(challan.changeLog) ? challan.changeLog : [];
+            await tx.receiveFromCutterMachineChallan.update({
+              where: { id: markEvent.challanId },
+              data: {
+                wastageNetWeight: 0,
+                wastageNote: challan.wastageNote
+                  ? `${challan.wastageNote} | Reverted: ${reason}`
+                  : `Reverted: ${reason}`,
+                changeLog: [
+                  ...prevLog,
+                  {
+                    at: new Date().toISOString(),
+                    action: 'revert_wastage',
+                    actorUserId: req.user?.id || null,
+                    details: { reverted: decrementBy, reason, note },
+                  },
+                ],
+                ...actorUpdateFields(req.user?.id),
+              },
+            });
+          }
+        }
+        const ev = await insertWastageRevertEvent(tx, req, {
+          stage: 'cutter',
+          pieceId,
+          weight: decrementBy,
+          reason,
+          note,
+          reversedEventId: markEvent.id,
+        });
+        return { updated: after, revertEvent: ev };
+      }));
+    } catch (err) {
+      if (err && (err.code === 'P2002' || /reversedEventId/i.test(String(err.message)))) {
+        return res.status(409).json({ error: 'This wastage has already been reverted' });
+      }
+      throw err;
+    }
+
+    // Notification (best-effort)
+    try {
+      const inbound = await prisma.inboundItem.findUnique({ where: { id: pieceId } });
+      const itemRec = inbound?.itemId ? await prisma.item.findUnique({ where: { id: inbound.itemId } }) : null;
+      sendNotification('piece_wastage_reverted_cutter', {
+        pieceId,
+        lotNo: inbound?.lotNo || '',
+        itemName: itemRec?.name || '',
+        wastage: decrementBy.toFixed(3),
+        reason: reason || '',
+        note: note || '',
+        markedAt: markEvent.createdAt ? new Date(markEvent.createdAt).toISOString() : '',
+        createdByUserId: req.user?.id || null,
+      });
+    } catch (e) { console.error('notify cutter revert error', e); }
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_piece_total',
+      entityId: pieceId,
+      action: 'revert_wastage',
+      before: currentTotal,
+      after: updated,
+      payload: { reverted: decrementBy, reason, note, markEventId: markEvent.id, revertEventId: revertEvent.id, legacyRevert: !!markEvent.synthetic },
+    });
+
+    res.json({ ok: true, pieceId, reverted: decrementBy, reason, note, updated, eventId: revertEvent.id });
+  } catch (err) {
+    console.error('Failed to revert cutter wastage', err);
+    res.status(500).json({ error: err.message || 'Failed to revert cutter wastage' });
   }
 });
 
@@ -7702,12 +7898,16 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
 
     let wastageToMark = 0;
     let wastageNote = null;
+    let userWastageNote = null;
     if (wastageEntries.length > 0) {
       if (pendingRemaining <= 0) {
         return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
       }
       wastageToMark = roundTo3Decimals(pendingRemaining);
-      wastageNote = `Wastage marked: ${wastageToMark.toFixed(3)} kg`;
+      userWastageNote = normalizeWastageNote(wastageEntries[0]?.wastageNote);
+      wastageNote = userWastageNote
+        ? `Wastage marked: ${wastageToMark.toFixed(3)} kg — ${userWastageNote}`
+        : `Wastage marked: ${wastageToMark.toFixed(3)} kg`;
       pendingRemaining = 0;
     }
 
@@ -7779,7 +7979,22 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         },
       });
 
-      return { challan, upload, rows: createdRows };
+      let wastageEvent = null;
+      if (wastageToMark > 0) {
+        wastageEvent = await insertWastageMarkEvent(tx, req, {
+          stage: 'cutter',
+          pieceId,
+          weight: wastageToMark,
+          note: userWastageNote,
+          challanId: challan.id,
+        });
+        await tx.receiveFromCutterMachinePieceTotal.update({
+          where: { pieceId },
+          data: { lastWastageEventId: wastageEvent.id },
+        });
+      }
+
+      return { challan, upload, rows: createdRows, wastageEvent };
     });
 
     if (wastageToMark > 0) {
@@ -7788,7 +8003,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         const itemName = itemRec ? itemRec.name || '' : '';
         const wastageFormatted = Number(wastageToMark).toFixed(3);
         const wastagePercent = inboundWeight > 0 ? ((wastageToMark / inboundWeight) * 100).toFixed(2) : '0.00';
-        sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent, createdByUserId: created?.challan?.createdByUserId || actorUserId || null });
+        sendNotification('piece_wastage_marked_cutter', { pieceId, lotNo: piece.lotNo || '', itemName, wastage: wastageFormatted, wastagePercent, note: userWastageNote || '', createdByUserId: created?.challan?.createdByUserId || actorUserId || null });
       } catch (e) {
         console.error('notify piece wastage error', e);
       }
@@ -9346,6 +9561,134 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
   }
 });
 
+// Revert (soft-delete) a holo wastage receive row. Only allowed when the row's RollType
+// is a wastage type and no downstream consumption has occurred. Records a WastageEvent
+// so the action shows up in the audit trail.
+router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermission('receive.holo', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { rowId } = req.body || {};
+    if (!rowId || typeof rowId !== 'string') return res.status(400).json({ error: 'Missing rowId' });
+    const reason = normalizeWastageReason(req.body?.reason);
+    if (!reason || reason.length < WASTAGE_REASON_MIN) {
+      return res.status(400).json({ error: `Reason is required (min ${WASTAGE_REASON_MIN} chars)` });
+    }
+    const note = normalizeWastageNote(req.body?.note);
+
+    const row = await prisma.receiveFromHoloMachineRow.findUnique({
+      where: { id: rowId },
+      include: { issue: true, rollType: true },
+    });
+    if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
+    if (!row.issue) return res.status(404).json({ error: 'Receive issue not found' });
+
+    const rollTypeName = String(row.rollType?.name || '').toLowerCase();
+    if (!rollTypeName.includes('wastage')) {
+      return res.status(400).json({ error: 'Row is not a wastage row' });
+    }
+
+    const dispatchedWeight = Number(row.dispatchedWeight || 0);
+    const dispatchedCount = Number(row.dispatchedCount || 0);
+    if (dispatchedWeight > 0 || dispatchedCount > 0) {
+      return res.status(409).json({ error: 'Cannot revert: row has already been dispatched' });
+    }
+    if (await isHoloRowReferencedByConing({ rowId: row.id, barcode: row.barcode })) {
+      return res.status(409).json({ error: 'Cannot revert: row already issued to coning' });
+    }
+    const transfer = await prisma.boxTransfer.findFirst({
+      where: {
+        stage: 'holo',
+        OR: [{ fromItemId: rowId }, { toItemId: rowId }],
+      },
+      select: { id: true },
+    });
+    if (transfer) {
+      return res.status(409).json({ error: 'Cannot revert: row referenced by a box transfer' });
+    }
+
+    const pieceId = row.pieceId || null;
+    const prevNetWeight = Number.isFinite(row.rollWeight)
+      ? Number(row.rollWeight)
+      : roundTo3Decimals((Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
+    const prevRollCount = Number(row.rollCount || 0);
+    const deltaNetWeight = roundTo3Decimals(-prevNetWeight);
+    const deltaRolls = -prevRollCount;
+
+    let revertEvent;
+    try {
+      revertEvent = await prisma.$transaction(async (tx) => {
+        // Claim the row atomically: only the request that flips isDeleted false→true
+        // proceeds. Concurrent retries see count===0 and abort before decrementing totals.
+        const claim = await tx.receiveFromHoloMachineRow.updateMany({
+          where: { id: rowId, isDeleted: false },
+          data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedByUserId: actorUserId || null,
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+        if (claim.count !== 1) {
+          throw Object.assign(new Error('already_reverted'), { code: 'WASTAGE_ALREADY_REVERTED' });
+        }
+        if (pieceId) {
+          const totals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId } });
+          if (totals) {
+            await tx.receiveFromHoloMachinePieceTotal.update({
+              where: { pieceId },
+              data: {
+                totalNetWeight: { increment: deltaNetWeight },
+                totalRolls: { increment: deltaRolls },
+                ...actorUpdateFields(actorUserId),
+              },
+            });
+          }
+        }
+        return await insertWastageRevertEvent(tx, req, {
+          stage: 'holo',
+          pieceId: pieceId || row.issueId,
+          weight: prevNetWeight,
+          reason,
+          note,
+          reversedEventId: null,
+          holoRowId: rowId,
+        });
+      });
+    } catch (err) {
+      if (err && (err.code === 'WASTAGE_ALREADY_REVERTED' || err.code === 'P2002')) {
+        return res.status(409).json({ error: 'This row has already been reverted' });
+      }
+      throw err;
+    }
+
+    try {
+      const itemRec = row.issue?.itemId ? await prisma.item.findUnique({ where: { id: row.issue.itemId } }) : null;
+      sendNotification('piece_wastage_reverted_holo', {
+        rowId,
+        pieceId: pieceId || '',
+        lotNo: row.issue?.lotNo || '',
+        itemName: itemRec?.name || '',
+        wastage: prevNetWeight.toFixed(3),
+        reason: reason || '',
+        note: note || '',
+        createdByUserId: actorUserId || null,
+      });
+    } catch (e) { console.error('notify holo revert error', e); }
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_from_holo_machine_row',
+      entityId: rowId,
+      action: 'revert_wastage',
+      payload: { reverted: prevNetWeight, rollCount: prevRollCount, reason, note, revertEventId: revertEvent.id },
+    });
+
+    res.json({ ok: true, rowId, reverted: prevNetWeight, reason, note, eventId: revertEvent.id });
+  } catch (err) {
+    console.error('Failed to revert holo wastage row', err);
+    res.status(500).json({ error: err.message || 'Failed to revert holo wastage row' });
+  }
+});
+
 router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query?.barcode);
@@ -9962,6 +10305,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
   try {
     const actorUserId = req.user?.id;
     const { issueId } = req.body || {};
+    const note = normalizeWastageNote(req.body?.note);
     if (!issueId || typeof issueId !== 'string') {
       return res.status(400).json({ error: 'Missing issueId' });
     }
@@ -10005,8 +10349,8 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
     }
 
-    // 5. Upsert wastage inside transaction
-    const updated = await prisma.$transaction(async (tx) => {
+    // 5. Upsert wastage + record event inside transaction
+    const { updated, event } = await prisma.$transaction(async (tx) => {
       await tx.receiveFromConingMachinePieceTotal.upsert({
         where: { pieceId: issueId },
         update: {
@@ -10021,7 +10365,12 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
           ...actorCreateFields(actorUserId)
         },
       });
-      return tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
+      const eventRow = await insertWastageMarkEvent(tx, req, { stage: 'coning', pieceId: issueId, weight: remaining, note });
+      const after = await tx.receiveFromConingMachinePieceTotal.update({
+        where: { pieceId: issueId },
+        data: { lastWastageEventId: eventRow.id },
+      });
+      return { updated: after, event: eventRow };
     });
 
     // 6. Send WhatsApp notification
@@ -10036,6 +10385,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
         itemName,
         wastage: wastageFormatted,
         wastagePercent,
+        note: note || '',
         createdByUserId: updated?.createdByUserId || actorUserId || null,
       });
     } catch (e) {
@@ -10049,13 +10399,114 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       action: 'update',
       before: currentTotal,
       after: updated,
-      payload: { action: 'mark_wastage', marked: remaining },
+      payload: { action: 'mark_wastage', marked: remaining, note, eventId: event.id },
     });
 
-    res.json({ ok: true, issueId, marked: remaining, updated });
+    res.json({ ok: true, issueId, marked: remaining, note, updated, eventId: event.id });
   } catch (err) {
     console.error('Failed to mark coning wastage', err);
     res.status(500).json({ error: err.message || 'Failed to mark coning wastage' });
+  }
+});
+
+// Revert a previously marked coning wastage. Restores pending weight by decrementing
+// the piece total's wastageNetWeight by the most recent mark event's amount.
+router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const { issueId } = req.body || {};
+    if (!issueId || typeof issueId !== 'string') return res.status(400).json({ error: 'Missing issueId' });
+    const reason = normalizeWastageReason(req.body?.reason);
+    if (!reason || reason.length < WASTAGE_REASON_MIN) {
+      return res.status(400).json({ error: `Reason is required (min ${WASTAGE_REASON_MIN} chars)` });
+    }
+    const note = normalizeWastageNote(req.body?.note);
+
+    const currentTotal = await prisma.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
+    if (!currentTotal) return res.status(404).json({ error: 'Piece total not found' });
+    if (Number(currentTotal.wastageNetWeight || 0) <= 0) return res.status(400).json({ error: 'No wastage to revert' });
+
+    const markEvent = await prisma.wastageEvent.findFirst({
+      where: { stage: 'coning', pieceId: issueId, eventType: 'mark', reversedEventId: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!markEvent) return res.status(400).json({ error: 'No open wastage mark event found for this issue' });
+
+    // Downstream-consumption guard: block if any new receive row was added after the mark.
+    const sinceConsumption = await prisma.receiveFromConingMachineRow.count({
+      where: { issueId, isDeleted: false, createdAt: { gt: markEvent.createdAt } },
+    });
+    if (sinceConsumption > 0) {
+      return res.status(409).json({ error: 'Cannot revert: issue has received new entries after wastage was marked' });
+    }
+
+    const decrementBy = Number(markEvent.weight) || 0;
+
+    let updated;
+    let revertEvent;
+    try {
+      ({ updated, revertEvent } = await prisma.$transaction(async (tx) => {
+        const guard = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
+        if (!guard || guard.lastWastageEventId !== markEvent.id) {
+          if (markEvent.synthetic && (!guard?.lastWastageEventId)) {
+            // Legacy row had no pointer; tolerated.
+          } else {
+            throw new Error('Wastage state changed; please refresh and retry');
+          }
+        }
+        const nextWastage = Math.max(0, Number(guard?.wastageNetWeight || 0) - decrementBy);
+        const after = await tx.receiveFromConingMachinePieceTotal.update({
+          where: { pieceId: issueId },
+          data: {
+            wastageNetWeight: nextWastage,
+            lastWastageEventId: null,
+            ...actorUpdateFields(req.user?.id),
+          },
+        });
+        const ev = await insertWastageRevertEvent(tx, req, {
+          stage: 'coning',
+          pieceId: issueId,
+          weight: decrementBy,
+          reason,
+          note,
+          reversedEventId: markEvent.id,
+        });
+        return { updated: after, revertEvent: ev };
+      }));
+    } catch (err) {
+      if (err && (err.code === 'P2002' || /reversedEventId/i.test(String(err.message)))) {
+        return res.status(409).json({ error: 'This wastage has already been reverted' });
+      }
+      throw err;
+    }
+
+    try {
+      const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
+      const itemRec = issue?.itemId ? await prisma.item.findUnique({ where: { id: issue.itemId } }) : null;
+      sendNotification('piece_wastage_reverted_coning', {
+        pieceId: issueId,
+        lotNo: issue?.lotNo || issue?.lotLabel || '',
+        itemName: itemRec?.name || '',
+        wastage: decrementBy.toFixed(3),
+        reason: reason || '',
+        note: note || '',
+        markedAt: markEvent.createdAt ? new Date(markEvent.createdAt).toISOString() : '',
+        createdByUserId: req.user?.id || null,
+      });
+    } catch (e) { console.error('notify coning revert error', e); }
+
+    await logCrudWithActor(req, {
+      entityType: 'receive_coning_piece_total',
+      entityId: issueId,
+      action: 'revert_wastage',
+      before: currentTotal,
+      after: updated,
+      payload: { reverted: decrementBy, reason, note, markEventId: markEvent.id, revertEventId: revertEvent.id, legacyRevert: !!markEvent.synthetic },
+    });
+
+    res.json({ ok: true, issueId, reverted: decrementBy, reason, note, updated, eventId: revertEvent.id });
+  } catch (err) {
+    console.error('Failed to revert coning wastage', err);
+    res.status(500).json({ error: err.message || 'Failed to revert coning wastage' });
   }
 });
 

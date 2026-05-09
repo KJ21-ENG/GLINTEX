@@ -146,6 +146,36 @@ async function seed() {
         '📉 *Percent:* @wastagePercent%'
     },
     {
+      event: 'piece_wastage_reverted_cutter',
+      enabled: true,
+      template: '*Cutter Wastage Reverted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Piece:* @pieceId\n' +
+        '↩️ *Restored:* *@wastage kg*\n' +
+        '📝 *Reason:* @reason'
+    },
+    {
+      event: 'piece_wastage_reverted_coning',
+      enabled: true,
+      template: '*Coning Wastage Reverted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Piece:* @pieceId\n' +
+        '↩️ *Restored:* *@wastage kg*\n' +
+        '📝 *Reason:* @reason'
+    },
+    {
+      event: 'piece_wastage_reverted_holo',
+      enabled: true,
+      template: '*Holo Wastage Row Reverted*\n\n' +
+        '📦 *Item:* @itemName\n' +
+        '🔢 *Lot:* @lotNo\n' +
+        '🆔 *Row:* @rowId\n' +
+        '↩️ *Restored:* *@wastage kg*\n' +
+        '📝 *Reason:* @reason'
+    },
+    {
       event: 'issue_to_cutter_machine_deleted',
       enabled: true,
       template: '*Cutter Issue Deleted*\n\n' +

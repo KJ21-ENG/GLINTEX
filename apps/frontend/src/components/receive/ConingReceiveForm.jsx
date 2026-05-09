@@ -8,6 +8,7 @@ import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
 const RECEIVED_OVER_ISSUED_EPSILON_KG = 0.001;
 
@@ -21,6 +22,7 @@ export function ConingReceiveForm() {
     const [submitting, setSubmitting] = useState(false);
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [isWastage, setIsWastage] = useState(false);
+    const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const enrichIssueWithBalance = (rawIssue) => {
         if (!rawIssue?.id) return rawIssue;
@@ -183,7 +185,12 @@ export function ConingReceiveForm() {
             alert('Wastage is already queued in the list.');
             return;
         }
+        setWastageDialogOpen(true);
+    }
 
+    function commitWastageEntry(note) {
+        if (!issue) return;
+        const trimmed = (note || '').trim();
         setCart(prev => [...prev, {
             id: uid(),
             isWastage: true,
@@ -191,10 +198,12 @@ export function ConingReceiveForm() {
             grossWeight: 0,
             netWeight: wastageStatus.pendingWeight,
             boxId: '',
-            notes: 'Wastage - Issue Closed',
+            notes: trimmed || 'Wastage - Issue Closed',
+            wastageNote: trimmed || null,
             operatorId: issue?.operatorId || ''
         }]);
         setIsWastage(false);
+        setWastageDialogOpen(false);
     }
 
     function updateRow(id, field, val) {
@@ -370,7 +379,8 @@ export function ConingReceiveForm() {
             let wastageTotals = null;
             if (wastageEntries.length > 0) {
                 try {
-                    const res = await api.markConingWastage(issue.id);
+                    const wastageNote = wastageEntries[0]?.wastageNote || null;
+                    const res = await api.markConingWastage({ issueId: issue.id, note: wastageNote });
                     wastageTotals = res?.updated || null;
                 } catch (e) {
                     console.error('Failed to mark coning wastage', e);
@@ -740,6 +750,16 @@ export function ConingReceiveForm() {
                     </CardContent>
                 )}
             </Card>
+
+            <WastageNoteDialog
+                open={wastageDialogOpen}
+                onOpenChange={setWastageDialogOpen}
+                mode="mark"
+                stage="coning"
+                contextLine={issue ? `Lot ${issue.lotNo || ''} • Issue ${issue.id}` : ''}
+                weight={wastageStatus.pendingWeight}
+                onConfirm={({ note }) => commitWastageEntry(note)}
+            />
         </div>
     );
 }

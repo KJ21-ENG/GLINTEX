@@ -8,6 +8,7 @@ import { Scan, Save, Trash2, Plus } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
+import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
 export function CutterReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -30,6 +31,8 @@ export function CutterReceiveForm() {
     const [bobbinQty, setBobbinQty] = useState('');
     const [grossWeight, setGrossWeight] = useState('');
     const [isWastage, setIsWastage] = useState(false);
+    const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
+    const [pendingWastageContext, setPendingWastageContext] = useState(null);
 
     const [cart, setCart] = useState([]);
     const [saving, setSaving] = useState(false);
@@ -369,37 +372,12 @@ export function CutterReceiveForm() {
                 return;
             }
 
-            setCart(prev => [...prev, {
-                id: uid(),
-                issueId: issueRecord.id,
-                pieceId: pieceIdToUse,
+            setPendingWastageContext({
+                closeWeight,
                 lotNo: issueRecord.lotNo,
-                itemId: issueRecord.itemId,
-                operatorId: issueRecord.operatorId,
-                cutId: '',
-                helperId: '',
-                shift: '',
-                bobbinId: '',
-                boxId: '',
-                bobbinQty: '',
-                grossWeight: '',
-                isWastage: true,
-                receiveDate,
-                netWeight: closeWeight,
-                barcode: '',
-
-                // Display Names
-                itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
-                cutName: '',
-                cut: '',
-                helperName: '',
-                shiftName: '',
-                operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
-                bobbinName: '',
-                boxName: ''
-            }]);
-
-            setIsWastage(false);
+                pieceId: pieceIdToUse,
+            });
+            setWastageDialogOpen(true);
             return;
         }
 
@@ -538,7 +516,8 @@ export function CutterReceiveForm() {
                 cutId: entry.cutId,
                 helperId: entry.helperId,
                 shift: entry.shift,
-                isWastage: entry.isWastage
+                isWastage: entry.isWastage,
+                wastageNote: entry.isWastage ? (entry.wastageNote || null) : undefined,
             }));
 
             const res = await api.createCutterReceiveChallan({ entries });
@@ -805,9 +784,14 @@ export function CutterReceiveForm() {
                                             <TableCell>{entry.lotNo}</TableCell>
                                             <TableCell className="text-xs text-muted-foreground">
                                                 {entry.isWastage ? (
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
-                                                        <span>{formatKg(entry.netWeight)}</span>
+                                                    <div className="flex flex-col">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-destructive font-bold">WASTAGE / CLOSE</span>
+                                                            <span>{formatKg(entry.netWeight)}</span>
+                                                        </div>
+                                                        {entry.wastageNote && (
+                                                            <span className="italic text-[11px] text-muted-foreground">"{entry.wastageNote}"</span>
+                                                        )}
                                                     </div>
                                                 ) : (
                                                     <div>
@@ -836,6 +820,56 @@ export function CutterReceiveForm() {
                     </CardContent>
                 </Card>
             )}
+
+            <WastageNoteDialog
+                open={wastageDialogOpen}
+                onOpenChange={(open) => {
+                    setWastageDialogOpen(open);
+                    if (!open) setPendingWastageContext(null);
+                }}
+                mode="mark"
+                stage="cutter"
+                contextLine={pendingWastageContext ? `Lot ${pendingWastageContext.lotNo} • Piece ${pendingWastageContext.pieceId}` : ''}
+                weight={pendingWastageContext?.closeWeight}
+                onConfirm={({ note }) => {
+                    if (!pendingWastageContext || !issueRecord) {
+                        setWastageDialogOpen(false);
+                        setPendingWastageContext(null);
+                        return;
+                    }
+                    setCart(prev => [...prev, {
+                        id: uid(),
+                        issueId: issueRecord.id,
+                        pieceId: pendingWastageContext.pieceId,
+                        lotNo: issueRecord.lotNo,
+                        itemId: issueRecord.itemId,
+                        operatorId: issueRecord.operatorId,
+                        cutId: '',
+                        helperId: '',
+                        shift: '',
+                        bobbinId: '',
+                        boxId: '',
+                        bobbinQty: '',
+                        grossWeight: '',
+                        isWastage: true,
+                        wastageNote: note || null,
+                        receiveDate,
+                        netWeight: pendingWastageContext.closeWeight,
+                        barcode: '',
+                        itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
+                        cutName: '',
+                        cut: '',
+                        helperName: '',
+                        shiftName: '',
+                        operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
+                        bobbinName: '',
+                        boxName: '',
+                    }]);
+                    setIsWastage(false);
+                    setWastageDialogOpen(false);
+                    setPendingWastageContext(null);
+                }}
+            />
         </div>
     );
 }

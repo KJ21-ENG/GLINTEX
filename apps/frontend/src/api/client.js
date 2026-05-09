@@ -218,7 +218,13 @@ export async function deleteConingReceiveRow(id, payload) {
   return await request(`/api/receive_from_coning_machine/rows/${encodeURIComponent(id)}`, { method: 'DELETE', body: payload });
 }
 export async function markPieceWastage(payload) { return await request('/api/receive_from_cutter_machine/mark_wastage', { method: 'POST', body: payload }); }
-export async function markConingWastage(issueId) { return await request('/api/receive_from_coning_machine/mark_wastage', { method: 'POST', body: { issueId } }); }
+export async function markConingWastage(input) {
+  const body = typeof input === 'string' ? { issueId: input } : (input || {});
+  return await request('/api/receive_from_coning_machine/mark_wastage', { method: 'POST', body });
+}
+export async function revertCutterWastage(payload) { return await request('/api/receive_from_cutter_machine/revert_wastage', { method: 'POST', body: payload }); }
+export async function revertConingWastage(payload) { return await request('/api/receive_from_coning_machine/revert_wastage', { method: 'POST', body: payload }); }
+export async function revertHoloWastageRow(payload) { return await request('/api/receive_from_holo_machine/revert_wastage_row', { method: 'POST', body: payload }); }
 export async function sendDocument(formData) { return await requestFormData('/api/documents/send', formData); }
 export async function getDocumentHistory() { return await request('/api/documents/history'); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }

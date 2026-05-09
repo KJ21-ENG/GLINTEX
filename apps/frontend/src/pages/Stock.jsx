@@ -73,6 +73,8 @@ export function Stock() {
   const { canEdit: canInboundEdit, canDelete: canInboundDelete } = usePermission('inbound');
   const issueStage = isHolo ? 'holo' : isConing ? 'coning' : 'cutter';
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
+  const { canWrite: canReceiveWrite } = useStagePermission('receive', issueStage);
+  const canRevertWastage = canReceiveWrite && processId === 'cutter';
 
   useEffect(() => {
     // Legacy Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
@@ -1178,6 +1180,8 @@ export function Stock() {
                                         hidePending={filters.status === 'available_to_issue'}
                                         canEdit={canInboundEdit}
                                         canDelete={canInboundDelete}
+                                        canRevertWastage={canRevertWastage}
+                                        processId={processId}
                                         selectDisabled={!canIssueWrite || !isPieceAvailableForIssue(p)}
                                         search={search}
                                       />

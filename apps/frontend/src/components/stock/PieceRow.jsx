@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Input, Button } from '../ui';
 import { formatKg } from '../../utils';
 import * as api from '../../api';
-import { Check, X, Edit2, AlertTriangle, MoreVertical, Trash2 } from 'lucide-react';
+import { Check, X, Edit2, AlertTriangle, MoreVertical, Trash2, Undo2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DisabledWithTooltip } from '../common/DisabledWithTooltip';
 import { HighlightMatch } from '../../components/common/HighlightMatch';
+import { WastageNoteDialog } from './WastageNoteDialog';
 
 export function PieceRow({
   p,
@@ -22,6 +23,8 @@ export function PieceRow({
   hidePending = false,
   canEdit = false,
   canDelete = false,
+  canRevertWastage = false,
+  processId = null,
   selectDisabled = false,
   search = ''
 }) {
@@ -30,6 +33,8 @@ export function PieceRow({
   const [weight, setWeight] = useState(p.weight);
   const [saving, setSaving] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [revertDialogOpen, setRevertDialogOpen] = useState(false);
+  const [reverting, setReverting] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => { setWeight(p.weight); }, [p.weight]);
@@ -68,7 +73,24 @@ export function PieceRow({
 
   const allowEdit = !!canEdit && !isWastageMarked && !isIssued;
   const allowDelete = !!canDelete && !isWastageMarked && !isIssued && p.status !== 'consumed';
+  // Revert is only meaningful for cutter (where wastage is keyed by pieceId).
+  // Coning wastage is keyed by issueId (not the inbound piece) and holo wastage is row-based.
+  const allowRevertWastage = !!canRevertWastage && isWastageMarked && processId === 'cutter';
   const barcodeMatch = search && search.trim().length >= 6 && String(p.barcode || '').toLowerCase().includes(search.trim().toLowerCase());
+
+  async function handleRevertConfirm({ reason, note }) {
+    if (reverting) return;
+    setReverting(true);
+    try {
+      await api.revertCutterWastage({ pieceId: p.id, reason, note });
+      setRevertDialogOpen(false);
+      onSaved && onSaved();
+    } catch (err) {
+      alert(err.message || 'Failed to revert wastage');
+    } finally {
+      setReverting(false);
+    }
+  }
 
   return (
     <tr className={cn(
@@ -171,7 +193,27 @@ export function PieceRow({
                   <Trash2 className="mr-2 h-3 w-3" /> {isDeleting ? 'Deleting...' : 'Delete Piece'}
                 </button>
               </DisabledWithTooltip>
+              {allowRevertWastage && (
+                <button
+                  className="w-full flex items-center px-2 py-1.5 text-xs rounded-sm hover:bg-amber-100 text-amber-700"
+                  onClick={() => { setRevertDialogOpen(true); setMenuOpen(false); }}
+                >
+                  <Undo2 className="mr-2 h-3 w-3" /> Revert wastage
+                </button>
+              )}
             </div>
+          )}
+          {allowRevertWastage && (
+            <WastageNoteDialog
+              open={revertDialogOpen}
+              onOpenChange={setRevertDialogOpen}
+              mode="revert"
+              stage={processId}
+              contextLine={`Piece ${p.id} • Lot ${p.lotNo || ''}`}
+              weight={wastageWeight}
+              busy={reverting}
+              onConfirm={handleRevertConfirm}
+            />
           )}
         </div>
       </td>

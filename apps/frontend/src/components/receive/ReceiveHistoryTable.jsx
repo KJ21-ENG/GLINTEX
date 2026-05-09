@@ -3,7 +3,7 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/Invento
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, CardHeader, CardTitle, CardContent, ActionMenu, Button, Input, Select } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
-import { Printer, Edit2, Trash2, Download, History, RotateCcw, Search, X } from 'lucide-react';
+import { Printer, Edit2, Trash2, Download, History, RotateCcw, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../../api';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
@@ -19,8 +19,9 @@ import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../../api/v2';
 import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
+import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
-export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
+export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWrite = false }) {
     const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
     const flags = getFeatureFlags();
     const v2Enabled = flags.v2ReceiveHistory;
@@ -38,6 +39,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
     const [deletePrompt, setDeletePrompt] = useState(null);
     const [pieceOptionsOverride, setPieceOptionsOverride] = useState(null);
     const [logChallan, setLogChallan] = useState(null);
+    const [holoRevertTarget, setHoloRevertTarget] = useState(null);
+    const [holoRevertBusy, setHoloRevertBusy] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
@@ -1871,6 +1874,59 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
         }
     };
 
+    const isHoloWastageRow = (row) => {
+        if (process !== 'holo') return false;
+        const rollTypeName = String(rollTypeById.get(row?.rollTypeId)?.name || '').toLowerCase();
+        if (!rollTypeName.includes('wastage')) return false;
+        if (Number(row?.dispatchedWeight || 0) > 0) return false;
+        if (Number(row?.dispatchedCount || 0) > 0) return false;
+        return true;
+    };
+
+    const handleRevertHoloWastageRow = (row) => {
+        if (!isHoloWastageRow(row)) return;
+        setHoloRevertTarget(row);
+    };
+
+    const confirmRevertHoloWastageRow = async ({ reason, note }) => {
+        if (!holoRevertTarget || holoRevertBusy) return;
+        setHoloRevertBusy(true);
+        try {
+            await api.revertHoloWastageRow({ rowId: holoRevertTarget.id, reason, note });
+            const row = holoRevertTarget;
+            const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
+            const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
+            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
+            const prevRolls = Number(row.rollCount || 0);
+            const pieceId = row.pieceId || null;
+            // Always remove the reverted row from local state so the user gets immediate feedback,
+            // regardless of whether pieceId was set or v2 is enabled.
+            const nextRows = existingRows.filter(r => r.id !== row.id);
+            if (pieceId) {
+                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                const nextTotal = {
+                    ...baseTotal,
+                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
+                    totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
+                };
+                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                patchDb({
+                    receive_from_holo_machine_rows: nextRows,
+                    receive_from_holo_machine_piece_totals: nextTotals,
+                });
+            } else {
+                patchDb({ receive_from_holo_machine_rows: nextRows });
+                if (v2Enabled) refreshV2List();
+                else await refreshProcessData('holo');
+            }
+            setHoloRevertTarget(null);
+        } catch (err) {
+            alert(err.message || 'Failed to revert wastage row');
+        } finally {
+            setHoloRevertBusy(false);
+        }
+    };
+
     const getActions = (row) => [
         {
             label: 'Reprint',
@@ -1885,6 +1941,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                 disabled: !canEdit,
                 disabledReason: 'You do not have permission to edit receive records.',
             },
+            ...(isHoloWastageRow(row) ? [{
+                label: 'Revert wastage',
+                icon: <Undo2 className="w-4 h-4" />,
+                onClick: () => handleRevertHoloWastageRow(row),
+                disabled: !canWrite,
+                disabledReason: 'You do not have permission to revert wastage rows.',
+            }] : []),
             {
                 label: 'Delete',
                 icon: <Trash2 className="w-4 h-4" />,
@@ -3246,6 +3309,17 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false }) {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <WastageNoteDialog
+                open={!!holoRevertTarget}
+                onOpenChange={(open) => { if (!open) setHoloRevertTarget(null); }}
+                mode="revert"
+                stage="holo"
+                contextLine={holoRevertTarget ? `Row ${holoRevertTarget.barcode || holoRevertTarget.id}` : ''}
+                weight={holoRevertTarget ? (Number(holoRevertTarget.rollWeight) || calcNetFromGrossTare(holoRevertTarget)) : 0}
+                busy={holoRevertBusy}
+                onConfirm={confirmRevertHoloWastageRow}
+            />
         </Card>
     );
 }

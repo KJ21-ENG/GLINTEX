@@ -34,6 +34,29 @@ export function IssueToHolo() {
 
     // --- Derived Data ---
 
+    const autoSelectTwistEnabled = !!db?.settings?.[0]?.autoSelectTwistForMachine;
+    const machineTwistMapping = useMemo(() => {
+        if (!autoSelectTwistEnabled || !form.machineId) return null;
+        return (db.twist_mappings || []).find(m => m.machineId === form.machineId) || null;
+    }, [autoSelectTwistEnabled, form.machineId, db.twist_mappings]);
+    const mappedTwistValid = !!machineTwistMapping && (db.twists || []).some(t => t.id === machineTwistMapping.twistId);
+    const twistLocked = autoSelectTwistEnabled && mappedTwistValid;
+
+    useEffect(() => {
+        if (!autoSelectTwistEnabled) return;
+        if (!form.machineId) {
+            if (form.twistId) setForm(prev => ({ ...prev, twistId: '' }));
+            return;
+        }
+        if (mappedTwistValid) {
+            if (form.twistId !== machineTwistMapping.twistId) {
+                setForm(prev => ({ ...prev, twistId: machineTwistMapping.twistId }));
+            }
+        } else {
+            if (form.twistId) setForm(prev => ({ ...prev, twistId: '' }));
+        }
+    }, [autoSelectTwistEnabled, form.machineId, mappedTwistValid, machineTwistMapping?.twistId]);
+
     const holoTotals = useMemo(() => {
         return crates.reduce((acc, c) => ({
             rolls: acc.rolls + (Number(c.issuedBobbins) || 0),
@@ -162,6 +185,10 @@ export function IssueToHolo() {
         if (crates.length === 0) return;
         if (lotSummary.itemIds.length > 1) {
             alert('Mixed items not allowed');
+            return;
+        }
+        if (!form.twistId) {
+            alert('Twist is required');
             return;
         }
         setSubmitting(true);
@@ -311,7 +338,11 @@ export function IssueToHolo() {
                                 valueKey="id"
                                 placeholder="Select Twist"
                                 clearable
+                                disabled={twistLocked}
                             />
+                            {twistLocked && (
+                                <p className="text-[10px] text-muted-foreground mt-1">Set automatically from Machine mapping</p>
+                            )}
                         </div>
                         <div>
                             <Label>Total Yarn Kg</Label>
@@ -388,7 +419,7 @@ export function IssueToHolo() {
                             Total Rolls: {holoTotals.rolls} | Total Weight: {formatKg(holoTotals.weight)}
                             {lotSummary.lotLabel ? ` | Lots: ${lotSummary.lotLabel}` : ''}
                         </div>
-                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0} className="w-full sm:w-auto">
+                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0 || !form.twistId} className="w-full sm:w-auto">
                             {submitting ? 'Issuing...' : 'Confirm Issue'}
                         </Button>
                     </div>

@@ -45,14 +45,29 @@ model Cut {
 }
 
 model Twist {
-  id              String                 @id @default(cuid())
-  name            String                 @unique
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @default(now()) @updatedAt
+  id              String                  @id @default(cuid())
+  name            String                  @unique
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
   holoIssues      IssueToHoloMachine[]
   coningIssues    IssueToConingMachine[]
+  machineMappings MachineTwistMapping[]
+}
+
+model MachineTwistMapping {
+  id              String   @id @default(cuid())
+  machineId       String   @unique
+  twistId         String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  machine         Machine  @relation(fields: [machineId], references: [id])
+  twist           Twist    @relation(fields: [twistId], references: [id])
+
+  @@index([twistId])
 }
 
 model Firm {
@@ -127,6 +142,7 @@ model Machine {
   issueToHoloMachines   IssueToHoloMachine[]
   issueToConingMachines IssueToConingMachine[]
   boilerSteamLogs       BoilerSteamLog[]       @relation("BoilerSteamLogMachine")
+  twistMapping          MachineTwistMapping?
 }
 
 model Operator {
@@ -596,6 +612,7 @@ model Settings {
   challanFromAddress  String?
   challanFromMobile   String?
   challanFieldsConfig Json     @default("{}")
+  autoSelectTwistForMachine Boolean @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
   createdByUserId     String?

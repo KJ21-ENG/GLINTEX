@@ -2955,6 +2955,7 @@ router.get('/api/bootstrap', async (req, res) => {
       yarns: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
       cuts: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
       twists: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
+      twist_mappings: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
       firms: hasAnyReadPermission(req, ['inbound', 'dispatch', 'opening_stock', 'reports', 'masters']),
       suppliers: hasAnyReadPermission(req, ['inbound', 'stock', 'opening_stock', 'reports', 'masters']),
       customers: hasAnyReadPermission(req, ['dispatch', 'reports', 'masters']),
@@ -2975,6 +2976,15 @@ router.get('/api/bootstrap', async (req, res) => {
     slices.yarns = allowed.yarns ? await prisma.yarn.findMany() : [];
     slices.cuts = allowed.cuts ? await prisma.cut.findMany({ orderBy: { name: 'asc' } }) : [];
     slices.twists = allowed.twists ? await prisma.twist.findMany({ orderBy: { name: 'asc' } }) : [];
+    slices.twist_mappings = [];
+    if (allowed.twist_mappings) {
+      try {
+        slices.twist_mappings = await prisma.machineTwistMapping.findMany();
+      } catch (err) {
+        // Table may not exist yet (migration pending). Degrade gracefully so the rest of the app loads.
+        console.warn('twist_mappings query failed (migration pending?):', err?.message || err);
+      }
+    }
     slices.firms = allowed.firms ? await prisma.firm.findMany() : [];
     slices.suppliers = allowed.suppliers ? await prisma.supplier.findMany() : [];
     slices.customers = allowed.customers ? await prisma.customer.findMany({ orderBy: { name: 'asc' } }) : [];
@@ -3005,7 +3015,7 @@ router.get('/api/bootstrap', async (req, res) => {
       : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
-    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers'];
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers'];
     for (const key of masterSliceKeys) {
       if (slices[key] && slices[key].length > 0) {
         slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
@@ -11190,6 +11200,10 @@ router.delete('/api/twists/:id', requireDeletePermission('masters'), async (req,
     if (!existing) {
       return res.status(404).json({ error: 'Twist not found' });
     }
+    const mappingUsage = await prisma.machineTwistMapping.count({ where: { twistId: id } });
+    if (mappingUsage > 0) {
+      return res.status(400).json({ error: 'Twist is mapped to a machine and cannot be deleted. Remove the mapping first.' });
+    }
     const usage = await prisma.issueToHoloMachine.count({ where: { twistId: id, isDeleted: false } });
     if (usage > 0) {
       return res.status(400).json({ error: 'Twist is in use and cannot be deleted' });
@@ -11200,6 +11214,93 @@ router.delete('/api/twists/:id', requireDeletePermission('masters'), async (req,
   } catch (err) {
     console.error('Failed to delete twist', err);
     res.status(500).json({ error: err.message || 'Failed to delete twist' });
+  }
+});
+
+router.get('/api/twist-mappings', requirePermission('masters', PERM_READ), async (req, res) => {
+  const mappings = await prisma.machineTwistMapping.findMany({ orderBy: { createdAt: 'asc' } });
+  res.json(mappings);
+});
+
+router.post('/api/twist-mappings', requirePermission('masters', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { machineId, twistId } = req.body || {};
+    if (!machineId || !twistId) {
+      return res.status(400).json({ error: 'machineId and twistId are required' });
+    }
+    const [machine, twist] = await Promise.all([
+      prisma.machine.findUnique({ where: { id: machineId } }),
+      prisma.twist.findUnique({ where: { id: twistId } }),
+    ]);
+    if (!machine) return res.status(400).json({ error: 'Machine not found' });
+    if (!twist) return res.status(400).json({ error: 'Twist not found' });
+    const before = await prisma.machineTwistMapping.findUnique({ where: { machineId } });
+    const mapping = await prisma.machineTwistMapping.upsert({
+      where: { machineId },
+      create: { machineId, twistId, ...actorCreateFields(actorUserId) },
+      update: { twistId, ...actorUpdateFields(actorUserId) },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'twist_mapping',
+      entityId: mapping.id,
+      action: before ? 'update' : 'create',
+      before: before || undefined,
+      after: mapping,
+      payload: mapping,
+    });
+    res.json(mapping);
+  } catch (err) {
+    console.error('Failed to upsert twist mapping', err);
+    res.status(500).json({ error: err.message || 'Failed to save twist mapping' });
+  }
+});
+
+router.put('/api/twist-mappings/:id', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const { twistId } = req.body || {};
+    if (!twistId) return res.status(400).json({ error: 'twistId is required' });
+    const existing = await prisma.machineTwistMapping.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Mapping not found' });
+    const twist = await prisma.twist.findUnique({ where: { id: twistId } });
+    if (!twist) return res.status(400).json({ error: 'Twist not found' });
+    const updated = await prisma.machineTwistMapping.update({
+      where: { id },
+      data: { twistId, ...actorUpdateFields(actorUserId) },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'twist_mapping',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: updated,
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update twist mapping', err);
+    res.status(500).json({ error: err.message || 'Failed to update twist mapping' });
+  }
+});
+
+router.delete('/api/twist-mappings/:id', requireDeletePermission('masters'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.machineTwistMapping.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Mapping not found' });
+    await prisma.machineTwistMapping.delete({ where: { id } });
+    await logCrudWithActor(req, {
+      entityType: 'twist_mapping',
+      entityId: id,
+      action: 'delete',
+      payload: existing,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Failed to delete twist mapping', err);
+    res.status(500).json({ error: err.message || 'Failed to delete twist mapping' });
   }
 });
 
@@ -11336,6 +11437,7 @@ router.delete('/api/machines/:id', requireDeletePermission('masters'), async (re
   if (usage > 0) {
     return res.status(400).json({ error: 'Machine is referenced and cannot be deleted' });
   }
+  await prisma.machineTwistMapping.deleteMany({ where: { machineId: id } });
   await prisma.machine.delete({ where: { id } });
   await logCrudWithActor(req, { entityType: 'machine', entityId: id, action: 'delete', payload: existingMachine });
   res.json({ ok: true });
@@ -13336,8 +13438,12 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     const hasChallanFromAddress = Object.prototype.hasOwnProperty.call(body, 'challanFromAddress');
     const hasChallanFromMobile = Object.prototype.hasOwnProperty.call(body, 'challanFromMobile');
     const hasChallanFieldsConfig = Object.prototype.hasOwnProperty.call(body, 'challanFieldsConfig');
+    const hasAutoSelectTwistForMachine = Object.prototype.hasOwnProperty.call(body, 'autoSelectTwistForMachine');
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
     if (hasBackupTime && !req.user?.isAdmin) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (hasAutoSelectTwistForMachine && !req.user?.isAdmin) {
       return res.status(403).json({ error: 'forbidden' });
     }
     // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
@@ -13393,6 +13499,7 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       if (hasChallanFromAddress) updateData.challanFromAddress = challanFromAddress || null;
       if (hasChallanFromMobile) updateData.challanFromMobile = challanFromMobile || null;
       if (hasChallanFieldsConfig) updateData.challanFieldsConfig = challanFieldsConfig || {};
+      if (hasAutoSelectTwistForMachine) updateData.autoSelectTwistForMachine = !!body.autoSelectTwistForMachine;
 
       const createData = {
         id: 1,
@@ -13413,6 +13520,7 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       createData.challanFromAddress = hasChallanFromAddress ? (challanFromAddress || null) : null;
       createData.challanFromMobile = hasChallanFromMobile ? (challanFromMobile || null) : null;
       createData.challanFieldsConfig = hasChallanFieldsConfig ? (challanFieldsConfig || {}) : {};
+      createData.autoSelectTwistForMachine = hasAutoSelectTwistForMachine ? !!body.autoSelectTwistForMachine : false;
 
       const settings = await prisma.settings.upsert({
         where: { id: 1 },

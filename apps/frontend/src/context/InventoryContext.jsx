@@ -19,6 +19,7 @@ const BOOTSTRAP_KEYS = [
   'yarns',
   'cuts',
   'twists',
+  'twist_mappings',
   'firms',
   'customers',
   'suppliers',
@@ -39,6 +40,7 @@ const buildRawFromDb = (db) => ({
   yarns: db?.yarns || [],
   cuts: db?.cuts || [],
   twists: db?.twists || [],
+  twist_mappings: db?.twist_mappings || [],
   firms: db?.firms || [],
   customers: db?.customers || [],
   suppliers: db?.suppliers || [],
@@ -479,6 +481,11 @@ export const InventoryProvider = ({ children }) => {
     createTwist: async (name) => { await api.createTwist(name); await refreshDb(); },
     updateTwist: async (id, name) => { await api.updateTwist(id, name); await refreshDb(); },
     deleteTwist: async (id) => { await api.deleteTwist(id); await refreshDb(); },
+
+    // Masters - Twist Mappings (machine -> twist)
+    createTwistMapping: async (machineId, twistId) => { await api.createTwistMapping(machineId, twistId); await refreshDb(); },
+    updateTwistMapping: async (id, twistId) => { await api.updateTwistMapping(id, twistId); await refreshDb(); },
+    deleteTwistMapping: async (id) => { await api.deleteTwistMapping(id); await refreshDb(); },
 
     // Masters - Firms
     createFirm: async (name, address, mobile) => { await api.createFirm(name, address, mobile); await refreshDb(); },

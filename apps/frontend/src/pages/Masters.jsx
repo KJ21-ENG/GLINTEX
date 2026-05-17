@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
+import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label } from '../components/ui';
 import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
@@ -30,6 +31,8 @@ export function Masters() {
         createYarn, updateYarn, deleteYarn,
         createCut, updateCut, deleteCut,
         createTwist, updateTwist, deleteTwist,
+        createTwistMapping, updateTwistMapping, deleteTwistMapping,
+        updateSettings,
         createFirm, updateFirm, deleteFirm,
         createCustomer, updateCustomer, deleteCustomer,
         createSupplier, updateSupplier, deleteSupplier,
@@ -46,6 +49,8 @@ export function Masters() {
     } = useInventory();
     const { canRead, canWrite, canEdit, canDelete } = usePermission('masters');
     const canCreate = canWrite;
+    const { user } = useAuth();
+    const isAdmin = user?.isAdmin || (user?.roleKeys || []).includes('admin');
 
     const [activeTab, setActiveTab] = useState('items');
 
@@ -64,6 +69,7 @@ export function Masters() {
             case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'twistMappings': return <TwistMappingsMasterCrud data={db.twist_mappings || []} machines={db.machines || []} twists={db.twists || []} settings={db?.settings?.[0]} onCreate={createTwistMapping} onUpdate={updateTwistMapping} onDelete={deleteTwistMapping} updateSettings={updateSettings} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} isAdmin={isAdmin} />;
             case 'firms': return <FirmsMasterCrud data={db.firms} onCreate={createFirm} onUpdate={updateFirm} onDelete={deleteFirm} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'customers': return <CustomersMasterCrud data={db.customers} onCreate={createCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'suppliers': return <SimpleMasterCrud title="Suppliers" data={db.suppliers} onCreate={createSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
@@ -120,6 +126,7 @@ export function Masters() {
                         <SectionDivider label="Holo" />
                         <TabButton id="yarns" label="Yarns" />
                         <TabButton id="twists" label="Twists" />
+                        <TabButton id="twistMappings" label="Twist Mapping" />
                         <TabButton id="rollTypes" label="Roll Types" />
                         <TabButton id="holoProductionPerHour" label="Production Per Hour" />
                         <TabButton id="holoOtherWastageItems" label="Other Wastage" />
@@ -272,6 +279,230 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
             </CardContent>
         </Card>
     )
+}
+
+function TwistMappingsMasterCrud({ data, machines, twists, settings, onCreate, onUpdate, onDelete, updateSettings, loading, canCreate, canEdit, canDelete, isAdmin }) {
+    const [newMachineId, setNewMachineId] = useState('');
+    const [newTwistId, setNewTwistId] = useState('');
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editTwistId, setEditTwistId] = useState('');
+    const [savingToggle, setSavingToggle] = useState(false);
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+    const autoEnabled = !!settings?.autoSelectTwistForMachine;
+
+    const eligibleMachines = (machines || []).filter(m => ['all', 'holo', 'coning'].includes(m.processType || 'all'));
+    const mappedMachineIds = new Set((data || []).map(r => r.machineId));
+    const addableMachines = eligibleMachines
+        .filter(m => !mappedMachineIds.has(m.id))
+        .map(m => ({ id: m.id, name: m.name }));
+    const twistOptions = (twists || []).map(t => ({ id: t.id, name: t.name }));
+
+    const machineName = (id) => (machines || []).find(m => m.id === id)?.name || '—';
+    const twistName = (id) => (twists || []).find(t => t.id === id)?.name || '—';
+
+    const filtered = (data || []).filter(r => {
+        if (!search) return true;
+        const s = search.toLowerCase();
+        return machineName(r.machineId).toLowerCase().includes(s) || twistName(r.twistId).toLowerCase().includes(s);
+    });
+
+    const handleCreate = async () => {
+        if (!allowCreate) return;
+        if (!newMachineId || !newTwistId) return;
+        await onCreate(newMachineId, newTwistId);
+        setNewMachineId('');
+        setNewTwistId('');
+    };
+
+    const handleUpdate = async (id) => {
+        if (!allowEdit) return;
+        if (!editTwistId) return;
+        await onUpdate(id, editTwistId);
+        setEditingId(null);
+    };
+
+    const handleToggle = async (e) => {
+        const next = !!e.target.checked;
+        setSavingToggle(true);
+        try {
+            await updateSettings({ autoSelectTwistForMachine: next });
+        } catch (err) {
+            alert(err?.message || 'Failed to update setting');
+        } finally {
+            setSavingToggle(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="space-y-1">
+                    <CardTitle>Twist Mapping</CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                        Map each machine to a default Twist. When the toggle is on, picking a machine on the Issue to Machine form will auto-select and lock the Twist.
+                    </p>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+                    <div className="relative w-full sm:w-48">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-9" />
+                    </div>
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                {isAdmin && (
+                    <div className="flex items-center justify-between gap-3 border rounded-md p-3 bg-muted/30">
+                        <div>
+                            <Label className="text-sm font-medium">Auto-select Twist on Machine selection</Label>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                When enabled, the Twist field on Issue to Machine (Holo &amp; Coning) is set from the mapping and locked. Machines without a mapping leave Twist blank for manual selection.
+                            </p>
+                        </div>
+                        <label className="inline-flex items-center cursor-pointer">
+                            <input
+                                type="checkbox"
+                                className="sr-only peer"
+                                checked={autoEnabled}
+                                disabled={savingToggle}
+                                onChange={handleToggle}
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary relative" />
+                        </label>
+                    </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                    <Select
+                        value={newMachineId}
+                        onChange={e => setNewMachineId(e.target.value)}
+                        options={addableMachines}
+                        labelKey="name"
+                        valueKey="id"
+                        placeholder="Select Machine"
+                        className="flex-1"
+                        disabled={!allowCreate || addableMachines.length === 0}
+                    />
+                    <Select
+                        value={newTwistId}
+                        onChange={e => setNewTwistId(e.target.value)}
+                        options={twistOptions}
+                        labelKey="name"
+                        valueKey="id"
+                        placeholder="Select Twist"
+                        className="flex-1"
+                        disabled={!allowCreate || twistOptions.length === 0}
+                    />
+                    <Button onClick={handleCreate} disabled={loading || !allowCreate || !newMachineId || !newTwistId} className="w-full sm:w-auto">
+                        <Plus className="w-4 h-4 mr-2" /> Add
+                    </Button>
+                </div>
+
+                <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Machine</TableHead>
+                                <TableHead>Twist</TableHead>
+                                <TableHead>Added By</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No mappings yet</TableCell></TableRow>
+                            ) : filtered.map(item => (
+                                <TableRow key={item.id}>
+                                    <TableCell>{machineName(item.machineId)}</TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select
+                                                value={editTwistId}
+                                                onChange={e => setEditTwistId(e.target.value)}
+                                                options={twistOptions}
+                                                labelKey="name"
+                                                valueKey="id"
+                                                className="h-8"
+                                                disabled={!allowEdit}
+                                            />
+                                        ) : twistName(item.twistId)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <UserBadge user={item.createdByUser} timestamp={item.createdAt} />
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditTwistId(item.twistId); }}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete mapping?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="block sm:hidden space-y-2">
+                    {filtered.length === 0 ? (
+                        <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No mappings yet</div>
+                    ) : filtered.map(item => (
+                        <div key={item.id} className="border rounded-lg bg-card p-3">
+                            {editingId === item.id ? (
+                                <div className="space-y-2">
+                                    <div className="text-sm font-medium">{machineName(item.machineId)}</div>
+                                    <Select
+                                        value={editTwistId}
+                                        onChange={e => setEditTwistId(e.target.value)}
+                                        options={twistOptions}
+                                        labelKey="name"
+                                        valueKey="id"
+                                        disabled={!allowEdit}
+                                    />
+                                    <div className="flex justify-end gap-1">
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4 mr-1" /> Save</Button>
+                                        </DisabledWithTooltip>
+                                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4 mr-1" /> Cancel</Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <div className="font-medium">{machineName(item.machineId)}</div>
+                                        <div className="text-xs text-muted-foreground">Twist: {twistName(item.twistId)}</div>
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditTwistId(item.twistId); }}><Edit2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete mapping?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
 }
 
 function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {

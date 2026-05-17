@@ -10,6 +10,7 @@ export function normalizeDb(raw) {
   const yarns = ensureArr(raw?.yarns);
   const cuts = ensureArr(raw?.cuts);
   const twists = ensureArr(raw?.twists);
+  const twist_mappings = ensureArr(raw?.twist_mappings);
   const firms = ensureArr(raw?.firms);
   const customers = ensureArr(raw?.customers);
   const suppliers = ensureArr(raw?.suppliers);
@@ -68,6 +69,7 @@ export function normalizeDb(raw) {
     yarns,
     cuts,
     twists,
+    twist_mappings,
     firms,
     customers,
     suppliers,

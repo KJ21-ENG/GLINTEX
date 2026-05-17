@@ -247,6 +247,10 @@ export async function listTwists() { return await request('/api/twists'); }
 export async function createTwist(name) { return await request('/api/twists', { method: 'POST', body: { name } }); }
 export async function deleteTwist(id) { return await request(`/api/twists/${id}`, { method: 'DELETE' }); }
 export async function updateTwist(id, name) { return await request(`/api/twists/${id}`, { method: 'PUT', body: { name } }); }
+export async function listTwistMappings() { return await request('/api/twist-mappings'); }
+export async function createTwistMapping(machineId, twistId) { return await request('/api/twist-mappings', { method: 'POST', body: { machineId, twistId } }); }
+export async function updateTwistMapping(id, twistId) { return await request(`/api/twist-mappings/${id}`, { method: 'PUT', body: { twistId } }); }
+export async function deleteTwistMapping(id) { return await request(`/api/twist-mappings/${id}`, { method: 'DELETE' }); }
 export async function listFirms() { return await request('/api/firms'); }
 export async function createFirm(name, address, mobile) { return await request('/api/firms', { method: 'POST', body: { name, address, mobile } }); }
 export async function deleteFirm(id) { return await request(`/api/firms/${id}`, { method: 'DELETE' }); }
@@ -574,6 +578,10 @@ export default {
   createTwist,
   deleteTwist,
   updateTwist,
+  listTwistMappings,
+  createTwistMapping,
+  updateTwistMapping,
+  deleteTwistMapping,
   listFirms,
   createFirm,
   deleteFirm,

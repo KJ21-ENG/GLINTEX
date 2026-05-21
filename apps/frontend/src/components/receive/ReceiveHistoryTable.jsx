@@ -6,7 +6,7 @@ import { Dialog, DialogContent } from '../ui/Dialog';
 import { Printer, Edit2, Trash2, Download, History, RotateCcw, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../../api';
 import { HighlightMatch } from '../common/HighlightMatch';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
@@ -903,6 +903,33 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             // Silent success
         } catch (err) {
             alert(err.message || 'Failed to reprint sticker');
+        }
+    };
+
+    const handlePrintConingSmallSticker = async (row) => {
+        try {
+            if (process !== 'coning') return;
+
+            const qtyInput = prompt('Enter quantity of stickers to print:', '1');
+            if (qtyInput === null) return;
+            const qty = parseInt(qtyInput, 10);
+            if (!qty || qty < 1) {
+                alert('Please enter a valid quantity (1 or more)');
+                return;
+            }
+
+            const stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL;
+            const data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
+            const template = await loadTemplate(stageKey);
+            if (!template) {
+                alert('No small sticker template found. Please configure it in Label Designer (Receive from machine (coning)_small sticker).');
+                return;
+            }
+
+            await printStageTemplatesBatch(stageKey, [data], { template, copies: qty });
+            // Silent success
+        } catch (err) {
+            alert(err.message || 'Failed to print small sticker');
         }
     };
 
@@ -1933,6 +1960,11 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             icon: <Printer className="w-4 h-4" />,
             onClick: () => handleReprint(row),
         },
+        ...(process === 'coning' ? [{
+            label: 'Print Small Sticker',
+            icon: <Printer className="w-4 h-4" />,
+            onClick: () => handlePrintConingSmallSticker(row),
+        }] : []),
         ...((process === 'holo' || process === 'coning') ? [
             {
                 label: 'Edit',

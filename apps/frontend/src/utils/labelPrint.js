@@ -17,6 +17,7 @@ export const LABEL_STAGE_KEYS = {
   HOLO_RECEIVE: 'holo_receive',
   CONING_ISSUE: 'coning_issue',
   CONING_RECEIVE: 'coning_receive',
+  CONING_RECEIVE_SMALL: 'coning_receive_small',
 };
 
 export const STAGE_VARIABLES = {
@@ -140,6 +141,27 @@ export const STAGE_VARIABLES = {
     { key: 'shift', label: 'Shift' },
   ],
   [LABEL_STAGE_KEYS.CONING_RECEIVE]: [
+    { key: 'lotNo', label: 'Lot No' },
+    { key: 'itemName', label: 'Item Name' },
+    { key: 'cut', label: 'Cut' },
+    { key: 'yarnName', label: 'Yarn' },
+    { key: 'twist', label: 'Twist' },
+    { key: 'rollType', label: 'Roll Type' },
+    { key: 'coneType', label: 'Cone Type' },
+    { key: 'wrapperName', label: 'Wrapper' },
+    { key: 'issueBarcode', label: 'Issue Barcode' },
+    { key: 'barcode', label: 'Receive Barcode' },
+    { key: 'rollCount', label: 'Roll Count' },
+    { key: 'coneCount', label: 'Cone Count' },
+    { key: 'grossWeight', label: 'Gross Weight' },
+    { key: 'tareWeight', label: 'Tare Weight' },
+    { key: 'netWeight', label: 'Net Weight' },
+    { key: 'shift', label: 'Shift' },
+    { key: 'boxName', label: 'Box' },
+    { key: 'operatorName', label: 'Operator' },
+    { key: 'date', label: 'Date' },
+  ],
+  [LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL]: [
     { key: 'lotNo', label: 'Lot No' },
     { key: 'itemName', label: 'Item Name' },
     { key: 'cut', label: 'Cut' },
@@ -463,6 +485,39 @@ export const DEFAULT_STAGE_TEMPLATES = {
         _hLine('l-cor-hline', 32, 0, 125),
         _textBase('t-cor-net', 35, 122, 'NET WT : @netWeight KG', 15),
         _barcode('bc-cor', 45, 95, { heightMm: 10, moduleMm: 0.35 }),
+      ],
+    },
+  },
+
+  // ── CONING RECEIVE SMALL ─────────────────────────────────────────────
+  // 50x25 portrait, 2-column compact sticker.
+  [LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL]: {
+    dimensions: {
+      width: 50, height: 25, columns: 2, offsetX: 1, offsetY: -1,
+      fontSize: 10, marginTop: 0, pageWidth: 105, marginLeft: 0,
+      orientation: 'portrait', verticalGap: 2, horizontalGap: 2,
+    },
+    content: {
+      copies: 1,
+      texts: [
+        { id: 't-cors-item', type: 'text', angle: 0, pos: { x: 3, y: 3 },
+          style: { bold: true, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: true },
+          value: '@itemName' },
+        { id: 't-cors-operator', type: 'text', angle: 0, pos: { x: 3, y: 8 },
+          style: { bold: false, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: false },
+          value: '@operatorName' },
+        { id: 'bc-cors', type: 'barcode', angle: 0, pos: { x: 5, y: 14 },
+          style: { bold: false, italic: false, heightMm: 7, moduleMm: 0.25, underline: false, humanReadable: true },
+          value: '{{barcode}}' },
+        { id: 't-cors-cut', type: 'text', angle: 0, pos: { x: 29, y: 3 },
+          style: { bold: true, size: 10, italic: false, opacity: 1, visible: true, underline: false,
+            background: { color: '#000000', enabled: false, paddingMm: 0.8, textColor: '#ffffff' },
+            wrapAtCenter: false },
+          value: '(@cut)' },
       ],
     },
   },

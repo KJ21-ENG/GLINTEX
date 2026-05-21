@@ -1806,6 +1806,7 @@ const LabelDesigner = () => {
     { value: LABEL_STAGE_KEYS.HOLO_RECEIVE, label: 'Receive from machine (holo)' },
     { value: LABEL_STAGE_KEYS.CONING_ISSUE, label: 'Issue to machine (coning)' },
     { value: LABEL_STAGE_KEYS.CONING_RECEIVE, label: 'Receive from machine (coning)' },
+    { value: LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL, label: 'Receive from machine (coning)_small sticker' },
   ];
 
   return (

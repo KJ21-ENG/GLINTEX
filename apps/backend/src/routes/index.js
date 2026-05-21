@@ -18735,18 +18735,41 @@ async function generateSummaryData(stage, type, date) {
     summary.totalRolls = rows.reduce((sum, r) => sum + (r.rollCount || 0), 0);
     summary.totalNetWeight = rows.reduce((sum, r) => sum + netWeight(r), 0);
 
-    summary.details = rows.map(r => ({
-      machineName: issueMap.get(r.issueId)?.machine?.name || (issueMap.get(r.issueId)?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
-      itemName: itemMap[issueMap.get(r.issueId)?.itemId] || issueMap.get(r.issueId)?.itemId || '-',
-      lotNo: issueMap.get(r.issueId)?.lotNo || '-',
-      cutName: cutNameMap.get(r.issueId) || '-',
-      twistName: issueMap.get(r.issueId)?.twist?.name || '-',
-      yarnName: issueMap.get(r.issueId)?.yarn?.name || '-',
-      operatorName: r.operator?.name || (issueMap.get(r.issueId)?.note === 'Opening Stock' ? 'Opening Stock' : '-'),
-      boxName: r.box?.name || '-',
-      rollCount: r.rollCount || 0,
-      netWeight: netWeight(r),
-    }));
+    const groupedMap = new Map();
+    rows.forEach((r) => {
+      const issue = issueMap.get(r.issueId);
+      const rawMachine = issue?.machine?.name || (issue?.note === 'Opening Stock' ? 'Opening Stock' : '-');
+      const machineName = getBaseMachineName(rawMachine, rawMachine || '-');
+      const itemName = itemMap[issue?.itemId] || issue?.itemId || '-';
+      const cutName = cutNameMap.get(r.issueId) || '-';
+      const twistName = issue?.twist?.name || '-';
+      const yarnName = issue?.yarn?.name || '-';
+      const key = [machineName, yarnName, itemName, cutName, twistName].join('||');
+
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, {
+          machineName,
+          itemName,
+          cutName,
+          twistName,
+          yarnName,
+          rollCount: 0,
+          netWeight: 0,
+        });
+      }
+
+      const entry = groupedMap.get(key);
+      entry.rollCount += Number(r.rollCount || 0);
+      entry.netWeight += Number(netWeight(r) || 0);
+    });
+
+    summary.details = Array.from(groupedMap.values()).sort((a, b) => (
+      String(a.yarnName || '').localeCompare(String(b.yarnName || ''), undefined, { numeric: true, sensitivity: 'base' })
+      || String(a.itemName || '').localeCompare(String(b.itemName || ''), undefined, { numeric: true, sensitivity: 'base' })
+      || String(a.cutName || '').localeCompare(String(b.cutName || ''), undefined, { numeric: true, sensitivity: 'base' })
+      || String(a.twistName || '').localeCompare(String(b.twistName || ''), undefined, { numeric: true, sensitivity: 'base' })
+      || String(a.machineName || '').localeCompare(String(b.machineName || ''), undefined, { numeric: true, sensitivity: 'base' })
+    ));
 
     summary.byOperator = aggregateBy(rows, r => r.operator?.name || 'Unknown', {
       count: () => 1,

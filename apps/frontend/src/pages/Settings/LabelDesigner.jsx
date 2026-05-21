@@ -59,6 +59,25 @@ const normalizeTextBlock = (block = {}, fallbackId = 0) => normalizeBlock(block,
 
 const migrateLegacyContent = (raw) => migrateContent(raw);
 
+const getBarcodeWarningForBlock = (block, dimensions) => {
+  if (!block || block.type !== 'barcode' || !dimensions) return null;
+
+  const bounds = measureRenderedBlock(block, dimensions, {});
+  const offsetX = Number(dimensions.offsetX || 0);
+  const offsetY = Number(dimensions.offsetY || 0);
+  const width = Number(dimensions.width || 0);
+  const height = Number(dimensions.height || 0);
+
+  const overflows =
+    bounds.left < offsetX
+    || bounds.top < offsetY
+    || bounds.right > offsetX + width
+    || bounds.bottom > offsetY + height;
+
+  if (!overflows) return null;
+  return 'Barcode exceeds the safe label area. Increase label size, move it inward, or reduce module width.';
+};
+
 const LabelCanvasSurface = ({ sourceCanvas }) => {
   const canvasRef = useRef(null);
 
@@ -2052,7 +2071,7 @@ const LabelDesigner = () => {
                     selectedTextSizes.length > 1 && new Set(selectedTextSizes.map((v) => String(v))).size > 1;
                   const hasMixedFontFamily =
                     selectedTextFontFamilies.length > 1 && new Set(selectedTextFontFamilies).size > 1;
-                  const barcodeWarning = isBarcode ? getBarcodeWarning(text) : null;
+                  const barcodeWarning = isBarcode ? getBarcodeWarningForBlock(text, dimensions) : null;
                   return (
                     <>
                       <div className="flex items-start gap-2">

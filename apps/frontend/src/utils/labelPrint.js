@@ -1,5 +1,5 @@
 // Shared label printing helpers for LabelDesigner and stage flows.
-// Handles template storage (localStorage), TSPL generation for text + Code128 barcodes,
+// Handles template storage (localStorage), TSPL generation for text + Code128/QR codes,
 // placeholder substitution, and posting jobs to the local print service.
 
 import { formatDateDDMMYYYY } from './formatting';
@@ -844,11 +844,15 @@ export const applyFlowLayout = (fields = [], dimensions, options = {}) => {
 export const normalizeBlock = (block = {}, fallbackId = 0) => {
   const baseStyle = block.style || {};
   const type = block.type || 'text';
+  const barcodeCodeType = baseStyle.codeType === 'qr' ? 'qr' : 'barcode';
+  const qrEcLevel = ['L', 'M', 'Q', 'H'].includes(baseStyle.ecLevel) ? baseStyle.ecLevel : 'M';
   const defaultBarcodeStyle = {
+    codeType: barcodeCodeType,
     heightMm: baseStyle.heightMm ?? 12,
     moduleMm: baseStyle.moduleMm ?? 0.3,
     humanReadable: baseStyle.humanReadable !== false,
     profile: baseStyle.profile === 'robust' ? 'robust' : 'balanced',
+    ecLevel: qrEcLevel,
     quietZoneMm: getBarcodeQuietZoneMm(baseStyle),
     bold: false,
     italic: false,
@@ -1067,10 +1071,15 @@ export const buildTspl = (dimensions, content, data = {}, options = {}) => {
         const moduleMm = field.style?.moduleMm ?? 0.3;
         const heightMm = field.style?.heightMm ?? 12;
         const moduleDots = Math.max(1, mmToDots(moduleMm));
-        const heightDots = Math.max(16, mmToDots(heightMm));
-        const humanReadable = field.style?.humanReadable === false ? 0 : 1;
         const x = mmToDots(columnOffset + (field.pos?.x || 0));
         const y = mmToDots(baseY + (field.pos?.y || 0));
+        if (field.style?.codeType === 'qr') {
+          const ecLevel = ['L', 'M', 'Q', 'H'].includes(field.style?.ecLevel) ? field.style.ecLevel : 'M';
+          lines.push(`QRCODE ${x},${y},${ecLevel},${moduleDots},A,${angle},"${sanitizeText(finalValue)}"`);
+          return;
+        }
+        const heightDots = Math.max(16, mmToDots(heightMm));
+        const humanReadable = field.style?.humanReadable === false ? 0 : 1;
         lines.push(
           `BARCODE ${x},${y},"128",${heightDots},${humanReadable},${angle},${moduleDots},${moduleDots * 3},"${sanitizeText(
             finalValue,

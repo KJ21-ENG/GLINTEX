@@ -796,6 +796,7 @@ const LabelPreview = ({
         startY: clientY,
         origin: { moduleMm, heightMm },
         modules,
+        codeType: target.style?.codeType === 'qr' ? 'qr' : 'barcode',
       });
       return;
     }
@@ -848,6 +849,17 @@ const LabelPreview = ({
         const moduleMmBase = resizing.origin.moduleMm;
         const heightMmBase = resizing.origin.heightMm;
         const modules = Math.max(30, resizing.modules || 30);
+        if (resizing.codeType === 'qr') {
+          const delta = Math.max(dxMm, dyMm);
+          const nextModuleMm = Math.min(2, Math.max(0.1, snapToGrid ? Math.round((moduleMmBase + delta / modules) * 20) / 20 : moduleMmBase + delta / modules));
+          return {
+            ...prev,
+            texts: allTexts.map((t) => {
+              if (t.id !== resizing.id) return t;
+              return { ...t, style: { ...(t.style || {}), moduleMm: nextModuleMm } };
+            }),
+          };
+        }
         const nextModuleMm = Math.min(2, Math.max(0.1, snapToGrid ? Math.round((moduleMmBase + dxMm / modules) * 20) / 20 : moduleMmBase + dxMm / modules));
         const nextHeightMm = Math.min(80, Math.max(4, snapToGrid ? Math.round(heightMmBase + dyMm) : heightMmBase + dyMm));
         return {
@@ -1586,6 +1598,7 @@ const LabelDesigner = () => {
       value: '{{barcode}}',
       pos: { x: 5, y: 5 },
       style: {
+        codeType: 'barcode',
         heightMm: 12,
         moduleMm: 0.3,
         humanReadable: true,
@@ -2040,7 +2053,7 @@ const LabelDesigner = () => {
                 + Add text
               </Button>
               <Button size="sm" variant="outline" onClick={addBarcodeBlock}>
-                + Add barcode
+                + Add code
               </Button>
               <Button size="sm" variant="outline" onClick={addLineBlock}>
                 + Add line
@@ -2058,6 +2071,7 @@ const LabelDesigner = () => {
                   if (!text) return <div className="text-sm text-muted-foreground">Select a text to edit.</div>;
                   const isBarcode = text.type === 'barcode';
                   const isLine = text.type === 'line';
+                  const codeType = text.style?.codeType === 'qr' ? 'qr' : 'barcode';
                   const selectedTextIds = selectedBlocks
                     .filter((t) => t.type !== 'barcode' && t.type !== 'line')
                     .map((t) => t.id);
@@ -2166,18 +2180,34 @@ const LabelDesigner = () => {
                             <div className="text-[11px]">Tip: use {'{{barcode}}'} to pull the runtime barcode value.</div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
-                                <Label className="text-xs">Height (mm)</Label>
+                                <Label className="text-xs">Code type</Label>
+                                <select
+                                  value={codeType}
+                                  onChange={(e) => updateTextStyle(text.id, { codeType: e.target.value })}
+                                  className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  <option value="barcode">Barcode</option>
+                                  <option value="qr">QR code</option>
+                                </select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">{codeType === 'qr' ? 'Cell width (mm)' : 'Height (mm)'}</Label>
                                 <Input
                                   type="number"
-                                  step="0.5"
+                                  step={codeType === 'qr' ? '0.05' : '0.5'}
                                   className="h-8"
-                                  value={text.style?.heightMm ?? 12}
+                                  value={codeType === 'qr' ? text.style?.moduleMm ?? 0.3 : text.style?.heightMm ?? 12}
                                   onChange={(e) =>
-                                    updateTextStyle(text.id, { heightMm: Math.max(4, parseFloat(e.target.value) || 12) })
+                                    updateTextStyle(
+                                      text.id,
+                                      codeType === 'qr'
+                                        ? { moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3) }
+                                        : { heightMm: Math.max(4, parseFloat(e.target.value) || 12) }
+                                    )
                                   }
                                 />
                               </div>
-                              <div>
+                              {codeType === 'barcode' ? <div>
                                 <Label className="text-xs">Module width (mm)</Label>
                                 <Input
                                   type="number"
@@ -2190,8 +2220,8 @@ const LabelDesigner = () => {
                                     })
                                   }
                                 />
-                              </div>
-                              <div>
+                              </div> : null}
+                              {codeType === 'barcode' ? <div>
                                 <Label className="text-xs">Profile</Label>
                                 <select
                                   value={text.style?.profile || 'balanced'}
@@ -2201,8 +2231,22 @@ const LabelDesigner = () => {
                                   <option value="balanced">Balanced</option>
                                   <option value="robust">Robust</option>
                                 </select>
-                              </div>
-                              <div className="flex items-center gap-2">
+                              </div> : (
+                                <div>
+                                  <Label className="text-xs">Error correction</Label>
+                                  <select
+                                    value={text.style?.ecLevel || 'M'}
+                                    onChange={(e) => updateTextStyle(text.id, { ecLevel: e.target.value })}
+                                    className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  >
+                                    <option value="L">L</option>
+                                    <option value="M">M</option>
+                                    <option value="Q">Q</option>
+                                    <option value="H">H</option>
+                                  </select>
+                                </div>
+                              )}
+                              {codeType === 'barcode' ? <div className="flex items-center gap-2">
                                 <Label className="text-xs">Human readable</Label>
                                 <Button
                                   size="sm"
@@ -2216,7 +2260,7 @@ const LabelDesigner = () => {
                                 >
                                   {text.style?.humanReadable === false ? 'Off' : 'On'}
                                 </Button>
-                              </div>
+                              </div> : null}
                               <div className="flex items-center gap-2">
                                 <Label className="text-xs">Angle</Label>
                                 <select

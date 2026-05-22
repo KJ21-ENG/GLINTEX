@@ -85,10 +85,12 @@ const drawWithRotation = (ctx, x, y, angle, draw) => {
 const buildBarcodeCacheKey = (value, style = {}, pixelsPerMm) =>
   JSON.stringify({
     value,
+    codeType: style.codeType === 'qr' ? 'qr' : 'barcode',
     moduleMm: Number(style.moduleMm ?? 0.3).toFixed(3),
     heightMm: Number(style.heightMm ?? 12).toFixed(3),
     humanReadable: style.humanReadable !== false,
     profile: style.profile === 'robust' ? 'robust' : 'balanced',
+    ecLevel: ['L', 'M', 'Q', 'H'].includes(style.ecLevel) ? style.ecLevel : 'M',
     quietZoneMm: getBarcodeQuietZoneMm(style),
     pixelsPerMm: Number(pixelsPerMm).toFixed(3),
   });
@@ -139,16 +141,27 @@ const renderBarcodeToCanvas = (value, style = {}, options = {}) => {
   const heightMmForBwip = Number(((heightPixels * 25.4) / (72 * modulePixels)).toFixed(2));
   const quietZoneMm = getBarcodeQuietZoneMm(style);
   const innerCanvas = createCanvas(1, 1);
+  const codeType = style.codeType === 'qr' ? 'qr' : 'barcode';
 
-  bwipjs.toCanvas(innerCanvas, {
-    bcid: 'code128',
-    text: barcodeValue,
-    scale: modulePixels,
-    height: heightMmForBwip,
-    includetext: style.humanReadable !== false,
-    textxalign: 'center',
-    backgroundcolor: 'FFFFFF',
-  });
+  if (codeType === 'qr') {
+    bwipjs.toCanvas(innerCanvas, {
+      bcid: 'qrcode',
+      text: barcodeValue,
+      scale: modulePixels,
+      eclevel: ['L', 'M', 'Q', 'H'].includes(style.ecLevel) ? style.ecLevel : 'M',
+      backgroundcolor: 'FFFFFF',
+    });
+  } else {
+    bwipjs.toCanvas(innerCanvas, {
+      bcid: 'code128',
+      text: barcodeValue,
+      scale: modulePixels,
+      height: heightMmForBwip,
+      includetext: style.humanReadable !== false,
+      textxalign: 'center',
+      backgroundcolor: 'FFFFFF',
+    });
+  }
 
   const paddingLeft = mmToRenderPixels(quietZoneMm.left, pixelsPerMm);
   const paddingRight = mmToRenderPixels(quietZoneMm.right, pixelsPerMm);

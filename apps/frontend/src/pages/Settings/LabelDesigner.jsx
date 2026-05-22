@@ -84,10 +84,13 @@ const getQrSizing = (block, dimensions, options = {}) => {
   const metrics = measureRenderedBlock(block, dimensions, options);
   const symbolWidthMm = Math.max(moduleMm, Number(metrics.widthMm || 0) - quietZone.left - quietZone.right);
   const moduleCount = Math.max(1, symbolWidthMm / Math.max(0.001, moduleMm));
+  const configuredSizeMm = Number(block?.style?.sizeMm);
   return {
     moduleCount,
     quietZone,
-    sizeMm: Number(metrics.widthMm || 0),
+    sizeMm: Number.isFinite(configuredSizeMm) && configuredSizeMm > 0
+      ? configuredSizeMm
+      : Number(metrics.widthMm || 0),
   };
 };
 
@@ -95,6 +98,14 @@ const moduleMmForQrSize = (block, dimensions, sizeMm, options = {}) => {
   const sizing = getQrSizing(block, dimensions, options);
   const nextSymbolSize = Math.max(0.1, Number(sizeMm || 0) - sizing.quietZone.left - sizing.quietZone.right);
   return Math.max(0.05, nextSymbolSize / sizing.moduleCount);
+};
+
+const buildQrSizeStyle = (block, dimensions, sizeMm, options = {}) => {
+  const nextSizeMm = Math.max(1, Number(sizeMm || 0));
+  return {
+    sizeMm: nextSizeMm,
+    moduleMm: moduleMmForQrSize(block, dimensions, nextSizeMm, options),
+  };
 };
 
 const LabelCanvasSurface = ({ sourceCanvas }) => {
@@ -898,7 +909,7 @@ const LabelPreview = ({
             ...prev,
             texts: allTexts.map((t) => {
               if (t.id !== resizing.id) return t;
-              return { ...t, style: { ...(t.style || {}), moduleMm: nextModuleMm } };
+              return { ...t, style: { ...(t.style || {}), moduleMm: nextModuleMm, sizeMm: nextSizeMm } };
             }),
           };
         }
@@ -2245,7 +2256,7 @@ const LabelDesigner = () => {
                                     updateTextStyle(
                                       text.id,
                                       codeType === 'qr'
-                                        ? { moduleMm: moduleMmForQrSize(text, dimensions, parseFloat(e.target.value) || 4, { preserveColor: true }) }
+                                        ? buildQrSizeStyle(text, dimensions, parseFloat(e.target.value) || 4, { preserveColor: true })
                                         : { heightMm: Math.max(4, parseFloat(e.target.value) || 12) }
                                     )
                                   }

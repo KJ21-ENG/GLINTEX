@@ -86,6 +86,7 @@ const buildBarcodeCacheKey = (value, style = {}, pixelsPerMm) =>
   JSON.stringify({
     value,
     codeType: style.codeType === 'qr' ? 'qr' : 'barcode',
+    sizeMm: Number.isFinite(Number(style.sizeMm)) ? Number(style.sizeMm).toFixed(3) : null,
     moduleMm: Number(style.moduleMm ?? 0.3).toFixed(3),
     heightMm: Number(style.heightMm ?? 12).toFixed(3),
     humanReadable: style.humanReadable !== false,
@@ -144,13 +145,38 @@ const renderBarcodeToCanvas = (value, style = {}, options = {}) => {
   const codeType = style.codeType === 'qr' ? 'qr' : 'barcode';
 
   if (codeType === 'qr') {
+    const requestedSizeMm = Number(style.sizeMm);
+    const qrScale = 8;
     bwipjs.toCanvas(innerCanvas, {
       bcid: 'qrcode',
       text: barcodeValue,
-      scale: modulePixels,
+      scale: qrScale,
       eclevel: ['L', 'M', 'Q', 'H'].includes(style.ecLevel) ? style.ecLevel : 'M',
       backgroundcolor: 'FFFFFF',
     });
+    if (Number.isFinite(requestedSizeMm) && requestedSizeMm > 0) {
+      const targetInnerPixels = Math.max(
+        1,
+        mmToRenderPixels(requestedSizeMm - quietZoneMm.left - quietZoneMm.right, pixelsPerMm),
+      );
+      const resizedCanvas = createCanvas(targetInnerPixels, targetInnerPixels);
+      const resizedContext = resizedCanvas.getContext('2d', { alpha: false });
+      if (!resizedContext) {
+        throw new Error('Unable to acquire canvas context for QR rendering');
+      }
+      resizedContext.imageSmoothingEnabled = false;
+      resizedContext.fillStyle = '#ffffff';
+      resizedContext.fillRect(0, 0, resizedCanvas.width, resizedCanvas.height);
+      resizedContext.drawImage(innerCanvas, 0, 0, resizedCanvas.width, resizedCanvas.height);
+      innerCanvas.width = resizedCanvas.width;
+      innerCanvas.height = resizedCanvas.height;
+      const innerContext = innerCanvas.getContext('2d', { alpha: false });
+      if (!innerContext) {
+        throw new Error('Unable to acquire canvas context for QR rendering');
+      }
+      innerContext.imageSmoothingEnabled = false;
+      innerContext.drawImage(resizedCanvas, 0, 0);
+    }
   } else {
     bwipjs.toCanvas(innerCanvas, {
       bcid: 'code128',

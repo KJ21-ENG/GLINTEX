@@ -848,6 +848,7 @@ export const normalizeBlock = (block = {}, fallbackId = 0) => {
   const qrEcLevel = ['L', 'M', 'Q', 'H'].includes(baseStyle.ecLevel) ? baseStyle.ecLevel : 'M';
   const defaultBarcodeStyle = {
     codeType: barcodeCodeType,
+    sizeMm: Number.isFinite(Number(baseStyle.sizeMm)) ? Number(baseStyle.sizeMm) : null,
     heightMm: baseStyle.heightMm ?? 12,
     moduleMm: baseStyle.moduleMm ?? 0.3,
     humanReadable: baseStyle.humanReadable !== false,

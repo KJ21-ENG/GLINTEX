@@ -69,23 +69,34 @@ export async function generateHoloReceivePdf(data) {
     let totalNetWeight = 0;
 
     if (data.details && data.details.length > 0) {
+        const summaryGroupedMap = new Map();
         data.details.forEach((item, idx) => {
             const rolls = Number(item.rollCount || 0);
             const netWeight = Number(item.netWeight || 0);
             totalRolls += rolls;
             totalNetWeight += netWeight;
 
-            summaryRows.push({
-                cells: [
-                    { text: item.machineName || '-', align: 'left' },
-                    { text: item.yarnName || '-', align: 'left' },
-                    { text: item.itemName || '-', align: 'left' },
-                    { text: item.cutName || '-', align: 'left' },
-                    { text: item.twistName || '-', align: 'left' },
-                    { text: formatNumber(rolls), align: 'right' },
-                    { text: formatWeight(netWeight), align: 'right' },
-                ],
-            });
+            const summaryKey = [
+                item.yarnName || '-',
+                item.itemName || '-',
+                item.cutName || '-',
+                item.twistName || '-',
+            ].join('||');
+            if (!summaryGroupedMap.has(summaryKey)) {
+                summaryGroupedMap.set(summaryKey, {
+                    machineNames: new Set(),
+                    yarnName: item.yarnName || '-',
+                    itemName: item.itemName || '-',
+                    cutName: item.cutName || '-',
+                    twistName: item.twistName || '-',
+                    rollCount: 0,
+                    netWeight: 0,
+                });
+            }
+            const summaryEntry = summaryGroupedMap.get(summaryKey);
+            summaryEntry.machineNames.add(item.machineName || '-');
+            summaryEntry.rollCount += rolls;
+            summaryEntry.netWeight += netWeight;
 
             detailsRows.push({
                 cells: [
@@ -100,6 +111,27 @@ export async function generateHoloReceivePdf(data) {
                 ],
             });
         });
+
+        Array.from(summaryGroupedMap.values())
+            .sort((a, b) => (
+                String(a.yarnName || '').localeCompare(String(b.yarnName || ''), undefined, { numeric: true, sensitivity: 'base' })
+                || String(a.itemName || '').localeCompare(String(b.itemName || ''), undefined, { numeric: true, sensitivity: 'base' })
+                || String(a.cutName || '').localeCompare(String(b.cutName || ''), undefined, { numeric: true, sensitivity: 'base' })
+                || String(a.twistName || '').localeCompare(String(b.twistName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            ))
+            .forEach((entry) => {
+                summaryRows.push({
+                    cells: [
+                        { text: Array.from(entry.machineNames).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })).join(', '), align: 'left' },
+                        { text: entry.yarnName, align: 'left' },
+                        { text: entry.itemName, align: 'left' },
+                        { text: entry.cutName, align: 'left' },
+                        { text: entry.twistName, align: 'left' },
+                        { text: formatNumber(entry.rollCount), align: 'right' },
+                        { text: formatWeight(entry.netWeight), align: 'right' },
+                    ],
+                });
+            });
 
         // Totals row
         detailsRows.push({

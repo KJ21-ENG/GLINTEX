@@ -41,15 +41,15 @@ export async function generateHoloReceivePdf(data) {
     y = drawOverview(doc, { y, metrics, pageWidth });
 
     const summaryHeaders = [
-        { text: 'Machine', align: 'left' },
         { text: 'Yarn', align: 'left' },
         { text: 'Item', align: 'left', wrap: true },
         { text: 'Cut', align: 'left' },
         { text: 'Twist', align: 'left' },
+        { text: 'Machine', align: 'left' },
         { text: 'Rolls', align: 'right' },
         { text: 'Net Wt (kg)', align: 'right' },
     ];
-    const summaryColWidths = [30, 34, 56, 34, 34, 32, 47];
+    const summaryColWidths = [34, 56, 34, 34, 30, 32, 47];
 
     const detailHeaders = [
         { text: 'S.No', align: 'center' },
@@ -122,11 +122,11 @@ export async function generateHoloReceivePdf(data) {
             .forEach((entry) => {
                 summaryRows.push({
                     cells: [
-                        { text: Array.from(entry.machineNames).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })).join(', '), align: 'left' },
                         { text: entry.yarnName, align: 'left' },
                         { text: entry.itemName, align: 'left' },
                         { text: entry.cutName, align: 'left' },
                         { text: entry.twistName, align: 'left' },
+                        { text: Array.from(entry.machineNames).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })).join(', '), align: 'left' },
                         { text: formatNumber(entry.rollCount), align: 'right' },
                         { text: formatWeight(entry.netWeight), align: 'right' },
                     ],

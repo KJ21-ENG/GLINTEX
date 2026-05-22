@@ -69,8 +69,15 @@ export async function generateHoloReceivePdf(data) {
     let totalNetWeight = 0;
 
     if (data.details && data.details.length > 0) {
+        const sortedDetails = [...data.details].sort((a, b) => (
+            String(a.machineName || '').localeCompare(String(b.machineName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            || String(a.yarnName || '').localeCompare(String(b.yarnName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            || String(a.itemName || '').localeCompare(String(b.itemName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            || String(a.cutName || '').localeCompare(String(b.cutName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            || String(a.twistName || '').localeCompare(String(b.twistName || ''), undefined, { numeric: true, sensitivity: 'base' })
+        ));
         const summaryGroupedMap = new Map();
-        data.details.forEach((item, idx) => {
+        sortedDetails.forEach((item, idx) => {
             const rolls = Number(item.rollCount || 0);
             const netWeight = Number(item.netWeight || 0);
             totalRolls += rolls;

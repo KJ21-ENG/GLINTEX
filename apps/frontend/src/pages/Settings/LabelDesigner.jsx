@@ -369,6 +369,23 @@ const LabelPreview = ({
     return { widthMm: metrics.widthMm, heightMm: metrics.heightMm };
   };
 
+  const getBlockMinPos = useCallback((block) => {
+    if (block?.type !== 'barcode') return { x: 0, y: 0 };
+    const quietZone = getBarcodeQuietZoneMm(block.style || {});
+    return {
+      x: -Number(quietZone.left || 0),
+      y: -Number(quietZone.top || 0),
+    };
+  }, []);
+
+  const clampBlockPosition = useCallback((block, x, y) => {
+    const min = getBlockMinPos(block);
+    return {
+      x: Math.max(min.x, x),
+      y: Math.max(min.y, y),
+    };
+  }, [getBlockMinPos]);
+
   const computeBoundingBox = (text) => {
     const { widthMm, heightMm } = measureBlock(text);
     const angle = text.type === 'line' ? 0 : snapAngle(text.angle || 0);
@@ -447,15 +464,13 @@ const LabelPreview = ({
   const moveSelectedBy = useCallback((dx, dy) => {
     updateSelectedBlocks((texts) => texts.map((block) => {
       if (!selectedIds.includes(block.id) || block.locked) return block;
+      const nextPos = clampBlockPosition(block, (block.pos?.x || 0) + dx, (block.pos?.y || 0) + dy);
       return {
         ...block,
-        pos: {
-          x: Math.max(0, (block.pos?.x || 0) + dx),
-          y: Math.max(0, (block.pos?.y || 0) + dy),
-        },
+        pos: nextPos,
       };
     }));
-  }, [selectedIds, updateSelectedBlocks]);
+  }, [clampBlockPosition, selectedIds, updateSelectedBlocks]);
 
   const alignSelected = useCallback((mode) => {
     if (selectedIds.length < 2) return;
@@ -481,15 +496,13 @@ const LabelPreview = ({
       if (mode === 'top') dy = bounds.top - box.top;
       if (mode === 'bottom') dy = bounds.bottom - box.bottom;
       if (mode === 'center-y') dy = centerY - box.centerY;
+      const nextPos = clampBlockPosition(block, (block.pos?.x || 0) + dx, (block.pos?.y || 0) + dy);
       return {
         ...block,
-        pos: {
-          x: Math.max(0, (block.pos?.x || 0) + dx),
-          y: Math.max(0, (block.pos?.y || 0) + dy),
-        },
+        pos: nextPos,
       };
     }));
-  }, [content.texts, selectedIds, updateSelectedBlocks]);
+  }, [clampBlockPosition, content.texts, selectedIds, updateSelectedBlocks]);
 
   const distributeSelected = useCallback((axis) => {
     if (selectedIds.length < 3) return;
@@ -519,15 +532,17 @@ const LabelPreview = ({
     updateSelectedBlocks((texts) => texts.map((block) => {
       if (!selectedIds.includes(block.id) || block.locked || !shifts.has(block.id)) return block;
       const delta = shifts.get(block.id) || 0;
+      const nextPos = clampBlockPosition(
+        block,
+        (block.pos?.x || 0) + (axis === 'x' ? delta : 0),
+        (block.pos?.y || 0) + (axis === 'y' ? delta : 0),
+      );
       return {
         ...block,
-        pos: {
-          x: Math.max(0, (block.pos?.x || 0) + (axis === 'x' ? delta : 0)),
-          y: Math.max(0, (block.pos?.y || 0) + (axis === 'y' ? delta : 0)),
-        },
+        pos: nextPos,
       };
     }));
-  }, [content.texts, selectedIds, updateSelectedBlocks]);
+  }, [clampBlockPosition, content.texts, selectedIds, updateSelectedBlocks]);
 
   const duplicateSelected = useCallback(() => {
     if (selectedIds.length === 0) return;
@@ -670,9 +685,10 @@ const LabelPreview = ({
       ].forEach((c) => considerCandidate(c, 'y'));
     }
 
+    const min = getBlockMinPos(active);
     return {
-      snappedX: bestX ? Math.max(0, proposedPos.x + bestX.diff) : proposedPos.x,
-      snappedY: bestY ? Math.max(0, proposedPos.y + bestY.diff) : proposedPos.y,
+      snappedX: bestX ? Math.max(min.x, proposedPos.x + bestX.diff) : proposedPos.x,
+      snappedY: bestY ? Math.max(min.y, proposedPos.y + bestY.diff) : proposedPos.y,
       guideX: bestX ? bestX.guide : null,
       guideY: bestY ? bestY.guide : null,
       diffX: bestX ? bestX.diff : null,
@@ -731,10 +747,7 @@ const LabelPreview = ({
       if (!target) return prev;
       const origin = dragging.origins[activeId] || { x: 0, y: 0 };
       const snapToGridValue = (value) => (snapToGrid ? Math.round(value) : value);
-      const proposed = {
-        x: Math.max(0, snapToGridValue(origin.x + dxMm)),
-        y: Math.max(0, snapToGridValue(origin.y + dyMm)),
-      };
+      const proposed = clampBlockPosition(target, snapToGridValue(origin.x + dxMm), snapToGridValue(origin.y + dyMm));
       if (!snapEnabled) {
         setGuides({ vertical: null, horizontal: null });
         return {
@@ -742,12 +755,10 @@ const LabelPreview = ({
           texts: allTexts.map((t) => {
             if (!dragging.ids.includes(t.id) || t.locked) return t;
             const originPos = dragging.origins[t.id] || { x: t.pos?.x || 0, y: t.pos?.y || 0 };
+            const nextPos = clampBlockPosition(t, snapToGridValue(originPos.x + dxMm), snapToGridValue(originPos.y + dyMm));
             return {
               ...t,
-              pos: {
-                x: Math.max(0, snapToGridValue(originPos.x + dxMm)),
-                y: Math.max(0, snapToGridValue(originPos.y + dyMm)),
-              },
+              pos: nextPos,
             };
           }),
         };
@@ -775,12 +786,14 @@ const LabelPreview = ({
         texts: allTexts.map((t) => {
           if (!dragging.ids.includes(t.id) || t.locked) return t;
           const originPos = dragging.origins[t.id] || { x: t.pos?.x || 0, y: t.pos?.y || 0 };
+          const nextPos = clampBlockPosition(
+            t,
+            snapToGridValue(originPos.x + dxMm + snapDeltaX),
+            snapToGridValue(originPos.y + dyMm + snapDeltaY),
+          );
           return {
             ...t,
-            pos: {
-              x: Math.max(0, snapToGridValue(originPos.x + dxMm + snapDeltaX)),
-              y: Math.max(0, snapToGridValue(originPos.y + dyMm + snapDeltaY)),
-            },
+            pos: nextPos,
           };
         }),
       };
@@ -1099,19 +1112,18 @@ const LabelPreview = ({
         ...prev,
         texts: (prev.texts || []).map((t) => {
           if (!selectedIds.includes(t.id) || t.locked) return t;
+          const nextX = snapToGrid ? Math.round((t.pos?.x || 0) + dx) : (t.pos?.x || 0) + dx;
+          const nextY = snapToGrid ? Math.round((t.pos?.y || 0) + dy) : (t.pos?.y || 0) + dy;
           return {
             ...t,
-            pos: {
-              x: Math.max(0, snapToGrid ? Math.round((t.pos?.x || 0) + dx) : (t.pos?.x || 0) + dx),
-              y: Math.max(0, snapToGrid ? Math.round((t.pos?.y || 0) + dy) : (t.pos?.y || 0) + dy),
-            },
+            pos: clampBlockPosition(t, nextX, nextY),
           };
         }),
       }));
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, setContentWithHistory, orientation, pxToMm, content.texts, clipboard, snapToGrid]);
+  }, [clampBlockPosition, selectedIds, setContentWithHistory, orientation, pxToMm, content.texts, clipboard, snapToGrid]);
 
   return (
     <div className="w-full select-none space-y-3">

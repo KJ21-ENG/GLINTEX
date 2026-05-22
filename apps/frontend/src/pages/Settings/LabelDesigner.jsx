@@ -78,6 +78,25 @@ const getBarcodeWarningForBlock = (block, dimensions) => {
   return 'Barcode exceeds the safe label area. Increase label size, move it inward, or reduce module width.';
 };
 
+const getQrSizing = (block, dimensions, options = {}) => {
+  const moduleMm = Number(block?.style?.moduleMm ?? 0.3);
+  const quietZone = getBarcodeQuietZoneMm(block?.style || {});
+  const metrics = measureRenderedBlock(block, dimensions, options);
+  const symbolWidthMm = Math.max(moduleMm, Number(metrics.widthMm || 0) - quietZone.left - quietZone.right);
+  const moduleCount = Math.max(1, symbolWidthMm / Math.max(0.001, moduleMm));
+  return {
+    moduleCount,
+    quietZone,
+    sizeMm: Number(metrics.widthMm || 0),
+  };
+};
+
+const moduleMmForQrSize = (block, dimensions, sizeMm, options = {}) => {
+  const sizing = getQrSizing(block, dimensions, options);
+  const nextSymbolSize = Math.max(0.1, Number(sizeMm || 0) - sizing.quietZone.left - sizing.quietZone.right);
+  return Math.max(0.05, nextSymbolSize / sizing.moduleCount);
+};
+
 const LabelCanvasSurface = ({ sourceCanvas }) => {
   const canvasRef = useRef(null);
 
@@ -788,15 +807,19 @@ const LabelPreview = ({
       const moduleMm = target.style?.moduleMm ?? 0.3;
       const heightMm = target.style?.heightMm ?? 12;
       const valueLength = Math.max(1, (target.value || '').length);
-      const modules = Math.max(30, valueLength * 11 + 35);
+      const isQr = target.style?.codeType === 'qr';
+      const qrSizing = isQr
+        ? getQrSizing(target, dimensions, { stageKey, pixelsPerMm: previewPixelsPerMm, preserveColor: true })
+        : null;
+      const modules = isQr ? qrSizing.moduleCount : Math.max(30, valueLength * 11 + 35);
       setResizing({
         type: 'barcode',
         id,
         startX: clientX,
         startY: clientY,
-        origin: { moduleMm, heightMm },
+        origin: { moduleMm, heightMm, sizeMm: qrSizing?.sizeMm || null },
         modules,
-        codeType: target.style?.codeType === 'qr' ? 'qr' : 'barcode',
+        codeType: isQr ? 'qr' : 'barcode',
       });
       return;
     }
@@ -848,10 +871,16 @@ const LabelPreview = ({
       if (resizing.type === 'barcode') {
         const moduleMmBase = resizing.origin.moduleMm;
         const heightMmBase = resizing.origin.heightMm;
-        const modules = Math.max(30, resizing.modules || 30);
+        const modules = resizing.codeType === 'qr'
+          ? Math.max(1, Number(resizing.modules || 1))
+          : Math.max(30, resizing.modules || 30);
         if (resizing.codeType === 'qr') {
-          const delta = Math.max(dxMm, dyMm);
-          const nextModuleMm = Math.min(2, Math.max(0.1, snapToGrid ? Math.round((moduleMmBase + delta / modules) * 20) / 20 : moduleMmBase + delta / modules));
+          const delta = Math.abs(dxMm) >= Math.abs(dyMm) ? dxMm : dyMm;
+          const originSizeMm = Number(resizing.origin.sizeMm || moduleMmBase * modules);
+          const nextSizeMm = Math.min(200, Math.max(4, originSizeMm + delta));
+          const quietZone = getBarcodeQuietZoneMm(target.style || {});
+          const nextModuleMmRaw = (nextSizeMm - quietZone.left - quietZone.right) / modules;
+          const nextModuleMm = Math.min(2, Math.max(0.05, snapToGrid ? Math.round(nextModuleMmRaw * 20) / 20 : nextModuleMmRaw));
           return {
             ...prev,
             texts: allTexts.map((t) => {
@@ -2086,6 +2115,9 @@ const LabelDesigner = () => {
                   const hasMixedFontFamily =
                     selectedTextFontFamilies.length > 1 && new Set(selectedTextFontFamilies).size > 1;
                   const barcodeWarning = isBarcode ? getBarcodeWarningForBlock(text, dimensions) : null;
+                  const qrSizing = isBarcode && codeType === 'qr'
+                    ? getQrSizing(text, dimensions, { preserveColor: true })
+                    : null;
                   return (
                     <>
                       <div className="flex items-start gap-2">
@@ -2191,17 +2223,17 @@ const LabelDesigner = () => {
                                 </select>
                               </div>
                               <div>
-                                <Label className="text-xs">{codeType === 'qr' ? 'Cell width (mm)' : 'Height (mm)'}</Label>
+                                <Label className="text-xs">{codeType === 'qr' ? 'QR size (mm)' : 'Height (mm)'}</Label>
                                 <Input
                                   type="number"
-                                  step={codeType === 'qr' ? '0.05' : '0.5'}
+                                  step={codeType === 'qr' ? '0.5' : '0.5'}
                                   className="h-8"
-                                  value={codeType === 'qr' ? text.style?.moduleMm ?? 0.3 : text.style?.heightMm ?? 12}
+                                  value={codeType === 'qr' ? Number(qrSizing?.sizeMm || 0).toFixed(2) : text.style?.heightMm ?? 12}
                                   onChange={(e) =>
                                     updateTextStyle(
                                       text.id,
                                       codeType === 'qr'
-                                        ? { moduleMm: Math.max(0.1, parseFloat(e.target.value) || 0.3) }
+                                        ? { moduleMm: moduleMmForQrSize(text, dimensions, parseFloat(e.target.value) || 4, { preserveColor: true }) }
                                         : { heightMm: Math.max(4, parseFloat(e.target.value) || 12) }
                                     )
                                   }

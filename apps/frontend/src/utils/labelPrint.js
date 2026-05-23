@@ -141,6 +141,7 @@ export const STAGE_VARIABLES = {
     { key: 'shift', label: 'Shift' },
   ],
   [LABEL_STAGE_KEYS.CONING_RECEIVE]: [
+    { key: 'barcodeNumber', label: 'Barcode Number (text only)' },
     { key: 'lotNo', label: 'Lot No' },
     { key: 'itemName', label: 'Item Name' },
     { key: 'cut', label: 'Cut' },
@@ -162,6 +163,7 @@ export const STAGE_VARIABLES = {
     { key: 'date', label: 'Date' },
   ],
   [LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL]: [
+    { key: 'barcodeNumber', label: 'Barcode Number (text only)' },
     { key: 'lotNo', label: 'Lot No' },
     { key: 'itemName', label: 'Item Name' },
     { key: 'cut', label: 'Cut' },
@@ -560,6 +562,24 @@ export const snapAngle = (angle = 0) => {
 export const mmToDots = (mm) => Math.round(mm * DOTS_PER_MM);
 export const sanitizeText = (text = '') => text.replace(/"/g, "'");
 
+const PLACEHOLDER_ALIASES = {
+  barcodeNumber: 'barcode',
+  receiveBarcode: 'barcode',
+  issueBarcodeNumber: 'issueBarcode',
+};
+
+const resolvePlaceholderValue = (data, key) => {
+  if (!key || !data) return { found: false, value: undefined };
+  if (Object.prototype.hasOwnProperty.call(data, key)) {
+    return { found: true, value: data[key] };
+  }
+  const aliasKey = PLACEHOLDER_ALIASES[key];
+  if (aliasKey && Object.prototype.hasOwnProperty.call(data, aliasKey)) {
+    return { found: true, value: data[aliasKey] };
+  }
+  return { found: false, value: undefined };
+};
+
 export const substitutePlaceholders = (value = '', data = {}) => {
   if (!value || typeof value !== 'string') return value;
   // Keys that should be formatted as DD/MM/YYYY dates
@@ -572,8 +592,9 @@ export const substitutePlaceholders = (value = '', data = {}) => {
   ];
   return value.replace(/(\{\{\s*([\w.]+)\s*\}\})|(@([\w.]+))/g, (match, p1, p2, p3, p4) => {
     const key = p2 || p4;
-    if (key && data && Object.prototype.hasOwnProperty.call(data, key)) {
-      const val = data[key];
+    const resolved = resolvePlaceholderValue(data, key);
+    if (resolved.found) {
+      const val = resolved.value;
       if (val === null || val === undefined) return '';
       // Format date values to DD/MM/YYYY
       if (dateKeys.includes(key) && val) {

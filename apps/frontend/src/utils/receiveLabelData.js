@@ -113,6 +113,7 @@ export function buildConingReceiveLabelData({ db, row, coningTraceContext = buil
     || '';
 
   return {
+    barcodeNumber: row?.barcode,
     lotNo: lotLabel,
     itemName: row?.itemName || item?.name || '',
     coneCount: row?.coneCount,
@@ -130,6 +131,7 @@ export function buildConingReceiveLabelData({ db, row, coningTraceContext = buil
     machineName,
     shift: issue?.shift || row?.shift || '',
     date: row?.date || row?.createdAt,
+    issueBarcode: issue?.barcode || row?.issueBarcode || '',
     barcode: row?.barcode,
   };
 }

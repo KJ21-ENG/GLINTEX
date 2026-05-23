@@ -37,6 +37,7 @@ const PX_PER_MM = 3.6; // for on-screen preview
 const SNAP_TOLERANCE_MM = 1.5;
 const NUDGE_STEP_PX = 1;
 const NUDGE_STEP_FAST_PX = 5;
+const MIN_TEXT_FONT_SIZE = 1;
 
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -2460,12 +2461,16 @@ const LabelDesigner = () => {
                               </Label>
                               <Input
                                 type="number"
-                                min="6"
+                                min={MIN_TEXT_FONT_SIZE}
+                                step="0.5"
                                 className="h-8 w-20"
                                 value={text.style?.size || dimensions.fontSize}
                                 onChange={(e) =>
                                   updateTextStyle(selectedTextIds.length ? selectedTextIds : text.id, {
-                                    size: Math.max(6, parseInt(e.target.value, 10) || dimensions.fontSize),
+                                    size: Math.max(
+                                      MIN_TEXT_FONT_SIZE,
+                                      parseFloat(e.target.value) || dimensions.fontSize,
+                                    ),
                                   })
                                 }
                               />

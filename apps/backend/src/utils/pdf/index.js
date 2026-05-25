@@ -9,13 +9,14 @@ import { generateHoloIssuePdf } from './holoIssuePdf.js';
 import { generateHoloReceivePdf } from './holoReceivePdf.js';
 import { generateConingIssuePdf } from './coningIssuePdf.js';
 import { generateConingReceivePdf } from './coningReceivePdf.js';
+import { generateBoilerSteamedPdf } from './boilerSteamedPdf.js';
 import { generateProductionDailyExportPdf } from './productionDailyExportPdf.js';
 import { generateHoloWeeklyExportPdf } from './holoWeeklyExportPdf.js';
 
 /**
  * Generate summary PDF based on stage and type
- * @param {string} stage - 'cutter' | 'holo' | 'coning'
- * @param {string} type - 'issue' | 'receive'
+ * @param {string} stage - 'cutter' | 'holo' | 'coning' | 'boiler'
+ * @param {string} type - 'issue' | 'receive' | 'steamed'
  * @param {object} data - Summary data with details array
  * @returns {Promise<Buffer>} - PDF buffer
  */
@@ -34,6 +35,9 @@ export async function generateSummaryPDF(stage, type, data) {
             return await generateConingIssuePdf(data);
         case 'coning_receive':
             return await generateConingReceivePdf(data);
+        case 'boiler_steamed':
+        case 'boiler_receive':
+            return await generateBoilerSteamedPdf(data);
         default:
             throw new Error(`Unknown stage/type combination: ${stage}/${type}`);
     }
@@ -47,6 +51,7 @@ export {
     generateHoloReceivePdf,
     generateConingIssuePdf,
     generateConingReceivePdf,
+    generateBoilerSteamedPdf,
     generateProductionDailyExportPdf,
     generateHoloWeeklyExportPdf,
 };

@@ -18982,6 +18982,115 @@ async function generateSummaryData(stage, type, date) {
       count: () => 1,
       netWeight: r => r.netWeight || 0,
     }).map(a => ({ name: a.key, count: a.count, netWeight: a.netWeight }));
+  } else if (stage === 'boiler') {
+    // Both 'steamed' and 'receive' types are treated identically for boiler daily summary.
+    const steamLogs = await prisma.boilerSteamLog.findMany({
+      where: {
+        steamedAt: {
+          gte: new Date(`${date}T00:00:00.000Z`),
+          lte: new Date(`${date}T23:59:59.999Z`),
+        },
+      },
+      include: {
+        boilerMachine: { select: { id: true, name: true } },
+        createdByUser: { select: { id: true, username: true, displayName: true } }
+      },
+      orderBy: { steamedAt: 'asc' },
+    });
+
+    // Fetch related holo receive row details
+    const holoRowIds = steamLogs.map(s => s.holoReceiveRowId).filter(Boolean);
+    const holoRows = holoRowIds.length > 0
+      ? await prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: holoRowIds } },
+        include: {
+          issue: {
+            select: {
+              id: true,
+              lotNo: true,
+              itemId: true,
+              yarnId: true,
+              twistId: true,
+              cutId: true,
+              receivedRowRefs: true,
+              machine: { select: { name: true } },
+              cut: { select: { name: true } },
+              yarn: { select: { name: true } },
+              twist: { select: { name: true } },
+            },
+          },
+          box: { select: { name: true } },
+          rollType: { select: { name: true } },
+        },
+      })
+      : [];
+
+    const holoRowMap = new Map(holoRows.map(r => [r.id, r]));
+    const itemIds = Array.from(new Set(holoRows.map(r => r.issue?.itemId).filter(Boolean)));
+    const itemsById = itemIds.length > 0
+      ? new Map((await prisma.item.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, name: true },
+      })).map(item => [item.id, item]))
+      : new Map();
+
+    const traceCaches = createTraceCaches();
+    const issueDetailsById = new Map();
+
+    summary.totalCount = steamLogs.length;
+    let totalRolls = 0;
+    let totalNetWeight = 0;
+
+    const detailsPromises = steamLogs.map(async (log) => {
+      const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
+      const netWeight = holoRow
+        ? (holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0)))
+        : 0;
+      const rolls = holoRow?.rollCount || 0;
+      totalRolls += rolls;
+      totalNetWeight += netWeight;
+
+      const issue = holoRow?.issue || null;
+      let issueDetails = null;
+      if (issue?.id) {
+        issueDetails = issueDetailsById.get(issue.id);
+        if (!issueDetails) {
+          issueDetails = await resolveHoloIssueDetails(issue, traceCaches);
+          issueDetailsById.set(issue.id, issueDetails);
+        }
+      }
+
+      const getBoilerLabelStr = () => {
+        const machine = log.boilerMachine?.name || '';
+        const boilerNo = log.boilerNumber ? `No. ${log.boilerNumber}` : '';
+        if (machine && boilerNo) return `${machine} • ${boilerNo}`;
+        return machine || boilerNo || '-';
+      };
+
+      return {
+        barcode: log.barcode || '-',
+        steamedAt: log.steamedAt,
+        itemName: issue?.itemId ? (itemsById.get(issue.itemId)?.name || null) : null,
+        twistName: issueDetails?.twistName || null,
+        cutName: issueDetails?.cutName || null,
+        lotNo: issue?.lotNo || null,
+        rollCount: rolls,
+        netWeight: roundTo3Decimals(netWeight),
+        boilerLabel: getBoilerLabelStr(),
+        boilerMachineName: log.boilerMachine?.name || null,
+        boilerNumber: log.boilerNumber || null,
+        addedBy: log.createdByUser?.displayName || log.createdByUser?.username || '-',
+      };
+    });
+
+    summary.details = await Promise.all(detailsPromises);
+    summary.totalRolls = totalRolls;
+    summary.totalNetWeight = roundTo3Decimals(totalNetWeight);
+
+    // Simple aggregations for compatibility if needed
+    summary.byMachine = aggregateBy(steamLogs, s => s.boilerMachine?.name || 'Unknown', {
+      count: () => 1,
+    }).map(a => ({ name: a.key, count: a.count }));
   }
 
   return summary;
@@ -18993,8 +19102,8 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
     const { stage, type } = req.params;
     const date = req.query.date || getTodayDateString();
 
-    const validStages = ['cutter', 'holo', 'coning'];
-    const validTypes = ['issue', 'receive'];
+    const validStages = ['cutter', 'holo', 'coning', 'boiler'];
+    const validTypes = ['issue', 'receive', 'steamed'];
 
     if (!validStages.includes(stage)) {
       return res.status(400).json({ error: `Invalid stage. Must be one of: ${validStages.join(', ')}` });
@@ -19003,7 +19112,7 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
       return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
     }
 
-    const permissionKey = type === 'issue' ? `issue.${stage}` : `receive.${stage}`;
+    const permissionKey = stage === 'boiler' ? 'boiler' : (type === 'issue' ? `issue.${stage}` : `receive.${stage}`);
     if (!req.user?.isAdmin) {
       const level = Number(req.user?.permissions?.[permissionKey] || 0);
       if (level < PERM_READ) {
@@ -19023,6 +19132,9 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
 router.post('/api/summary/:stage/:type/send', async (req, res) => {
   try {
     const { stage, type } = req.params;
+    if (stage === 'boiler') {
+      return res.status(400).json({ error: 'Send notification is currently unavailable for Boiler.' });
+    }
     const date = req.query.date || req.body.date || getTodayDateString();
 
     const validStages = ['cutter', 'holo', 'coning'];
@@ -19127,8 +19239,8 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
     const { stage, type } = req.params;
     const date = req.query.date || getTodayDateString();
 
-    const validStages = ['cutter', 'holo', 'coning'];
-    const validTypes = ['issue', 'receive'];
+    const validStages = ['cutter', 'holo', 'coning', 'boiler'];
+    const validTypes = ['issue', 'receive', 'steamed'];
 
     if (!validStages.includes(stage)) {
       return res.status(400).json({ error: `Invalid stage. Must be one of: ${validStages.join(', ')}` });
@@ -19137,7 +19249,7 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
       return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
     }
 
-    const permissionKey = type === 'issue' ? `issue.${stage}` : `receive.${stage}`;
+    const permissionKey = stage === 'boiler' ? 'boiler' : (type === 'issue' ? `issue.${stage}` : `receive.${stage}`);
     if (!req.user?.isAdmin) {
       const level = Number(req.user?.permissions?.[permissionKey] || 0);
       if (level < PERM_READ) {

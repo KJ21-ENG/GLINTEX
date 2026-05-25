@@ -8,8 +8,10 @@ import {
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../utils';
 import {
     Flame, Trash2, Loader2, AlertCircle, CheckCircle2, Ban,
-    Search, History, Package, ScanLine, RefreshCw, X, ChevronDown, ChevronRight
+    Search, History, Package, ScanLine, RefreshCw, X, ChevronDown, ChevronRight,
+    Calendar, Send, Download
 } from 'lucide-react';
+import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBoilerView } from '../components/boiler/MobileBoilerView';
@@ -121,6 +123,14 @@ const renderScanGroupStatus = (group) => (
     </div>
 );
 
+function formatDateDisplay(dateStr) {
+    if (!dateStr) return 'Today';
+    const today = todayISO();
+    if (dateStr === today) return 'Today';
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
+}
+
 /**
  * Boiler (Steaming) Module
  * Track which crates from Holo have been steamed
@@ -157,6 +167,60 @@ export function Boiler() {
     const [openHistoryFilterId, setOpenHistoryFilterId] = useState(null);
     const [expandedHistoryGroups, setExpandedHistoryGroups] = useState(() => new Set());
     const [expandedScanGroups, setExpandedScanGroups] = useState(() => new Set());
+
+    // Summary states
+    const [sendingSum, setSendingSum] = useState(false);
+    const [downloadingSum, setDownloadingSum] = useState(false);
+    const [summaryActionOpen, setSummaryActionOpen] = useState(false);
+    const [sumMessage, setSumMessage] = useState(null);
+    const [summaryDate, setSummaryDate] = useState(() => todayISO());
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
+    const pickerRef = useRef(null);
+
+    // Close date picker on outside click
+    useEffect(() => {
+        function handleClickOutside(e) {
+            if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+                setShowDatePicker(false);
+            }
+        }
+        if (showDatePicker) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [showDatePicker]);
+
+    const handleDownloadSummary = async () => {
+        if (sendingSum || downloadingSum) return;
+        setDownloadingSum(true);
+        setSumMessage(null);
+        try {
+            await api.downloadSummaryPdf('boiler', 'steamed', summaryDate);
+            setSumMessage({ type: 'success', text: 'Summary downloaded successfully!' });
+        } catch (err) {
+            setSumMessage({ type: 'error', text: err.message || 'Failed to download summary' });
+        } finally {
+            setDownloadingSum(false);
+            setTimeout(() => setSumMessage(null), 5000);
+        }
+    };
+
+    const handleRightClick = (e) => {
+        e.preventDefault();
+        setPickerPosition({ x: e.clientX, y: e.clientY });
+        setShowDatePicker(true);
+    };
+
+    const handleSummaryActionOpen = () => {
+        if (sendingSum || downloadingSum) return;
+        setSummaryActionOpen(true);
+    };
+
+    const handleDateChange = (e) => {
+        setSummaryDate(e.target.value);
+        setShowDatePicker(false);
+    };
 
     // Auto-enable mobile mode on mobile devices
     useEffect(() => {
@@ -495,8 +559,36 @@ export function Boiler() {
                     <p className="text-muted-foreground text-sm">Mark Holo crates as steamed after boiler processing</p>
                 </div>
 
-                {/* Tab Toggle + Scanner Toggle */}
-                <div className="flex gap-2">
+                {/* Tab Toggle + Scanner Toggle + Send Summary */}
+                <div className="flex flex-wrap items-center gap-2">
+                    {activeTab === 'history' && (
+                        <>
+                            {sumMessage && (
+                                <span className={`text-sm ${sumMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                                    {sumMessage.text}
+                                </span>
+                            )}
+                            {summaryDate !== todayISO() && (
+                                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    {formatDateDisplay(summaryDate)}
+                                </span>
+                            )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleSummaryActionOpen}
+                                onContextMenu={handleRightClick}
+                                disabled={sendingSum || downloadingSum}
+                                className="flex items-center gap-2 mr-2"
+                                title="Click to choose action, Right-click to change date"
+                            >
+                                <Send className="h-4 w-4" />
+                                {downloadingSum ? 'Downloading...' : 'Send Summary'}
+                            </Button>
+                        </>
+                    )}
+
                     {activeTab === 'steam' && (
                         <Button
                             variant={useMobileMode ? "default" : "outline"}
@@ -935,6 +1027,62 @@ export function Boiler() {
                 itemCount={steamableItems.length}
                 boilerMachines={boilerMachines}
             />
+
+            {/* Summary Action Dialog */}
+            <Dialog open={summaryActionOpen} onOpenChange={setSummaryActionOpen}>
+                <DialogContent title="Summary Action" onOpenChange={setSummaryActionOpen}>
+                    <p className="text-sm text-muted-foreground mb-4">
+                        Choose what to do for {formatDateDisplay(summaryDate)} summary.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                        <Button
+                            disabled={true}
+                            className="flex-1 flex items-center gap-2 opacity-50 cursor-not-allowed"
+                            title="Notifications are currently unavailable for Boiler summary"
+                        >
+                            <Send className="h-4 w-4" />
+                            Send Notification (Unavailable)
+                        </Button>
+                        <Button
+                            variant="outline"
+                            onClick={async () => {
+                                setSummaryActionOpen(false);
+                                await handleDownloadSummary();
+                            }}
+                            disabled={sendingSum || downloadingSum}
+                            className="flex-1 flex items-center gap-2"
+                        >
+                            <Download className="h-4 w-4" />
+                            Download Summary
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* Date Picker Popup */}
+            {showDatePicker && (
+                <div
+                    ref={pickerRef}
+                    className="fixed z-50 bg-background border rounded-lg shadow-lg p-3"
+                    style={{
+                        left: Math.min(pickerPosition.x, window.innerWidth - 220),
+                        top: Math.min(pickerPosition.y, window.innerHeight - 100),
+                    }}
+                >
+                    <label className="block text-sm font-medium mb-2">Summary Date</label>
+                    <input
+                        type="date"
+                        value={summaryDate}
+                        onChange={handleDateChange}
+                        max={todayISO()}
+                        className="w-full px-3 py-2 border rounded-md text-sm"
+                        autoFocus
+                    />
+                    <p className="text-xs text-muted-foreground mt-2">
+                        Select date for summary PDF
+                    </p>
+                </div>
+            )}
         </div>
     );
 }

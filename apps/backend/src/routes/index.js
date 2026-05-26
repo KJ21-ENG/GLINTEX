@@ -18993,7 +18993,6 @@ async function generateSummaryData(stage, type, date) {
       },
       include: {
         boilerMachine: { select: { id: true, name: true } },
-        createdByUser: { select: { id: true, username: true, displayName: true } }
       },
       orderBy: { steamedAt: 'asc' },
     });
@@ -19079,11 +19078,17 @@ async function generateSummaryData(stage, type, date) {
         boilerLabel: getBoilerLabelStr(),
         boilerMachineName: log.boilerMachine?.name || null,
         boilerNumber: log.boilerNumber || null,
-        addedBy: log.createdByUser?.displayName || log.createdByUser?.username || '-',
+        createdByUserId: log.createdByUserId || null,
       };
     });
 
-    summary.details = await Promise.all(detailsPromises);
+    const detailsPreliminary = await Promise.all(detailsPromises);
+    const detailsWithUsers = await resolveUserFields(detailsPreliminary);
+
+    summary.details = detailsWithUsers.map(item => ({
+      ...item,
+      addedBy: item.createdByUser?.displayName || item.createdByUser?.username || '-',
+    }));
     summary.totalRolls = totalRolls;
     summary.totalNetWeight = roundTo3Decimals(totalNetWeight);
 

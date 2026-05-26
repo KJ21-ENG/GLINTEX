@@ -59,8 +59,20 @@ export async function generateBoilerSteamedPdf(data) {
     ];
     y = drawOverview(doc, { y, metrics, pageWidth });
 
+    // Summary table headers
+    const summaryHeaders = [
+        { text: 'Item', align: 'left', wrap: true },
+        { text: 'Twist', align: 'left' },
+        { text: 'Cut', align: 'left' },
+        { text: 'Boilers', align: 'left' },
+        { text: 'Rolls', align: 'right' },
+        { text: 'Net Wt (kg)', align: 'right' },
+    ];
+    // Column widths for landscape A4 (sum to 267)
+    const summaryColWidths = [60, 35, 30, 60, 32, 50];
+
     // Detailed table headers
-    const headers = [
+    const detailHeaders = [
         { text: 'S.No', align: 'center' },
         { text: 'Barcode', align: 'left' },
         { text: 'Item', align: 'left' },
@@ -73,22 +85,48 @@ export async function generateBoilerSteamedPdf(data) {
         { text: 'Steamed At', align: 'center' },
         { text: 'Added By', align: 'left' },
     ];
-
     // Column widths for landscape A4 (sum to 267)
-    const colWidths = [10, 35, 42, 22, 18, 18, 32, 16, 24, 25, 25];
+    const detailColWidths = [10, 35, 42, 22, 18, 18, 32, 16, 24, 25, 25];
 
-    const rows = [];
+    const summaryRows = [];
+    const detailsRows = [];
     let totalRolls = 0;
     let totalNetWeight = 0;
 
     if (data.details && data.details.length > 0) {
+        const summaryGroupedMap = new Map();
+
         data.details.forEach((item, idx) => {
             const rolls = Number(item.rollCount || 0);
             const netWeight = Number(item.netWeight || 0);
             totalRolls += rolls;
             totalNetWeight += netWeight;
 
-            rows.push({
+            const summaryKey = [
+                item.itemName || '-',
+                item.twistName || '-',
+                item.cutName || '-',
+            ].join('||');
+
+            if (!summaryGroupedMap.has(summaryKey)) {
+                summaryGroupedMap.set(summaryKey, {
+                    boilerLabels: new Set(),
+                    itemName: item.itemName || '-',
+                    twistName: item.twistName || '-',
+                    cutName: item.cutName || '-',
+                    rollCount: 0,
+                    netWeight: 0,
+                });
+            }
+
+            const summaryEntry = summaryGroupedMap.get(summaryKey);
+            if (item.boilerLabel && item.boilerLabel !== '-') {
+                summaryEntry.boilerLabels.add(item.boilerLabel);
+            }
+            summaryEntry.rollCount += rolls;
+            summaryEntry.netWeight += netWeight;
+
+            detailsRows.push({
                 cells: [
                     { text: String(idx + 1), align: 'center' },
                     { text: item.barcode || '-', align: 'left' },
@@ -105,8 +143,29 @@ export async function generateBoilerSteamedPdf(data) {
             });
         });
 
-        // Totals row
-        rows.push({
+        // Generate summary rows
+        Array.from(summaryGroupedMap.values())
+            .sort((a, b) => (
+                String(a.itemName || '').localeCompare(String(b.itemName || ''), undefined, { numeric: true, sensitivity: 'base' })
+                || String(a.twistName || '').localeCompare(String(b.twistName || ''), undefined, { numeric: true, sensitivity: 'base' })
+                || String(a.cutName || '').localeCompare(String(b.cutName || ''), undefined, { numeric: true, sensitivity: 'base' })
+            ))
+            .forEach((entry) => {
+                const boilersList = Array.from(entry.boilerLabels).sort().join(', ') || '-';
+                summaryRows.push({
+                    cells: [
+                        { text: entry.itemName, align: 'left' },
+                        { text: entry.twistName, align: 'left' },
+                        { text: entry.cutName, align: 'left' },
+                        { text: boilersList, align: 'left' },
+                        { text: formatNumber(entry.rollCount), align: 'right' },
+                        { text: formatWeight(entry.netWeight), align: 'right' },
+                    ],
+                });
+            });
+
+        // Totals row for detailed list
+        detailsRows.push({
             isTotal: true,
             cells: [
                 { text: '', align: 'center' },
@@ -124,13 +183,34 @@ export async function generateBoilerSteamedPdf(data) {
         });
     }
 
+    // Draw summary table
     y = drawTable(doc, {
         y,
-        headers,
-        rows,
-        colWidths,
+        headers: summaryHeaders,
+        rows: summaryRows,
+        colWidths: summaryColWidths,
+        pageWidth,
+        title: 'Summary (Grouped by Item/Twist/Cut)',
+        rowHeight: 6,
+        headerHeight: 7,
+        padding: 1.5,
+        bottomMargin: 15,
+        lineHeight: 3,
+    });
+
+    // Draw detailed table
+    y = drawTable(doc, {
+        y,
+        headers: detailHeaders,
+        rows: detailsRows,
+        colWidths: detailColWidths,
         pageWidth,
         title: 'Steamed Items Details',
+        rowHeight: 6,
+        headerHeight: 7,
+        padding: 1.5,
+        bottomMargin: 15,
+        lineHeight: 3,
     });
 
     // Footer

@@ -18454,9 +18454,18 @@ function getTodayDateString() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function getYesterdayDateString() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function formatDateForFilename(dateStr) {
   if (!dateStr) return getTodayDateString().replace(/-/g, '');
-  return String(dateStr).replace(/-/g, '');
+  return String(dateStr).replace(/-/g, '').replace(/\s+/g, '_');
 }
 
 // Helper to aggregate by a key
@@ -18476,8 +18485,20 @@ function aggregateBy(items, keyFn, valueFns) {
 }
 
 // Shared helper to generate summary data (used by both GET and POST endpoints)
-async function generateSummaryData(stage, type, date) {
+async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day', 'Night']) {
+  const finalDateFrom = dateFrom || getYesterdayDateString();
+  const finalDateTo = dateTo || getYesterdayDateString();
+  const date = finalDateFrom === finalDateTo ? finalDateFrom : `${finalDateFrom} to ${finalDateTo}`;
   let summary = { stage, type, date };
+
+  let shiftCondition = {};
+  if (shifts && shifts.length > 0) {
+    if (shifts.includes('Day') && shifts.includes('Night')) {
+      // Both selected, do not filter by shift to include null/empty shifts
+    } else {
+      shiftCondition = { shift: { in: shifts } };
+    }
+  }
 
   // Helper to lookup item names from ids
   async function getItemNameMap(itemIds) {
@@ -18541,7 +18562,10 @@ async function generateSummaryData(stage, type, date) {
 
   if (stage === 'cutter' && type === 'issue') {
     const issues = await prisma.issueToCutterMachine.findMany({
-      where: { date, isDeleted: false },
+      where: {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false,
+      },
       include: { machine: true, operator: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18585,7 +18609,11 @@ async function generateSummaryData(stage, type, date) {
 
   } else if (stage === 'cutter' && type === 'receive') {
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
-      where: { date, isDeleted: false },
+      where: {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false,
+        ...shiftCondition,
+      },
       include: { operator: true, challan: true, cutMaster: true, box: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18660,7 +18688,11 @@ async function generateSummaryData(stage, type, date) {
 
   } else if (stage === 'holo' && type === 'issue') {
     const issues = await prisma.issueToHoloMachine.findMany({
-      where: { date, isDeleted: false },
+      where: {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false,
+        ...shiftCondition,
+      },
       include: { machine: true, operator: true, twist: true, yarn: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18704,8 +18736,17 @@ async function generateSummaryData(stage, type, date) {
     }).map(a => ({ name: a.key, count: a.count, bobbinWeight: a.bobbinWeight }));
 
   } else if (stage === 'holo' && type === 'receive') {
+    const holoReceiveWhere = {
+      date: { gte: finalDateFrom, lte: finalDateTo },
+      isDeleted: false,
+    };
+    if (Object.keys(shiftCondition).length > 0) {
+      holoReceiveWhere.issue = {
+        shift: shiftCondition.shift
+      };
+    }
     const rows = await prisma.receiveFromHoloMachineRow.findMany({
-      where: { date, isDeleted: false },
+      where: holoReceiveWhere,
       include: { operator: true, box: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18783,7 +18824,11 @@ async function generateSummaryData(stage, type, date) {
 
   } else if (stage === 'coning' && type === 'issue') {
     const issues = await prisma.issueToConingMachine.findMany({
-      where: { date, isDeleted: false },
+      where: {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false,
+        ...shiftCondition,
+      },
       include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18862,8 +18907,17 @@ async function generateSummaryData(stage, type, date) {
     }).map(a => ({ name: a.key, count: a.count, rollsIssued: a.rollsIssued }));
 
   } else if (stage === 'coning' && type === 'receive') {
+    const coningReceiveWhere = {
+      date: { gte: finalDateFrom, lte: finalDateTo },
+      isDeleted: false,
+    };
+    if (Object.keys(shiftCondition).length > 0) {
+      coningReceiveWhere.issue = {
+        shift: shiftCondition.shift
+      };
+    }
     const rows = await prisma.receiveFromConingMachineRow.findMany({
-      where: { date, isDeleted: false },
+      where: coningReceiveWhere,
       include: { operator: true, box: true, issue: { include: { machine: true, yarn: true, twist: true, cut: true } } },
       orderBy: { createdAt: 'asc' },
     });
@@ -18987,8 +19041,8 @@ async function generateSummaryData(stage, type, date) {
     const steamLogs = await prisma.boilerSteamLog.findMany({
       where: {
         steamedAt: {
-          gte: new Date(`${date}T00:00:00.000Z`),
-          lte: new Date(`${date}T23:59:59.999Z`),
+          gte: new Date(`${finalDateFrom}T00:00:00.000Z`),
+          lte: new Date(`${finalDateTo}T23:59:59.999Z`),
         },
       },
       include: {
@@ -19016,6 +19070,7 @@ async function generateSummaryData(stage, type, date) {
               cut: { select: { name: true } },
               yarn: { select: { name: true } },
               twist: { select: { name: true } },
+              shift: true,
             },
           },
           box: { select: { name: true } },
@@ -19025,6 +19080,18 @@ async function generateSummaryData(stage, type, date) {
       : [];
 
     const holoRowMap = new Map(holoRows.map(r => [r.id, r]));
+
+    // Apply shift filtering to steam logs in-memory
+    let filteredSteamLogs = steamLogs;
+    if (Object.keys(shiftCondition).length > 0) {
+      const allowedShifts = shiftCondition.shift.in;
+      filteredSteamLogs = steamLogs.filter(log => {
+        const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
+        const shift = holoRow?.issue?.shift || '';
+        return allowedShifts.includes(shift);
+      });
+    }
+
     const itemIds = Array.from(new Set(holoRows.map(r => r.issue?.itemId).filter(Boolean)));
     const itemsById = itemIds.length > 0
       ? new Map((await prisma.item.findMany({
@@ -19036,11 +19103,11 @@ async function generateSummaryData(stage, type, date) {
     const traceCaches = createTraceCaches();
     const issueDetailsById = new Map();
 
-    summary.totalCount = steamLogs.length;
+    summary.totalCount = filteredSteamLogs.length;
     let totalRolls = 0;
     let totalNetWeight = 0;
 
-    const detailsPromises = steamLogs.map(async (log) => {
+    const detailsPromises = filteredSteamLogs.map(async (log) => {
       const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
       const netWeight = holoRow
         ? (holoRow.rollWeight ? holoRow.rollWeight : ((holoRow.grossWeight || 0) - (holoRow.tareWeight || 0)))
@@ -19093,7 +19160,7 @@ async function generateSummaryData(stage, type, date) {
     summary.totalNetWeight = roundTo3Decimals(totalNetWeight);
 
     // Simple aggregations for compatibility if needed
-    summary.byMachine = aggregateBy(steamLogs, s => s.boilerMachine?.name || 'Unknown', {
+    summary.byMachine = aggregateBy(filteredSteamLogs, s => s.boilerMachine?.name || 'Unknown', {
       count: () => 1,
     }).map(a => ({ name: a.key, count: a.count }));
   }
@@ -19105,7 +19172,19 @@ async function generateSummaryData(stage, type, date) {
 router.get('/api/summary/:stage/:type', async (req, res) => {
   try {
     const { stage, type } = req.params;
-    const date = req.query.date || getTodayDateString();
+    const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
+    const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
+    
+    let shifts = [];
+    if (req.query.shifts) {
+      if (Array.isArray(req.query.shifts)) {
+        shifts = req.query.shifts;
+      } else {
+        shifts = req.query.shifts.split(',').map(s => s.trim());
+      }
+    } else {
+      shifts = ['Day', 'Night'];
+    }
 
     const validStages = ['cutter', 'holo', 'coning', 'boiler'];
     const validTypes = ['issue', 'receive', 'steamed'];
@@ -19125,7 +19204,7 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
       }
     }
 
-    const summary = await generateSummaryData(stage, type, date);
+    const summary = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
     res.json(summary);
   } catch (err) {
     console.error('Failed to get summary', err);
@@ -19140,7 +19219,20 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     if (stage === 'boiler') {
       return res.status(400).json({ error: 'Send notification is currently unavailable for Boiler.' });
     }
-    const date = req.query.date || req.body.date || getTodayDateString();
+    const dateFrom = req.query.dateFrom || req.body.dateFrom || req.query.date || req.body.date || getYesterdayDateString();
+    const dateTo = req.query.dateTo || req.body.dateTo || req.query.date || req.body.date || getYesterdayDateString();
+    
+    let shifts = [];
+    const rawShifts = req.query.shifts || req.body.shifts;
+    if (rawShifts) {
+      if (Array.isArray(rawShifts)) {
+        shifts = rawShifts;
+      } else {
+        shifts = rawShifts.split(',').map(s => s.trim());
+      }
+    } else {
+      shifts = ['Day', 'Night'];
+    }
 
     const validStages = ['cutter', 'holo', 'coning'];
     const validTypes = ['issue', 'receive'];
@@ -19172,16 +19264,17 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     }
 
     // Get summary data using shared helper function (no internal HTTP request)
-    const summaryData = await generateSummaryData(stage, type, date);
+    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
 
     // Check if there are any entries
     if (!summaryData.totalCount || summaryData.totalCount === 0) {
-      return res.json({ ok: false, reason: 'no_data', message: `No ${type} entries found for ${stage} on ${date}` });
+      const dateStr = dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`;
+      return res.json({ ok: false, reason: 'no_data', message: `No ${type} entries found for ${stage} on ${dateStr}` });
     }
 
     // Generate PDF
     const pdfBuffer = await generateSummaryPDF(stage, type, summaryData);
-    const filename = `summary_${stage}_${type}_${formatDateForFilename(date)}.pdf`;
+    const filename = `summary_${stage}_${type}_${formatDateForFilename(summaryData.date)}.pdf`;
 
     // Get settings and resolve channel routing
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
@@ -19228,7 +19321,7 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
       summary: {
         stage,
         type,
-        date,
+        date: summaryData.date,
         totalCount: summaryData.totalCount,
       }
     });
@@ -19242,7 +19335,19 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
 router.get('/api/summary/:stage/:type/download', async (req, res) => {
   try {
     const { stage, type } = req.params;
-    const date = req.query.date || getTodayDateString();
+    const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
+    const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
+    
+    let shifts = [];
+    if (req.query.shifts) {
+      if (Array.isArray(req.query.shifts)) {
+        shifts = req.query.shifts;
+      } else {
+        shifts = req.query.shifts.split(',').map(s => s.trim());
+      }
+    } else {
+      shifts = ['Day', 'Night'];
+    }
 
     const validStages = ['cutter', 'holo', 'coning', 'boiler'];
     const validTypes = ['issue', 'receive', 'steamed'];
@@ -19262,13 +19367,14 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
       }
     }
 
-    const summaryData = await generateSummaryData(stage, type, date);
+    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
     if (!summaryData.totalCount || summaryData.totalCount === 0) {
-      return res.status(404).json({ error: `No ${type} entries found for ${stage} on ${date}` });
+      const dateStr = dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`;
+      return res.status(404).json({ error: `No ${type} entries found for ${stage} on ${dateStr}` });
     }
 
     const pdfBuffer = await generateSummaryPDF(stage, type, summaryData);
-    const filename = `summary_${stage}_${type}_${formatDateForFilename(date)}.pdf`;
+    const filename = `summary_${stage}_${type}_${formatDateForFilename(summaryData.date)}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

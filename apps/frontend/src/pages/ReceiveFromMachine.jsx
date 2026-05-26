@@ -30,10 +30,15 @@ export function ReceiveFromMachine() {
   const [downloadingSum, setDownloadingSum] = useState(false);
   const [summaryActionOpen, setSummaryActionOpen] = useState(false);
   const [sumMessage, setSumMessage] = useState(null);
-  const [summaryDate, setSummaryDate] = useState(getTodayISO());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [pickerPosition, setPickerPosition] = useState({ x: 0, y: 0 });
-  const pickerRef = useRef(null);
+  
+  const getYesterdayISO = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  };
+  const [summaryDateFrom, setSummaryDateFrom] = useState(getYesterdayISO);
+  const [summaryDateTo, setSummaryDateTo] = useState(getYesterdayISO);
+  const [summaryShifts, setSummaryShifts] = useState(['Day', 'Night']);
 
   useEffect(() => {
     if (process !== 'cutter') {
@@ -47,26 +52,13 @@ export function ReceiveFromMachine() {
     }
   }, [canRead, ensureModuleData, stage]);
 
-  // Close date picker on outside click
-  useEffect(() => {
-    function handleClickOutside(e) {
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
-        setShowDatePicker(false);
-      }
-    }
-    if (showDatePicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showDatePicker]);
-
   const handleSendSummary = async () => {
     if (sendingSum || downloadingSum) return;
     setSendingSum(true);
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      const result = await sendSummaryNotification(stage, 'receive', summaryDate);
+      const result = await sendSummaryNotification(stage, 'receive', summaryDateFrom, summaryDateTo, summaryShifts);
       if (result.ok) {
         const channelErrors = Object.entries(result?.channels || {})
           .flatMap(([channel, detail]) => (detail?.results || [])
@@ -94,7 +86,7 @@ export function ReceiveFromMachine() {
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      await downloadSummaryPdf(stage, 'receive', summaryDate);
+      await downloadSummaryPdf(stage, 'receive', summaryDateFrom, summaryDateTo, summaryShifts);
       setSumMessage({ type: 'success', text: 'Summary downloaded successfully!' });
     } catch (err) {
       setSumMessage({ type: 'error', text: err.message || 'Failed to download summary' });
@@ -104,20 +96,9 @@ export function ReceiveFromMachine() {
     }
   };
 
-  const handleRightClick = (e) => {
-    e.preventDefault();
-    setPickerPosition({ x: e.clientX, y: e.clientY });
-    setShowDatePicker(true);
-  };
-
   const handleSummaryActionOpen = () => {
     if (sendingSum || downloadingSum || readOnly) return;
     setSummaryActionOpen(true);
-  };
-
-  const handleDateChange = (e) => {
-    setSummaryDate(e.target.value);
-    setShowDatePicker(false);
   };
 
   if (!canRead) {
@@ -139,20 +120,19 @@ export function ReceiveFromMachine() {
               {sumMessage.text}
             </span>
           )}
-          {summaryDate !== getTodayISO() && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Calendar className="h-3 w-3" />
-              {formatDateDisplay(summaryDate)}
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            {summaryDateFrom === summaryDateTo
+              ? formatDateDisplay(summaryDateFrom)
+              : `${formatDateDisplay(summaryDateFrom)} to ${formatDateDisplay(summaryDateTo)}`}
+            {` (${summaryShifts.join(', ')})`}
+          </span>
           <Button
             variant="outline"
             size="sm"
             onClick={handleSummaryActionOpen}
-            onContextMenu={handleRightClick}
             disabled={sendingSum || downloadingSum || readOnly}
             className="flex items-center gap-2"
-            title="Click to choose action, Right-click to change date"
           >
             <Send className="h-4 w-4" />
             {sendingSum ? 'Sending...' : 'Send Summary'}
@@ -161,21 +141,67 @@ export function ReceiveFromMachine() {
       </div>
 
       <Dialog open={summaryActionOpen} onOpenChange={setSummaryActionOpen}>
-        <DialogContent title="Summary Action" onOpenChange={setSummaryActionOpen}>
-          <p className="text-sm text-muted-foreground mb-4">
-            Choose what to do for {formatDateDisplay(summaryDate)} summary.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-2">
+        <DialogContent title="Send / Download Summary" onOpenChange={setSummaryActionOpen}>
+          <div className="space-y-4 my-3 text-left">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">From Date</label>
+                <input
+                  type="date"
+                  value={summaryDateFrom}
+                  onChange={(e) => setSummaryDateFrom(e.target.value)}
+                  className="w-full rounded border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">To Date</label>
+                <input
+                  type="date"
+                  value={summaryDateTo}
+                  onChange={(e) => setSummaryDateTo(e.target.value)}
+                  className="w-full rounded border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">Shifts</label>
+              <div className="flex gap-4 mt-2">
+                {['Day', 'Night'].map((shift) => {
+                  const isChecked = summaryShifts.includes(shift);
+                  return (
+                    <label key={shift} className="flex items-center gap-2 text-sm font-medium select-none cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {
+                          if (isChecked) {
+                            setSummaryShifts(summaryShifts.filter(s => s !== shift));
+                          } else {
+                            setSummaryShifts([...summaryShifts, shift]);
+                          }
+                        }}
+                        className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                      />
+                      <span>{shift} Shift</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex flex-col sm:flex-row gap-2 mt-4">
             <Button
               onClick={async () => {
                 setSummaryActionOpen(false);
                 await handleSendSummary();
               }}
-              disabled={sendingSum || downloadingSum || readOnly}
-              className="flex-1 flex items-center gap-2"
+              disabled={sendingSum || downloadingSum || readOnly || summaryShifts.length === 0}
+              className="flex-1 flex items-center gap-2 justify-center"
             >
               <Send className="h-4 w-4" />
-              Send Notification
+              {sendingSum ? 'Sending...' : 'Send Notification'}
             </Button>
             <Button
               variant="outline"
@@ -183,40 +209,15 @@ export function ReceiveFromMachine() {
                 setSummaryActionOpen(false);
                 await handleDownloadSummary();
               }}
-              disabled={sendingSum || downloadingSum}
-              className="flex-1 flex items-center gap-2"
+              disabled={sendingSum || downloadingSum || summaryShifts.length === 0}
+              className="flex-1 flex items-center gap-2 justify-center"
             >
               <Download className="h-4 w-4" />
-              Download Summary
+              {downloadingSum ? 'Downloading...' : 'Download PDF'}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Date Picker Popup */}
-      {showDatePicker && (
-        <div
-          ref={pickerRef}
-          className="fixed z-50 bg-background border rounded-lg shadow-lg p-3"
-          style={{
-            left: Math.min(pickerPosition.x, window.innerWidth - 220),
-            top: Math.min(pickerPosition.y, window.innerHeight - 100),
-          }}
-        >
-          <label className="block text-sm font-medium mb-2">Summary Date</label>
-          <input
-            type="date"
-            value={summaryDate}
-            onChange={handleDateChange}
-            max={getTodayISO()}
-            className="w-full px-3 py-2 border rounded-md text-sm"
-            autoFocus
-          />
-          <p className="text-xs text-muted-foreground mt-2">
-            Select date for summary PDF
-          </p>
-        </div>
-      )}
 
       {readOnly ? (
         <div className="rounded-md border p-4 text-sm text-muted-foreground">

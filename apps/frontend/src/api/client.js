@@ -406,17 +406,40 @@ export async function saveHoloOtherWastageMetrics(entries = []) {
 }
 
 // Summary
-export async function getSummary(stage, type, date) {
-  const params = date ? `?date=${date}` : '';
-  return await request(`/api/summary/${stage}/${type}${params}`);
+export async function getSummary(stage, type, dateFromOrObj, dateTo, shifts) {
+  let dateFrom = dateFromOrObj;
+  let finalShifts = shifts;
+  if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
+    dateFrom = dateFromOrObj.dateFrom;
+    dateTo = dateFromOrObj.dateTo;
+    finalShifts = dateFromOrObj.shifts;
+  } else if (dateTo === undefined) {
+    dateTo = dateFromOrObj;
+    finalShifts = ['Day', 'Night'];
+  }
+  const params = new URLSearchParams();
+  if (dateFrom) params.append('dateFrom', dateFrom);
+  if (dateTo) params.append('dateTo', dateTo);
+  if (finalShifts && finalShifts.length > 0) params.append('shifts', finalShifts.join(','));
+  return await request(`/api/summary/${stage}/${type}?${params.toString()}`);
 }
-export async function sendSummaryNotification(stage, type, date) {
+export async function sendSummaryNotification(stage, type, dateFromOrObj, dateTo, shifts) {
+  let body = {};
+  if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
+    body = dateFromOrObj;
+  } else if (dateTo !== undefined) {
+    body = { dateFrom: dateFromOrObj, dateTo, shifts };
+  } else {
+    body = { dateFrom: dateFromOrObj, dateTo: dateFromOrObj, shifts: ['Day', 'Night'] };
+  }
   return await request(`/api/summary/${stage}/${type}/send`, {
     method: 'POST',
-    body: date ? { date } : {}
+    body
   });
 }
-export async function sendSummaryWhatsApp(stage, type, date) { return await sendSummaryNotification(stage, type, date); }
+export async function sendSummaryWhatsApp(stage, type, dateFromOrObj, dateTo, shifts) {
+  return await sendSummaryNotification(stage, type, dateFromOrObj, dateTo, shifts);
+}
 async function downloadBlobResponse(path, fallbackFilename, options = {}) {
   let res;
   try {
@@ -470,9 +493,22 @@ async function downloadBlobResponse(path, fallbackFilename, options = {}) {
   a.remove();
   window.URL.revokeObjectURL(blobUrl);
 }
-export async function downloadSummaryPdf(stage, type, date) {
-  const params = date ? `?date=${encodeURIComponent(date)}` : '';
-  const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download${params}`;
+export async function downloadSummaryPdf(stage, type, dateFromOrObj, dateTo, shifts) {
+  let dateFrom = dateFromOrObj;
+  let finalShifts = shifts;
+  if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
+    dateFrom = dateFromOrObj.dateFrom;
+    dateTo = dateFromOrObj.dateTo;
+    finalShifts = dateFromOrObj.shifts;
+  } else if (dateTo === undefined) {
+    dateTo = dateFromOrObj;
+    finalShifts = ['Day', 'Night'];
+  }
+  const params = new URLSearchParams();
+  if (dateFrom) params.append('dateFrom', dateFrom);
+  if (dateTo) params.append('dateTo', dateTo);
+  if (finalShifts && finalShifts.length > 0) params.append('shifts', finalShifts.join(','));
+  const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download?${params.toString()}`;
   await downloadBlobResponse(path, `summary_${stage}_${type}.pdf`);
 }
 export async function downloadProductionDailyExport({ process, from, to, signal }) {

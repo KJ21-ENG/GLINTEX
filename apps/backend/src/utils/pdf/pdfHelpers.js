@@ -19,6 +19,11 @@ export async function getJsPDF() {
 export function formatDateDDMMYYYY(dateStr) {
     if (!dateStr) return '';
     const str = String(dateStr).trim();
+    const rangeMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})\s+to\s+(\d{4})-(\d{2})-(\d{2})$/);
+    if (rangeMatch) {
+        const [, y1, m1, d1, y2, m2, d2] = rangeMatch;
+        return `${d1}/${m1}/${y1} to ${d2}/${m2}/${y2}`;
+    }
     const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (match) {
         const [, yyyy, mm, dd] = match;

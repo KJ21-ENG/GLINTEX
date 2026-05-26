@@ -62,31 +62,31 @@ export async function generateBoilerSteamedPdf(data) {
     // Summary table headers
     const summaryHeaders = [
         { text: 'Item', align: 'left', wrap: true },
+        { text: 'Boilers', align: 'left' },
         { text: 'Twist', align: 'left' },
         { text: 'Cut', align: 'left' },
-        { text: 'Boilers', align: 'left' },
         { text: 'Rolls', align: 'right' },
         { text: 'Net Wt (kg)', align: 'right' },
     ];
     // Column widths for landscape A4 (sum to 267)
-    const summaryColWidths = [60, 35, 30, 60, 32, 50];
+    const summaryColWidths = [60, 60, 35, 30, 32, 50];
 
     // Detailed table headers
     const detailHeaders = [
         { text: 'S.No', align: 'center' },
         { text: 'Barcode', align: 'left' },
+        { text: 'Boiler', align: 'left' },
         { text: 'Item', align: 'left' },
         { text: 'Twist', align: 'left' },
         { text: 'Cut', align: 'left' },
         { text: 'Lot No', align: 'left' },
-        { text: 'Boiler', align: 'left' },
         { text: 'Rolls', align: 'right' },
         { text: 'Net Wt (kg)', align: 'right' },
         { text: 'Steamed At', align: 'center' },
         { text: 'Added By', align: 'left' },
     ];
     // Column widths for landscape A4 (sum to 267)
-    const detailColWidths = [10, 35, 42, 22, 18, 18, 32, 16, 24, 25, 25];
+    const detailColWidths = [10, 35, 32, 42, 22, 18, 18, 16, 24, 25, 25];
 
     const summaryRows = [];
     const detailsRows = [];
@@ -130,11 +130,11 @@ export async function generateBoilerSteamedPdf(data) {
                 cells: [
                     { text: String(idx + 1), align: 'center' },
                     { text: item.barcode || '-', align: 'left' },
+                    { text: item.boilerLabel || '-', align: 'left' },
                     { text: item.itemName || '-', align: 'left' },
                     { text: item.twistName || '-', align: 'left' },
                     { text: item.cutName || '-', align: 'left' },
                     { text: item.lotNo || '-', align: 'left' },
-                    { text: item.boilerLabel || '-', align: 'left' },
                     { text: formatNumber(rolls), align: 'right' },
                     { text: formatWeight(netWeight), align: 'right' },
                     { text: formatTime(item.steamedAt), align: 'center' },
@@ -155,9 +155,9 @@ export async function generateBoilerSteamedPdf(data) {
                 summaryRows.push({
                     cells: [
                         { text: entry.itemName, align: 'left' },
+                        { text: boilersList, align: 'left' },
                         { text: entry.twistName, align: 'left' },
                         { text: entry.cutName, align: 'left' },
-                        { text: boilersList, align: 'left' },
                         { text: formatNumber(entry.rollCount), align: 'right' },
                         { text: formatWeight(entry.netWeight), align: 'right' },
                     ],

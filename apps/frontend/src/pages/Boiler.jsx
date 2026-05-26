@@ -885,12 +885,12 @@ export function Boiler() {
                                     <TableRow>
                                         <TableHead className="w-[42px]"></TableHead>
                                         {renderHistoryHeader('Date', 'steamedAt')}
+                                        {renderHistoryHeader('Boilers', 'boiler')}
                                         {renderHistoryHeader('Item', 'item')}
                                         {renderHistoryHeader('Twist', 'twist')}
                                         {renderHistoryHeader('Cut', 'cut')}
                                         <TableHead className="text-right">Records</TableHead>
                                         {renderHistoryHeader('Lots', 'lotNo')}
-                                        {renderHistoryHeader('Boilers', 'boiler')}
                                         {renderHistoryHeader('Rolls', 'rolls', 'text-right')}
                                         {renderHistoryHeader('Net Weight', 'weight', 'text-right')}
                                         {renderHistoryHeader('Latest Steam', 'steamedAt')}
@@ -931,12 +931,12 @@ export function Boiler() {
                                                             )}
                                                         </TableCell>
                                                         <TableCell>{group.date}</TableCell>
+                                                        <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
                                                         <TableCell className="font-medium">{group.itemName}</TableCell>
                                                         <TableCell>{group.twistName}</TableCell>
                                                         <TableCell>{group.cutName}</TableCell>
                                                         <TableCell className="text-right">{group.recordCount}</TableCell>
                                                         <TableCell className="max-w-[180px] truncate" title={lots}>{lots}</TableCell>
-                                                        <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
                                                         <TableCell className="text-right">{group.totalRolls}</TableCell>
                                                         <TableCell className="text-right">{formatKg(group.totalNetWeight)}</TableCell>
                                                         <TableCell>{formatHistoryTime(group.latestSteamedAt)}</TableCell>
@@ -997,11 +997,11 @@ export function Boiler() {
                                         <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
+                                            <TableCell></TableCell>
                                             <TableCell className="font-bold text-primary">Grand Total</TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell className="text-right font-bold text-primary">{historyTotals.records}</TableCell>
-                                            <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell className="text-right font-bold text-primary">{historyTotals.rolls}</TableCell>
                                             <TableCell className="text-right font-bold text-primary">{formatKg(historyTotals.netWeight)}</TableCell>

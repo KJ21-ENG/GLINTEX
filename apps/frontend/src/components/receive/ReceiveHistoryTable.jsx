@@ -379,6 +379,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const filterColumns = useMemo(() => {
         const base = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
+            { id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || r.issue?.shift || '' },
             { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
             { id: 'notes', label: 'Notes', kind: 'text', getValue: (r) => r.note || r.notes || '' },
             { id: 'addedBy', label: 'Added By', kind: 'values', getValue: (r) => r.createdByUser?.username || r.createdByUser?.name || '' },
@@ -2096,6 +2097,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 const resolvedTwist = resolvePieceTwistName(piece) || '—';
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    shift: row.shift || '—',
                     item: row.itemName || item?.name || '—',
                     piece: row.pieceId || '—',
                     cut: resolvedCut,
@@ -2111,6 +2113,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             });
             columns = [
                 { key: 'date', header: 'Date' },
+                { key: 'shift', header: 'Shift' },
                 { key: 'item', header: 'Item' },
                 { key: 'piece', header: 'Piece' },
                 { key: 'cut', header: 'Cut' },
@@ -2127,6 +2130,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             exportData = sourceRows.map(row => {
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    shift: row.shift || row.issue?.shift || '—',
                     item: row.itemName || row.issue?.item?.name || '—',
                     cut: row.cutName || row.issue?.cut?.name || '—',
                     yarn: row.yarnName || row.issue?.yarn?.name || '—',
@@ -2143,6 +2147,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             });
             columns = [
                 { key: 'date', header: 'Date' },
+                { key: 'shift', header: 'Shift' },
                 { key: 'item', header: 'Item' },
                 { key: 'cut', header: 'Cut' },
                 { key: 'yarn', header: 'Yarn' },
@@ -2166,6 +2171,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 const actualPerConeNet = formatActualPerCone(row.netWeight ?? row.grossWeight, row.coneCount);
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
+                    shift: row.shift || coningIssue?.shift || '—',
                     item: item || '—',
                     cut: row.cutName || coningIssue?.cut?.name || '—',
                     yarn: row.yarnName || coningIssue?.yarn?.name || '—',
@@ -2185,6 +2191,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             });
             columns = [
                 { key: 'date', header: 'Date' },
+                { key: 'shift', header: 'Shift' },
                 { key: 'item', header: 'Item' },
                 { key: 'cut', header: 'Cut' },
                 { key: 'yarn', header: 'Yarn' },
@@ -2235,7 +2242,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         exportHistoryToExcel(exportData, columns, `receive-challans-cutter-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 14 : 17;
+    const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 16 : 19;
 
     return (
         <Card>
@@ -2301,6 +2308,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                    </div>
+                                                </TableHead>
+                                                <TableHead>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span>Shift</span>
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
@@ -2373,6 +2386,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                    </div>
+                                                </TableHead>
+                                                <TableHead>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span>Shift</span>
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
@@ -2462,6 +2481,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Date</span>
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                    </div>
+                                                </TableHead>
+                                                <TableHead>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span>Shift</span>
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
@@ -2582,6 +2607,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="font-mono text-xs"><HighlightMatch text={r.pieceId} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={resolvedCut} query={searchTerm} /></TableCell>
@@ -2628,6 +2654,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.shift || r.issue?.shift || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
@@ -2667,6 +2694,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={r.shift || coningIssue?.shift || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
@@ -2745,7 +2773,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                             <p className="font-mono text-xs text-primary">{r.barcode}</p>
                                                             <p className="font-medium mt-1">{item?.name || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">
-                                                                {dateDisplay} • {r.operator?.name || r.employee || '—'}
+                                                                {dateDisplay}{r.shift ? ` (${r.shift})` : ''} • {r.operator?.name || r.employee || '—'}
                                                             </p>
                                                         </div>
                                                         <div className="text-right">
@@ -2783,7 +2811,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                                 Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
-                                                                {dateDisplay} • {r.operator?.name || '—'}
+                                                                {dateDisplay}{r.shift || r.issue?.shift ? ` (${r.shift || r.issue?.shift})` : ''} • {r.operator?.name || '—'}
                                                             </p>
                                                         </div>
                                                         <div className="text-right">
@@ -2827,7 +2855,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                                 Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
-                                                                {dateDisplay} • {r.operator?.name || '—'}
+                                                                {dateDisplay}{r.shift || coningIssue?.shift ? ` (${r.shift || coningIssue?.shift})` : ''} • {r.operator?.name || '—'}
                                                             </p>
                                                         </div>
                                                         <div className="text-right">

@@ -2656,7 +2656,7 @@ async function fetchHoloReceiveData({ issueLotLabelMap, issueLotNosMap, cutterRo
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true, cutId: true, cut: { select: { name: true } }, receivedRowRefs: true } },
+      issue: { select: { id: true, lotNo: true, itemId: true, barcode: true, date: true, yarnId: true, twistId: true, cutId: true, cut: { select: { name: true } }, receivedRowRefs: true, shift: true } },
       rollType: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
     },
@@ -2758,7 +2758,7 @@ async function fetchConingReceiveData({ receive_from_holo_machine_rows_raw, incl
     include: {
       operator: { select: { id: true, name: true } },
       helper: { select: { id: true, name: true } },
-      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true, receivedRowRefs: true } },
+      issue: { select: { id: true, lotNo: true, barcode: true, date: true, itemId: true, receivedRowRefs: true, shift: true } },
       box: { select: { id: true, name: true, weight: true } },
     },
   });

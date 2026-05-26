@@ -994,6 +994,7 @@ const RECEIVE_FILTERS = {
 function mapReceiveRow(process, row, extras = {}) {
   const base = { ...row };
   if (process === 'holo' || process === 'coning') {
+    base.shift = row.shift || row.issue?.shift || '';
     base.itemName = row.issue?.itemName || '';
     base.cutName = row.issue?.cut?.name || '';
     base.yarnName = row.issue?.yarn?.name || '';

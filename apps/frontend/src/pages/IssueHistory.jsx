@@ -1209,6 +1209,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     // In v2 mode, row objects already include flattened names; avoid expensive tracing.
     const common = [
       { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
+      { id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' },
       { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || itemNameById.get(r.itemId) || '' },
       { id: 'lotOrPiece', label: 'Piece/Lot', kind: 'text', getValue: (r) => (process === 'cutter' ? (r.pieceIds || '') : (r.lotLabel || lotLabelFor(r) || '')) },
       { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).cutName || '') },
@@ -1605,6 +1606,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const exportData = sourceRows.map(r => {
       const baseData = {
         date: formatDateDDMMYYYY(r.date || r.createdAt),
+        shift: r.shift || '—',
         itemName: r.itemName || itemNameById.get(r.itemId) || '—',
         machineName: r.machineName || machineNameById.get(r.machineId) || '—',
         operatorName: r.operatorName || operatorNameById.get(r.operatorId) || '—',
@@ -1660,6 +1662,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (process === 'cutter') {
       columns = [
         { key: 'date', header: 'Date' },
+        { key: 'shift', header: 'Shift' },
         { key: 'itemName', header: 'Item' },
         { key: 'pieceIds', header: 'Piece IDs' },
         { key: 'cut', header: 'Cut' },
@@ -1678,6 +1681,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     } else if (process === 'holo') {
       columns = [
         { key: 'date', header: 'Date' },
+        { key: 'shift', header: 'Shift' },
         { key: 'itemName', header: 'Item' },
         { key: 'lotNo', header: 'Lot' },
         { key: 'cut', header: 'Cut' },
@@ -1697,6 +1701,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     } else {
       columns = [
         { key: 'date', header: 'Date' },
+        { key: 'shift', header: 'Shift' },
         { key: 'itemName', header: 'Item' },
         { key: 'lotNo', header: 'Lot' },
         { key: 'cut', header: 'Cut' },
@@ -1718,7 +1723,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     exportHistoryToExcel(exportData, columns, `issue-history-${process}-${today}`);
   };
 
-  const emptyColSpan = process === 'cutter' ? 15 : process === 'holo' ? 18 : 17;
+  const emptyColSpan = process === 'cutter' ? 16 : process === 'holo' ? 19 : 18;
 
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
@@ -1811,6 +1816,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
+                      <span>Shift</span>
+                      <SheetColumnFilter column={columnFor('shift')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
                       <span>Item</span>
                       <SheetColumnFilter column={columnFor('item')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
@@ -1897,6 +1908,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="flex items-center justify-between gap-2">
                       <span>Date</span>
                       <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Shift</span>
+                      <SheetColumnFilter column={columnFor('shift')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead>
@@ -2008,6 +2025,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   </TableHead>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
+                      <span>Shift</span>
+                      <SheetColumnFilter column={columnFor('shift')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                    </div>
+                  </TableHead>
+                  <TableHead>
+                    <div className="flex items-center justify-between gap-2">
                       <span>Item</span>
                       <SheetColumnFilter column={columnFor('item')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
@@ -2114,6 +2137,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       {process === 'cutter' && (
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}><HighlightMatch text={r.pieceIds || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
@@ -2134,6 +2158,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       {process === 'holo' && (
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
@@ -2157,6 +2182,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       {process === 'coning' && (
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
+                          <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
@@ -2239,7 +2265,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       {machineNameById.get(r.machineId)} • {operatorNameById.get(r.operatorId)}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {formatDateDDMMYYYY(r.date)} • {itemNameById.get(r.itemId)}
+                      {formatDateDDMMYYYY(r.date)}{r.shift ? ` (${r.shift})` : ''} • {itemNameById.get(r.itemId)}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       Cut: {resolved.cutName || '—'}{process !== 'cutter' && (<> • Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</>)}

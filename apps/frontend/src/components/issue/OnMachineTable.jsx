@@ -914,6 +914,7 @@ export function OnMachineTable({ db, process }) {
     const filterColumns = useMemo(() => {
         const common = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
+            { id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' },
             { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || itemNameById.get(r.itemId) || '' },
             { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceIds || '')) },
             { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveEntryNames(r).cutName || '') },
@@ -1106,6 +1107,7 @@ export function OnMachineTable({ db, process }) {
             const resolvedNames = resolveEntryNames(entry);
             const baseData = {
                 date: formatDateDDMMYYYY(entry.date),
+                shift: entry.shift || '—',
                 lotOrPiece: (process === 'cutter' || process === 'holo' || process === 'coning')
                     ? resolvePieceDisplay(entry)
                     : (entry.lotNo || ''),
@@ -1146,6 +1148,7 @@ export function OnMachineTable({ db, process }) {
 
         let columns = [
             { key: 'date', header: 'Date' },
+            { key: 'shift', header: 'Shift' },
             { key: 'lotOrPiece', header: (process === 'cutter' || process === 'holo' || process === 'coning') ? 'Piece' : 'Lot' },
             { key: 'itemName', header: 'Item' },
         ];
@@ -1177,7 +1180,7 @@ export function OnMachineTable({ db, process }) {
         exportHistoryToExcel(exportData, columns, `on-machine-${process}-${today}`);
     };
 
-    const emptyColSpan = process === 'cutter' ? 12 : process === 'holo' ? 14 : 17;
+    const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 15 : 18;
 
     // Shared pool constraint for coning take-back modal
     const issuePendingPool = process === 'coning'
@@ -1227,6 +1230,12 @@ export function OnMachineTable({ db, process }) {
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                        </div>
+                                    </TableHead>
+                                    <TableHead>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span>Shift</span>
+                                            <SheetColumnFilter column={columnFor('shift')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
@@ -1294,6 +1303,12 @@ export function OnMachineTable({ db, process }) {
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                        </div>
+                                    </TableHead>
+                                    <TableHead>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span>Shift</span>
+                                            <SheetColumnFilter column={columnFor('shift')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
@@ -1372,6 +1387,12 @@ export function OnMachineTable({ db, process }) {
                                         <div className="flex items-center justify-between gap-2">
                                             <span>Date</span>
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                        </div>
+                                    </TableHead>
+                                    <TableHead>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span>Shift</span>
+                                            <SheetColumnFilter column={columnFor('shift')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead>
@@ -1482,6 +1503,7 @@ export function OnMachineTable({ db, process }) {
                                     return (
                                         <TableRow key={entry.id}>
                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(entry.date)} query={searchTerm} /></TableCell>
+                                            <TableCell><HighlightMatch text={entry.shift || '—'} query={searchTerm} /></TableCell>
                                             <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
                                             <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
                                                 <HighlightMatch text={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')} query={searchTerm} />
@@ -1593,7 +1615,7 @@ export function OnMachineTable({ db, process }) {
                                     <div className="min-w-0 flex-1">
                                         <p className="font-semibold truncate" title={identifier}>{identifier}</p>
                                         <p className="text-xs text-muted-foreground mt-1">
-                                            {formatDateDDMMYYYY(entry.date)} • {itemNameById.get(entry.itemId)}
+                                            {formatDateDDMMYYYY(entry.date)}{entry.shift ? ` (${entry.shift})` : ''} • {itemNameById.get(entry.itemId)}
                                         </p>
                                     </div>
                                     <Badge variant="outline" className="text-blue-600 border-blue-600 whitespace-nowrap">

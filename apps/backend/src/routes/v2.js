@@ -195,8 +195,9 @@ async function buildItemWhereFromSheetFilters(filters = [], { mode } = {}) {
   return and;
 }
 
-function buildFilterWhere(filters = [], mapping = {}, { excludeField } = {}) {
+function buildFilterWhere(filters = [], mapping = {}, { excludeField, process } = {}) {
   const and = [];
+  const ctx = { process };
   for (const f of filters || []) {
     if (!f || typeof f !== 'object') continue;
     const field = String(f.field || '').trim();
@@ -209,15 +210,15 @@ function buildFilterWhere(filters = [], mapping = {}, { excludeField } = {}) {
     if (op === 'in') {
       const values = Array.isArray(f.values) ? f.values.map(v => String(v)) : [];
       if (!values.length) continue;
-      and.push(mapEntry.in(values));
+      and.push(mapEntry.in(values, ctx));
     } else if (op === 'contains') {
       const value = normalizeText(f.value);
       if (!value) continue;
-      and.push(mapEntry.contains(value));
+      and.push(mapEntry.contains(value, ctx));
     } else if (op === 'between') {
       const min = f.min == null ? null : Number(f.min);
       const max = f.max == null ? null : Number(f.max);
-      and.push(mapEntry.between({ min, max }));
+      and.push(mapEntry.between({ min, max }, ctx));
     }
   }
   return and;
@@ -518,6 +519,19 @@ const ISSUE_FILTERS = {
     contains: () => ({}),
     between: () => ({}),
   },
+  shift: {
+    in: (values, ctx) => {
+      const proc = ctx?.process || '';
+      if (proc === 'cutter') return {};
+      return { shift: { in: values } };
+    },
+    contains: (value, ctx) => {
+      const proc = ctx?.process || '';
+      if (proc === 'cutter') return {};
+      return { shift: { contains: value, mode: 'insensitive' } };
+    },
+    between: () => ({}),
+  },
   lotOrPiece: {
     in: () => ({}),
     contains: (value) => ({ lotNo: { contains: value, mode: 'insensitive' } }),
@@ -659,7 +673,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       : { rawFilters: filters, computedFilters: [] };
     const cursorWhere = computedFilters.length > 0 ? null : buildCursorWhere(cursor);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS);
+    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
@@ -818,7 +832,7 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
   try {
     const model = issueModelForProcess(process);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { excludeField });
+    const filterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { excludeField, process });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const where = {
       isDeleted: false,
@@ -838,6 +852,24 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
       prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
     ]);
 
+    let shifts = [];
+    if (process === 'holo') {
+      const distinctShifts = await prisma.issueToHoloMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    } else if (process === 'coning') {
+      const distinctShifts = await prisma.issueToConingMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    }
+    shifts.sort((a, b) => a.localeCompare(b));
+
     // NOTE: The above uses master tables (global facets) to preserve current dropdown behavior even when paging.
     // If you want truly context-filtered facets later, we can add per-field distinct-from-where queries.
     res.json({
@@ -848,6 +880,7 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
         cut: cuts.map(r => r.name).filter(Boolean),
         yarn: yarns.map(r => r.name).filter(Boolean),
         twist: twists.map(r => r.name).filter(Boolean),
+        shift: shifts,
       },
       meta: { process, excludeField, whereApplied: Boolean(where) },
     });
@@ -870,7 +903,7 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
       ? splitCutterHistoryFilters(filters)
       : { rawFilters: filters, computedFilters: [] };
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS);
+    const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
@@ -931,6 +964,23 @@ const RECEIVE_FILTERS = {
   date: {
     in: () => ({}),
     contains: () => ({}),
+    between: () => ({}),
+  },
+  shift: {
+    in: (values, ctx) => {
+      const proc = ctx?.process || '';
+      if (proc === 'cutter') {
+        return { shift: { in: values } };
+      }
+      return { issue: { shift: { in: values } } };
+    },
+    contains: (value, ctx) => {
+      const proc = ctx?.process || '';
+      if (proc === 'cutter') {
+        return { shift: { contains: value, mode: 'insensitive' } };
+      }
+      return { issue: { shift: { contains: value, mode: 'insensitive' } } };
+    },
     between: () => ({}),
   },
   barcode: {
@@ -1056,7 +1106,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     const model = receiveModelForProcess(process);
     const cursorWhere = buildCursorWhere(cursor);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS);
+    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
     const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     if (process !== 'cutter') {
@@ -1148,7 +1198,7 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
   try {
     const model = receiveModelForProcess(process);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { excludeField });
+    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { excludeField, process });
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     const where = {
       isDeleted: false,
@@ -1167,6 +1217,32 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
       prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.box.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
     ]);
+
+    let shifts = [];
+    if (process === 'cutter') {
+      const distinctShifts = await prisma.receiveFromCutterMachineRow.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    } else if (process === 'holo') {
+      const distinctShifts = await prisma.issueToHoloMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    } else if (process === 'coning') {
+      const distinctShifts = await prisma.issueToConingMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    }
+    shifts.sort((a, b) => a.localeCompare(b));
+
     // `where` is currently unused; keeping it for future context-filtered facets.
     void where;
     void model;
@@ -1181,6 +1257,7 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
         yarn: yarns.map(r => r.name).filter(Boolean),
         twist: twists.map(r => r.name).filter(Boolean),
         box: boxes.map(r => r.name).filter(Boolean),
+        shift: shifts,
       },
       meta: { process, excludeField },
     });
@@ -1200,7 +1277,7 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
   try {
     const model = receiveModelForProcess(process);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS);
+    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
     const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     if (process !== 'cutter') {
@@ -1543,7 +1620,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     };
 
     // Column filters are supported for the same ids used in OnMachineTable (subset).
-    const onMachineFilterWhere = buildFilterWhere(filters, ISSUE_FILTERS);
+    const onMachineFilterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { process });
     const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
     const filterAnd = onMachineFilterWhere.length || itemFilterWhere.length
       ? { AND: [...onMachineFilterWhere, ...itemFilterWhere] }

@@ -637,7 +637,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!v2Enabled) return;
         if (!showHistory) return;
         let cancelled = false;
-        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee'] : ['item', 'cut', 'yarn', 'twist'];
+        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift'];
         (async () => {
             try {
                 const res = await Promise.all(fields.map(async (field) => {

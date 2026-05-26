@@ -1466,7 +1466,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   useEffect(() => {
     if (!v2Enabled) return;
     let cancelled = false;
-    const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'operator'] : ['item', 'cut', 'yarn', 'twist', 'machine', 'operator'];
+    const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'operator'] : ['item', 'cut', 'yarn', 'twist', 'machine', 'operator', 'shift'];
     (async () => {
       try {
         const res = await Promise.all(fields.map(async (field) => {

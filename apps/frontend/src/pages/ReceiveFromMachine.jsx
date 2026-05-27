@@ -38,7 +38,8 @@ export function ReceiveFromMachine() {
   };
   const [summaryDateFrom, setSummaryDateFrom] = useState(getYesterdayISO);
   const [summaryDateTo, setSummaryDateTo] = useState(getYesterdayISO);
-  const [summaryShifts, setSummaryShifts] = useState(['Day', 'Night']);
+  const [summaryFromShifts, setSummaryFromShifts] = useState(['Day', 'Night']);
+  const [summaryToShifts, setSummaryToShifts] = useState(['Day', 'Night']);
 
   useEffect(() => {
     if (process !== 'cutter') {
@@ -58,7 +59,7 @@ export function ReceiveFromMachine() {
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      const result = await sendSummaryNotification(stage, 'receive', summaryDateFrom, summaryDateTo, summaryShifts);
+      const result = await sendSummaryNotification(stage, 'receive', summaryDateFrom, summaryDateTo, summaryFromShifts, summaryToShifts);
       if (result.ok) {
         const channelErrors = Object.entries(result?.channels || {})
           .flatMap(([channel, detail]) => (detail?.results || [])
@@ -86,7 +87,7 @@ export function ReceiveFromMachine() {
     setSumMessage(null);
     try {
       const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
-      await downloadSummaryPdf(stage, 'receive', summaryDateFrom, summaryDateTo, summaryShifts);
+      await downloadSummaryPdf(stage, 'receive', summaryDateFrom, summaryDateTo, summaryFromShifts, summaryToShifts);
       setSumMessage({ type: 'success', text: 'Summary downloaded successfully!' });
     } catch (err) {
       setSumMessage({ type: 'error', text: err.message || 'Failed to download summary' });
@@ -122,10 +123,18 @@ export function ReceiveFromMachine() {
           )}
           <span className="text-xs text-muted-foreground flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            {summaryDateFrom === summaryDateTo
-              ? formatDateDisplay(summaryDateFrom)
-              : `${formatDateDisplay(summaryDateFrom)} to ${formatDateDisplay(summaryDateTo)}`}
-            {` (${summaryShifts.join(', ')})`}
+            {summaryDateFrom === summaryDateTo ? (
+              <>
+                {formatDateDisplay(summaryDateFrom)}
+                {summaryFromShifts.length === summaryToShifts.length && summaryFromShifts.every(s => summaryToShifts.includes(s)) ? (
+                  ` (${summaryFromShifts.join(', ')})`
+                ) : (
+                  ` (${summaryFromShifts.join(', ')} -> ${summaryToShifts.join(', ')})`
+                )}
+              </>
+            ) : (
+              `${formatDateDisplay(summaryDateFrom)} (${summaryFromShifts.join(', ')}) to ${formatDateDisplay(summaryDateTo)} (${summaryToShifts.join(', ')})`
+            )}
           </span>
           <Button
             variant="outline"
@@ -143,50 +152,77 @@ export function ReceiveFromMachine() {
       <Dialog open={summaryActionOpen} onOpenChange={setSummaryActionOpen}>
         <DialogContent title="Send / Download Summary" onOpenChange={setSummaryActionOpen}>
           <div className="space-y-4 my-3 text-left">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">From Date</label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* From Column */}
+              <div className="space-y-3 p-3 rounded-lg border bg-muted/20">
+                <label className="block text-xs font-bold text-foreground mb-1 uppercase tracking-wider">From Date & Shifts</label>
                 <input
                   type="date"
                   value={summaryDateFrom}
                   onChange={(e) => setSummaryDateFrom(e.target.value)}
                   className="w-full rounded border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary"
                 />
+                <div>
+                  <span className="block text-xs font-semibold text-muted-foreground mb-1">From Shifts</span>
+                  <div className="flex gap-4 mt-1">
+                    {['Day', 'Night'].map((shift) => {
+                      const isChecked = summaryFromShifts.includes(shift);
+                      return (
+                        <label key={`from-${shift}`} className="flex items-center gap-2 text-sm font-medium select-none cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              if (isChecked) {
+                                setSummaryFromShifts(summaryFromShifts.filter(s => s !== shift));
+                              } else {
+                                setSummaryFromShifts([...summaryFromShifts, shift]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                          />
+                          <span>{shift}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">To Date</label>
+
+              {/* To Column */}
+              <div className="space-y-3 p-3 rounded-lg border bg-muted/20">
+                <label className="block text-xs font-bold text-foreground mb-1 uppercase tracking-wider">To Date & Shifts</label>
                 <input
                   type="date"
                   value={summaryDateTo}
                   onChange={(e) => setSummaryDateTo(e.target.value)}
                   className="w-full rounded border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary"
                 />
-              </div>
-            </div>
-            
-            <div>
-              <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase">Shifts</label>
-              <div className="flex gap-4 mt-2">
-                {['Day', 'Night'].map((shift) => {
-                  const isChecked = summaryShifts.includes(shift);
-                  return (
-                    <label key={shift} className="flex items-center gap-2 text-sm font-medium select-none cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {
-                          if (isChecked) {
-                            setSummaryShifts(summaryShifts.filter(s => s !== shift));
-                          } else {
-                            setSummaryShifts([...summaryShifts, shift]);
-                          }
-                        }}
-                        className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
-                      />
-                      <span>{shift} Shift</span>
-                    </label>
-                  );
-                })}
+                <div>
+                  <span className="block text-xs font-semibold text-muted-foreground mb-1">To Shifts</span>
+                  <div className="flex gap-4 mt-1">
+                    {['Day', 'Night'].map((shift) => {
+                      const isChecked = summaryToShifts.includes(shift);
+                      return (
+                        <label key={`to-${shift}`} className="flex items-center gap-2 text-sm font-medium select-none cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              if (isChecked) {
+                                setSummaryToShifts(summaryToShifts.filter(s => s !== shift));
+                              } else {
+                                setSummaryToShifts([...summaryToShifts, shift]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                          />
+                          <span>{shift}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -197,7 +233,7 @@ export function ReceiveFromMachine() {
                 setSummaryActionOpen(false);
                 await handleSendSummary();
               }}
-              disabled={sendingSum || downloadingSum || readOnly || summaryShifts.length === 0}
+              disabled={sendingSum || downloadingSum || readOnly || summaryFromShifts.length === 0 || summaryToShifts.length === 0}
               className="flex-1 flex items-center gap-2 justify-center"
             >
               <Send className="h-4 w-4" />
@@ -209,7 +245,7 @@ export function ReceiveFromMachine() {
                 setSummaryActionOpen(false);
                 await handleDownloadSummary();
               }}
-              disabled={sendingSum || downloadingSum || summaryShifts.length === 0}
+              disabled={sendingSum || downloadingSum || summaryFromShifts.length === 0 || summaryToShifts.length === 0}
               className="flex-1 flex items-center gap-2 justify-center"
             >
               <Download className="h-4 w-4" />

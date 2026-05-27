@@ -406,39 +406,43 @@ export async function saveHoloOtherWastageMetrics(entries = []) {
 }
 
 // Summary
-export async function getSummary(stage, type, dateFromOrObj, dateTo, shifts) {
+export async function getSummary(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts) {
   let dateFrom = dateFromOrObj;
-  let finalShifts = shifts;
+  let finalFromShifts = fromShifts;
+  let finalToShifts = toShifts;
   if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
     dateFrom = dateFromOrObj.dateFrom;
     dateTo = dateFromOrObj.dateTo;
-    finalShifts = dateFromOrObj.shifts;
+    finalFromShifts = dateFromOrObj.fromShifts || dateFromOrObj.shifts;
+    finalToShifts = dateFromOrObj.toShifts || dateFromOrObj.shifts;
   } else if (dateTo === undefined) {
     dateTo = dateFromOrObj;
-    finalShifts = ['Day', 'Night'];
+    finalFromShifts = ['Day', 'Night'];
+    finalToShifts = ['Day', 'Night'];
   }
   const params = new URLSearchParams();
   if (dateFrom) params.append('dateFrom', dateFrom);
   if (dateTo) params.append('dateTo', dateTo);
-  if (finalShifts && finalShifts.length > 0) params.append('shifts', finalShifts.join(','));
+  if (finalFromShifts && finalFromShifts.length > 0) params.append('fromShifts', finalFromShifts.join(','));
+  if (finalToShifts && finalToShifts.length > 0) params.append('toShifts', finalToShifts.join(','));
   return await request(`/api/summary/${stage}/${type}?${params.toString()}`);
 }
-export async function sendSummaryNotification(stage, type, dateFromOrObj, dateTo, shifts) {
+export async function sendSummaryNotification(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts) {
   let body = {};
   if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
     body = dateFromOrObj;
   } else if (dateTo !== undefined) {
-    body = { dateFrom: dateFromOrObj, dateTo, shifts };
+    body = { dateFrom: dateFromOrObj, dateTo, fromShifts, toShifts };
   } else {
-    body = { dateFrom: dateFromOrObj, dateTo: dateFromOrObj, shifts: ['Day', 'Night'] };
+    body = { dateFrom: dateFromOrObj, dateTo: dateFromOrObj, fromShifts: ['Day', 'Night'], toShifts: ['Day', 'Night'] };
   }
   return await request(`/api/summary/${stage}/${type}/send`, {
     method: 'POST',
     body
   });
 }
-export async function sendSummaryWhatsApp(stage, type, dateFromOrObj, dateTo, shifts) {
-  return await sendSummaryNotification(stage, type, dateFromOrObj, dateTo, shifts);
+export async function sendSummaryWhatsApp(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts) {
+  return await sendSummaryNotification(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts);
 }
 async function downloadBlobResponse(path, fallbackFilename, options = {}) {
   let res;
@@ -493,21 +497,25 @@ async function downloadBlobResponse(path, fallbackFilename, options = {}) {
   a.remove();
   window.URL.revokeObjectURL(blobUrl);
 }
-export async function downloadSummaryPdf(stage, type, dateFromOrObj, dateTo, shifts) {
+export async function downloadSummaryPdf(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts) {
   let dateFrom = dateFromOrObj;
-  let finalShifts = shifts;
+  let finalFromShifts = fromShifts;
+  let finalToShifts = toShifts;
   if (typeof dateFromOrObj === 'object' && dateFromOrObj !== null) {
     dateFrom = dateFromOrObj.dateFrom;
     dateTo = dateFromOrObj.dateTo;
-    finalShifts = dateFromOrObj.shifts;
+    finalFromShifts = dateFromOrObj.fromShifts || dateFromOrObj.shifts;
+    finalToShifts = dateFromOrObj.toShifts || dateFromOrObj.shifts;
   } else if (dateTo === undefined) {
     dateTo = dateFromOrObj;
-    finalShifts = ['Day', 'Night'];
+    finalFromShifts = ['Day', 'Night'];
+    finalToShifts = ['Day', 'Night'];
   }
   const params = new URLSearchParams();
   if (dateFrom) params.append('dateFrom', dateFrom);
   if (dateTo) params.append('dateTo', dateTo);
-  if (finalShifts && finalShifts.length > 0) params.append('shifts', finalShifts.join(','));
+  if (finalFromShifts && finalFromShifts.length > 0) params.append('fromShifts', finalFromShifts.join(','));
+  if (finalToShifts && finalToShifts.length > 0) params.append('toShifts', finalToShifts.join(','));
   const path = `/api/summary/${encodeURIComponent(stage)}/${encodeURIComponent(type)}/download?${params.toString()}`;
   await downloadBlobResponse(path, `summary_${stage}_${type}.pdf`);
 }

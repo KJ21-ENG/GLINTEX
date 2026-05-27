@@ -18485,19 +18485,88 @@ function aggregateBy(items, keyFn, valueFns) {
 }
 
 // Shared helper to generate summary data (used by both GET and POST endpoints)
-async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day', 'Night']) {
+async function generateSummaryData(stage, type, dateFrom, dateTo, fromShifts = ['Day', 'Night'], toShifts = ['Day', 'Night']) {
   const finalDateFrom = dateFrom || getYesterdayDateString();
   const finalDateTo = dateTo || getYesterdayDateString();
   const date = finalDateFrom === finalDateTo ? finalDateFrom : `${finalDateFrom} to ${finalDateTo}`;
   let summary = { stage, type, date };
 
-  let shiftCondition = {};
-  if (shifts && shifts.length > 0) {
-    if (shifts.includes('Day') && shifts.includes('Night')) {
-      // Both selected, do not filter by shift to include null/empty shifts
-    } else {
-      shiftCondition = { shift: { in: shifts } };
+  const isFromAll = fromShifts.includes('Day') && fromShifts.includes('Night');
+  const isToAll = toShifts.includes('Day') && toShifts.includes('Night');
+
+  // Helper to build date-shift filter condition
+  function getDateShiftWhereCondition(hasShiftField) {
+    if (finalDateFrom === finalDateTo) {
+      if (isFromAll) {
+        return { date: finalDateFrom, isDeleted: false };
+      } else {
+        const cond = { date: finalDateFrom, isDeleted: false };
+        if (hasShiftField) cond.shift = { in: fromShifts };
+        return cond;
+      }
     }
+
+    if (isFromAll && isToAll) {
+      return {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false
+      };
+    }
+
+    const clauses = [];
+    if (fromShifts.length > 0) {
+      const cond = { date: finalDateFrom, isDeleted: false };
+      if (hasShiftField && !isFromAll) cond.shift = { in: fromShifts };
+      clauses.push(cond);
+    }
+    if (toShifts.length > 0) {
+      const cond = { date: finalDateTo, isDeleted: false };
+      if (hasShiftField && !isToAll) cond.shift = { in: toShifts };
+      clauses.push(cond);
+    }
+    clauses.push({
+      date: { gt: finalDateFrom, lt: finalDateTo },
+      isDeleted: false
+    });
+
+    return { OR: clauses };
+  }
+
+  function getReceiveRelationWhereCondition() {
+    if (finalDateFrom === finalDateTo) {
+      if (isFromAll) {
+        return { date: finalDateFrom, isDeleted: false };
+      } else {
+        const cond = { date: finalDateFrom, isDeleted: false };
+        cond.issue = { shift: { in: fromShifts } };
+        return cond;
+      }
+    }
+
+    if (isFromAll && isToAll) {
+      return {
+        date: { gte: finalDateFrom, lte: finalDateTo },
+        isDeleted: false
+      };
+    }
+
+    const clauses = [];
+    if (fromShifts.length > 0) {
+      const cond = { date: finalDateFrom, isDeleted: false };
+      if (!isFromAll) cond.issue = { shift: { in: fromShifts } };
+      clauses.push(cond);
+    }
+    if (toShifts.length > 0) {
+      const cond = { date: finalDateTo, isDeleted: false };
+      if (!isToAll) cond.issue = { shift: { in: toShifts } };
+      clauses.push(cond);
+    }
+    clauses.push({
+      date: { gt: finalDateFrom, lt: finalDateTo },
+      isDeleted: false
+    });
+
+    return { OR: clauses };
   }
 
   // Helper to lookup item names from ids
@@ -18609,11 +18678,7 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
 
   } else if (stage === 'cutter' && type === 'receive') {
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
-      where: {
-        date: { gte: finalDateFrom, lte: finalDateTo },
-        isDeleted: false,
-        ...shiftCondition,
-      },
+      where: getDateShiftWhereCondition(true),
       include: { operator: true, challan: true, cutMaster: true, box: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18688,11 +18753,7 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
 
   } else if (stage === 'holo' && type === 'issue') {
     const issues = await prisma.issueToHoloMachine.findMany({
-      where: {
-        date: { gte: finalDateFrom, lte: finalDateTo },
-        isDeleted: false,
-        ...shiftCondition,
-      },
+      where: getDateShiftWhereCondition(true),
       include: { machine: true, operator: true, twist: true, yarn: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18736,17 +18797,8 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
     }).map(a => ({ name: a.key, count: a.count, bobbinWeight: a.bobbinWeight }));
 
   } else if (stage === 'holo' && type === 'receive') {
-    const holoReceiveWhere = {
-      date: { gte: finalDateFrom, lte: finalDateTo },
-      isDeleted: false,
-    };
-    if (Object.keys(shiftCondition).length > 0) {
-      holoReceiveWhere.issue = {
-        shift: shiftCondition.shift
-      };
-    }
     const rows = await prisma.receiveFromHoloMachineRow.findMany({
-      where: holoReceiveWhere,
+      where: getReceiveRelationWhereCondition(),
       include: { operator: true, box: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18824,11 +18876,7 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
 
   } else if (stage === 'coning' && type === 'issue') {
     const issues = await prisma.issueToConingMachine.findMany({
-      where: {
-        date: { gte: finalDateFrom, lte: finalDateTo },
-        isDeleted: false,
-        ...shiftCondition,
-      },
+      where: getDateShiftWhereCondition(true),
       include: { machine: true, operator: true, yarn: true, twist: true, cut: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -18907,17 +18955,8 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
     }).map(a => ({ name: a.key, count: a.count, rollsIssued: a.rollsIssued }));
 
   } else if (stage === 'coning' && type === 'receive') {
-    const coningReceiveWhere = {
-      date: { gte: finalDateFrom, lte: finalDateTo },
-      isDeleted: false,
-    };
-    if (Object.keys(shiftCondition).length > 0) {
-      coningReceiveWhere.issue = {
-        shift: shiftCondition.shift
-      };
-    }
     const rows = await prisma.receiveFromConingMachineRow.findMany({
-      where: coningReceiveWhere,
+      where: getReceiveRelationWhereCondition(),
       include: { operator: true, box: true, issue: { include: { machine: true, yarn: true, twist: true, cut: true } } },
       orderBy: { createdAt: 'asc' },
     });
@@ -19083,12 +19122,20 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, shifts = ['Day
 
     // Apply shift filtering to steam logs in-memory
     let filteredSteamLogs = steamLogs;
-    if (Object.keys(shiftCondition).length > 0) {
-      const allowedShifts = shiftCondition.shift.in;
+    if (!isFromAll || !isToAll) {
       filteredSteamLogs = steamLogs.filter(log => {
+        const steamedDateStr = log.steamedAt.toISOString().split('T')[0];
         const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
         const shift = holoRow?.issue?.shift || '';
-        return allowedShifts.includes(shift);
+        
+        if (steamedDateStr === finalDateFrom) {
+          return fromShifts.includes(shift);
+        } else if (steamedDateStr === finalDateTo) {
+          return toShifts.includes(shift);
+        } else {
+          // Intermediate dates
+          return true;
+        }
       });
     }
 
@@ -19175,15 +19222,20 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
     const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
     
-    let shifts = [];
-    if (req.query.shifts) {
-      if (Array.isArray(req.query.shifts)) {
-        shifts = req.query.shifts;
-      } else {
-        shifts = req.query.shifts.split(',').map(s => s.trim());
-      }
+    let fromShifts = [];
+    const rawFromShifts = req.query.fromShifts || req.query.shifts;
+    if (rawFromShifts) {
+      fromShifts = Array.isArray(rawFromShifts) ? rawFromShifts : rawFromShifts.split(',').map(s => s.trim());
     } else {
-      shifts = ['Day', 'Night'];
+      fromShifts = ['Day', 'Night'];
+    }
+
+    let toShifts = [];
+    const rawToShifts = req.query.toShifts || req.query.shifts;
+    if (rawToShifts) {
+      toShifts = Array.isArray(rawToShifts) ? rawToShifts : rawToShifts.split(',').map(s => s.trim());
+    } else {
+      toShifts = ['Day', 'Night'];
     }
 
     const validStages = ['cutter', 'holo', 'coning', 'boiler'];
@@ -19204,7 +19256,7 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
       }
     }
 
-    const summary = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
+    const summary = await generateSummaryData(stage, type, dateFrom, dateTo, fromShifts, toShifts);
     res.json(summary);
   } catch (err) {
     console.error('Failed to get summary', err);
@@ -19222,16 +19274,20 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     const dateFrom = req.query.dateFrom || req.body.dateFrom || req.query.date || req.body.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.body.dateTo || req.query.date || req.body.date || getYesterdayDateString();
     
-    let shifts = [];
-    const rawShifts = req.query.shifts || req.body.shifts;
-    if (rawShifts) {
-      if (Array.isArray(rawShifts)) {
-        shifts = rawShifts;
-      } else {
-        shifts = rawShifts.split(',').map(s => s.trim());
-      }
+    let fromShifts = [];
+    const rawFromShifts = req.query.fromShifts || req.body.fromShifts || req.query.shifts || req.body.shifts;
+    if (rawFromShifts) {
+      fromShifts = Array.isArray(rawFromShifts) ? rawFromShifts : rawFromShifts.split(',').map(s => s.trim());
     } else {
-      shifts = ['Day', 'Night'];
+      fromShifts = ['Day', 'Night'];
+    }
+
+    let toShifts = [];
+    const rawToShifts = req.query.toShifts || req.body.toShifts || req.query.shifts || req.body.shifts;
+    if (rawToShifts) {
+      toShifts = Array.isArray(rawToShifts) ? rawToShifts : rawToShifts.split(',').map(s => s.trim());
+    } else {
+      toShifts = ['Day', 'Night'];
     }
 
     const validStages = ['cutter', 'holo', 'coning'];
@@ -19264,7 +19320,7 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     }
 
     // Get summary data using shared helper function (no internal HTTP request)
-    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
+    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, fromShifts, toShifts);
 
     // Check if there are any entries
     if (!summaryData.totalCount || summaryData.totalCount === 0) {
@@ -19338,15 +19394,20 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
     const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
     
-    let shifts = [];
-    if (req.query.shifts) {
-      if (Array.isArray(req.query.shifts)) {
-        shifts = req.query.shifts;
-      } else {
-        shifts = req.query.shifts.split(',').map(s => s.trim());
-      }
+    let fromShifts = [];
+    const rawFromShifts = req.query.fromShifts || req.query.shifts;
+    if (rawFromShifts) {
+      fromShifts = Array.isArray(rawFromShifts) ? rawFromShifts : rawFromShifts.split(',').map(s => s.trim());
     } else {
-      shifts = ['Day', 'Night'];
+      fromShifts = ['Day', 'Night'];
+    }
+
+    let toShifts = [];
+    const rawToShifts = req.query.toShifts || req.query.shifts;
+    if (rawToShifts) {
+      toShifts = Array.isArray(rawToShifts) ? rawToShifts : rawToShifts.split(',').map(s => s.trim());
+    } else {
+      toShifts = ['Day', 'Night'];
     }
 
     const validStages = ['cutter', 'holo', 'coning', 'boiler'];
@@ -19367,7 +19428,7 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
       }
     }
 
-    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, shifts);
+    const summaryData = await generateSummaryData(stage, type, dateFrom, dateTo, fromShifts, toShifts);
     if (!summaryData.totalCount || summaryData.totalCount === 0) {
       const dateStr = dateFrom === dateTo ? dateFrom : `${dateFrom} to ${dateTo}`;
       return res.status(404).json({ error: `No ${type} entries found for ${stage} on ${dateStr}` });

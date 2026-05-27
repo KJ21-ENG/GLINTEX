@@ -373,6 +373,24 @@ export function IssueToHolo() {
                     {scanFeedback && (
                         <div className="mb-2 text-xs text-green-600">{scanFeedback}</div>
                     )}
+                    {crates.length > 0 && (
+                        <div className="space-y-4 mb-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted rounded-md text-sm">
+                                <div><strong>Lot:</strong> {lotSummary.lotLabel || '—'}</div>
+                                <div><strong>Item:</strong> {db?.items?.find(i => i.id === lotSummary.itemId)?.name || lotSummary.itemId || '—'}</div>
+                                <div><strong>Cut:</strong> {crates[0]?.cut || '—'}</div>
+                                <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === form.yarnId)?.name || '—'}</div>
+                                <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === form.twistId)?.name || '—'}</div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/50 rounded-md text-sm">
+                                <div><strong>Total Avail Count:</strong> {crates.reduce((acc, c) => acc + (Number(c.availCount) || 0), 0)}</div>
+                                <div><strong>Total Avail Weight:</strong> {formatKg(crates.reduce((acc, c) => acc + (Number(c.availWt) || 0), 0))}</div>
+                                <div><strong>Issue Count:</strong> {holoTotals.rolls}</div>
+                                <div><strong>Issue Weight:</strong> {formatKg(holoTotals.weight)}</div>
+                                <div><strong>Yarn Weight:</strong> {form.yarnKg ? formatKg(Number(form.yarnKg)) : formatKg(holoTotals.weight)}</div>
+                            </div>
+                        </div>
+                    )}
                     <div className="border rounded-md overflow-x-auto">
                         <Table>
                             <TableHeader>

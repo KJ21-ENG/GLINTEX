@@ -18463,9 +18463,24 @@ function getYesterdayDateString() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function formatDateDDMMYYYY(dateStr) {
+  if (!dateStr) return '';
+  const str = String(dateStr).trim();
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const [, yyyy, mm, dd] = match;
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  return str;
+}
+
 function formatDateForFilename(dateStr) {
   if (!dateStr) return getTodayDateString().replace(/-/g, '');
-  return String(dateStr).replace(/-/g, '').replace(/\s+/g, '_');
+  return String(dateStr)
+    .replace(/\//g, '')
+    .replace(/-/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '');
 }
 
 // Helper to aggregate by a key
@@ -18488,7 +18503,16 @@ function aggregateBy(items, keyFn, valueFns) {
 async function generateSummaryData(stage, type, dateFrom, dateTo, fromShifts = ['Day', 'Night'], toShifts = ['Day', 'Night']) {
   const finalDateFrom = dateFrom || getYesterdayDateString();
   const finalDateTo = dateTo || getYesterdayDateString();
-  const date = finalDateFrom === finalDateTo ? finalDateFrom : `${finalDateFrom} to ${finalDateTo}`;
+
+  const dateFromFormatted = formatDateDDMMYYYY(finalDateFrom);
+  const dateToFormatted = formatDateDDMMYYYY(finalDateTo);
+  const fromShiftsStr = fromShifts.join(', ');
+  const toShiftsStr = toShifts.join(', ');
+
+  const date = finalDateFrom === finalDateTo
+    ? `${dateFromFormatted} (${fromShiftsStr})`
+    : `${dateFromFormatted} (${fromShiftsStr}) to ${dateToFormatted} (${toShiftsStr})`;
+
   let summary = { stage, type, date };
 
   const isFromAll = fromShifts.includes('Day') && fromShifts.includes('Night');

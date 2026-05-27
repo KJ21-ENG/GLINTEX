@@ -20,15 +20,9 @@ async function getJsPDF() {
 
 function formatDateDDMMYYYY(dateStr) {
     if (!dateStr) return '';
-    // Parse YYYY-MM-DD directly without creating Date object to avoid timezone issues
-    const str = String(dateStr).trim();
-    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (match) {
-        const [, yyyy, mm, dd] = match;
+    return String(dateStr).replace(/(\d{4})-(\d{2})-(\d{2})/g, (match, yyyy, mm, dd) => {
         return `${dd}/${mm}/${yyyy}`;
-    }
-    // Fallback for other formats
-    return str;
+    });
 }
 
 function formatWeight(val) {

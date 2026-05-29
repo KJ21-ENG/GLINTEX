@@ -19278,6 +19278,7 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, fromShifts = [
       return {
         barcode: log.barcode || '-',
         steamedAt: log.steamedAt,
+        yarnName: issueDetails?.yarnName || null,
         itemName: issue?.itemId ? (itemsById.get(issue.itemId)?.name || null) : null,
         twistName: issueDetails?.twistName || null,
         cutName: issueDetails?.cutName || null,
@@ -19849,6 +19850,7 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
         steamedAt: log.steamedAt,
         holoReceiveRowId: log.holoReceiveRowId,
         itemId: issue?.itemId || null,
+        yarnName: issueDetails?.yarnName || null,
         itemName: issue?.itemId ? (itemsById.get(issue.itemId)?.name || null) : null,
         twistName: issueDetails?.twistName || null,
         cutName: issueDetails?.cutName || null,

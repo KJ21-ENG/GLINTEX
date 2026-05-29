@@ -81,6 +81,7 @@ const formatUniqueValues = (values) => {
 
 const buildBoilerHistoryGroupKey = (item) => [
     getHistoryDateKey(item?.steamedAt) || DISPLAY_EMPTY,
+    displayText(item?.yarnName),
     displayText(item?.itemName),
     displayText(item?.twistName),
     displayText(item?.cutName),
@@ -239,6 +240,7 @@ export function Boiler() {
     const historyFilterColumns = useMemo(() => [
         { id: 'barcode', label: 'Barcode', kind: 'text', getValue: (r) => r.barcode || '' },
         { id: 'lotNo', label: 'Lot No', kind: 'values', getValue: (r) => r.lotNo || '' },
+        { id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => r.yarnName || '' },
         { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || '' },
         { id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => r.twistName || '' },
         { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => r.cutName || '' },

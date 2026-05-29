@@ -307,6 +307,7 @@ export function Boiler() {
             const existing = groups.get(key) || {
                 key,
                 date: formatHistoryDate(item.steamedAt),
+                yarnName: displayText(item.yarnName),
                 itemName: displayText(item.itemName),
                 twistName: displayText(item.twistName),
                 cutName: displayText(item.cutName),
@@ -877,6 +878,7 @@ export function Boiler() {
                                         <TableHead className="w-[42px]"></TableHead>
                                         {renderHistoryHeader('Date', 'steamedAt')}
                                         {renderHistoryHeader('Boilers', 'boiler')}
+                                        {renderHistoryHeader('Yarn', 'yarn')}
                                         {renderHistoryHeader('Item', 'item')}
                                         {renderHistoryHeader('Twist', 'twist')}
                                         {renderHistoryHeader('Cut', 'cut')}
@@ -890,13 +892,13 @@ export function Boiler() {
                                 <TableBody>
                                     {loadingHistory ? (
                                         <TableRow>
-                                            <TableCell colSpan={11} className="h-24 text-center">
+                                            <TableCell colSpan={12} className="h-24 text-center">
                                                 <Loader2 className="w-6 h-6 mx-auto animate-spin text-muted-foreground" />
                                             </TableCell>
                                         </TableRow>
                                     ) : groupedHistory.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                                            <TableCell colSpan={12} className="h-24 text-center text-muted-foreground">
                                                 <div className="flex flex-col items-center gap-2">
                                                     <History className="w-8 h-8 opacity-50" />
                                                     <span>No items steamed in this range</span>
@@ -922,8 +924,9 @@ export function Boiler() {
                                                             )}
                                                         </TableCell>
                                                         <TableCell>{group.date}</TableCell>
-                                                        <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
-                                                        <TableCell className="font-medium">{group.itemName}</TableCell>
+                                                         <TableCell className="max-w-[220px] truncate" title={boilers}>{boilers}</TableCell>
+                                                         <TableCell>{group.yarnName}</TableCell>
+                                                         <TableCell className="font-medium">{group.itemName}</TableCell>
                                                         <TableCell>{group.twistName}</TableCell>
                                                         <TableCell>{group.cutName}</TableCell>
                                                         <TableCell className="text-right">{group.recordCount}</TableCell>
@@ -934,7 +937,7 @@ export function Boiler() {
                                                     </TableRow>
                                                     {isExpanded && (
                                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                                            <TableCell colSpan={11} className="p-4">
+                                                            <TableCell colSpan={12} className="p-4">
                                                                 <div className="rounded-md border bg-background overflow-x-auto">
                                                                     <Table>
                                                                         <TableHeader>
@@ -942,6 +945,7 @@ export function Boiler() {
                                                                                 {renderHistoryHeader('Barcode', 'barcode')}
                                                                                 {renderHistoryHeader('Date', 'steamedAt')}
                                                                                 {renderHistoryHeader('Lot No', 'lotNo')}
+                                                                                {renderHistoryHeader('Yarn', 'yarn')}
                                                                                 {renderHistoryHeader('Item', 'item')}
                                                                                 {renderHistoryHeader('Twist', 'twist')}
                                                                                 {renderHistoryHeader('Cut', 'cut')}
@@ -959,6 +963,7 @@ export function Boiler() {
                                                                                     <TableCell className="font-mono text-sm">{displayText(item.barcode)}</TableCell>
                                                                                     <TableCell>{formatHistoryDate(item.steamedAt)}</TableCell>
                                                                                     <TableCell>{displayText(item.lotNo)}</TableCell>
+                                                                                    <TableCell>{displayText(item.yarnName)}</TableCell>
                                                                                     <TableCell>{displayText(item.itemName)}</TableCell>
                                                                                     <TableCell>{displayText(item.twistName)}</TableCell>
                                                                                     <TableCell>{displayText(item.cutName)}</TableCell>
@@ -986,6 +991,7 @@ export function Boiler() {
                                     )}
                                     {!loadingHistory && groupedHistory.length > 0 && (
                                         <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
+                                            <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>
                                             <TableCell></TableCell>

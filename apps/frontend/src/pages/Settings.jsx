@@ -2163,6 +2163,119 @@ function ChallanSettings({ db, updateSettings, refreshDb, readOnly }) {
     );
 }
 
+const CRON_DAYS = [
+    { label: 'Sun', value: '0', shortLabel: 'S' },
+    { label: 'Mon', value: '1', shortLabel: 'M' },
+    { label: 'Tue', value: '2', shortLabel: 'T' },
+    { label: 'Wed', value: '3', shortLabel: 'W' },
+    { label: 'Thu', value: '4', shortLabel: 'T' },
+    { label: 'Fri', value: '5', shortLabel: 'F' },
+    { label: 'Sat', value: '6', shortLabel: 'S' },
+];
+
+function parseCron(cronStr) {
+    const defaultRes = {
+        time: '10:30',
+        days: ['4', '6'], // Thu, Sat
+        isCustom: false
+    };
+    if (!cronStr) return defaultRes;
+    const parts = cronStr.trim().split(/\s+/);
+    if (parts.length !== 5 && parts.length !== 6) {
+        return { time: '10:30', days: [], isCustom: true };
+    }
+
+    let min, hour, dayOfMonth, month, dayOfWeek;
+    if (parts.length === 5) {
+        [min, hour, dayOfMonth, month, dayOfWeek] = parts;
+    } else {
+        let sec;
+        [sec, min, hour, dayOfMonth, month, dayOfWeek] = parts;
+    }
+
+    const isSimpleTime = /^\d+$/.test(min) && /^\d+$/.test(hour);
+    const isSimpleDate = dayOfMonth === '*' && month === '*';
+
+    if (!isSimpleTime || !isSimpleDate) {
+        return { time: '10:30', days: [], isCustom: true };
+    }
+
+    const paddedHour = hour.padStart(2, '0');
+    const paddedMin = min.padStart(2, '0');
+    const time = `${paddedHour}:${paddedMin}`;
+
+    let days = [];
+    if (dayOfWeek === '*') {
+        days = ['0', '1', '2', '3', '4', '5', '6'];
+    } else {
+        const rawDays = dayOfWeek.split(',');
+        for (const d of rawDays) {
+            if (d === '7' || d === '0') {
+                if (!days.includes('0')) days.push('0');
+            } else if (/^[1-6]$/.test(d)) {
+                if (!days.includes(d)) days.push(d);
+            } else {
+                return { time, days: [], isCustom: true };
+            }
+        }
+    }
+
+    return { time, days, isCustom: false };
+}
+
+function generateCron(days, time, isCustom, customCronStr) {
+    if (isCustom) return customCronStr;
+    if (!time) time = '10:30';
+    const [hourStr, minStr] = time.split(':');
+    const hour = parseInt(hourStr, 10);
+    const min = parseInt(minStr, 10);
+
+    if (isNaN(hour) || isNaN(min)) return '30 10 * * 4,6';
+
+    let dayOfWeek = '*';
+    if (days.length === 0) {
+        dayOfWeek = '*';
+    } else if (days.length < 7) {
+        dayOfWeek = [...days].sort((a, b) => parseInt(a, 10) - parseInt(b, 10)).join(',');
+    }
+
+    return `${min} ${hour} * * ${dayOfWeek}`;
+}
+
+function getScheduleSummary(days, time) {
+    if (days.length === 0) return 'No days selected (will not run)';
+
+    const dayNames = days
+        .map(d => CRON_DAYS.find(day => day.value === d)?.label)
+        .filter(Boolean);
+
+    let daysStr = '';
+    if (dayNames.length === 7) {
+        daysStr = 'every day';
+    } else if (dayNames.length === 5 && !days.includes('0') && !days.includes('6')) {
+        daysStr = 'every weekday (Monday to Friday)';
+    } else if (dayNames.length === 2 && days.includes('0') && days.includes('6')) {
+        daysStr = 'every weekend (Saturday & Sunday)';
+    } else {
+        daysStr = 'every ' + dayNames.join(', ');
+    }
+
+    let timeStr = time;
+    try {
+        const [h, m] = time.split(':');
+        const hour = parseInt(h, 10);
+        const minute = parseInt(m, 10);
+        if (!isNaN(hour) && !isNaN(minute)) {
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+            const displayMinute = String(minute).padStart(2, '0');
+            timeStr = `${displayHour}:${displayMinute} ${ampm}`;
+        }
+    } catch (e) {}
+
+    return `Runs ${daysStr} at ${timeStr}.`;
+}
+
 export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }) {
     const isReadOnly = !!readOnly;
     const [working, setWorking] = useState(false);
@@ -2178,20 +2291,44 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
     const [testingPrimary, setTestingPrimary] = useState(false);
     const [testingReminder, setTestingReminder] = useState(false);
 
+    // Human-friendly builder states
+    const [selectedDays, setSelectedDays] = useState(['4', '6']);
+    const [selectedTime, setSelectedTime] = useState('10:30');
+    const [isCustomCron, setIsCustomCron] = useState(false);
+    const [customCronSchedule, setCustomCronSchedule] = useState('30 10 * * 4,6');
+
     const configuredChatIds = db?.settings?.[0]?.telegramChatIds || [];
 
     useEffect(() => {
         const settings = db?.settings?.[0];
         if (settings) {
             setCronEnabled(settings.telegramCronEnabled === true);
-            setCronSchedule(settings.telegramCronSchedule || '30 10 * * 4,6');
+            const sched = settings.telegramCronSchedule || '30 10 * * 4,6';
+            setCronSchedule(sched);
             setCronChatId(settings.telegramCronChatId || '');
             setCronMessage(settings.telegramCronMessage || '');
             setReminderEnabled(settings.telegramCronReminderEnabled === true);
             setReminderTime(settings.telegramCronReminderTime || '14:00');
             setReminderMessage(settings.telegramCronReminderMessage || '');
+
+            // Parse cron schedule for human-friendly inputs
+            const parsed = parseCron(sched);
+            setSelectedDays(parsed.days);
+            setSelectedTime(parsed.time);
+            setIsCustomCron(parsed.isCustom);
+            setCustomCronSchedule(sched);
         }
     }, [db]);
+
+    // Keep cronSchedule in sync with builder values
+    useEffect(() => {
+        if (!isCustomCron) {
+            const generated = generateCron(selectedDays, selectedTime, false, '');
+            setCronSchedule(generated);
+        } else {
+            setCronSchedule(customCronSchedule);
+        }
+    }, [selectedDays, selectedTime, isCustomCron, customCronSchedule]);
 
     const loadLogs = async () => {
         setLoadingLogs(true);
@@ -2294,18 +2431,90 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
                             </div>
                         </label>
 
-                        <div className="space-y-2">
-                            <Label>Cron Schedule Expression</Label>
-                            <Input
-                                value={cronSchedule}
-                                onChange={e => setCronSchedule(e.target.value)}
-                                placeholder="e.g. 30 10 * * 4,6"
-                                disabled={isReadOnly || !cronEnabled}
-                            />
-                            <p className="text-[11px] text-muted-foreground flex items-start gap-1">
-                                <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                                Standard 5-field cron. E.g., "30 10 * * 4,6" runs every Thursday & Saturday at 10:30 AM.
-                            </p>
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <Label className="text-sm font-semibold">Cron Run Schedule</Label>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (isCustomCron) {
+                                            const parsed = parseCron(customCronSchedule);
+                                            setSelectedDays(parsed.days);
+                                            setSelectedTime(parsed.time);
+                                            setIsCustomCron(false);
+                                        } else {
+                                            setIsCustomCron(true);
+                                        }
+                                    }}
+                                    className="text-xs text-primary hover:underline font-medium"
+                                    disabled={isReadOnly || !cronEnabled}
+                                >
+                                    {isCustomCron ? 'Use Days & Time Builder' : 'Use Raw Cron Expression'}
+                                </button>
+                            </div>
+
+                            {!isCustomCron ? (
+                                <div className="space-y-3 p-3 border rounded-md bg-muted/20">
+                                    <div className="space-y-1.5">
+                                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Days of Week</span>
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                            {CRON_DAYS.map(day => {
+                                                const isSelected = selectedDays.includes(day.value);
+                                                return (
+                                                    <button
+                                                        key={day.value}
+                                                        type="button"
+                                                        disabled={isReadOnly || !cronEnabled}
+                                                        onClick={() => {
+                                                            if (isSelected) {
+                                                                setSelectedDays(selectedDays.filter(d => d !== day.value));
+                                                            } else {
+                                                                setSelectedDays([...selectedDays, day.value]);
+                                                            }
+                                                        }}
+                                                        className={`w-9 h-9 rounded-full font-semibold text-xs flex items-center justify-center transition-all ${
+                                                            isSelected
+                                                                ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/95'
+                                                                : 'bg-background text-muted-foreground border border-input hover:bg-muted/80'
+                                                        } ${(!cronEnabled || isReadOnly) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                    >
+                                                        {day.label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5 pt-1">
+                                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Execution Time (IST)</span>
+                                        <Input
+                                            type="time"
+                                            value={selectedTime}
+                                            onChange={e => setSelectedTime(e.target.value)}
+                                            disabled={isReadOnly || !cronEnabled}
+                                            className="max-w-[150px] bg-background"
+                                        />
+                                    </div>
+
+                                    <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 pt-1.5 border-t border-dashed">
+                                        <Info className="w-3.5 h-3.5 shrink-0 text-primary" />
+                                        <span>{getScheduleSummary(selectedDays, selectedTime)}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    <Input
+                                        value={customCronSchedule}
+                                        onChange={e => setCustomCronSchedule(e.target.value)}
+                                        placeholder="e.g. 30 10 * * 4,6"
+                                        disabled={isReadOnly || !cronEnabled}
+                                    />
+                                    <p className="text-[11px] text-muted-foreground flex items-start gap-1">
+                                        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                        Standard 5-field cron. E.g., "30 10 * * 4,6" runs every Thursday & Saturday at 10:30 AM.
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         <div className="space-y-2">

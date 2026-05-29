@@ -1,24 +1,3 @@
--- DropIndex
-DROP INDEX "Dispatch_challanNo_idx";
-
--- DropIndex
-DROP INDEX "HoloOtherWastageMetric_otherWastageItemId_idx";
-
--- DropIndex
-DROP INDEX "IssueToConingMachine_receivedRowRefs_gin_idx";
-
--- DropIndex
-DROP INDEX "IssueToHoloMachine_receivedRowRefs_gin_idx";
-
--- DropIndex
-DROP INDEX "ReceiveFromCutterMachineRow_issueId_idx";
-
--- AlterTable
-ALTER TABLE "ReceiveFromConingMachineRow" ALTER COLUMN "deletedAt" SET DATA TYPE TIMESTAMP(3);
-
--- AlterTable
-ALTER TABLE "ReceiveFromHoloMachineRow" ALTER COLUMN "deletedAt" SET DATA TYPE TIMESTAMP(3);
-
 -- AlterTable
 ALTER TABLE "Settings" ADD COLUMN     "telegramCronChatId" TEXT,
 ADD COLUMN     "telegramCronEnabled" BOOLEAN NOT NULL DEFAULT false,

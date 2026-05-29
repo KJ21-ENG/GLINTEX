@@ -2298,6 +2298,30 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
     const [customCronSchedule, setCustomCronSchedule] = useState('30 10 * * 4,6');
 
     const configuredChatIds = db?.settings?.[0]?.telegramChatIds || [];
+    const [telegramChatInfoMap, setTelegramChatInfoMap] = useState({});
+
+    useEffect(() => {
+        let mounted = true;
+        async function resolveTelegramChats() {
+            if (!Array.isArray(configuredChatIds) || configuredChatIds.length === 0) {
+                if (mounted) setTelegramChatInfoMap({});
+                return;
+            }
+            try {
+                const response = await api.telegramResolveChats(configuredChatIds);
+                if (!mounted) return;
+                const map = {};
+                (response?.items || []).forEach((item) => {
+                    if (item?.chatId) map[item.chatId] = item;
+                });
+                setTelegramChatInfoMap(map);
+            } catch (_) {
+                if (mounted) setTelegramChatInfoMap({});
+            }
+        }
+        resolveTelegramChats();
+        return () => { mounted = false; };
+    }, [configuredChatIds.join(',')]);
 
     useEffect(() => {
         const settings = db?.settings?.[0];
@@ -2526,12 +2550,20 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
                                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={isReadOnly || !cronEnabled}
                                 >
-                                    <option value="">-- Select Chat ID --</option>
-                                    {configuredChatIds.map(id => (
-                                        <option key={id} value={id}>{id}</option>
-                                    ))}
+                                    <option value="">-- Select Chat --</option>
+                                    {configuredChatIds.map(id => {
+                                        const info = telegramChatInfoMap[id];
+                                        const displayName = info?.title ? `${info.title} (${id})` : id;
+                                        return (
+                                            <option key={id} value={id}>{displayName}</option>
+                                        );
+                                    })}
                                     {cronChatId && !configuredChatIds.includes(cronChatId) && (
-                                        <option value={cronChatId}>{cronChatId} (Custom)</option>
+                                        <option value={cronChatId}>
+                                            {telegramChatInfoMap[cronChatId]?.title 
+                                                ? `${telegramChatInfoMap[cronChatId].title} (${cronChatId}) (Custom)` 
+                                                : `${cronChatId} (Custom)`}
+                                        </option>
                                     )}
                                 </select>
                                 <Input

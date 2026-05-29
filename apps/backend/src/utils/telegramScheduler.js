@@ -163,14 +163,12 @@ export async function runReminderSequence() {
           responseDetected: true,
           responseText,
           responseUser,
-          responseCheckedAt: new Date(),
         },
         create: {
           date: todayStr,
           responseDetected: true,
           responseText,
           responseUser,
-          responseCheckedAt: new Date(),
         }
       });
 
@@ -184,12 +182,10 @@ export async function runReminderSequence() {
       where: { date: todayStr },
       update: {
         reminderSentAt: new Date(),
-        responseCheckedAt: new Date(),
       },
       create: {
         date: todayStr,
         reminderSentAt: new Date(),
-        responseCheckedAt: new Date(),
       }
     });
 

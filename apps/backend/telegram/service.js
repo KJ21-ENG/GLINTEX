@@ -187,6 +187,15 @@ class TelegramService {
       throw new Error(sanitizeErrorMessage(err?.message || err));
     }
   }
+
+  async getUpdates(opts = {}) {
+    const token = await this._resolveToken(opts.token);
+    try {
+      return await this._postJson(token, 'getUpdates', opts);
+    } catch (err) {
+      throw new Error(sanitizeErrorMessage(err?.message || err));
+    }
+  }
 }
 
 const telegram = new TelegramService();

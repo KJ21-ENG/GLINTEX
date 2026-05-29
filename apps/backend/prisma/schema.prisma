@@ -613,10 +613,33 @@ model Settings {
   challanFromMobile   String?
   challanFieldsConfig Json     @default("{}")
   autoSelectTwistForMachine Boolean @default(false)
+  
+  // Telegram Cron Configuration
+  telegramCronEnabled         Boolean  @default(false)
+  telegramCronSchedule        String   @default("30 10 * * 4,6")
+  telegramCronChatId          String?
+  telegramCronMessage         String?
+  telegramCronReminderEnabled Boolean  @default(false)
+  telegramCronReminderTime    String   @default("14:00")
+  telegramCronReminderMessage String?
+
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
   createdByUserId     String?
   updatedByUserId     String?
+}
+
+model TelegramCronLog {
+  id                String    @id @default(cuid())
+  date              String    @unique // Format: "YYYY-MM-DD"
+  initialSentAt     DateTime?
+  initialMessageId  Int?
+  reminderSentAt    DateTime?
+  responseDetected  Boolean   @default(false)
+  responseText      String?
+  responseUser      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
 }
 
 model GoogleDriveCredential {

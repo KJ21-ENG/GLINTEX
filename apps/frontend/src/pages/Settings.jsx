@@ -455,6 +455,9 @@ export function Settings() {
                         <button onClick={() => setActiveTab('challan')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'challan' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
                             <FileText className="w-4 h-4" /> Challan Settings
                         </button>
+                        <button onClick={() => setActiveTab('telegram-cron')} className={`px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 ${activeTab === 'telegram-cron' ? 'border-primary bg-muted text-primary' : 'border-transparent text-muted-foreground'}`}>
+                            <Cloud className="w-4 h-4" /> Telegram Cron
+                        </button>
                         <button
                             onClick={() => { if (!isReadOnly) navigate('/app/settings/label-designer'); }}
                             disabled={isReadOnly}
@@ -495,6 +498,7 @@ export function Settings() {
                                     <option value="data">Raw Data</option>
                                     <option value="backup">Backup</option>
                                     <option value="challan">Challan Settings</option>
+                                    <option value="telegram-cron">Telegram Cron</option>
                                     {isAdmin ? <option value="users">Users & Roles</option> : null}
                                 </select>
                             </div>
@@ -571,6 +575,14 @@ export function Settings() {
                 {activeTab === 'data' && <RawDataView db={db} />}
                 {activeTab === 'backup' && <BackupSettings isAdmin={isAdmin} db={db} updateSettings={updateSettings} readOnly={isReadOnly} />}
                 {activeTab === 'challan' && <ChallanSettings db={db} updateSettings={updateSettings} refreshDb={refreshDb} readOnly={isReadOnly} />}
+                {activeTab === 'telegram-cron' && (
+                    <TelegramCronSettings
+                        db={db}
+                        updateSettings={updateSettings}
+                        refreshDb={refreshDb}
+                        readOnly={isReadOnly}
+                    />
+                )}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
@@ -2150,3 +2162,360 @@ function ChallanSettings({ db, updateSettings, refreshDb, readOnly }) {
         </div>
     );
 }
+
+export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }) {
+    const isReadOnly = !!readOnly;
+    const [working, setWorking] = useState(false);
+    const [cronEnabled, setCronEnabled] = useState(false);
+    const [cronSchedule, setCronSchedule] = useState('30 10 * * 4,6');
+    const [cronChatId, setCronChatId] = useState('');
+    const [cronMessage, setCronMessage] = useState('');
+    const [reminderEnabled, setReminderEnabled] = useState(false);
+    const [reminderTime, setReminderTime] = useState('14:00');
+    const [reminderMessage, setReminderMessage] = useState('');
+    const [logs, setLogs] = useState([]);
+    const [loadingLogs, setLoadingLogs] = useState(false);
+    const [testingPrimary, setTestingPrimary] = useState(false);
+    const [testingReminder, setTestingReminder] = useState(false);
+
+    const configuredChatIds = db?.settings?.[0]?.telegramChatIds || [];
+
+    useEffect(() => {
+        const settings = db?.settings?.[0];
+        if (settings) {
+            setCronEnabled(settings.telegramCronEnabled === true);
+            setCronSchedule(settings.telegramCronSchedule || '30 10 * * 4,6');
+            setCronChatId(settings.telegramCronChatId || '');
+            setCronMessage(settings.telegramCronMessage || '');
+            setReminderEnabled(settings.telegramCronReminderEnabled === true);
+            setReminderTime(settings.telegramCronReminderTime || '14:00');
+            setReminderMessage(settings.telegramCronReminderMessage || '');
+        }
+    }, [db]);
+
+    const loadLogs = async () => {
+        setLoadingLogs(true);
+        try {
+            const response = await api.getTelegramCronLogs();
+            setLogs(response?.logs || []);
+        } catch (e) {
+            console.error('Failed to load telegram cron logs:', e);
+        } finally {
+            setLoadingLogs(false);
+        }
+    };
+
+    useEffect(() => {
+        loadLogs();
+    }, []);
+
+    const handleSave = async () => {
+        if (isReadOnly) return;
+        setWorking(true);
+        try {
+            await updateSettings({
+                telegramCronEnabled: cronEnabled,
+                telegramCronSchedule: cronSchedule,
+                telegramCronChatId: cronChatId,
+                telegramCronMessage: cronMessage,
+                telegramCronReminderEnabled: reminderEnabled,
+                telegramCronReminderTime: reminderTime,
+                telegramCronReminderMessage: reminderMessage,
+            });
+            alert('Telegram Cron settings saved successfully.');
+            refreshDb();
+        } catch (e) {
+            alert(e.message || 'Failed to save settings.');
+        } finally {
+            setWorking(false);
+        }
+    };
+
+    const handleTestPrimary = async () => {
+        if (testingPrimary) return;
+        setTestingPrimary(true);
+        try {
+            const res = await api.testTelegramCronPrimary();
+            if (res.success) {
+                alert(`Primary message sent successfully! Message ID: ${res.messageId}`);
+            } else if (res.skipped) {
+                alert(`Message skipped: ${res.reason}`);
+            }
+            loadLogs();
+        } catch (e) {
+            alert(e.message || 'Failed to trigger primary message test.');
+        } finally {
+            setTestingPrimary(false);
+        }
+    };
+
+    const handleTestReminder = async () => {
+        if (testingReminder) return;
+        setTestingReminder(true);
+        try {
+            const res = await api.testTelegramCronReminder();
+            if (res.responseDetected) {
+                alert(`Response check completed: Response was detected from ${res.responseUser || 'user'}: "${res.responseText || ''}". Reminder message skipped.`);
+            } else if (res.reminderSent) {
+                alert(`Response check completed: No response detected. Reminder message sent successfully! Message ID: ${res.messageId || 'N/A'}`);
+            } else if (res.skipped) {
+                alert(`Reminder skipped: ${res.reason}`);
+            }
+            loadLogs();
+        } catch (e) {
+            alert(e.message || 'Failed to trigger reminder check test.');
+        } finally {
+            setTestingReminder(false);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Primary Cron Settings */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Cloud className="w-5 h-5 text-primary" /> Primary Message Cron
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <label className="flex items-center gap-3 p-3 border rounded-md hover:bg-muted/50 cursor-pointer transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={cronEnabled}
+                                onChange={e => setCronEnabled(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                disabled={isReadOnly}
+                            />
+                            <div className="flex flex-col">
+                                <span className="text-sm font-semibold">Enable Automated Primary Message</span>
+                                <span className="text-xs text-muted-foreground">Send periodic messages automatically</span>
+                            </div>
+                        </label>
+
+                        <div className="space-y-2">
+                            <Label>Cron Schedule Expression</Label>
+                            <Input
+                                value={cronSchedule}
+                                onChange={e => setCronSchedule(e.target.value)}
+                                placeholder="e.g. 30 10 * * 4,6"
+                                disabled={isReadOnly || !cronEnabled}
+                            />
+                            <p className="text-[11px] text-muted-foreground flex items-start gap-1">
+                                <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                Standard 5-field cron. E.g., "30 10 * * 4,6" runs every Thursday & Saturday at 10:30 AM.
+                            </p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Target Group Chat ID</Label>
+                            <div className="flex gap-2">
+                                <select
+                                    value={cronChatId}
+                                    onChange={e => setCronChatId(e.target.value)}
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={isReadOnly || !cronEnabled}
+                                >
+                                    <option value="">-- Select Chat ID --</option>
+                                    {configuredChatIds.map(id => (
+                                        <option key={id} value={id}>{id}</option>
+                                    ))}
+                                    {cronChatId && !configuredChatIds.includes(cronChatId) && (
+                                        <option value={cronChatId}>{cronChatId} (Custom)</option>
+                                    )}
+                                </select>
+                                <Input
+                                    value={cronChatId}
+                                    onChange={e => setCronChatId(e.target.value)}
+                                    placeholder="-100xxxxxxxxx"
+                                    className="max-w-[200px]"
+                                    disabled={isReadOnly || !cronEnabled}
+                                />
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                                Select from configured notification chats or type a custom Telegram Chat ID.
+                            </p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Primary Message Content</Label>
+                            <textarea
+                                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                value={cronMessage}
+                                onChange={e => setCronMessage(e.target.value)}
+                                placeholder="Enter message to send automatically..."
+                                disabled={isReadOnly || !cronEnabled}
+                            />
+                        </div>
+
+                        <div className="pt-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full flex items-center justify-center gap-2"
+                                onClick={handleTestPrimary}
+                                disabled={testingPrimary || isReadOnly || !cronChatId || !cronMessage}
+                            >
+                                <MessageSquare className="w-4 h-4" /> Send Test Primary Message Now
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Reminder Settings */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <MessageSquare className="w-5 h-5 text-primary" /> Response Check & Reminder
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <label className="flex items-center gap-3 p-3 border rounded-md hover:bg-muted/50 cursor-pointer transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={reminderEnabled}
+                                onChange={e => setReminderEnabled(e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                disabled={isReadOnly || !cronEnabled}
+                            />
+                            <div className="flex flex-col">
+                                <span className="text-sm font-semibold">Enable Automated Reminders</span>
+                                <span className="text-xs text-muted-foreground">Send reminder if no human response detected</span>
+                            </div>
+                        </label>
+
+                        <div className="space-y-2">
+                            <Label>Reminder Time (HH:mm)</Label>
+                            <Input
+                                value={reminderTime}
+                                onChange={e => setReminderTime(e.target.value)}
+                                placeholder="e.g. 14:00"
+                                disabled={isReadOnly || !reminderEnabled || !cronEnabled}
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                                Check for response and send reminder at this time (same days as primary schedule).
+                            </p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Reminder Message Content</Label>
+                            <textarea
+                                className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                value={reminderMessage}
+                                onChange={e => setReminderMessage(e.target.value)}
+                                placeholder="Enter reminder message..."
+                                disabled={isReadOnly || !reminderEnabled || !cronEnabled}
+                            />
+                        </div>
+
+                        <div className="pt-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full flex items-center justify-center gap-2"
+                                onClick={handleTestReminder}
+                                disabled={testingReminder || isReadOnly || !cronChatId || !reminderMessage || !reminderEnabled}
+                            >
+                                <MessageSquare className="w-4 h-4" /> Run Test Check & Reminder Now
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex justify-end">
+                <Button className="w-full md:w-auto md:min-w-[200px]" onClick={handleSave} disabled={working || isReadOnly}>
+                    <Save className="w-4 h-4 mr-2" /> Save Cron Settings
+                </Button>
+            </div>
+
+            {/* Recent Execution Logs */}
+            <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle>Recent Cron Logs</CardTitle>
+                    <Button variant="ghost" size="icon" onClick={loadLogs} disabled={loadingLogs}>
+                        <RefreshCw className={`w-4 h-4 ${loadingLogs ? 'animate-spin' : ''}`} />
+                    </Button>
+                </CardHeader>
+                <CardContent>
+                    <div className="rounded-md border overflow-x-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead>Primary Sent At</TableHead>
+                                    <TableHead>Response Detected?</TableHead>
+                                    <TableHead>Responder & Preview</TableHead>
+                                    <TableHead>Reminder Sent At</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {logs.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
+                                            No recent logs found. Primary cron jobs run on target schedule.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    logs.map((log) => {
+                                        const responseStatusColor = log.responseDetected
+                                            ? 'text-green-600 bg-green-50 dark:bg-green-950/30'
+                                            : log.initialSentAt
+                                                ? 'text-amber-600 bg-amber-50 dark:bg-amber-950/30'
+                                                : 'text-muted-foreground';
+
+                                        return (
+                                            <TableRow key={log.id}>
+                                                <TableCell className="font-medium">{log.date}</TableCell>
+                                                <TableCell>
+                                                    {log.initialSentAt
+                                                        ? new Date(log.initialSentAt).toLocaleString()
+                                                        : '—'}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <span className={`px-2.5 py-1 rounded text-xs font-semibold ${responseStatusColor}`}>
+                                                        {log.responseDetected
+                                                            ? 'Yes'
+                                                            : log.initialSentAt
+                                                                ? 'No'
+                                                                : '—'}
+                                                    </span>
+                                                </TableCell>
+                                                <TableCell className="max-w-[250px] truncate">
+                                                    {log.responseDetected ? (
+                                                        <div className="flex flex-col">
+                                                            <span className="font-semibold text-xs text-foreground truncate">{log.responseUser}</span>
+                                                            <span className="text-[11px] text-muted-foreground truncate italic">"{log.responseText}"</span>
+                                                        </div>
+                                                    ) : log.responseText && log.responseText.startsWith('Failed') ? (
+                                                        <span className="text-red-500 text-xs font-semibold">{log.responseText}</span>
+                                                    ) : (
+                                                        '—'
+                                                    )}
+                                                </TableCell>
+                                                <TableCell>
+                                                    {log.reminderSentAt ? (
+                                                        new Date(log.reminderSentAt).toLocaleString()
+                                                    ) : log.responseDetected ? (
+                                                        <span className="text-xs text-muted-foreground italic bg-muted px-2 py-0.5 rounded">Skipped (Responded)</span>
+                                                    ) : log.initialSentAt ? (
+                                                        <span className="text-xs text-muted-foreground italic">Pending / Not sent</span>
+                                                    ) : (
+                                                        '—'
+                                                    )}
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+

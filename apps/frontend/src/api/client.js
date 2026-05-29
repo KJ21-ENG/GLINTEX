@@ -327,6 +327,9 @@ export async function whatsappSendTest(number) { return await request('/api/what
 export async function telegramStatus() { return await request('/api/telegram/status'); }
 export async function telegramSendTest(chatId, text) { return await request('/api/telegram/send-test', { method: 'POST', body: { chatId, text } }); }
 export async function telegramResolveChats(chatIds = []) { return await request('/api/telegram/chats/resolve', { method: 'POST', body: { chatIds } }); }
+export async function getTelegramCronLogs() { return await request('/api/telegram-cron/logs'); }
+export async function testTelegramCronPrimary() { return await request('/api/telegram-cron/test-primary', { method: 'POST' }); }
+export async function testTelegramCronReminder() { return await request('/api/telegram-cron/test-reminder', { method: 'POST' }); }
 export async function listWhatsappTemplates() { return await request('/api/whatsapp/templates'); }
 export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
 export async function sendNotificationEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
@@ -682,4 +685,7 @@ export default {
   saveHoloOtherWastageMetrics,
   updateDispatch,
   updateDispatchChallan,
+  getTelegramCronLogs,
+  testTelegramCronPrimary,
+  testTelegramCronReminder,
 };

@@ -3,6 +3,7 @@ import whatsapp from '../whatsapp/service.js';
 import telegram from '../telegram/service.js';
 import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 import { initBackupScheduler } from './utils/backup.js';
+import { initTelegramCronScheduler } from './utils/telegramScheduler.js';
 
 const PORT = process.env.PORT || 4000;
 
@@ -51,6 +52,7 @@ async function start() {
   startWhatsapp();
   startTelegram();
   await initBackupScheduler();
+  await initTelegramCronScheduler();
 }
 
 start();

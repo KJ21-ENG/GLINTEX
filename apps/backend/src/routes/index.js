@@ -28,6 +28,7 @@ import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
+import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
 
 async function timedTransaction(label, lineCount, fn) {
   if (!isPerfLogEnabled()) return prisma.$transaction(fn);
@@ -5939,6 +5940,39 @@ router.post('/api/telegram/chats/resolve', requirePermission('settings', PERM_RE
     res.json({ items });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+router.get('/api/telegram-cron/logs', requirePermission('settings', PERM_READ), async (req, res) => {
+  try {
+    const logs = await prisma.telegramCronLog.findMany({
+      orderBy: { date: 'desc' },
+      take: 20,
+    });
+    res.json({ logs });
+  } catch (err) {
+    console.error('Failed to fetch telegram cron logs:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.post('/api/telegram-cron/test-primary', requirePermission('settings', PERM_WRITE), async (req, res) => {
+  try {
+    const result = await runPrimarySequence();
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to run primary telegram cron test:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+router.post('/api/telegram-cron/test-reminder', requirePermission('settings', PERM_WRITE), async (req, res) => {
+  try {
+    const result = await runReminderSequence();
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to run reminder telegram cron test:', err);
+    res.status(500).json({ error: err.message || String(err) });
   }
 });
 
@@ -13421,7 +13455,14 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       challanFromName,
       challanFromAddress,
       challanFromMobile,
-      challanFieldsConfig
+      challanFieldsConfig,
+      telegramCronEnabled,
+      telegramCronSchedule,
+      telegramCronChatId,
+      telegramCronMessage,
+      telegramCronReminderEnabled,
+      telegramCronReminderTime,
+      telegramCronReminderMessage
     } = body;
     const hasBrandPrimary = Object.prototype.hasOwnProperty.call(body, 'brandPrimary') || Object.prototype.hasOwnProperty.call(body, 'primary');
     const hasBrandGold = Object.prototype.hasOwnProperty.call(body, 'brandGold') || Object.prototype.hasOwnProperty.call(body, 'gold');
@@ -13439,6 +13480,14 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     const hasChallanFromMobile = Object.prototype.hasOwnProperty.call(body, 'challanFromMobile');
     const hasChallanFieldsConfig = Object.prototype.hasOwnProperty.call(body, 'challanFieldsConfig');
     const hasAutoSelectTwistForMachine = Object.prototype.hasOwnProperty.call(body, 'autoSelectTwistForMachine');
+    const hasTelegramCronEnabled = Object.prototype.hasOwnProperty.call(body, 'telegramCronEnabled');
+    const hasTelegramCronSchedule = Object.prototype.hasOwnProperty.call(body, 'telegramCronSchedule');
+    const hasTelegramCronChatId = Object.prototype.hasOwnProperty.call(body, 'telegramCronChatId');
+    const hasTelegramCronMessage = Object.prototype.hasOwnProperty.call(body, 'telegramCronMessage');
+    const hasTelegramCronReminderEnabled = Object.prototype.hasOwnProperty.call(body, 'telegramCronReminderEnabled');
+    const hasTelegramCronReminderTime = Object.prototype.hasOwnProperty.call(body, 'telegramCronReminderTime');
+    const hasTelegramCronReminderMessage = Object.prototype.hasOwnProperty.call(body, 'telegramCronReminderMessage');
+
     const previousSettings = await prisma.settings.findUnique({ where: { id: 1 } });
     if (hasBackupTime && !req.user?.isAdmin) {
       return res.status(403).json({ error: 'forbidden' });
@@ -13500,6 +13549,13 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       if (hasChallanFromMobile) updateData.challanFromMobile = challanFromMobile || null;
       if (hasChallanFieldsConfig) updateData.challanFieldsConfig = challanFieldsConfig || {};
       if (hasAutoSelectTwistForMachine) updateData.autoSelectTwistForMachine = !!body.autoSelectTwistForMachine;
+      if (hasTelegramCronEnabled) updateData.telegramCronEnabled = !!telegramCronEnabled;
+      if (hasTelegramCronSchedule) updateData.telegramCronSchedule = telegramCronSchedule || '30 10 * * 4,6';
+      if (hasTelegramCronChatId) updateData.telegramCronChatId = telegramCronChatId || null;
+      if (hasTelegramCronMessage) updateData.telegramCronMessage = telegramCronMessage || null;
+      if (hasTelegramCronReminderEnabled) updateData.telegramCronReminderEnabled = !!telegramCronReminderEnabled;
+      if (hasTelegramCronReminderTime) updateData.telegramCronReminderTime = telegramCronReminderTime || '14:00';
+      if (hasTelegramCronReminderMessage) updateData.telegramCronReminderMessage = telegramCronReminderMessage || null;
 
       const createData = {
         id: 1,
@@ -13521,6 +13577,13 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       createData.challanFromMobile = hasChallanFromMobile ? (challanFromMobile || null) : null;
       createData.challanFieldsConfig = hasChallanFieldsConfig ? (challanFieldsConfig || {}) : {};
       createData.autoSelectTwistForMachine = hasAutoSelectTwistForMachine ? !!body.autoSelectTwistForMachine : false;
+      createData.telegramCronEnabled = hasTelegramCronEnabled ? !!telegramCronEnabled : false;
+      createData.telegramCronSchedule = hasTelegramCronSchedule ? (telegramCronSchedule || '30 10 * * 4,6') : '30 10 * * 4,6';
+      createData.telegramCronChatId = hasTelegramCronChatId ? (telegramCronChatId || null) : null;
+      createData.telegramCronMessage = hasTelegramCronMessage ? (telegramCronMessage || null) : null;
+      createData.telegramCronReminderEnabled = hasTelegramCronReminderEnabled ? !!telegramCronReminderEnabled : false;
+      createData.telegramCronReminderTime = hasTelegramCronReminderTime ? (telegramCronReminderTime || '14:00') : '14:00';
+      createData.telegramCronReminderMessage = hasTelegramCronReminderMessage ? (telegramCronReminderMessage || null) : null;
 
       const settings = await prisma.settings.upsert({
         where: { id: 1 },
@@ -13533,6 +13596,14 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
         } catch (scheduleErr) {
           console.error('Failed to update backup scheduler', scheduleErr);
           return res.status(500).json({ error: 'Failed to update backup scheduler' });
+        }
+      }
+      // Apply Telegram Cron Schedule if cron settings changed
+      if (hasTelegramEnabled || hasTelegramCronEnabled || hasTelegramCronSchedule || hasTelegramCronReminderEnabled || hasTelegramCronReminderTime) {
+        try {
+          applyTelegramCronSchedule(settings);
+        } catch (cronErr) {
+          console.error('Failed to update Telegram cron scheduler', cronErr);
         }
       }
       await logCrudWithActor(req, {

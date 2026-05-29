@@ -138,7 +138,7 @@ WITH active_issue_weight AS (
     SUM(l."issuedWeight") AS issued_weight
   FROM "IssueToCutterMachineLine" l
   JOIN "IssueToCutterMachine" i ON i."id" = l."issueId"
-  WHERE i."isDeleted" = false
+  WHERE 1=1
   GROUP BY l."pieceId"
 )
 UPDATE "InboundItem" ii
@@ -153,7 +153,7 @@ SET "issueId" = (
   FROM "IssueToCutterMachineLine" l
   JOIN "IssueToCutterMachine" i ON i."id" = l."issueId"
   WHERE l."pieceId" = r."pieceId"
-    AND i."isDeleted" = false
+    AND 1=1
     AND i."createdAt" <= r."createdAt"
   ORDER BY i."createdAt" DESC
   LIMIT 1
@@ -167,7 +167,7 @@ SET "issueId" = (
   FROM "IssueToCutterMachineLine" l
   JOIN "IssueToCutterMachine" i ON i."id" = l."issueId"
   WHERE l."pieceId" = r."pieceId"
-    AND i."isDeleted" = false
+    AND 1=1
   ORDER BY i."createdAt" DESC
   LIMIT 1
 )

@@ -41,6 +41,22 @@ const isPieceAvailableForIssue = (piece) => (
 
 const countAvailablePieces = (pieces = []) => pieces.filter(isPieceAvailableForIssue).length;
 
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
+}
+
 function lotStatus(lot) {
   const pending = Number(lot.pendingWeight || 0);
   const initial = Number(lot.totalWeight || 0);
@@ -130,6 +146,7 @@ export function Stock() {
   const [selectedByLot, setSelectedByLot] = useState({});
   const [groupByItem, setGroupByItem] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingDetailed, setExportingDetailed] = useState(false);
   const exportMenuRef = useRef(null);
 
   // --- Filters ---
@@ -543,7 +560,9 @@ export function Stock() {
   }, [displayedLots]);
 
   // --- Export Handler ---
-  const handleExport = (format = 'xlsx') => {
+  const handleExport = async (format = 'xlsx') => {
+    if (format === 'xlsx-detailed' && exportingDetailed) return;
+
     // Determine the correct view type for export
     let viewType = 'jumbo';
     if (isConing) viewType = 'coning';
@@ -638,14 +657,16 @@ export function Stock() {
 
     if (format === 'xlsx-detailed') {
       if (v2StockEnabled && dataToExport && dataToExport.length > 0) {
-        // v2 mode: row details are lazy-loaded on demand; fetch all before exporting.
-        (async () => {
-          const enrichedData = await Promise.all(
-            dataToExport.map(async (lot) => {
+        setExportingDetailed(true);
+        try {
+          const enrichedData = await mapWithConcurrency(
+            dataToExport,
+            4,
+            async (lot) => {
               if (!lot.lotKey) return lot;
               const rows = v2RowsByKey[lot.lotKey] || (await loadV2LotRows(lot.lotKey));
               return { ...lot, rows };
-            })
+            }
           );
           exportStockDetailedXlsx(enrichedData, {
             viewType,
@@ -653,7 +674,12 @@ export function Stock() {
             grandTotals: totals,
             statusFilter: filters.status,
           });
-        })();
+        } catch (err) {
+          console.error('Failed to export detailed stock', err);
+          alert(err?.message || 'Failed to export detailed stock');
+        } finally {
+          setExportingDetailed(false);
+        }
         return;
       }
       exportStockDetailedXlsx(dataToExport, {
@@ -902,10 +928,11 @@ export function Stock() {
                 variant="outline"
                 size="sm"
                 onClick={() => setExportMenuOpen((v) => !v)}
+                disabled={exportingDetailed}
                 className="gap-2"
               >
                 <Download className="w-4 h-4" />
-                <span>Export</span>
+                <span>{exportingDetailed ? 'Exporting…' : 'Export'}</span>
                 <ChevronDown className={cn("w-4 h-4 opacity-70 transition-transform", exportMenuOpen ? "rotate-180" : "rotate-0")} />
               </Button>
 
@@ -919,6 +946,7 @@ export function Stock() {
                   </button>
                   <button
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                    disabled={exportingDetailed}
                     onClick={() => { setExportMenuOpen(false); handleExport('xlsx-detailed'); }}
                   >
                     Excel Detailed (.xlsx)

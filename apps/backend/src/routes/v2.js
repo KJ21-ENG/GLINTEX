@@ -2405,13 +2405,34 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
       const cutNames = Array.isArray(key.cutNames) ? key.cutNames.map(String).filter(Boolean) : [];
       const firmId = String(key.firmId || '');
       const supplierId = String(key.supplierId || '');
+      const lotNoRaw = String(key.lotNoRaw || '');
 
       const rows = await prisma.$queryRaw`
-        WITH issue_refs AS (
-          SELECT i.id AS issue_id, elem->>'rowId' AS cutter_row_id
+        WITH candidate_issues AS MATERIALIZED (
+          SELECT
+            i.id,
+            i."lotNo",
+            i."itemId",
+            i."yarnId",
+            i."twistId",
+            i."cutId",
+            i."receivedRowRefs"
           FROM "IssueToHoloMachine" i
-          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem ON true
+          LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
+          LEFT JOIN "Cut" ct ON ct.id = i."cutId"
           WHERE i."isDeleted" = false
+            AND i."itemId" = ${itemId}
+            AND (${lotNoRaw} = '' OR i."lotNo" = ${lotNoRaw})
+            AND (${yarnId}::text IS NULL OR i."yarnId" = ${yarnId})
+            AND (${twistId}::text IS NULL OR i."twistId" = ${twistId})
+            AND (${isMixed}::boolean = true OR COALESCE(lot."firmId", '') = ${firmId})
+            AND (${isMixed}::boolean = true OR COALESCE(lot."supplierId", '') = ${supplierId})
+            AND (${cutNames.length} = 0 OR COALESCE(ct.name, '—') = ANY(${cutNames}::text[]))
+        ),
+        issue_refs AS (
+          SELECT ci.id AS issue_id, elem->>'rowId' AS cutter_row_id
+          FROM candidate_issues ci
+          LEFT JOIN LATERAL jsonb_array_elements(COALESCE(ci."receivedRowRefs", '[]'::jsonb)) elem ON true
         ),
         issue_lots AS (
           SELECT ir.issue_id,
@@ -2422,23 +2443,31 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           GROUP BY ir.issue_id
         ),
         issue_labels AS (
-          SELECT i.id AS issue_id,
+          SELECT ci.id AS issue_id,
                  CASE
-                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) <= 1 THEN COALESCE(il.lot_nos[1], i."lotNo", '')
+                   WHEN COALESCE(array_length(il.lot_nos, 1), 0) <= 1 THEN COALESCE(il.lot_nos[1], ci."lotNo", '')
                    WHEN array_length(il.lot_nos, 1) <= 3 THEN 'Mixed (' || array_to_string(il.lot_nos, ', ') || ')'
                    ELSE 'Mixed (' || array_length(il.lot_nos, 1) || ')'
                  END AS lot_label
-          FROM "IssueToHoloMachine" i
-          LEFT JOIN issue_lots il ON il.issue_id = i.id
-          WHERE i."isDeleted" = false
+          FROM candidate_issues ci
+          LEFT JOIN issue_lots il ON il.issue_id = ci.id
+        ),
+        candidate_rows AS MATERIALIZED (
+          SELECT r.*
+          FROM "ReceiveFromHoloMachineRow" r
+          JOIN candidate_issues ci ON ci.id = r."issueId"
+          JOIN issue_labels il ON il.issue_id = ci.id
+          WHERE r."isDeleted" = false
+            AND il.lot_label = ${lotLabel}
         ),
         issued AS (
           SELECT
             elem->>'rowId' AS row_id,
             SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
             SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
-          FROM "IssueToConingMachine" ic,
-            jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem
+          FROM "IssueToConingMachine" ic
+          JOIN LATERAL jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem ON true
+          JOIN candidate_rows cr ON cr.id = elem->>'rowId'
           WHERE ic."isDeleted" = false
           GROUP BY row_id
         ),
@@ -2448,6 +2477,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
             SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."count") AS tb_rolls,
             SUM((CASE WHEN tb."isReverse" = true THEN 1 ELSE -1 END) * l."weight") AS tb_weight
           FROM "IssueTakeBackLine" l
+          JOIN candidate_rows cr ON cr.id = l."sourceId"
           JOIN "IssueTakeBack" tb ON tb.id = l."takeBackId"
           WHERE tb.stage = 'coning'
           GROUP BY l."sourceId"
@@ -2467,25 +2497,14 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           bm.name AS boiler_machine_name,
           st."boilerNumber" AS boiler_number,
           r."notes"
-        FROM "ReceiveFromHoloMachineRow" r
-        JOIN "IssueToHoloMachine" i ON i.id = r."issueId" AND i."isDeleted" = false
-        JOIN issue_labels il ON il.issue_id = i.id
-        LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
-        LEFT JOIN "Cut" ct ON ct.id = i."cutId"
+        FROM candidate_rows r
+        JOIN candidate_issues i ON i.id = r."issueId"
         LEFT JOIN issued iss ON iss.row_id = r.id
         LEFT JOIN takeback tb ON tb.row_id = r.id
         LEFT JOIN "RollType" rt ON rt.id = r."rollTypeId"
         LEFT JOIN "BoilerSteamLog" st
           ON st."holoReceiveRowId" = r.id OR (st."barcode" IS NOT NULL AND upper(st."barcode") = upper(r."barcode"))
         LEFT JOIN "Machine" bm ON bm.id = st."boilerMachineId"
-        WHERE r."isDeleted" = false
-          AND il.lot_label = ${lotLabel}
-          AND i."itemId" = ${itemId}
-          AND (${yarnId}::text IS NULL OR i."yarnId" = ${yarnId})
-          AND (${twistId}::text IS NULL OR i."twistId" = ${twistId})
-          AND (${isMixed}::boolean = true OR COALESCE(lot."firmId", '') = ${firmId})
-          AND (${isMixed}::boolean = true OR COALESCE(lot."supplierId", '') = ${supplierId})
-          AND (${cutNames.length} = 0 OR COALESCE(ct.name, '—') = ANY(${cutNames}::text[]))
         ORDER BY r."createdAt" DESC, r.id DESC
       `;
 

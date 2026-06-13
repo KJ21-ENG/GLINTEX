@@ -51,14 +51,14 @@ const getSteamPillTone = (statusType) => {
   return 'bg-gray-50 text-gray-500 border-gray-200';
 };
 
-function SteamSummaryPill({ statusType, steamedRolls, totalRolls, label, compact = false }) {
+function SteamSummaryPill({ statusType, steamedRolls, totalRolls, compact = false }) {
   const Icon = statusType === 'partial' ? FlameKindling : Flame;
   const showIcon = statusType === 'steamed' || statusType === 'partial';
 
   return (
     <Badge
       variant="outline"
-      title={label ? `${steamedRolls}/${totalRolls} steamed - ${label}` : `${steamedRolls}/${totalRolls} steamed`}
+      title={`${steamedRolls}/${totalRolls} steamed`}
       className={cn(
         "inline-flex flex-col items-center justify-center rounded-full border shadow-sm",
         "px-3 py-1.5 text-center leading-none",
@@ -71,11 +71,6 @@ function SteamSummaryPill({ statusType, steamedRolls, totalRolls, label, compact
         <span>{steamedRolls}/{totalRolls}</span>
         <span>steamed</span>
       </span>
-      {label && (
-        <span className={cn("mt-1 block max-w-full truncate whitespace-nowrap font-semibold leading-none", compact ? "text-[10px]" : "text-[11px]")}>
-          {label}
-        </span>
-      )}
     </Badge>
   );
 }
@@ -625,7 +620,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                           statusType={l.steamedStatusType}
                           steamedRolls={l.steamedRolls}
                           totalRolls={l.totalRolls}
-                          label={l.boilerLabelsStr}
                         />
                       </TableCell>
                     </TableRow>
@@ -778,7 +772,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                           statusType={l.steamedStatusType}
                           steamedRolls={l.steamedRolls}
                           totalRolls={l.totalRolls}
-                          label={l.boilerLabelsStr}
                           compact
                         />
                       </div>

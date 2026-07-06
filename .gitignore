@@ -66,6 +66,7 @@ jspm_packages/
 # Development tools
 .codex/
 .cursor/
+.codebase-memory/
 # BMAD rules and docs
 .bmad/
 

@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+jspm_packages/
+.pnpm-store/
+.yarn/
+
+# Build output and bundled assets
+dist/
+build/
+.next/
+out/
+.public/
+apps/frontend/dist/
+
+# Tool and framework caches
+.cache/
+.parcel-cache/
+.vite/
+.eslintcache
+.turbo/
+
+# Runtime data, generated exports, and local uploads
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+reports/
+uploads/
+tmp/
+temp/
+
+# Local databases and database sidecars
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+postgres-data/
+
+# Test artifacts
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+cypress/screenshots/
+cypress/videos/
+junit*.xml
+
+# Local credentials and session stores
+.env
+.env.*
+.wwebjs_auth/
+.wwebjs_cache/
+apps/backend/.wwebjs_cache/
+
+# Local agent/editor state
+.codex/
+.claude/
+.cursor/
+.gemini/
+.gemini-clipboard/
+.vscode/
+.idea/
+
+# Temporary imported references and local backups
+temp_ref/
+apps/backend/backups/
+apps/backend/prisma/migrations_pre_baseline_*/
+
+# Team-shared graph artifacts are opt-in only.
+.codebase-memory/

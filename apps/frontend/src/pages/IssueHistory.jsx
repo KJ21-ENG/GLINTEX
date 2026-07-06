@@ -2240,16 +2240,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           </TableBody>
         </Table>
       </div>
-      {v2Enabled && (
-        <TablePagination
-          page={v2List.page}
-          totalPages={v2List.totalPages}
-          hasMore={v2List.hasMore}
-          onPageChange={v2List.setPage}
-          isLoading={v2List.isLoading}
-          className="hidden sm:flex"
-        />
-      )}
       <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
         <span className="text-sm font-semibold">Grand Total (filtered)</span>
         <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
@@ -2280,6 +2270,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           )}
         </div>
       </div>
+      {v2Enabled && (
+        <TablePagination
+          page={v2List.page}
+          totalPages={v2List.totalPages}
+          hasMore={v2List.hasMore}
+          onPageChange={v2List.setPage}
+          isLoading={v2List.isLoading}
+          className="hidden sm:flex"
+        />
+      )}
 
       {/* Mobile Card View */}
       <div className="block sm:hidden space-y-3">

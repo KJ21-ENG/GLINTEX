@@ -27,13 +27,14 @@ const stableStringify = (obj) => {
 
 export function useV2CursorList({
   enabled,
-  fetchPage, // ({limit, cursor, search, dateFrom, dateTo, filters}) => {items, hasMore, nextCursor}
+  fetchPage, // ({limit, cursor, search, dateFrom, dateTo, filters, order}) => {items, hasMore, nextCursor}
   limit = 50,
   scopeKey = '',
   search = '',
   dateFrom = '',
   dateTo = '',
   filters = [],
+  order = 'desc',
 }) {
   const [items, setItems] = useState([]);
   const [cursor, setCursor] = useState(null);
@@ -52,12 +53,12 @@ export function useV2CursorList({
   const hasMoreRef = useRef(hasMore);
   cursorRef.current = cursor;
   hasMoreRef.current = hasMore;
-  const queryParamsRef = useRef({ search, dateFrom, dateTo, filters });
-  queryParamsRef.current = { search, dateFrom, dateTo, filters };
+  const queryParamsRef = useRef({ search, dateFrom, dateTo, filters, order });
+  queryParamsRef.current = { search, dateFrom, dateTo, filters, order };
 
   const key = useMemo(
-    () => stableStringify({ scopeKey, search, dateFrom, dateTo, filters }),
-    [scopeKey, search, dateFrom, dateTo, filters],
+    () => stableStringify({ scopeKey, search, dateFrom, dateTo, filters, order }),
+    [scopeKey, search, dateFrom, dateTo, filters, order],
   );
 
   const refresh = useCallback(() => {
@@ -89,6 +90,7 @@ export function useV2CursorList({
         dateFrom: currentDateFrom,
         dateTo: currentDateTo,
         filters: currentFilters,
+        order: currentOrder,
       } = queryParamsRef.current;
       const res = await fetchPageRef.current({
         limit,
@@ -97,6 +99,7 @@ export function useV2CursorList({
         dateFrom: currentDateFrom,
         dateTo: currentDateTo,
         filters: currentFilters,
+        order: currentOrder,
       });
       // Params changed while request was in flight: drop stale response.
       if (genAtStart !== genRef.current) return;

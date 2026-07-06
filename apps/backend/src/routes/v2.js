@@ -93,13 +93,18 @@ function decodeCursor(raw) {
   }
 }
 
-function buildCursorWhere(cursor) {
+function normalizeOrder(raw) {
+  return String(raw || '').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+}
+
+function buildCursorWhere(cursor, order = 'desc') {
   if (!cursor) return null;
-  // Stable pagination for orderBy: createdAt desc, id desc
+  // Stable pagination for orderBy: createdAt <order>, id <order>
+  const cmp = order === 'asc' ? 'gt' : 'lt';
   return {
     OR: [
-      { createdAt: { lt: new Date(cursor.createdAt) } },
-      { createdAt: new Date(cursor.createdAt), id: { lt: String(cursor.id) } },
+      { createdAt: { [cmp]: new Date(cursor.createdAt) } },
+      { createdAt: new Date(cursor.createdAt), id: { [cmp]: String(cursor.id) } },
     ],
   };
 }
@@ -299,15 +304,17 @@ function matchesCutterHistoryComputedFilters(row, filters = []) {
   });
 }
 
-function applyCursorToSortedItems(items = [], cursor) {
+function applyCursorToSortedItems(items = [], cursor, order = 'desc') {
   if (!cursor) return items;
   const cursorMs = toTimeMs(cursor.createdAt);
+  const asc = order === 'asc';
   return (items || []).filter((item) => {
     const itemMs = toTimeMs(item?.createdAt);
     if (itemMs == null || cursorMs == null) return false;
-    if (itemMs < cursorMs) return true;
-    if (itemMs > cursorMs) return false;
-    return String(item?.id || '') < String(cursor.id || '');
+    if (itemMs !== cursorMs) return asc ? itemMs > cursorMs : itemMs < cursorMs;
+    const itemId = String(item?.id || '');
+    const cursorId = String(cursor.id || '');
+    return asc ? itemId > cursorId : itemId < cursorId;
   });
 }
 
@@ -665,13 +672,14 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
     const model = issueModelForProcess(process);
     const { rawFilters, computedFilters } = process === 'cutter'
       ? splitCutterHistoryFilters(filters)
       : { rawFilters: filters, computedFilters: [] };
-    const cursorWhere = computedFilters.length > 0 ? null : buildCursorWhere(cursor);
+    const cursorWhere = computedFilters.length > 0 ? null : buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
@@ -690,7 +698,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       const rowsRaw = await model.findMany({
         where: whereAll,
         include: issueIncludesForProcess(process),
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
       });
       const rowsWithUsers = await resolveUserFields(rowsRaw);
       const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
@@ -700,21 +708,23 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       const allItems = rowsWithItems
         .map((row) => mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId }))
         .filter((row) => matchesCutterHistoryComputedFilters(row, computedFilters));
-      const pageCandidates = applyCursorToSortedItems(allItems, cursor);
+      const pageCandidates = applyCursorToSortedItems(allItems, cursor, order);
       const hasMore = pageCandidates.length > limit;
       const items = pageCandidates.slice(0, limit);
       const lastInPage = items[items.length - 1];
       const nextCursor = hasMore && lastInPage
         ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
         : null;
-      const summary = !cursor ? buildCutterHistorySummary(allItems) : null;
+      const summary = !cursor
+        ? { ...buildCutterHistorySummary(allItems), totalCount: allItems.length }
+        : null;
       return res.json({ items, hasMore, nextCursor, summary });
     }
 
     const rowsRaw = await model.findMany({
       where: wherePage,
       include: issueIncludesForProcess(process),
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: order }, { id: order }],
       take: limit + 1,
     });
     const hasMore = rowsRaw.length > limit;
@@ -731,82 +741,90 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
     const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
 
     // Summary for footer totals (full filter context, not just page).
+    // First page only: later pages return summary: null and the client keeps the
+    // previous value (see useV2CursorList), so recomputing per page is wasted work.
     let summary = null;
-    const issueTable = process === 'holo' ? prisma.issueToHoloMachine : process === 'coning' ? prisma.issueToConingMachine : prisma.issueToCutterMachine;
-    const baseAgg = process === 'cutter'
-      ? await prisma.issueToCutterMachine.aggregate({ where: whereAll, _sum: { count: true, totalWeight: true } })
-      : process === 'holo'
-        ? await prisma.issueToHoloMachine.aggregate({ where: whereAll, _sum: { metallicBobbins: true, metallicBobbinsWeight: true, yarnKg: true, rollsProducedEstimate: true } })
-        : await prisma.issueToConingMachine.aggregate({ where: whereAll, _sum: { rollsIssued: true } });
+    if (!cursor) {
+      const totalCount = await model.count({ where: whereAll });
+      const issueTable = process === 'holo' ? prisma.issueToHoloMachine : process === 'coning' ? prisma.issueToConingMachine : prisma.issueToCutterMachine;
+      const baseAgg = process === 'cutter'
+        ? await prisma.issueToCutterMachine.aggregate({ where: whereAll, _sum: { count: true, totalWeight: true } })
+        : process === 'holo'
+          ? await prisma.issueToHoloMachine.aggregate({ where: whereAll, _sum: { metallicBobbins: true, metallicBobbinsWeight: true, yarnKg: true, rollsProducedEstimate: true } })
+          : await prisma.issueToConingMachine.aggregate({ where: whereAll, _sum: { rollsIssued: true } });
 
-    // Taken-back totals: chunk through matching issue ids to avoid huge IN lists.
-    let takenBackWeightTotal = 0;
-    let takenBackCountTotal = 0;
-    let coningIssuedWeightTotal = 0;
-    let coningRollsIssuedTotal = 0;
-    const chunkSize = 5000;
-    let loopCursor = null;
-    // Use same stable ordering.
-    // NOTE: this is still far cheaper than returning full issue graphs to the client.
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const batchWhere = loopCursor ? applyCursorWhere(whereAll, buildCursorWhere(loopCursor)) : whereAll;
-      const batch = await issueTable.findMany({
-        where: batchWhere,
-        select: process === 'coning'
-          ? { id: true, createdAt: true, receivedRowRefs: true }
-          : { id: true, createdAt: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: chunkSize,
-      });
-      if (!batch.length) break;
-      if (process === 'coning') {
-        batch.forEach((b) => {
-          const refs = normalizeReceivedRowRefs(b.receivedRowRefs);
-          coningIssuedWeightTotal += refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
-          coningRollsIssuedTotal += refs.reduce((sum, ref) => sum + Number(ref?.issueRolls || ref?.baseRolls || 0), 0);
+      // Taken-back totals: chunk through matching issue ids to avoid huge IN lists.
+      let takenBackWeightTotal = 0;
+      let takenBackCountTotal = 0;
+      let coningIssuedWeightTotal = 0;
+      let coningRollsIssuedTotal = 0;
+      const chunkSize = 5000;
+      let loopCursor = null;
+      // Use same stable ordering.
+      // NOTE: this is still far cheaper than returning full issue graphs to the client.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batchWhere = loopCursor ? applyCursorWhere(whereAll, buildCursorWhere(loopCursor)) : whereAll;
+        const batch = await issueTable.findMany({
+          where: batchWhere,
+          select: process === 'coning'
+            ? { id: true, createdAt: true, receivedRowRefs: true }
+            : { id: true, createdAt: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: chunkSize,
         });
+        if (!batch.length) break;
+        if (process === 'coning') {
+          batch.forEach((b) => {
+            const refs = normalizeReceivedRowRefs(b.receivedRowRefs);
+            coningIssuedWeightTotal += refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
+            coningRollsIssuedTotal += refs.reduce((sum, ref) => sum + Number(ref?.issueRolls || ref?.baseRolls || 0), 0);
+          });
+        }
+        const ids = batch.map(b => b.id);
+        const tbAgg = await prisma.issueTakeBack.aggregate({
+          where: { stage: process, isReverse: false, isReversed: false, issueId: { in: ids } },
+          _sum: { totalWeight: true, totalCount: true },
+        });
+        takenBackWeightTotal += Number(tbAgg?._sum?.totalWeight || 0);
+        takenBackCountTotal += Number(tbAgg?._sum?.totalCount || 0);
+        const lastInBatch = batch[batch.length - 1];
+        loopCursor = { createdAt: lastInBatch.createdAt, id: lastInBatch.id };
+        if (batch.length < chunkSize) break;
       }
-      const ids = batch.map(b => b.id);
-      const tbAgg = await prisma.issueTakeBack.aggregate({
-        where: { stage: process, isReverse: false, isReversed: false, issueId: { in: ids } },
-        _sum: { totalWeight: true, totalCount: true },
-      });
-      takenBackWeightTotal += Number(tbAgg?._sum?.totalWeight || 0);
-      takenBackCountTotal += Number(tbAgg?._sum?.totalCount || 0);
-      const lastInBatch = batch[batch.length - 1];
-      loopCursor = { createdAt: lastInBatch.createdAt, id: lastInBatch.id };
-      if (batch.length < chunkSize) break;
-    }
 
-    if (process === 'cutter') {
-      const weight = Number(baseAgg?._sum?.totalWeight || 0);
-      summary = {
-        qty: Number(baseAgg?._sum?.count || 0),
-        weight,
-        takenBackCount: takenBackCountTotal,
-        takenBackWeight: takenBackWeightTotal,
-        netIssuedWeight: Math.max(0, weight - takenBackWeightTotal),
-      };
-    } else if (process === 'holo') {
-      const issued = Number(baseAgg?._sum?.metallicBobbinsWeight || 0);
-      summary = {
-        metallicBobbins: Number(baseAgg?._sum?.metallicBobbins || 0),
-        metallicBobbinsWeight: issued,
-        yarnKg: Number(baseAgg?._sum?.yarnKg || 0),
-        rollsProducedEstimate: Number(baseAgg?._sum?.rollsProducedEstimate || 0),
-        takenBackCount: takenBackCountTotal,
-        takenBackWeight: takenBackWeightTotal,
-        netIssuedWeight: Math.max(0, issued - takenBackWeightTotal),
-      };
-    } else {
-      summary = {
-        rollsIssued: coningRollsIssuedTotal || Number(baseAgg?._sum?.rollsIssued || 0),
-        originalIssuedWeight: coningIssuedWeightTotal,
-        takenBackCount: takenBackCountTotal,
-        takenBackWeight: takenBackWeightTotal,
-        netIssuedWeight: Math.max(0, coningIssuedWeightTotal - takenBackWeightTotal),
-      };
+      if (process === 'cutter') {
+        const weight = Number(baseAgg?._sum?.totalWeight || 0);
+        summary = {
+          qty: Number(baseAgg?._sum?.count || 0),
+          weight,
+          takenBackCount: takenBackCountTotal,
+          takenBackWeight: takenBackWeightTotal,
+          netIssuedWeight: Math.max(0, weight - takenBackWeightTotal),
+          totalCount,
+        };
+      } else if (process === 'holo') {
+        const issued = Number(baseAgg?._sum?.metallicBobbinsWeight || 0);
+        summary = {
+          metallicBobbins: Number(baseAgg?._sum?.metallicBobbins || 0),
+          metallicBobbinsWeight: issued,
+          yarnKg: Number(baseAgg?._sum?.yarnKg || 0),
+          rollsProducedEstimate: Number(baseAgg?._sum?.rollsProducedEstimate || 0),
+          takenBackCount: takenBackCountTotal,
+          takenBackWeight: takenBackWeightTotal,
+          netIssuedWeight: Math.max(0, issued - takenBackWeightTotal),
+          totalCount,
+        };
+      } else {
+        summary = {
+          rollsIssued: coningRollsIssuedTotal || Number(baseAgg?._sum?.rollsIssued || 0),
+          originalIssuedWeight: coningIssuedWeightTotal,
+          takenBackCount: takenBackCountTotal,
+          takenBackWeight: takenBackWeightTotal,
+          netIssuedWeight: Math.max(0, coningIssuedWeightTotal - takenBackWeightTotal),
+          totalCount,
+        };
+      }
     }
 
     res.json({
@@ -896,6 +914,7 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
     const model = issueModelForProcess(process);
@@ -917,7 +936,7 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
     const rowsRaw = await model.findMany({
       where,
       include: issueIncludesForProcess(process),
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: order }, { id: order }],
     });
     const rowsWithUsers = await resolveUserFields(rowsRaw);
     const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
@@ -1101,10 +1120,11 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
     const model = receiveModelForProcess(process);
-    const cursorWhere = buildCursorWhere(cursor);
+    const cursorWhere = buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
     const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
@@ -1124,7 +1144,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     const rowsRaw = await model.findMany({
       where: wherePage,
       include: receiveIncludesForProcess(process),
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: order }, { id: order }],
       take: limit + 1,
     });
     const hasMore = rowsRaw.length > limit;
@@ -1149,35 +1169,41 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
 
     const lastInPage = pageWithUsers[pageWithUsers.length - 1];
     const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
-    // Summary totals for footer
+    // Summary totals for footer (first page only; client preserves it across pages).
     let summary = null;
-    if (process === 'cutter') {
-      const agg = await prisma.receiveFromCutterMachineRow.aggregate({
-        where: whereAll,
-        _sum: { netWt: true, bobbinQuantity: true },
-      });
-      summary = {
-        netWt: Number(agg?._sum?.netWt || 0),
-        bobbinQty: Number(agg?._sum?.bobbinQuantity || 0),
-      };
-    } else if (process === 'holo') {
-      const agg = await prisma.receiveFromHoloMachineRow.aggregate({
-        where: whereAll,
-        _sum: { rollCount: true, rollWeight: true },
-      });
-      summary = {
-        rolls: Number(agg?._sum?.rollCount || 0),
-        weight: Number(agg?._sum?.rollWeight || 0),
-      };
-    } else if (process === 'coning') {
-      const agg = await prisma.receiveFromConingMachineRow.aggregate({
-        where: whereAll,
-        _sum: { coneCount: true, netWeight: true },
-      });
-      summary = {
-        cones: Number(agg?._sum?.coneCount || 0),
-        weight: Number(agg?._sum?.netWeight || 0),
-      };
+    if (!cursor) {
+      const totalCount = await model.count({ where: whereAll });
+      if (process === 'cutter') {
+        const agg = await prisma.receiveFromCutterMachineRow.aggregate({
+          where: whereAll,
+          _sum: { netWt: true, bobbinQuantity: true },
+        });
+        summary = {
+          netWt: Number(agg?._sum?.netWt || 0),
+          bobbinQty: Number(agg?._sum?.bobbinQuantity || 0),
+          totalCount,
+        };
+      } else if (process === 'holo') {
+        const agg = await prisma.receiveFromHoloMachineRow.aggregate({
+          where: whereAll,
+          _sum: { rollCount: true, rollWeight: true },
+        });
+        summary = {
+          rolls: Number(agg?._sum?.rollCount || 0),
+          weight: Number(agg?._sum?.rollWeight || 0),
+          totalCount,
+        };
+      } else if (process === 'coning') {
+        const agg = await prisma.receiveFromConingMachineRow.aggregate({
+          where: whereAll,
+          _sum: { coneCount: true, netWeight: true },
+        });
+        summary = {
+          cones: Number(agg?._sum?.coneCount || 0),
+          weight: Number(agg?._sum?.netWeight || 0),
+          totalCount,
+        };
+      }
     }
 
     res.json({ items, hasMore, nextCursor, summary });
@@ -1273,6 +1299,7 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
     const model = receiveModelForProcess(process);
@@ -1293,7 +1320,7 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
     const rowsRaw = await model.findMany({
       where,
       include: receiveIncludesForProcess(process),
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: order }, { id: order }],
     });
     const rowsWithUsers = await resolveUserFields(rowsRaw);
     const rowsWithItems = process === 'cutter' ? rowsWithUsers : await attachItemNamesToReceiveRows(rowsWithUsers);
@@ -1593,6 +1620,231 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
 
 // -------------------- On Machine (Pending) --------------------
 
+// -------------------- On Machine --------------------
+
+function onMachineIncludesForProcess(process) {
+  if (process === 'cutter') return { cut: true, machine: true, operator: true, lines: true };
+  return { cut: true, machine: true, operator: true, yarn: true, twist: true };
+}
+
+// Full filter context (date + search + column filters), WITHOUT cursor.
+// Shared by the list, export, and summary paths so they can never disagree.
+async function buildOnMachineWhere({ process, filters, dateFrom, dateTo, search }) {
+  const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+  const searchOr = buildSearchOr({
+    search,
+    fields: ['barcode', 'lotNo', 'note', 'machine.name', 'operator.name'],
+  });
+  const itemSearchIds = await itemIdsByNameContains(search);
+  if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
+
+  const whereAll = {
+    isDeleted: false,
+    ...(dateWhere ? dateWhere : {}),
+    ...(searchOr.length ? { OR: searchOr } : {}),
+  };
+
+  // Column filters are supported for the same ids used in OnMachineTable (subset).
+  const onMachineFilterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { process });
+  const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
+  const filterAnd = onMachineFilterWhere.length || itemFilterWhere.length
+    ? { AND: [...onMachineFilterWhere, ...itemFilterWhere] }
+    : {};
+
+  return { ...whereAll, ...filterAnd };
+}
+
+// Enrich raw cutter issue rows (with includes) into on-machine entries and keep pending only.
+async function buildOnMachineCutterItems(rowsRaw) {
+  const rowsWithUsers = await resolveUserFields(rowsRaw);
+  const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
+  const issueIds = rowsWithItems.map(i => i.id);
+  const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('cutter', issueIds);
+  const wastageByIssueId = await buildCutterIssueWastageByIssueId(rowsWithItems);
+  const receiveRows = issueIds.length
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { isDeleted: false, issueId: { in: issueIds } },
+      select: { issueId: true, pieceId: true, netWt: true },
+    })
+    : [];
+  const receivedByIssue = new Map();
+  for (const r of receiveRows) {
+    const cur = receivedByIssue.get(r.issueId) || 0;
+    receivedByIssue.set(r.issueId, cur + Number(r.netWt || 0));
+  }
+
+  return rowsWithItems.map((issue) => {
+    const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
+    const originalIssuedWeight = Number(issue.totalWeight || 0);
+    const takeBackWeight = Number(tb.weight || 0);
+    const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
+    const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
+    const wastageWeight = Number(wastageByIssueId.get(issue.id) || 0);
+    const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
+    const pieceIdsList = Array.isArray(issue.pieceIds)
+      ? issue.pieceIds
+      : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
+    return {
+      ...issue,
+      itemName: issue.itemName || '',
+      cutName: issue.cut?.name || '',
+      machineName: issue.machine?.name || '',
+      operatorName: issue.operator?.name || '',
+      originalIssuedWeight,
+      takeBackWeight,
+      netIssuedWeight,
+      issuedWeight: netIssuedWeight,
+      receivedWeight,
+      wastageWeight,
+      pendingWeight,
+      pieceIdsList,
+    };
+  }).filter(i => i.pendingWeight > 0.001);
+}
+
+// Enrich raw holo issue rows (with includes) into on-machine entries and keep pending only.
+async function buildOnMachineHoloItems(rowsRaw) {
+  const rowsWithUsers = await resolveUserFields(rowsRaw);
+  const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
+  const issueIds = rowsWithItems.map(i => i.id);
+  const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('holo', issueIds);
+  const receiveRows = issueIds.length
+    ? await prisma.receiveFromHoloMachineRow.findMany({
+      where: { isDeleted: false, issueId: { in: issueIds } },
+      include: { rollType: true },
+    })
+    : [];
+  const receivedByIssue = new Map();
+  const wastageByIssue = new Map();
+  for (const r of receiveRows) {
+    const netWeight = Number.isFinite(r.rollWeight)
+      ? Number(r.rollWeight)
+      : (Number(r.grossWeight || 0) - Number(r.tareWeight || 0));
+    const isWastage = String(r.rollType?.name || '').toLowerCase().includes('wastage');
+    if (isWastage) {
+      wastageByIssue.set(r.issueId, (wastageByIssue.get(r.issueId) || 0) + netWeight);
+    } else {
+      receivedByIssue.set(r.issueId, (receivedByIssue.get(r.issueId) || 0) + netWeight);
+    }
+  }
+  const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(issueIds);
+
+  return rowsWithItems.map((issue) => {
+    const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
+    const originalIssuedWeight = Number(issue.metallicBobbinsWeight || 0);
+    const takeBackWeight = Number(tb.weight || 0);
+    const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
+    const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
+    const wastageWeight = Number(wastageByIssue.get(issue.id) || 0);
+    const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
+    return {
+      ...issue,
+      itemName: issue.itemName || '',
+      cutName: issue.cut?.name || '',
+      yarnName: issue.yarn?.name || '',
+      twistName: issue.twist?.name || '',
+      machineName: issue.machine?.name || '',
+      operatorName: issue.operator?.name || '',
+      originalIssuedWeight,
+      takeBackWeight,
+      netIssuedWeight,
+      issuedWeight: netIssuedWeight,
+      receivedWeight,
+      wastageWeight,
+      pendingWeight,
+      pieceIdsList: pieceIdsByIssueId.get(issue.id) || [],
+    };
+  }).filter(i => i.pendingWeight > 0.001);
+}
+
+// Enrich raw coning issue rows (with includes) into on-machine entries and keep pending only.
+async function buildOnMachineConingItems(rowsRaw) {
+  const rowsWithUsers = await resolveUserFields(rowsRaw);
+  const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
+  const issueIds = rowsWithItems.map(i => i.id);
+  const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('coning', issueIds);
+  const receiveRows = issueIds.length
+    ? await prisma.receiveFromConingMachineRow.findMany({
+      where: { isDeleted: false, issueId: { in: issueIds } },
+      select: { issueId: true, netWeight: true },
+    })
+    : [];
+  const receivedByIssue = new Map();
+  for (const r of receiveRows) {
+    receivedByIssue.set(r.issueId, (receivedByIssue.get(r.issueId) || 0) + Number(r.netWeight || 0));
+  }
+  const wastageByIssue = new Map();
+  if (issueIds.length) {
+    const wastageTotals = await prisma.receiveFromConingMachinePieceTotal.findMany({
+      where: { pieceId: { in: issueIds } },
+      select: { pieceId: true, wastageNetWeight: true },
+    });
+    for (const w of wastageTotals) {
+      const wt = Number(w.wastageNetWeight || 0);
+      if (wt > 0) wastageByIssue.set(w.pieceId, wt);
+    }
+  }
+  const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(issueIds);
+  const coneTypeIds = new Set();
+  for (const issue of rowsWithItems) {
+    const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
+    refs.forEach((ref) => {
+      if (ref?.coneTypeId) coneTypeIds.add(ref.coneTypeId);
+    });
+  }
+  const coneTypes = coneTypeIds.size
+    ? await prisma.coneType.findMany({
+      where: { id: { in: Array.from(coneTypeIds) } },
+      select: { id: true, name: true },
+    })
+    : [];
+  const coneTypeNameById = new Map(coneTypes.map((c) => [c.id, c.name]));
+
+  return rowsWithItems.map((issue) => {
+    const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
+    const originalIssuedWeight = refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
+    const rollsIssued = refs.reduce((sum, ref) => sum + Number(ref?.issueRolls || ref?.baseRolls || 0), 0);
+    const coneTypeName = (() => {
+      if (!refs.length) return '';
+      const ids = new Set(refs.map((ref) => ref?.coneTypeId).filter(Boolean));
+      if (!ids.size) return '';
+      return Array.from(ids).map((id) => coneTypeNameById.get(id) || id).join(', ');
+    })();
+    const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
+    const takeBackWeight = Number(tb.weight || 0);
+    const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
+    const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
+    const wastageWeight = Number(wastageByIssue.get(issue.id) || 0);
+    const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
+    return {
+      ...issue,
+      itemName: issue.itemName || '',
+      cutName: issue.cut?.name || '',
+      yarnName: issue.yarn?.name || '',
+      twistName: issue.twist?.name || '',
+      machineName: issue.machine?.name || '',
+      operatorName: issue.operator?.name || '',
+      originalIssuedWeight,
+      takeBackWeight,
+      netIssuedWeight,
+      issuedWeight: netIssuedWeight,
+      rollsIssued,
+      coneTypeName,
+      perConeTargetG: Number(issue.requiredPerConeNetWeight || 0),
+      receivedWeight,
+      wastageWeight,
+      pendingWeight,
+      pieceIdsList: pieceIdsByIssueId.get(issue.id) || [],
+    };
+  }).filter(i => i.pendingWeight > 0.001);
+}
+
+function buildOnMachineItems(process, rowsRaw) {
+  if (process === 'holo') return buildOnMachineHoloItems(rowsRaw);
+  if (process === 'coning') return buildOnMachineConingItems(rowsRaw);
+  return buildOnMachineCutterItems(rowsRaw);
+}
+
 router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issueStagePermissionKey), async (req, res) => {
   const process = String(req.params.process || '').trim().toLowerCase();
   const limit = clampLimit(req.query.limit);
@@ -1601,32 +1853,12 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
-    const cursorWhere = buildCursorWhere(cursor);
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const searchOr = buildSearchOr({
-      search,
-      fields: ['barcode', 'lotNo', 'note', 'machine.name', 'operator.name'],
-    });
-    const itemSearchIds = await itemIdsByNameContains(search);
-    if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
-
-    // whereAll = all filters WITHOUT cursor (for summary across entire dataset)
-    const whereAll = {
-      isDeleted: false,
-      ...(dateWhere ? dateWhere : {}),
-      ...(searchOr.length ? { OR: searchOr } : {}),
-    };
-
-    // Column filters are supported for the same ids used in OnMachineTable (subset).
-    const onMachineFilterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { process });
-    const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
-    const filterAnd = onMachineFilterWhere.length || itemFilterWhere.length
-      ? { AND: [...onMachineFilterWhere, ...itemFilterWhere] }
-      : {};
-
-    const whereAllFiltered = { ...whereAll, ...filterAnd };
+    const cursorWhere = buildCursorWhere(cursor, order);
+    // whereAllFiltered = all filters WITHOUT cursor (for summary across entire dataset)
+    const whereAllFiltered = await buildOnMachineWhere({ process, filters, dateFrom, dateTo, search });
 
     // where = all filters + cursor (for paginated results)
     const where = applyCursorWhere(whereAllFiltered, cursorWhere);
@@ -1637,56 +1869,13 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     if (process === 'cutter') {
       const issuesRaw = await prisma.issueToCutterMachine.findMany({
         where,
-        include: { cut: true, machine: true, operator: true, lines: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: onMachineIncludesForProcess(process),
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = issuesRaw.length > limit;
       const page = issuesRaw.slice(0, limit);
-      const pageWithUsers = await resolveUserFields(page);
-      const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
-      const issueIds = pageWithItems.map(i => i.id);
-      const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('cutter', issueIds);
-      const wastageByIssueId = await buildCutterIssueWastageByIssueId(pageWithItems);
-      const receiveRows = issueIds.length
-        ? await prisma.receiveFromCutterMachineRow.findMany({
-          where: { isDeleted: false, issueId: { in: issueIds } },
-          select: { issueId: true, pieceId: true, netWt: true },
-        })
-        : [];
-      const receivedByIssue = new Map();
-      for (const r of receiveRows) {
-        const cur = receivedByIssue.get(r.issueId) || 0;
-        receivedByIssue.set(r.issueId, cur + Number(r.netWt || 0));
-      }
-
-      const items = pageWithItems.map((issue) => {
-        const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
-        const originalIssuedWeight = Number(issue.totalWeight || 0);
-        const takeBackWeight = Number(tb.weight || 0);
-        const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
-        const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-        const wastageWeight = Number(wastageByIssueId.get(issue.id) || 0);
-        const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
-        const pieceIdsList = Array.isArray(issue.pieceIds)
-          ? issue.pieceIds
-          : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
-        return {
-          ...issue,
-          itemName: issue.itemName || '',
-          cutName: issue.cut?.name || '',
-          machineName: issue.machine?.name || '',
-          operatorName: issue.operator?.name || '',
-          originalIssuedWeight,
-          takeBackWeight,
-          netIssuedWeight,
-          issuedWeight: netIssuedWeight,
-          receivedWeight,
-          wastageWeight,
-          pendingWeight,
-          pieceIdsList,
-        };
-      }).filter(i => i.pendingWeight > 0.001);
+      const items = await buildOnMachineCutterItems(page);
 
       // Compute grand-total summary on first page only
       let summary = null;
@@ -1708,7 +1897,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         for (const r of allRecv) {
           allRecvMap.set(r.issueId, (allRecvMap.get(r.issueId) || 0) + Number(r.netWt || 0));
         }
-        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0 };
+        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, totalCount: 0 };
         for (const issue of allIssues) {
           const tb = allTb.get(issue.id) || { weight: 0 };
           const orig = Number(issue.totalWeight || 0);
@@ -1724,11 +1913,12 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           s.receivedWeight += recv;
           s.wastageWeight += waste;
           s.pendingWeight += pend;
+          s.totalCount += 1;
         }
         summary = s;
       }
 
-      const lastInPage = pageWithItems[pageWithItems.length - 1];
+      const lastInPage = page[page.length - 1];
       const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
       res.json({ items, hasMore, nextCursor, summary });
       return;
@@ -1737,63 +1927,13 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     if (process === 'holo') {
       const issuesRaw = await prisma.issueToHoloMachine.findMany({
         where,
-        include: { cut: true, machine: true, operator: true, yarn: true, twist: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: onMachineIncludesForProcess(process),
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = issuesRaw.length > limit;
       const page = issuesRaw.slice(0, limit);
-      const pageWithUsers = await resolveUserFields(page);
-      const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
-      const issueIds = pageWithItems.map(i => i.id);
-      const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('holo', issueIds);
-      const receiveRows = issueIds.length
-        ? await prisma.receiveFromHoloMachineRow.findMany({
-          where: { isDeleted: false, issueId: { in: issueIds } },
-          include: { rollType: true },
-        })
-        : [];
-      const receivedByIssue = new Map();
-      const wastageByIssue = new Map();
-      for (const r of receiveRows) {
-        const netWeight = Number.isFinite(r.rollWeight)
-          ? Number(r.rollWeight)
-          : (Number(r.grossWeight || 0) - Number(r.tareWeight || 0));
-        const isWastage = String(r.rollType?.name || '').toLowerCase().includes('wastage');
-        if (isWastage) {
-          wastageByIssue.set(r.issueId, (wastageByIssue.get(r.issueId) || 0) + netWeight);
-        } else {
-          receivedByIssue.set(r.issueId, (receivedByIssue.get(r.issueId) || 0) + netWeight);
-        }
-      }
-      const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(issueIds);
-
-      const items = pageWithItems.map((issue) => {
-        const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
-        const originalIssuedWeight = Number(issue.metallicBobbinsWeight || 0);
-        const takeBackWeight = Number(tb.weight || 0);
-        const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
-        const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-        const wastageWeight = Number(wastageByIssue.get(issue.id) || 0);
-        const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
-        return {
-          ...issue,
-          itemName: issue.itemName || '',
-          cutName: issue.cut?.name || '',
-          yarnName: issue.yarn?.name || '',
-          twistName: issue.twist?.name || '',
-          machineName: issue.machine?.name || '',
-          operatorName: issue.operator?.name || '',
-          originalIssuedWeight,
-          takeBackWeight,
-          netIssuedWeight,
-          issuedWeight: netIssuedWeight,
-          receivedWeight,
-          wastageWeight,
-          pendingWeight,
-          pieceIdsList: pieceIdsByIssueId.get(issue.id) || [],
-        };
-      }).filter(i => i.pendingWeight > 0.001);
+      const items = await buildOnMachineHoloItems(page);
 
       // Compute grand-total summary on first page only
       let summary = null;
@@ -1823,7 +1963,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
             allRecvMap.set(r.issueId, (allRecvMap.get(r.issueId) || 0) + nw);
           }
         }
-        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0 };
+        const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, totalCount: 0 };
         for (const issue of allIssues) {
           const tb = allTb.get(issue.id) || { weight: 0 };
           const orig = Number(issue.metallicBobbinsWeight || 0);
@@ -1839,11 +1979,12 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           s.receivedWeight += recv;
           s.wastageWeight += waste;
           s.pendingWeight += pend;
+          s.totalCount += 1;
         }
         summary = s;
       }
 
-      const lastInPage = pageWithItems[pageWithItems.length - 1];
+      const lastInPage = page[page.length - 1];
       const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
       res.json({ items, hasMore, nextCursor, summary });
       return;
@@ -1852,90 +1993,13 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     // coning
     const issuesRaw = await prisma.issueToConingMachine.findMany({
       where,
-      include: { cut: true, machine: true, operator: true, yarn: true, twist: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: onMachineIncludesForProcess(process),
+      orderBy: [{ createdAt: order }, { id: order }],
       take: limit + 1,
     });
     const hasMore = issuesRaw.length > limit;
     const page = issuesRaw.slice(0, limit);
-    const pageWithUsers = await resolveUserFields(page);
-    const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
-    const issueIds = pageWithItems.map(i => i.id);
-    const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('coning', issueIds);
-    const receiveRows = issueIds.length
-      ? await prisma.receiveFromConingMachineRow.findMany({
-        where: { isDeleted: false, issueId: { in: issueIds } },
-        select: { issueId: true, netWeight: true },
-      })
-      : [];
-    const receivedByIssue = new Map();
-    for (const r of receiveRows) {
-      receivedByIssue.set(r.issueId, (receivedByIssue.get(r.issueId) || 0) + Number(r.netWeight || 0));
-    }
-    const wastageByIssue = new Map();
-    if (issueIds.length) {
-      const wastageTotals = await prisma.receiveFromConingMachinePieceTotal.findMany({
-        where: { pieceId: { in: issueIds } },
-        select: { pieceId: true, wastageNetWeight: true },
-      });
-      for (const w of wastageTotals) {
-        const wt = Number(w.wastageNetWeight || 0);
-        if (wt > 0) wastageByIssue.set(w.pieceId, wt);
-      }
-    }
-    const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(issueIds);
-    const coneTypeIds = new Set();
-    for (const issue of pageWithItems) {
-      const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
-      refs.forEach((ref) => {
-        if (ref?.coneTypeId) coneTypeIds.add(ref.coneTypeId);
-      });
-    }
-    const coneTypes = coneTypeIds.size
-      ? await prisma.coneType.findMany({
-        where: { id: { in: Array.from(coneTypeIds) } },
-        select: { id: true, name: true },
-      })
-      : [];
-    const coneTypeNameById = new Map(coneTypes.map((c) => [c.id, c.name]));
-
-    const items = pageWithItems.map((issue) => {
-      const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
-      const originalIssuedWeight = refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
-      const rollsIssued = refs.reduce((sum, ref) => sum + Number(ref?.issueRolls || ref?.baseRolls || 0), 0);
-      const coneTypeName = (() => {
-        if (!refs.length) return '';
-        const ids = new Set(refs.map((ref) => ref?.coneTypeId).filter(Boolean));
-        if (!ids.size) return '';
-        return Array.from(ids).map((id) => coneTypeNameById.get(id) || id).join(', ');
-      })();
-      const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
-      const takeBackWeight = Number(tb.weight || 0);
-      const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
-      const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-      const wastageWeight = Number(wastageByIssue.get(issue.id) || 0);
-      const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
-      return {
-        ...issue,
-        itemName: issue.itemName || '',
-        cutName: issue.cut?.name || '',
-        yarnName: issue.yarn?.name || '',
-        twistName: issue.twist?.name || '',
-        machineName: issue.machine?.name || '',
-        operatorName: issue.operator?.name || '',
-        originalIssuedWeight,
-        takeBackWeight,
-        netIssuedWeight,
-        issuedWeight: netIssuedWeight,
-        rollsIssued,
-        coneTypeName,
-        perConeTargetG: Number(issue.requiredPerConeNetWeight || 0),
-        receivedWeight,
-        wastageWeight,
-        pendingWeight,
-        pieceIdsList: pieceIdsByIssueId.get(issue.id) || [],
-      };
-    }).filter(i => i.pendingWeight > 0.001);
+    const items = await buildOnMachineConingItems(page);
 
     // Compute grand-total summary on first page only
     let summary = null;
@@ -1967,7 +2031,7 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           if (wt > 0) allWasteMap.set(w.pieceId, wt);
         }
       }
-      const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, rollsIssued: 0 };
+      const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, rollsIssued: 0, totalCount: 0 };
       for (const issue of allIssues) {
         const refs = normalizeReceivedRowRefs(issue.receivedRowRefs);
         const orig = refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
@@ -1986,16 +2050,97 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         s.wastageWeight += waste;
         s.pendingWeight += pend;
         s.rollsIssued += rolls;
+        s.totalCount += 1;
       }
       summary = s;
     }
 
-    const lastInPage = pageWithItems[pageWithItems.length - 1];
+    const lastInPage = page[page.length - 1];
     const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
     res.json({ items, hasMore, nextCursor, summary });
   } catch (err) {
     console.error('v2 on-machine error', err);
     res.status(500).json({ error: err.message || 'Failed to load on-machine' });
+  }
+});
+
+// Export the FULL filtered on-machine set (no pagination) so Excel exports are never
+// silently truncated to the pages a user happened to scroll through.
+router.get('/on-machine/:process/export.json', requireAuth, requireStageReadPermission(issueStagePermissionKey), async (req, res) => {
+  const process = String(req.params.process || '').trim().toLowerCase();
+  const filters = sheetFiltersArrayFromQuery(req.query.filters);
+  const dateFrom = req.query.dateFrom;
+  const dateTo = req.query.dateTo;
+  const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
+
+  try {
+    const whereAllFiltered = await buildOnMachineWhere({ process, filters, dateFrom, dateTo, search });
+    const model = issueModelForProcess(process);
+    const rowsRaw = await model.findMany({
+      where: whereAllFiltered,
+      include: onMachineIncludesForProcess(process),
+      orderBy: [{ createdAt: order }, { id: order }],
+    });
+    const items = await buildOnMachineItems(process, rowsRaw);
+    res.json({ items });
+  } catch (err) {
+    console.error('v2 on-machine export error', err);
+    res.status(500).json({ error: err.message || 'Failed to export' });
+  }
+});
+
+// Facet values for the on-machine column filter dropdowns. Same master-table approach
+// as the issue-tracking facets so options never depend on which pages are loaded.
+router.get('/on-machine/:process/facets', requireAuth, requireStageReadPermission(issueStagePermissionKey), async (req, res) => {
+  const process = String(req.params.process || '').trim().toLowerCase();
+  const excludeField = String(req.query.excludeField || '').trim();
+
+  try {
+    const [machines, operators, items, cuts, yarns, twists, coneTypes] = await Promise.all([
+      prisma.machine.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.item.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.cut.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.yarn.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.coneType.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+    ]);
+
+    let shifts = [];
+    if (process === 'holo') {
+      const distinctShifts = await prisma.issueToHoloMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    } else if (process === 'coning') {
+      const distinctShifts = await prisma.issueToConingMachine.findMany({
+        where: { isDeleted: false, NOT: { shift: null } },
+        select: { shift: true },
+        distinct: ['shift'],
+      });
+      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
+    }
+    shifts.sort((a, b) => a.localeCompare(b));
+
+    res.json({
+      facets: {
+        machine: machines.map(r => r.name).filter(Boolean),
+        operator: operators.map(r => r.name).filter(Boolean),
+        item: items.map(r => r.name).filter(Boolean),
+        cut: cuts.map(r => r.name).filter(Boolean),
+        yarn: yarns.map(r => r.name).filter(Boolean),
+        twist: twists.map(r => r.name).filter(Boolean),
+        coneType: coneTypes.map(r => r.name).filter(Boolean),
+        shift: shifts,
+      },
+      meta: { process, excludeField },
+    });
+  } catch (err) {
+    console.error('v2 on-machine facets error', err);
+    res.status(500).json({ error: err.message || 'Failed to load facets' });
   }
 });
 

@@ -67,6 +67,12 @@ export const exportV2OpeningStockHistoryJson = (stage, params = {}) =>
 export const getV2OnMachine = (process, params = {}) =>
   request(`/api/v2/on-machine/${process}`, params);
 
+export const getV2OnMachineFacets = (process, params = {}) =>
+  request(`/api/v2/on-machine/${process}/facets`, params);
+
+export const exportV2OnMachineJson = (process, params = {}) =>
+  request(`/api/v2/on-machine/${process}/export.json`, params);
+
 export const getV2StockLots = (process, params = {}) =>
   request(`/api/v2/stock/${process}/lots`, params);
 

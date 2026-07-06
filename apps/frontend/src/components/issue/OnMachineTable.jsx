@@ -2,13 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
-import { ArrowRight, Download, RotateCcw, Search, X } from 'lucide-react';
+import { ArrowRight, Download, Loader2, RotateCcw, Search, X } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { KeyValueGrid } from '../common/KeyValueGrid';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../data-table';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Dialog, DialogContent } from '../ui/Dialog';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { getFeatureFlags } from '../../utils/featureFlags';
@@ -29,6 +31,9 @@ export function OnMachineTable({ db, process }) {
     const flags = getFeatureFlags();
     const v2Enabled = flags.v2OnMachine;
     const [searchTerm, setSearchTerm] = useState('');
+    // Debounced copy for server queries so each keystroke doesn't reset the list.
+    const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
+    const [sortOrder, setSortOrder] = useState('desc');
     const [expandedIds, setExpandedIds] = useState(() => new Set());
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
@@ -957,8 +962,19 @@ export function OnMachineTable({ db, process }) {
             );
         }
 
-        return rows;
-    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm, v2Enabled]);
+        // Match the v2 server ordering (date via createdAt, then id) so the
+        // Date sort toggle behaves the same in both modes.
+        const dir = sortOrder === 'asc' ? 1 : -1;
+        return [...rows].sort((a, b) => {
+            const aKey = String(a.createdAt || a.date || '');
+            const bKey = String(b.createdAt || b.date || '');
+            if (aKey !== bKey) return aKey < bKey ? -dir : dir;
+            const aId = String(a.id || '');
+            const bId = String(b.id || '');
+            if (aId === bId) return 0;
+            return aId < bId ? -dir : dir;
+        });
+    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm, sortOrder, v2Enabled]);
 
     const v2DateFilter = sheetFilters?.date && sheetFilters.date.kind === 'date' ? sheetFilters.date : null;
     const v2DateFrom = v2DateFilter?.from || '';
@@ -985,7 +1001,7 @@ export function OnMachineTable({ db, process }) {
     const v2List = useV2CursorList({
         enabled: v2Enabled,
         scopeKey: `on-machine:${process}`,
-        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
+        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
             v2.getV2OnMachine(process, {
                 limit,
                 cursor,
@@ -993,13 +1009,15 @@ export function OnMachineTable({ db, process }) {
                 dateFrom,
                 dateTo,
                 filters: JSON.stringify(filters || []),
+                order,
             })
         ),
         limit: 50,
-        search: searchTerm,
+        search: debouncedSearchTerm,
         dateFrom: v2DateFrom,
         dateTo: v2DateTo,
         filters: v2Filters,
+        order: sortOrder,
     });
 
     useEffect(() => {
@@ -1019,8 +1037,32 @@ export function OnMachineTable({ db, process }) {
         rootRef: scrollRootRef,
     });
 
+    // Server facets for the values-filter dropdowns. Without these the options were
+    // built from loaded pages only, so values not on the first page couldn't be picked.
+    const [v2FacetsById, setV2FacetsById] = useState({});
+
+    useEffect(() => {
+        if (!v2Enabled) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await v2.getV2OnMachineFacets(process);
+                if (!cancelled && res?.facets && typeof res.facets === 'object') {
+                    setV2FacetsById(res.facets);
+                }
+            } catch (_) {
+                // Ignore facet failures; the dropdown falls back to loaded-row values.
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [v2Enabled, process]);
+
     const columnFor = (id) => {
-        return filterColumns.find(c => c.id === id);
+        const col = filterColumns.find(c => c.id === id);
+        if (!col) return col;
+        if (!v2Enabled || col.kind !== 'values') return col;
+        const facetOptions = v2FacetsById?.[id];
+        return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
     };
 
     const totals = useMemo(() => {
@@ -1101,8 +1143,26 @@ export function OnMachineTable({ db, process }) {
         return Math.min(100, percent);
     };
 
-    const handleExport = () => {
-        const exportData = filteredEntries.map(entry => {
+    const handleExport = async () => {
+        // v2 mode paginates, so the loaded rows are only a slice of the dataset.
+        // Export must go through the server endpoint or the file is silently truncated.
+        let sourceRows = filteredEntries;
+        if (v2Enabled) {
+            try {
+                const res = await v2.exportV2OnMachineJson(process, {
+                    search: debouncedSearchTerm,
+                    dateFrom: v2DateFrom,
+                    dateTo: v2DateTo,
+                    filters: JSON.stringify(v2Filters || []),
+                    order: sortOrder,
+                });
+                sourceRows = Array.isArray(res?.items) ? res.items : [];
+            } catch (err) {
+                alert(err?.message || 'Failed to export');
+                return;
+            }
+        }
+        const exportData = sourceRows.map(entry => {
             const progressPercent = getProgressPercent(entry);
             const resolvedNames = resolveEntryNames(entry);
             const baseData = {
@@ -1111,9 +1171,9 @@ export function OnMachineTable({ db, process }) {
                 lotOrPiece: (process === 'cutter' || process === 'holo' || process === 'coning')
                     ? resolvePieceDisplay(entry)
                     : (entry.lotNo || ''),
-                itemName: itemNameById.get(entry.itemId) || '—',
-                machineName: machineNameById.get(entry.machineId) || '—',
-                operatorName: operatorNameById.get(entry.operatorId) || '—',
+                itemName: entry.itemName || itemNameById.get(entry.itemId) || '—',
+                machineName: entry.machineName || machineNameById.get(entry.machineId) || '—',
+                operatorName: entry.operatorName || operatorNameById.get(entry.operatorId) || '—',
                 originalIssuedWeight: formatKg(entry.originalIssuedWeight || entry.issuedWeight),
                 takeBackWeight: formatKg(entry.takeBackWeight || 0),
                 netIssuedWeight: formatKg(entry.netIssuedWeight ?? entry.issuedWeight),
@@ -1129,7 +1189,7 @@ export function OnMachineTable({ db, process }) {
                     yarn: resolvedNames.yarnName,
                     twist: resolvedNames.twistName,
                     rollsIssued: entry.rollsIssued || 0,
-                    coneType: resolveConingConeTypeName(entry),
+                    coneType: entry.coneTypeName || resolveConingConeTypeName(entry),
                     perConeNetG: Number.isFinite(Number(entry.requiredPerConeNetWeight)) ? Number(entry.requiredPerConeNetWeight) : '',
                 };
             }
@@ -1211,6 +1271,12 @@ export function OnMachineTable({ db, process }) {
                         </button>
                     )}
                 </div>
+                <TableResultCount
+                    shown={filteredEntries.length}
+                    total={v2Enabled ? v2List.summary?.totalCount : onMachineEntries.length}
+                    isLoading={v2Enabled && v2List.isLoading}
+                    className="self-center"
+                />
                 <button
                     onClick={handleExport}
                     className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -1228,7 +1294,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Date</span>
+                                            <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -1270,19 +1336,19 @@ export function OnMachineTable({ db, process }) {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Received (kg)</span>
                                             <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Pending (kg)</span>
                                             <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
@@ -1301,7 +1367,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Date</span>
+                                            <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -1354,19 +1420,19 @@ export function OnMachineTable({ db, process }) {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Received (kg)</span>
                                             <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Pending (kg)</span>
                                             <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
@@ -1385,7 +1451,7 @@ export function OnMachineTable({ db, process }) {
                                 <>
                                     <TableHead>
                                         <div className="flex items-center justify-between gap-2">
-                                            <span>Date</span>
+                                            <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                             <SheetColumnFilter column={columnFor('date')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -1426,7 +1492,7 @@ export function OnMachineTable({ db, process }) {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Rolls Issued</span>
                                             <SheetColumnFilter column={columnFor('rollsIssued')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
@@ -1438,8 +1504,8 @@ export function OnMachineTable({ db, process }) {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span>Per Cone (g)</span>
+                                        <div className="flex items-center justify-end gap-2">
+                                            <span className="whitespace-nowrap">Per Cone (g)</span>
                                             <SheetColumnFilter column={columnFor('perCone')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
@@ -1456,19 +1522,19 @@ export function OnMachineTable({ db, process }) {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Issued (O/TB/N)</span>
                                             <SheetColumnFilter column={columnFor('issuedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Received (kg)</span>
                                             <SheetColumnFilter column={columnFor('receivedWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-right">
-                                        <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center justify-end gap-2">
                                             <span>Pending (kg)</span>
                                             <SheetColumnFilter column={columnFor('pendingWeight')} rows={filterRows} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                         </div>
@@ -1487,11 +1553,13 @@ export function OnMachineTable({ db, process }) {
                     </TableHeader>
                     <TableBody>
                         {filteredEntries.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={emptyColSpan} className="text-center py-8 text-muted-foreground">
-                                    No pending entries on machine for {process}.
-                                </TableCell>
-                            </TableRow>
+                            <TableStateRow
+                                colSpan={emptyColSpan}
+                                isLoading={v2Enabled && v2List.isLoading}
+                                error={v2Enabled ? v2List.error : null}
+                                onRetry={v2Enabled ? v2List.refresh : undefined}
+                                emptyMessage={`No pending entries on machine for ${process}.`}
+                            />
                         ) : (
                             <>
                                 {filteredEntries.map((entry) => {
@@ -1504,7 +1572,7 @@ export function OnMachineTable({ db, process }) {
                                         <TableRow key={entry.id}>
                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(entry.date)} query={searchTerm} /></TableCell>
                                             <TableCell><HighlightMatch text={entry.shift || '—'} query={searchTerm} /></TableCell>
-                                            <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
+                                            <TableCell><CellText text={itemDisplay} query={searchTerm} /></TableCell>
                                             <TableCell className="max-w-[120px] truncate" title={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '')}>
                                                 <HighlightMatch text={(process === 'cutter' || process === 'holo' || process === 'coning') ? resolvePieceDisplay(entry) : (entry.lotNo || '—')} query={searchTerm} />
                                             </TableCell>
@@ -1514,24 +1582,24 @@ export function OnMachineTable({ db, process }) {
                                             {process === 'holo' && (
                                                 <>
                                                     <TableCell><HighlightMatch text={resolvedNames.cutName} query={searchTerm} /></TableCell>
-                                                    <TableCell><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
+                                                    <TableCell className="whitespace-nowrap"><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
                                                     <TableCell><HighlightMatch text={resolvedNames.twistName} query={searchTerm} /></TableCell>
                                                 </>
                                             )}
                                             {process === 'coning' && (
                                                 <>
                                                     <TableCell><HighlightMatch text={resolvedNames.cutName} query={searchTerm} /></TableCell>
-                                                    <TableCell><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
+                                                    <TableCell className="whitespace-nowrap"><HighlightMatch text={resolvedNames.yarnName} query={searchTerm} /></TableCell>
                                                     <TableCell><HighlightMatch text={resolvedNames.twistName} query={searchTerm} /></TableCell>
-                                                    <TableCell>{entry.rollsIssued || 0}</TableCell>
-                                                    <TableCell><HighlightMatch text={entry.coneTypeName || resolveConingConeTypeName(entry)} query={searchTerm} /></TableCell>
-                                                    <TableCell>{formatPerConeNet(entry.perConeTargetG ?? entry.requiredPerConeNetWeight)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{entry.rollsIssued || 0}</TableCell>
+                                                    <TableCell><CellText text={entry.coneTypeName || resolveConingConeTypeName(entry)} query={searchTerm} max="sm" /></TableCell>
+                                                    <TableCell className="text-right tabular-nums whitespace-nowrap">{formatPerConeNet(entry.perConeTargetG ?? entry.requiredPerConeNetWeight)}</TableCell>
                                                 </>
                                             )}
-                                            <TableCell><HighlightMatch text={machineDisplay} query={searchTerm} /></TableCell>
-                                            <TableCell><HighlightMatch text={operatorDisplay} query={searchTerm} /></TableCell>
-                                            <TableCell>
-                                                <div className="space-y-0.5 leading-tight">
+                                            <TableCell><CellText text={machineDisplay} query={searchTerm} max="sm" /></TableCell>
+                                            <TableCell><CellText text={operatorDisplay} query={searchTerm} max="sm" /></TableCell>
+                                            <TableCell className="text-right">
+                                                <div className="space-y-0.5 leading-tight whitespace-nowrap tabular-nums">
                                                     <div className="text-[11px] text-muted-foreground">O: {formatKg(entry.originalIssuedWeight || entry.issuedWeight)}</div>
                                                     <div className="text-[11px] text-amber-600">TB: {formatKg(entry.takeBackWeight || 0)}</div>
                                                     <div className="text-[11px] font-medium">N: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</div>
@@ -1553,7 +1621,7 @@ export function OnMachineTable({ db, process }) {
                                                     />
                                                 </div>
                                             </TableCell>
-                                            <TableCell className="font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
+                                            <TableCell className="text-right tabular-nums whitespace-nowrap font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
                                             <TableCell>
                                                 <div className="flex items-center gap-2">
                                                     <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
@@ -1565,7 +1633,7 @@ export function OnMachineTable({ db, process }) {
                                                     <span className="text-xs text-muted-foreground">{progressPercent}%</span>
                                                 </div>
                                             </TableCell>
-                                            <TableCell className="font-mono text-xs"><HighlightMatch text={entry.barcode || entry.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                                            <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={entry.barcode || entry.id.substring(0, 8)} query={searchTerm} /></TableCell>
                                             <TableCell>
                                                 <ActionMenu actions={getActions(entry)} />
                                             </TableCell>
@@ -1578,6 +1646,12 @@ export function OnMachineTable({ db, process }) {
                 </Table>
                 {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
                 <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
+                {v2Enabled && v2List.isLoading && filteredEntries.length > 0 && (
+                    <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Loading more…
+                    </div>
+                )}
             </div>
             <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                 <span className="text-sm font-semibold">Grand Total (filtered)</span>
@@ -1596,9 +1670,13 @@ export function OnMachineTable({ db, process }) {
             {/* Mobile Card View - shown on small screens only */}
             <div className="block sm:hidden space-y-3">
                 {filteredEntries.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
-                        No pending entries on machine for {process}.
-                    </div>
+                    <ListState
+                        className="border rounded-lg bg-card"
+                        isLoading={v2Enabled && v2List.isLoading}
+                        error={v2Enabled ? v2List.error : null}
+                        onRetry={v2Enabled ? v2List.refresh : undefined}
+                        emptyMessage={`No pending entries on machine for ${process}.`}
+                    />
                 ) : (
                     filteredEntries.map((entry) => {
                         const progressPercent = getProgressPercent(entry);

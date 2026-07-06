@@ -3,7 +3,7 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/Invento
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Card, CardHeader, CardTitle, CardContent, ActionMenu, Button, Input, Select } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
-import { Printer, Edit2, Trash2, Download, History, RotateCcw, Search, X, Undo2 } from 'lucide-react';
+import { Printer, Edit2, Trash2, Download, History, Loader2, RotateCcw, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../../api';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
@@ -14,6 +14,8 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
+import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../data-table';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
@@ -42,6 +44,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const [holoRevertTarget, setHoloRevertTarget] = useState(null);
     const [holoRevertBusy, setHoloRevertBusy] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+    // Debounced copy for server queries so each keystroke doesn't reset the list.
+    const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
+    const [sortOrder, setSortOrder] = useState('desc');
     const [sheetFilters, setSheetFilters] = useState({});
     const [openFilterId, setOpenFilterId] = useState(null);
     const [historyDirtyWhileHidden, setHistoryDirtyWhileHidden] = useState(false);
@@ -498,8 +503,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             );
         }
 
-        return rows;
-    }, [history, filterColumns, sheetFilters, searchTerm]);
+        // Match the v2 server ordering (createdAt, then id) so the Date sort toggle
+        // behaves the same in both modes.
+        const dir = sortOrder === 'asc' ? 1 : -1;
+        return [...rows].sort((a, b) => {
+            const aKey = String(a.createdAt || a.date || '');
+            const bKey = String(b.createdAt || b.date || '');
+            if (aKey !== bKey) return aKey < bKey ? -dir : dir;
+            const aId = String(a.id || '');
+            const bId = String(b.id || '');
+            if (aId === bId) return 0;
+            return aId < bId ? -dir : dir;
+        });
+    }, [history, filterColumns, sheetFilters, searchTerm, sortOrder]);
 
     const legacyTotals = useMemo(() => {
         if (v2Enabled) return { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
@@ -546,7 +562,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
     const v2List = useV2CursorList({
         enabled: v2Enabled && showHistory,
-        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
+        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
             v2.getV2ReceiveHistory(process, {
                 limit,
                 cursor,
@@ -554,13 +570,15 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 dateFrom,
                 dateTo,
                 filters: JSON.stringify(filters || []),
+                order,
             })
         ),
         limit: 50,
-        search: searchTerm,
+        search: debouncedSearchTerm,
         dateFrom: v2DateFrom,
         dateTo: v2DateTo,
         filters: v2Filters,
+        order: sortOrder,
     });
     const refreshV2List = (minIntervalMs = 150) => {
         const now = Date.now();
@@ -617,7 +635,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         (async () => {
             try {
                 const res = await v2.getV2ReceiveHistoryFacets(process, {
-                    search: searchTerm,
+                    search: debouncedSearchTerm,
                     dateFrom: v2DateFrom,
                     dateTo: v2DateTo,
                     filters: JSON.stringify(v2Filters || []),
@@ -630,7 +648,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             } catch (_) { }
         })();
         return () => { cancelled = true; };
-    }, [v2Enabled, showHistory, openFilterId, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+    }, [v2Enabled, showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
     // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
     useEffect(() => {
@@ -645,7 +663,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     const col = filterColumns.find(c => c.id === field);
                     if (!col || col.kind !== 'values') return null;
                     const out = await v2.getV2ReceiveHistoryFacets(process, {
-                        search: searchTerm,
+                        search: debouncedSearchTerm,
                         dateFrom: v2DateFrom,
                         dateTo: v2DateTo,
                         filters: JSON.stringify(v2Filters || []),
@@ -666,7 +684,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [v2Enabled, showHistory, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+    }, [v2Enabled, showHistory, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
@@ -2074,10 +2092,11 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (v2Enabled && showHistory) {
             try {
                 const res = await v2.exportV2ReceiveHistoryJson(process, {
-                    search: searchTerm,
+                    search: debouncedSearchTerm,
                     dateFrom: v2DateFrom,
                     dateTo: v2DateTo,
                     filters: JSON.stringify(v2Filters || []),
+                    order: sortOrder,
                 });
                 sourceRows = Array.isArray(res?.items) ? res.items : [];
             } catch (err) {
@@ -2287,6 +2306,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                             </button>
                         )}
                     </div>
+                    {showHistory && (
+                        <TableResultCount
+                            shown={filteredHistory.length}
+                            total={v2Enabled ? v2List.summary?.totalCount : history.length}
+                            isLoading={v2Enabled && v2List.isLoading}
+                            className="self-center"
+                        />
+                    )}
                     <button
                         onClick={showChallans ? handleExportChallans : handleExportHistory}
                         className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -2306,7 +2333,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             <>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
-                                                        <span>Date</span>
+                                                        <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2354,14 +2381,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Net Wt (kg)</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Net Wt (kg)</span>
                                                         <SheetColumnFilter column={columnFor('netWt')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Bobbin Qty</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Bobbin Qty</span>
                                                         <SheetColumnFilter column={columnFor('bobbinQty')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2384,7 +2411,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             <>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
-                                                        <span>Date</span>
+                                                        <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2431,14 +2458,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Rolls</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Rolls</span>
                                                         <SheetColumnFilter column={columnFor('rolls')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Weight (kg)</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Weight (kg)</span>
                                                         <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2479,7 +2506,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             <>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
-                                                        <span>Date</span>
+                                                        <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                                                         <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2532,14 +2559,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Per Cone (g)</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Per Cone (g)</span>
                                                         <SheetColumnFilter column={columnFor('perCone')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Actual (g)</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Actual (g)</span>
                                                         <SheetColumnFilter column={columnFor('actualG')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2550,14 +2577,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Cones</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Cones</span>
                                                         <SheetColumnFilter column={columnFor('cones')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span>Weight (kg)</span>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <span className="whitespace-nowrap">Weight (kg)</span>
                                                         <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
@@ -2592,7 +2619,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                 </TableHeader>
                                 <TableBody>
                                     {filteredHistory.length === 0 ? (
-                                        <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No records found.</TableCell></TableRow>
+                                        <TableStateRow
+                                            colSpan={emptyColSpan}
+                                            isLoading={v2Enabled && v2List.isLoading}
+                                            error={v2Enabled ? v2List.error : null}
+                                            onRetry={v2Enabled ? v2List.refresh : undefined}
+                                            emptyMessage="No records found."
+                                        />
                                     ) : (
                                         <>
                                             {filteredHistory.map(r => {
@@ -2608,11 +2641,11 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                         <TableRow key={r.id}>
                                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={item?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={item?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="font-mono text-xs"><HighlightMatch text={r.pieceId} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={resolvedCut} query={searchTerm} /></TableCell>
-                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={r.machineNo || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={r.machineNo || '—'} query={searchTerm} max="sm" /></TableCell>
                                                             <TableCell><HighlightMatch text={r.operator?.name || r.employee || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-right font-medium">
                                                                 <div className="flex items-center justify-end gap-1">
@@ -2631,7 +2664,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                                     />
                                                                 </div>
                                                             </TableCell>
-                                                            <TableCell className="text-right">{r.bobbinQuantity}</TableCell>
+                                                            <TableCell className="text-right tabular-nums">{r.bobbinQuantity}</TableCell>
                                                             <TableCell><HighlightMatch text={r.bobbin?.name || r.pcsTypeName || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell>
                                                                 <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
@@ -2653,19 +2686,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                     return (
                                                         <TableRow key={r.id}>
-                                                            <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.shift || r.issue?.shift || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={itemName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
                                                             <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
                                                                 <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
-                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell className="text-right">{r.rollCount || 1}</TableCell>
-                                                            <TableCell className="text-right font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
-                                                            <TableCell><HighlightMatch text={r.machineNo || r.machine?.name || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right tabular-nums">{r.rollCount || 1}</TableCell>
+                                                            <TableCell className="text-right tabular-nums whitespace-nowrap font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
+                                                            <TableCell><CellText text={r.machineNo || r.machine?.name || '—'} query={searchTerm} max="sm" /></TableCell>
                                                             <TableCell><HighlightMatch text={r.operator?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.helper?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}><HighlightMatch text={r.note || r.notes || '—'} query={searchTerm} /></TableCell>
@@ -2693,23 +2726,23 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                     return (
                                                         <TableRow key={r.id}>
-                                                            <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.shift || coningIssue?.shift || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={itemName} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={itemName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
                                                             <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
                                                                 <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
-                                                            <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={coneTypeName} query={searchTerm} /></TableCell>
-                                                            <TableCell className="text-right">{formatPerConeNet(perConeNet)}</TableCell>
-                                                            <TableCell className="text-right">{actualPerCone}</TableCell>
+                                                            <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={coneTypeName} query={searchTerm} max="sm" /></TableCell>
+                                                            <TableCell className="text-right tabular-nums whitespace-nowrap">{formatPerConeNet(perConeNet)}</TableCell>
+                                                            <TableCell className="text-right tabular-nums whitespace-nowrap">{actualPerCone}</TableCell>
                                                             <TableCell><HighlightMatch text={r.box?.name || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell className="text-right">{r.coneCount}</TableCell>
-                                                            <TableCell className="text-right font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
-                                                            <TableCell><HighlightMatch text={getConingMachineName(r)} query={searchTerm} /></TableCell>
+                                                            <TableCell className="text-right tabular-nums">{r.coneCount}</TableCell>
+                                                            <TableCell className="text-right tabular-nums whitespace-nowrap font-medium">{formatKg(r.netWeight ?? r.grossWeight)}</TableCell>
+                                                            <TableCell><CellText text={getConingMachineName(r)} query={searchTerm} max="sm" /></TableCell>
                                                             <TableCell><HighlightMatch text={r.operator?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.notes}><HighlightMatch text={r.notes || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell>
@@ -2726,6 +2759,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                             </Table>
                             {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
                             <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
+                            {v2Enabled && v2List.isLoading && filteredHistory.length > 0 && (
+                                <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    Loading more…
+                                </div>
+                            )}
                         </div>
                         <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                             <span className="text-sm font-semibold">Grand Total (filtered)</span>
@@ -2754,7 +2793,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                         {/* Mobile Card View for Receive History */}
                         <div className="block sm:hidden space-y-3">
                             {filteredHistory.length === 0 ? (
-                                <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No records found.</div>
+                                <ListState
+                                    className="border rounded-lg bg-card"
+                                    isLoading={v2Enabled && v2List.isLoading}
+                                    error={v2Enabled ? v2List.error : null}
+                                    onRetry={v2Enabled ? v2List.refresh : undefined}
+                                    emptyMessage="No records found."
+                                />
                             ) : (
                                 filteredHistory.map(r => {
                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
@@ -2910,7 +2955,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             return (
                                                 <TableRow key={challan.id}>
                                                     <TableCell className="font-mono text-xs"><HighlightMatch text={challan.challanNo} query={searchTerm} /></TableCell>
-                                                    <TableCell><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
+                                                    <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
                                                     <TableCell><HighlightMatch text={challan.lotNo || '—'} query={searchTerm} /></TableCell>
                                                     <TableCell><HighlightMatch text={meta.itemName} query={searchTerm} /></TableCell>
                                                     <TableCell className="text-right font-medium">{formatKg(challan.totalNetWeight)}</TableCell>

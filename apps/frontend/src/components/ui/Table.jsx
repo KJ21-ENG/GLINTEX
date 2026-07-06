@@ -55,7 +55,9 @@ const TableHead = React.forwardRef(({ className, ...props }, ref) => (
     ref={ref}
     className={cn(
       // Slightly tighter on mobile to reduce horizontal overflow.
-      "h-11 sm:h-12 px-2 sm:px-4 text-center align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+      // Left-aligned by default (right-align numeric columns per-cell): text reads
+      // left-to-right and numbers compare by their right edge — centering does neither.
+      "h-11 sm:h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
       className
     )}
     {...props}
@@ -68,7 +70,8 @@ const TableCell = React.forwardRef(({ className, ...props }, ref) => (
     ref={ref}
     className={cn(
       // Slightly tighter on mobile to reduce horizontal overflow.
-      "px-2 py-2 sm:p-4 text-center align-middle [&:has([role=checkbox])]:pr-0",
+      // Left-aligned by default; see TableHead.
+      "px-2 py-2 sm:p-4 text-left align-middle [&:has([role=checkbox])]:pr-0",
       className
     )}
     {...props}
@@ -90,7 +93,7 @@ const TableHeadSticky = React.forwardRef(({ className, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
-      "h-11 sm:h-12 px-2 sm:px-4 text-center align-middle font-medium text-muted-foreground",
+      "h-11 sm:h-12 px-2 sm:px-4 text-left align-middle font-medium text-muted-foreground",
       "sticky top-0 z-10 bg-card",
       "[&:has([role=checkbox])]:pr-0",
       className
@@ -105,7 +108,7 @@ const TableCellSticky = React.forwardRef(({ className, ...props }, ref) => (
   <td
     ref={ref}
     className={cn(
-      "px-2 py-2 sm:p-4 text-center align-middle sticky left-0 z-10 bg-card border-r",
+      "px-2 py-2 sm:p-4 text-left align-middle sticky left-0 z-10 bg-card border-r",
       "[&:has([role=checkbox])]:pr-0",
       className
     )}

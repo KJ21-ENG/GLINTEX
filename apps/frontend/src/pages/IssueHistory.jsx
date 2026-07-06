@@ -3,7 +3,7 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryC
 import { formatKg, formatDateDDMMYYYY, extractUserWastageNote } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { Trash2, Printer, Download, Edit2, Plus, Search, X, Undo2 } from 'lucide-react';
+import { Trash2, Printer, Download, Edit2, Loader2, Plus, Search, X, Undo2 } from 'lucide-react';
 import * as api from '../api';
 import { HighlightMatch } from '../components/common/HighlightMatch';
 import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
@@ -14,7 +14,9 @@ import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrac
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { UserBadge } from '../components/common/UserBadge';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
+import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../components/data-table';
 import { getFeatureFlags } from '../utils/featureFlags';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useV2CursorList } from '../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
@@ -26,6 +28,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [deletingId, setDeletingId] = useState(null);
   const [reversingTakeBackId, setReversingTakeBackId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  // Debounced copy for server queries so each keystroke doesn't reset the list.
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
+  const [sortOrder, setSortOrder] = useState('desc');
   const [sheetFilters, setSheetFilters] = useState({});
   const [openFilterId, setOpenFilterId] = useState(null);
   const [editingIssue, setEditingIssue] = useState(null);
@@ -1270,8 +1275,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       );
     }
 
-    return rows;
-  }, [issuesBase, filterColumns, sheetFilters, searchTerm]);
+    // Match the v2 server ordering (createdAt, then id) so the Date sort toggle
+    // behaves the same in both modes.
+    const dir = sortOrder === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const aKey = String(a.createdAt || a.date || '');
+      const bKey = String(b.createdAt || b.date || '');
+      if (aKey !== bKey) return aKey < bKey ? -dir : dir;
+      const aId = String(a.id || '');
+      const bId = String(b.id || '');
+      if (aId === bId) return 0;
+      return aId < bId ? -dir : dir;
+    });
+  }, [issuesBase, filterColumns, sheetFilters, searchTerm, sortOrder]);
 
   const legacyTotals = useMemo(() => {
     if (v2Enabled) {
@@ -1345,7 +1361,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const v2List = useV2CursorList({
     enabled: v2Enabled,
     scopeKey: `issue-history:${process}`,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters }) => (
+    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
       v2.getV2IssueTracking(process, {
         limit,
         cursor,
@@ -1353,13 +1369,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         dateFrom,
         dateTo,
         filters: JSON.stringify(filters || []),
+        order,
       })
     ),
     limit: 50,
-    search: searchTerm,
+    search: debouncedSearchTerm,
     dateFrom: v2DateFrom,
     dateTo: v2DateTo,
     filters: v2Filters,
+    order: sortOrder,
   });
 
   const v2TakeBackList = useV2CursorList({
@@ -1375,7 +1393,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       })
     ),
     limit: 50,
-    search: searchTerm,
+    search: debouncedSearchTerm,
     dateFrom: v2DateFrom,
     dateTo: v2DateTo,
   });
@@ -1445,7 +1463,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     (async () => {
       try {
         const res = await v2.getV2IssueTrackingFacets(process, {
-          search: searchTerm,
+          search: debouncedSearchTerm,
           dateFrom: v2DateFrom,
           dateTo: v2DateTo,
           filters: JSON.stringify(v2Filters || []),
@@ -1460,7 +1478,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [v2Enabled, openFilterId, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+  }, [v2Enabled, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
   // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
   useEffect(() => {
@@ -1474,7 +1492,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           const col = filterColumns.find(c => c.id === field);
           if (!col || col.kind !== 'values') return null;
           const out = await v2.getV2IssueTrackingFacets(process, {
-            search: searchTerm,
+            search: debouncedSearchTerm,
             dateFrom: v2DateFrom,
             dateTo: v2DateTo,
             filters: JSON.stringify(v2Filters || []),
@@ -1495,7 +1513,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Enabled, process, searchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+  }, [v2Enabled, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
   const columnFor = (id) => {
     const col = filterColumns.find(c => c.id === id);
@@ -1590,10 +1608,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (v2Enabled) {
       try {
         const res = await v2.exportV2IssueTrackingJson(process, {
-          search: searchTerm,
+          search: debouncedSearchTerm,
           dateFrom: v2DateFrom,
           dateTo: v2DateTo,
           filters: JSON.stringify(v2Filters || []),
+          order: sortOrder,
         });
         sourceRows = Array.isArray(res?.items) ? res.items : [];
       } catch (err) {
@@ -1793,6 +1812,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             </button>
           )}
         </div>
+        <TableResultCount
+          shown={issues.length}
+          total={v2Enabled ? v2List.summary?.totalCount : issuesBase.length}
+          isLoading={v2Enabled && v2List.isLoading}
+          className="self-center"
+        />
         <button
           onClick={handleExport}
           className="h-9 px-3 rounded-md border border-primary bg-primary text-primary-foreground text-xs hover:bg-primary/90 font-medium flex items-center gap-1"
@@ -1810,7 +1835,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                 <>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
-                      <span>Date</span>
+                      <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                       <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -1852,32 +1877,32 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Qty</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Qty</span>
                       <SheetColumnFilter column={columnFor('qty')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Weight (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Weight (kg)</span>
                       <SheetColumnFilter column={columnFor('weight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Taken Back (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Taken Back (kg)</span>
                       <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Net Issued (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Net Issued (kg)</span>
                       <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Wastage (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Wastage (kg)</span>
                       <SheetColumnFilter column={columnFor('wastageWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -1906,7 +1931,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                 <>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
-                      <span>Date</span>
+                      <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                       <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -1959,38 +1984,38 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Metallic Bobbins</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Metallic Bobbins</span>
                       <SheetColumnFilter column={columnFor('metallicBobbins')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Met. Bob. Wt (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Met. Bob. Wt (kg)</span>
                       <SheetColumnFilter column={columnFor('metallicBobbinsWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Taken Back (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Taken Back (kg)</span>
                       <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Net Issued (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Net Issued (kg)</span>
                       <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Yarn Wt (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Yarn Wt (kg)</span>
                       <SheetColumnFilter column={columnFor('yarnKg')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Rolls Prod. Est.</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Rolls Prod. Est.</span>
                       <SheetColumnFilter column={columnFor('rollsProducedEstimate')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -2019,7 +2044,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                 <>
                   <TableHead>
                     <div className="flex items-center justify-between gap-2">
-                      <span>Date</span>
+                      <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
                       <SheetColumnFilter column={columnFor('date')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -2078,26 +2103,26 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Per Cone (g)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Per Cone (g)</span>
                       <SheetColumnFilter column={columnFor('perCone')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Rolls Issued</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Rolls Issued</span>
                       <SheetColumnFilter column={columnFor('rollsIssued')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Taken Back (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Taken Back (kg)</span>
                       <SheetColumnFilter column={columnFor('takenBackWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
                   <TableHead className="text-right">
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Net Issued (kg)</span>
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="whitespace-nowrap">Net Issued (kg)</span>
                       <SheetColumnFilter column={columnFor('netIssuedWeight')} rows={issues} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                     </div>
                   </TableHead>
@@ -2126,7 +2151,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           </TableHeader>
           <TableBody>
             {issues.length === 0 ? (
-              <TableRow><TableCell colSpan={emptyColSpan} className="text-center py-4 text-muted-foreground">No issue records found for {process}.</TableCell></TableRow>
+              <TableStateRow
+                colSpan={emptyColSpan}
+                isLoading={v2Enabled && v2List.isLoading}
+                error={v2Enabled ? v2List.error : null}
+                onRetry={v2Enabled ? v2List.refresh : undefined}
+                emptyMessage={`No issue records found for ${process}.`}
+              />
             ) : (
               <>
                 {issues.map((r) => {
@@ -2138,17 +2169,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[150px] truncate" title={r.pieceIds || ''}><HighlightMatch text={r.pieceIds || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
-                          <TableCell>{r.count}</TableCell>
-                          <TableCell>{formatKg(r.totalWeight)}</TableCell>
-                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
-                          <TableCell>{formatKg(r.netIssuedWeight ?? r.totalWeight ?? 0)}</TableCell>
-                          <TableCell>{renderCutterWastageCell(r)}</TableCell>
-                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={machineNameById.get(r.machineId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell><CellText text={operatorNameById.get(r.operatorId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{r.count}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.totalWeight)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.netIssuedWeight ?? r.totalWeight ?? 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{renderCutterWastageCell(r)}</TableCell>
+                          <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
                             <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
@@ -2159,20 +2190,20 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell className="whitespace-nowrap"><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
-                          <TableCell>{r.metallicBobbins || 0}</TableCell>
-                          <TableCell>{formatKg(r.metallicBobbinsWeight)}</TableCell>
-                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
-                          <TableCell>{formatKg(r.netIssuedWeight ?? r.metallicBobbinsWeight ?? 0)}</TableCell>
-                          <TableCell>{formatKg(r.yarnKg)}</TableCell>
-                          <TableCell>{r.rollsProducedEstimate || '—'}</TableCell>
-                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={machineNameById.get(r.machineId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell><CellText text={operatorNameById.get(r.operatorId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{r.metallicBobbins || 0}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.metallicBobbinsWeight)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.netIssuedWeight ?? r.metallicBobbinsWeight ?? 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.yarnKg)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{r.rollsProducedEstimate || '—'}</TableCell>
+                          <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
                             <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
@@ -2183,19 +2214,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         <>
                           <TableCell className="whitespace-nowrap"><HighlightMatch text={formatDateDDMMYYYY(r.date)} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={r.shift || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={itemDisplay} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={itemDisplay} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={lotLabelFor(r) || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.cutName || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
+                          <TableCell className="whitespace-nowrap"><HighlightMatch text={resolved.yarnName || '—'} query={searchTerm} /></TableCell>
                           <TableCell><HighlightMatch text={resolved.twistName || '—'} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={machineNameById.get(r.machineId)} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={operatorNameById.get(r.operatorId)} query={searchTerm} /></TableCell>
-                          <TableCell><HighlightMatch text={r.coneTypeName || resolveConingConeTypeName(r) || '—'} query={searchTerm} /></TableCell>
-                          <TableCell>{formatPerConeNet((r.perConeTargetG ?? r.requiredPerConeNetWeight))}</TableCell>
-                          <TableCell>{r.count || r.rollsIssued || 0}</TableCell>
-                          <TableCell>{formatKg(r.takenBackWeight || 0)}</TableCell>
-                          <TableCell>{formatKg(r.netIssuedWeight ?? 0)}</TableCell>
-                          <TableCell className="font-mono text-xs"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
+                          <TableCell><CellText text={machineNameById.get(r.machineId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell><CellText text={operatorNameById.get(r.operatorId)} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell><CellText text={r.coneTypeName || resolveConingConeTypeName(r) || '—'} query={searchTerm} max="sm" /></TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatPerConeNet((r.perConeTargetG ?? r.requiredPerConeNetWeight))}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{r.count || r.rollsIssued || 0}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.takenBackWeight || 0)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.netIssuedWeight ?? 0)}</TableCell>
+                          <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || r.id.substring(0, 8)} query={searchTerm} /></TableCell>
                           <TableCell className="max-w-[200px] truncate" title={r.note || ''}><HighlightMatch text={r.note || '—'} query={searchTerm} /></TableCell>
                           <TableCell>
                             <UserBadge user={r.createdByUser} timestamp={r.createdAt} />
@@ -2214,6 +2245,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         </Table>
         {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
         <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
+        {v2Enabled && v2List.isLoading && issues.length > 0 && (
+          <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Loading more…
+          </div>
+        )}
       </div>
       <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
         <span className="text-sm font-semibold">Grand Total (filtered)</span>
@@ -2249,9 +2286,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       {/* Mobile Card View */}
       <div className="block sm:hidden space-y-3">
         {issues.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
-            No issue records found for {process}.
-          </div>
+          <ListState
+            className="border rounded-lg bg-card"
+            isLoading={v2Enabled && v2List.isLoading}
+            error={v2Enabled ? v2List.error : null}
+            onRetry={v2Enabled ? v2List.refresh : undefined}
+            emptyMessage={`No issue records found for ${process}.`}
+          />
         ) : (
           issues.map((r) => {
             const pieceDisplay = Array.isArray(r.pieceIds) ? r.pieceIds.join(', ') : (r.pieceIds || lotLabelFor(r) || '—');
@@ -2314,11 +2355,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             </TableHeader>
             <TableBody>
               {takeBacks.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={11} className="text-center py-6 text-muted-foreground">
-                    No take-back entries for {process}.
-                  </TableCell>
-                </TableRow>
+                <TableStateRow
+                  colSpan={11}
+                  isLoading={v2Enabled && v2TakeBackList.isLoading}
+                  error={v2Enabled ? v2TakeBackList.error : null}
+                  onRetry={v2Enabled ? v2TakeBackList.refresh : undefined}
+                  emptyMessage={`No take-back entries for ${process}.`}
+                />
               ) : (
                 takeBacks.map((tb) => {
                   const issue = !v2Enabled && issueById.get(tb.issueId) ? issueById.get(tb.issueId) : null;

@@ -115,6 +115,15 @@ function applyCursorWhere(baseWhere, cursorWhere) {
   return cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
 }
 
+// Optional 1-based page number for offset pagination. Returns null when absent so
+// endpoints keep their cursor behavior for callers that don't send it.
+function parsePageParam(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(1000000, Math.floor(n));
+}
+
 function normalizeText(v) {
   return String(v || '').trim();
 }
@@ -673,13 +682,14 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
   const dateTo = req.query.dateTo;
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
+  const pageNum = parsePageParam(req.query.page);
 
   try {
     const model = issueModelForProcess(process);
     const { rawFilters, computedFilters } = process === 'cutter'
       ? splitCutterHistoryFilters(filters)
       : { rawFilters: filters, computedFilters: [] };
-    const cursorWhere = computedFilters.length > 0 ? null : buildCursorWhere(cursor, order);
+    const cursorWhere = computedFilters.length > 0 || pageNum != null ? null : buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
@@ -708,14 +718,16 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       const allItems = rowsWithItems
         .map((row) => mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId }))
         .filter((row) => matchesCutterHistoryComputedFilters(row, computedFilters));
-      const pageCandidates = applyCursorToSortedItems(allItems, cursor, order);
+      const pageCandidates = pageNum != null
+        ? allItems.slice((pageNum - 1) * limit)
+        : applyCursorToSortedItems(allItems, cursor, order);
       const hasMore = pageCandidates.length > limit;
       const items = pageCandidates.slice(0, limit);
       const lastInPage = items[items.length - 1];
-      const nextCursor = hasMore && lastInPage
+      const nextCursor = pageNum == null && hasMore && lastInPage
         ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
         : null;
-      const summary = !cursor
+      const summary = !cursor && (pageNum == null || pageNum === 1)
         ? { ...buildCutterHistorySummary(allItems), totalCount: allItems.length }
         : null;
       return res.json({ items, hasMore, nextCursor, summary });
@@ -725,6 +737,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       where: wherePage,
       include: issueIncludesForProcess(process),
       orderBy: [{ createdAt: order }, { id: order }],
+      ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
       take: limit + 1,
     });
     const hasMore = rowsRaw.length > limit;
@@ -738,13 +751,14 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       : new Map();
     const items = pageWithItems.map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId, wastageByIssueId }));
     const lastInPage = pageWithItems[pageWithItems.length - 1];
-    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
+    const nextCursor = pageNum == null && hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
 
     // Summary for footer totals (full filter context, not just page).
     // First page only: later pages return summary: null and the client keeps the
-    // previous value (see useV2CursorList), so recomputing per page is wasted work.
+    // previous value (see useV2CursorList/useV2PagedList), so recomputing per page
+    // is wasted work.
     let summary = null;
-    if (!cursor) {
+    if (!cursor && (pageNum == null || pageNum === 1)) {
       const totalCount = await model.count({ where: whereAll });
       const issueTable = process === 'holo' ? prisma.issueToHoloMachine : process === 'coning' ? prisma.issueToConingMachine : prisma.issueToCutterMachine;
       const baseAgg = process === 'cutter'
@@ -1121,10 +1135,11 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
   const dateTo = req.query.dateTo;
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
+  const pageNum = parsePageParam(req.query.page);
 
   try {
     const model = receiveModelForProcess(process);
-    const cursorWhere = buildCursorWhere(cursor, order);
+    const cursorWhere = pageNum != null ? null : buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
     const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
@@ -1145,6 +1160,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       where: wherePage,
       include: receiveIncludesForProcess(process),
       orderBy: [{ createdAt: order }, { id: order }],
+      ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
       take: limit + 1,
     });
     const hasMore = rowsRaw.length > limit;
@@ -1168,10 +1184,10 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     }
 
     const lastInPage = pageWithUsers[pageWithUsers.length - 1];
-    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
+    const nextCursor = pageNum == null && hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
     // Summary totals for footer (first page only; client preserves it across pages).
     let summary = null;
-    if (!cursor) {
+    if (!cursor && (pageNum == null || pageNum === 1)) {
       const totalCount = await model.count({ where: whereAll });
       if (process === 'cutter') {
         const agg = await prisma.receiveFromCutterMachineRow.aggregate({
@@ -1357,10 +1373,11 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
   const dateTo = req.query.dateTo;
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
+  const pageNum = parsePageParam(req.query.page);
 
   try {
     if (stage === 'inbound') {
-      const cursorWhere = buildCursorWhere(cursor, order);
+      const cursorWhere = (pageNum != null ? null : buildCursorWhere(cursor, order));
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'createdAt' });
       const q = normalizeText(search);
       const baseWhere = {
@@ -1378,20 +1395,21 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const rows = await prisma.inboundItem.findMany({
         where,
         orderBy: [{ createdAt: order }, { id: order }],
+        ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
         take: limit + 1,
       });
       const hasMore = rows.length > limit;
       const page = rows.slice(0, limit);
       const last = page[page.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      const summary = cursor ? null : { totalCount: await prisma.inboundItem.count({ where: baseWhere }) };
+      const nextCursor = pageNum == null && hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const summary = (cursor || (pageNum != null && pageNum !== 1)) ? null : { totalCount: await prisma.inboundItem.count({ where: baseWhere }) };
       res.json({ items: page, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'cutter') {
       const model = prisma.receiveFromCutterMachineRow;
-      const cursorWhere = buildCursorWhere(cursor, order);
+      const cursorWhere = (pageNum != null ? null : buildCursorWhere(cursor, order));
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const baseWhere = {
@@ -1412,20 +1430,21 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
         where,
         include: { bobbin: true, cutMaster: true },
         orderBy: [{ createdAt: order }, { id: order }],
+        ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
       const page = rowsRaw.slice(0, limit);
       const pageWithUsers = await resolveUserFields(page);
       const last = pageWithUsers[pageWithUsers.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      const summary = cursor ? null : { totalCount: await model.count({ where: baseWhere }) };
+      const nextCursor = pageNum == null && hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const summary = (cursor || (pageNum != null && pageNum !== 1)) ? null : { totalCount: await model.count({ where: baseWhere }) };
       res.json({ items: pageWithUsers, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'holo') {
-      const cursorWhere = buildCursorWhere(cursor, order);
+      const cursorWhere = (pageNum != null ? null : buildCursorWhere(cursor, order));
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
@@ -1447,6 +1466,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
         where,
         include: { rollType: true, issue: { include: { cut: true, yarn: true, twist: true } } },
         orderBy: [{ createdAt: order }, { id: order }],
+        ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
@@ -1456,14 +1476,14 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(pageWithItems.map(r => r.issueId));
       const items = pageWithItems.map((r) => mapReceiveRow('holo', r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
       const last = items[items.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      const summary = cursor ? null : { totalCount: await prisma.receiveFromHoloMachineRow.count({ where: baseWhere }) };
+      const nextCursor = pageNum == null && hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const summary = (cursor || (pageNum != null && pageNum !== 1)) ? null : { totalCount: await prisma.receiveFromHoloMachineRow.count({ where: baseWhere }) };
       res.json({ items, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'coning') {
-      const cursorWhere = buildCursorWhere(cursor, order);
+      const cursorWhere = (pageNum != null ? null : buildCursorWhere(cursor, order));
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
@@ -1485,6 +1505,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
         where,
         include: { issue: { include: { cut: true, yarn: true, twist: true } }, box: true },
         orderBy: [{ createdAt: order }, { id: order }],
+        ...(pageNum != null ? { skip: (pageNum - 1) * limit } : {}),
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
@@ -1494,8 +1515,8 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(pageWithItems.map(r => r.issueId));
       const items = pageWithItems.map((r) => mapReceiveRow('coning', r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
       const last = items[items.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      const summary = cursor ? null : { totalCount: await prisma.receiveFromConingMachineRow.count({ where: baseWhere }) };
+      const nextCursor = pageNum == null && hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
+      const summary = (cursor || (pageNum != null && pageNum !== 1)) ? null : { totalCount: await prisma.receiveFromConingMachineRow.count({ where: baseWhere }) };
       res.json({ items, hasMore, nextCursor, summary });
       return;
     }

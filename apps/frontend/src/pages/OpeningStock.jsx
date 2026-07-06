@@ -28,10 +28,9 @@ import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { getFeatureFlags } from '../utils/featureFlags';
-import { useV2CursorList } from '../hooks/useV2CursorList';
+import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
-import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../components/data-table';
-import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
+import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import * as v2 from '../api/v2';
 
 const STAGE_OPTIONS = [
@@ -402,10 +401,11 @@ export function OpeningStock() {
     return result;
   }, [db, historySearchTerm, historyStartDate, historyEndDate, sortOrder, v2Enabled]);
 
-  const v2HistoryList = useV2CursorList({
+  const v2HistoryList = useV2PagedList({
     enabled: v2Enabled,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, order }) => (
-      v2.getV2OpeningStockHistory(stage, { limit, cursor, search, dateFrom, dateTo, order })
+    scopeKey: `opening-stock:${stage}`,
+    fetchPage: ({ limit, page, search, dateFrom, dateTo, order }) => (
+      v2.getV2OpeningStockHistory(stage, { limit, page, search, dateFrom, dateTo, order })
     ),
     limit: 50,
     search: debouncedHistorySearchTerm,
@@ -433,11 +433,6 @@ export function OpeningStock() {
       coning: stage === 'coning' ? items : [],
     };
   }, [v2Enabled, legacyOpeningHistory, stage, v2HistoryList.items]);
-
-  const loadMoreRef = useInfiniteScrollSentinel({
-    enabled: v2Enabled && v2HistoryList.hasMore && !v2HistoryList.isLoading,
-    onLoadMore: v2HistoryList.loadMore,
-  });
 
   const getBobbin = (id) => db.bobbins?.find(b => b.id === id);
   const getBox = (id) => db.boxes?.find(b => b.id === id);
@@ -1982,7 +1977,8 @@ export function OpeningStock() {
           <div className="mt-3">
             <TableResultCount
               shown={openingHistory[stage]?.length || 0}
-              total={v2Enabled ? v2HistoryList.summary?.totalCount : undefined}
+              total={v2Enabled ? v2HistoryList.totalCount : undefined}
+              rangeStart={v2Enabled ? v2HistoryList.rangeStart : undefined}
               isLoading={v2Enabled && v2HistoryList.isLoading}
             />
             {(historySearchTerm || historyStartDate || historyEndDate) && (
@@ -2502,12 +2498,14 @@ export function OpeningStock() {
             </>
           )}
           {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
-          <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
-          {v2Enabled && v2HistoryList.isLoading && (openingHistory[stage]?.length || 0) > 0 && (
-            <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Loading more…
-            </div>
+          {v2Enabled && (
+            <TablePagination
+              page={v2HistoryList.page}
+              totalPages={v2HistoryList.totalPages}
+              hasMore={v2HistoryList.hasMore}
+              onPageChange={v2HistoryList.setPage}
+              isLoading={v2HistoryList.isLoading}
+            />
           )}
         </CardContent>
       </Card>

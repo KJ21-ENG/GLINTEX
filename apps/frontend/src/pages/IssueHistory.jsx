@@ -14,10 +14,11 @@ import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrac
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { UserBadge } from '../components/common/UserBadge';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
-import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../components/data-table';
+import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import { getFeatureFlags } from '../utils/featureFlags';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useV2CursorList } from '../hooks/useV2CursorList';
+import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
 
@@ -1358,13 +1359,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     return out;
   }, [sheetFilters]);
 
-  const v2List = useV2CursorList({
+  const v2List = useV2PagedList({
     enabled: v2Enabled,
     scopeKey: `issue-history:${process}`,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
+    fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
       v2.getV2IssueTracking(process, {
         limit,
-        cursor,
+        page,
         search,
         dateFrom,
         dateTo,
@@ -1439,12 +1440,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       netIssuedWeight: Number(s.netIssuedWeight || 0),
     };
   }, [v2Enabled, v2List.summary, process, legacyTotals]);
-
-  const loadMoreRef = useInfiniteScrollSentinel({
-    enabled: v2Enabled && v2List.hasMore && !v2List.isLoading,
-    onLoadMore: v2List.loadMore,
-    rootRef: scrollRootRef,
-  });
 
   const takeBackLoadMoreRef = useInfiniteScrollSentinel({
     enabled: v2Enabled && v2TakeBackList.hasMore && !v2TakeBackList.isLoading,
@@ -1814,7 +1809,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         </div>
         <TableResultCount
           shown={issues.length}
-          total={v2Enabled ? v2List.summary?.totalCount : issuesBase.length}
+          total={v2Enabled ? v2List.totalCount : issuesBase.length}
+          rangeStart={v2Enabled ? v2List.rangeStart : undefined}
           isLoading={v2Enabled && v2List.isLoading}
           className="self-center"
         />
@@ -2243,15 +2239,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             )}
           </TableBody>
         </Table>
-        {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
-        <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
-        {v2Enabled && v2List.isLoading && issues.length > 0 && (
-          <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Loading more…
-          </div>
-        )}
       </div>
+      {v2Enabled && (
+        <TablePagination
+          page={v2List.page}
+          totalPages={v2List.totalPages}
+          hasMore={v2List.hasMore}
+          onPageChange={v2List.setPage}
+          isLoading={v2List.isLoading}
+          className="hidden sm:flex"
+        />
+      )}
       <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
         <span className="text-sm font-semibold">Grand Total (filtered)</span>
         <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
@@ -2333,6 +2331,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           })
         )}
       </div>
+      {v2Enabled && (
+        <TablePagination
+          page={v2List.page}
+          totalPages={v2List.totalPages}
+          hasMore={v2List.hasMore}
+          onPageChange={v2List.setPage}
+          isLoading={v2List.isLoading}
+          className="sm:hidden"
+        />
+      )}
 
       <div className="rounded-md border">
         <div className="px-3 py-2 border-b bg-muted/30 text-sm font-semibold">Take-Back Ledger</div>

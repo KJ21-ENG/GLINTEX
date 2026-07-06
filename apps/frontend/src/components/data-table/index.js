@@ -7,3 +7,4 @@ export { TableStateRow, ListState } from './TableStates';
 export { CellText } from './CellText';
 export { TableResultCount } from './TableResultCount';
 export { SortToggle } from './SortToggle';
+export { TablePagination } from './TablePagination';

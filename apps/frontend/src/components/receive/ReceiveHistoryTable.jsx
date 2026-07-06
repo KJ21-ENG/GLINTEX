@@ -14,11 +14,10 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
 import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
-import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../data-table';
+import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../data-table';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { getFeatureFlags } from '../../utils/featureFlags';
-import { useV2CursorList } from '../../hooks/useV2CursorList';
-import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
+import { useV2PagedList } from '../../hooks/useV2PagedList';
 import * as v2 from '../../api/v2';
 import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
@@ -560,12 +559,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         return out;
     }, [sheetFilters]);
 
-    const v2List = useV2CursorList({
+    const v2List = useV2PagedList({
         enabled: v2Enabled && showHistory,
-        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
+        scopeKey: `receive-history:${process}`,
+        fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
             v2.getV2ReceiveHistory(process, {
                 limit,
-                cursor,
+                page,
                 search,
                 dateFrom,
                 dateTo,
@@ -617,12 +617,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (process === 'holo') return { ...legacyTotals, rolls: Number(s.rolls || 0), weight: Number(s.weight || 0) };
         return { ...legacyTotals, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
     }, [v2Enabled, showHistory, v2List.summary, process, legacyTotals]);
-
-    const loadMoreRef = useInfiniteScrollSentinel({
-        enabled: v2Enabled && showHistory && v2List.hasMore && !v2List.isLoading,
-        onLoadMore: v2List.loadMore,
-        rootRef: scrollRootRef,
-    });
 
     const [v2FacetsById, setV2FacetsById] = useState({});
     useEffect(() => {
@@ -2309,7 +2303,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     {showHistory && (
                         <TableResultCount
                             shown={filteredHistory.length}
-                            total={v2Enabled ? v2List.summary?.totalCount : history.length}
+                            total={v2Enabled ? v2List.totalCount : history.length}
+                            rangeStart={v2Enabled ? v2List.rangeStart : undefined}
                             isLoading={v2Enabled && v2List.isLoading}
                             className="self-center"
                         />
@@ -2757,15 +2752,17 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                     )}
                                 </TableBody>
                             </Table>
-                            {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
-                            <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
-                            {v2Enabled && v2List.isLoading && filteredHistory.length > 0 && (
-                                <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    Loading more…
-                                </div>
-                            )}
                         </div>
+                        {v2Enabled && (
+                            <TablePagination
+                                page={v2List.page}
+                                totalPages={v2List.totalPages}
+                                hasMore={v2List.hasMore}
+                                onPageChange={v2List.setPage}
+                                isLoading={v2List.isLoading}
+                                className="hidden sm:flex"
+                            />
+                        )}
                         <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                             <span className="text-sm font-semibold">Grand Total (filtered)</span>
                             <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
@@ -2923,6 +2920,16 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                 })
                             )}
                         </div>
+                        {v2Enabled && (
+                            <TablePagination
+                                page={v2List.page}
+                                totalPages={v2List.totalPages}
+                                hasMore={v2List.hasMore}
+                                onPageChange={v2List.setPage}
+                                isLoading={v2List.isLoading}
+                                className="sm:hidden"
+                            />
+                        )}
                     </>
                 )}
 

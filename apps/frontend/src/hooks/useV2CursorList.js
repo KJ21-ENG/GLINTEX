@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const stableStringify = (obj) => {
+export const stableStringify = (obj) => {
   try {
     const seen = new WeakSet();
     const normalize = (value) => {

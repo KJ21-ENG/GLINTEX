@@ -19,7 +19,7 @@ import {
 } from '../components/ui';
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
-import { Plus, Save, Trash2, Upload, Download, X, History, Search } from 'lucide-react';
+import { Plus, Save, Trash2, Upload, Download, Loader2, X, History, Search } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
 import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
@@ -29,6 +29,8 @@ import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { getFeatureFlags } from '../utils/featureFlags';
 import { useV2CursorList } from '../hooks/useV2CursorList';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../components/data-table';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
 
@@ -85,6 +87,9 @@ export function OpeningStock() {
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
+  // Debounced copy for server queries so each keystroke doesn't reset the list.
+  const debouncedHistorySearchTerm = useDebouncedValue(historySearchTerm, 300);
+  const [sortOrder, setSortOrder] = useState('desc');
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
 
@@ -328,7 +333,7 @@ export function OpeningStock() {
         db.items?.find(i => i.id === p.itemId)?.name,
         p.status
       ]))
-      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
 
     // Cutter Receive: filter by lotNo starting with OP-
     result.cutter = (db.receive_from_cutter_machine_rows || [])
@@ -345,7 +350,7 @@ export function OpeningStock() {
           r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || db.cuts?.find(c => c.id === r.cutId)?.name
         ]);
       })
-      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
 
     // Holo Receive: filter by lotNo starting with OP-
     result.holo = (db.receive_from_holo_machine_rows || [])
@@ -370,7 +375,7 @@ export function OpeningStock() {
           cutName
         ]);
       })
-      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
 
     // Coning Receive: filter by lotNo starting with OP-
     result.coning = (db.receive_from_coning_machine_rows || [])
@@ -392,21 +397,22 @@ export function OpeningStock() {
           r.barcode
         ]);
       })
-      .slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
 
     return result;
-  }, [db, historySearchTerm, historyStartDate, historyEndDate, v2Enabled]);
+  }, [db, historySearchTerm, historyStartDate, historyEndDate, sortOrder, v2Enabled]);
 
   const v2HistoryList = useV2CursorList({
     enabled: v2Enabled,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo }) => (
-      v2.getV2OpeningStockHistory(stage, { limit, cursor, search, dateFrom, dateTo })
+    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, order }) => (
+      v2.getV2OpeningStockHistory(stage, { limit, cursor, search, dateFrom, dateTo, order })
     ),
     limit: 50,
-    search: historySearchTerm,
+    search: debouncedHistorySearchTerm,
     dateFrom: historyStartDate,
     dateTo: historyEndDate,
     filters: [],
+    order: sortOrder,
   });
 
   useEffect(() => {
@@ -1319,7 +1325,7 @@ export function OpeningStock() {
                     ) : inboundCart.map((row, idx) => (
                       <TableRow key={row.id}>
                         <TableCell>{idx + 1}</TableCell>
-                        <TableCell>{formatKg(row.weight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.weight)}</TableCell>
                         <TableCell>
                           <span className={row.isConsumed ? 'text-orange-600 font-medium' : 'text-green-600 font-medium'}>
                             {row.isConsumed ? 'Consumed' : 'Available'}
@@ -1487,9 +1493,9 @@ export function OpeningStock() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Bobbin</TableHead>
-                      <TableHead>Qty</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
                       <TableHead>Box</TableHead>
-                      <TableHead>Gross</TableHead>
+                      <TableHead className="text-right">Gross</TableHead>
                       <TableHead>Net</TableHead>
                       <TableHead>Cut</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
@@ -1503,10 +1509,10 @@ export function OpeningStock() {
                     ) : cutterCart.map(row => (
                       <TableRow key={row.id}>
                         <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                        <TableCell>{row.bobbinQuantity}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.bobbinQuantity}</TableCell>
                         <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
-                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWeight)}</TableCell>
                         <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
                         <TableCell>
                           <Button variant="ghost" size="icon" onClick={() => handleRemove(setCutterCart, row.id)}>
@@ -1673,7 +1679,7 @@ export function OpeningStock() {
                       <TableHead>Roll Type</TableHead>
                       <TableHead>Count</TableHead>
                       <TableHead>Box</TableHead>
-                      <TableHead>Gross</TableHead>
+                      <TableHead className="text-right">Gross</TableHead>
                       <TableHead>Net</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
@@ -1686,10 +1692,10 @@ export function OpeningStock() {
                     ) : holoCart.map(row => (
                       <TableRow key={row.id}>
                         <TableCell>{getRollType(row.rollTypeId)?.name || '—'}</TableCell>
-                        <TableCell>{row.rollCount}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.rollCount}</TableCell>
                         <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
-                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWeight)}</TableCell>
                         <TableCell>
                           <Button variant="ghost" size="icon" onClick={() => handleRemove(setHoloCart, row.id)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
@@ -1858,9 +1864,9 @@ export function OpeningStock() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Cones</TableHead>
+                      <TableHead className="text-right">Cones</TableHead>
                       <TableHead>Box</TableHead>
-                      <TableHead>Gross</TableHead>
+                      <TableHead className="text-right">Gross</TableHead>
                       <TableHead>Net</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
@@ -1872,10 +1878,10 @@ export function OpeningStock() {
                       </TableRow>
                     ) : coningCart.map(row => (
                       <TableRow key={row.id}>
-                        <TableCell>{row.coneCount}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.coneCount}</TableCell>
                         <TableCell>{row.boxId ? getBox(row.boxId)?.name || '—' : '—'}</TableCell>
-                        <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                        <TableCell>{formatKg(row.netWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.grossWeight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWeight)}</TableCell>
                         <TableCell>
                           <Button variant="ghost" size="icon" onClick={() => handleRemove(setConingCart, row.id)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
@@ -1973,9 +1979,15 @@ export function OpeningStock() {
           </div>
 
           {/* Record count display */}
-          <div className="mt-3 text-sm text-muted-foreground">
-            Showing {openingHistory[stage]?.length || 0} record{(openingHistory[stage]?.length || 0) !== 1 ? 's' : ''}
-            {(historySearchTerm || historyStartDate || historyEndDate) && ' (filtered)'}
+          <div className="mt-3">
+            <TableResultCount
+              shown={openingHistory[stage]?.length || 0}
+              total={v2Enabled ? v2HistoryList.summary?.totalCount : undefined}
+              isLoading={v2Enabled && v2HistoryList.isLoading}
+            />
+            {(historySearchTerm || historyStartDate || historyEndDate) && (
+              <span className="text-xs text-muted-foreground"> (filtered)</span>
+            )}
           </div>
         </div>
         <CardContent>
@@ -1984,7 +1996,13 @@ export function OpeningStock() {
               {/* Mobile cards */}
               <div className="sm:hidden space-y-2">
                 {openingHistory.inbound.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening inbound entries found.</div>
+                  <ListState
+                    className="border rounded-lg bg-card"
+                    isLoading={v2Enabled && v2HistoryList.isLoading}
+                    error={v2Enabled ? v2HistoryList.error : null}
+                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    emptyMessage="No opening inbound entries found."
+                  />
                 ) : openingHistory.inbound.map(row => (
                   <div key={row.id} className="border rounded-lg bg-card p-3">
                     <div className="flex items-start justify-between gap-2">
@@ -2039,11 +2057,11 @@ export function OpeningStock() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
+                      <TableHead><SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} /></TableHead>
                       <TableHead>Lot</TableHead>
                       <TableHead>Item</TableHead>
                       <TableHead>Piece</TableHead>
-                      <TableHead>Weight</TableHead>
+                      <TableHead className="text-right">Weight</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Added By</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
@@ -2051,16 +2069,20 @@ export function OpeningStock() {
                   </TableHeader>
                   <TableBody>
                     {openingHistory.inbound.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={8} className="text-center text-muted-foreground">No opening inbound entries found.</TableCell>
-                      </TableRow>
+                      <TableStateRow
+                        colSpan={8}
+                        isLoading={v2Enabled && v2HistoryList.isLoading}
+                        error={v2Enabled ? v2HistoryList.error : null}
+                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        emptyMessage="No opening inbound entries found."
+                      />
                     ) : openingHistory.inbound.map(row => (
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
                         <TableCell>{row.lotNo}</TableCell>
-                        <TableCell>{db.items?.find(i => i.id === row.itemId)?.name || '—'}</TableCell>
+                        <TableCell><CellText text={db.items?.find(i => i.id === row.itemId)?.name || '—'} /></TableCell>
                         <TableCell className="font-mono text-xs">{row.id}</TableCell>
-                        <TableCell>{formatKg(row.weight)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.weight)}</TableCell>
                         <TableCell>
                           <span className={row.status === 'available' ? 'text-green-600 font-medium' : 'text-orange-600 font-medium'}>
                             {row.status}
@@ -2095,7 +2117,13 @@ export function OpeningStock() {
             <>
               <div className="sm:hidden space-y-2">
                 {openingHistory.cutter.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening cutter receive entries found.</div>
+                  <ListState
+                    className="border rounded-lg bg-card"
+                    isLoading={v2Enabled && v2HistoryList.isLoading}
+                    error={v2Enabled ? v2HistoryList.error : null}
+                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    emptyMessage="No opening cutter receive entries found."
+                  />
                 ) : openingHistory.cutter.map(row => {
                   const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
                   const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
@@ -2155,23 +2183,27 @@ export function OpeningStock() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
+                      <TableHead><SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} /></TableHead>
                       <TableHead>Lot</TableHead>
                       <TableHead>Item</TableHead>
                       <TableHead>Barcode</TableHead>
                       <TableHead>Bobbin</TableHead>
-                      <TableHead>Qty</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
                       <TableHead>Cut</TableHead>
-                      <TableHead>Net Wt</TableHead>
+                      <TableHead className="text-right">Net Wt</TableHead>
                       <TableHead>Added By</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {openingHistory.cutter.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground">No opening cutter receive entries found.</TableCell>
-                      </TableRow>
+                      <TableStateRow
+                        colSpan={10}
+                        isLoading={v2Enabled && v2HistoryList.isLoading}
+                        error={v2Enabled ? v2HistoryList.error : null}
+                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        emptyMessage="No opening cutter receive entries found."
+                      />
                     ) : openingHistory.cutter.map(row => {
                       const inboundItem = db.inbound_items?.find(p => p.id === row.pieceId);
                       const itemName = row.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : null) || '—';
@@ -2179,12 +2211,12 @@ export function OpeningStock() {
                         <TableRow key={row.id}>
                           <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
                           <TableCell>{row.pieceId?.split('-').slice(0, 2).join('-')}</TableCell>
-                          <TableCell>{itemName}</TableCell>
+                          <TableCell><CellText text={itemName} /></TableCell>
                           <TableCell className="font-mono text-xs">{row.barcode || row.vchNo}</TableCell>
                           <TableCell>{row.bobbin?.name || getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                          <TableCell>{row.bobbinQuantity || 0}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.bobbinQuantity || 0}</TableCell>
                           <TableCell>{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || getCut(row.cutId)?.name || '—'}</TableCell>
-                          <TableCell>{formatKg(row.netWt)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWt)}</TableCell>
                           <TableCell>
                             <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
                           </TableCell>
@@ -2215,7 +2247,13 @@ export function OpeningStock() {
             <>
               <div className="sm:hidden space-y-2">
                 {openingHistory.holo.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening holo receive entries found.</div>
+                  <ListState
+                    className="border rounded-lg bg-card"
+                    isLoading={v2Enabled && v2HistoryList.isLoading}
+                    error={v2Enabled ? v2HistoryList.error : null}
+                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    emptyMessage="No opening holo receive entries found."
+                  />
                 ) : openingHistory.holo.map(row => {
                   const issue = row.issue || db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                   const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
@@ -2275,23 +2313,27 @@ export function OpeningStock() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
+                      <TableHead><SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} /></TableHead>
                       <TableHead>Lot</TableHead>
                       <TableHead>Item</TableHead>
                       <TableHead>Barcode</TableHead>
                       <TableHead>Roll Type</TableHead>
-                      <TableHead>Rolls</TableHead>
+                      <TableHead className="text-right">Rolls</TableHead>
                       <TableHead>Cut</TableHead>
-                      <TableHead>Net Wt</TableHead>
+                      <TableHead className="text-right">Net Wt</TableHead>
                       <TableHead>Added By</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {openingHistory.holo.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground">No opening holo receive entries found.</TableCell>
-                      </TableRow>
+                      <TableStateRow
+                        colSpan={10}
+                        isLoading={v2Enabled && v2HistoryList.isLoading}
+                        error={v2Enabled ? v2HistoryList.error : null}
+                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        emptyMessage="No opening holo receive entries found."
+                      />
                 ) : openingHistory.holo.map(row => {
                   const issue = row.issue || db.issue_to_holo_machine?.find(i => i.id === row.issueId);
                   const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
@@ -2300,12 +2342,12 @@ export function OpeningStock() {
                         <TableRow key={row.id}>
                           <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
                           <TableCell>{issue?.lotNo || row.issue?.lotNo || '—'}</TableCell>
-                          <TableCell>{itemName || '—'}</TableCell>
+                          <TableCell><CellText text={itemName || '—'} /></TableCell>
                           <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
                           <TableCell>{row.rollType?.name || getRollType(row.rollTypeId)?.name || '—'}</TableCell>
-                          <TableCell>{row.rollCount || 0}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.rollCount || 0}</TableCell>
                           <TableCell>{cutName || '—'}</TableCell>
-                          <TableCell>{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.rollWeight || (row.grossWeight - (row.tareWeight || 0)))}</TableCell>
                           <TableCell>
                             <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
                           </TableCell>
@@ -2336,7 +2378,13 @@ export function OpeningStock() {
             <>
               <div className="sm:hidden space-y-2">
                 {openingHistory.coning.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">No opening coning receive entries found.</div>
+                  <ListState
+                    className="border rounded-lg bg-card"
+                    isLoading={v2Enabled && v2HistoryList.isLoading}
+                    error={v2Enabled ? v2HistoryList.error : null}
+                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    emptyMessage="No opening coning receive entries found."
+                  />
                 ) : openingHistory.coning.map(row => {
                   const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                   const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
@@ -2395,22 +2443,26 @@ export function OpeningStock() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
+                      <TableHead><SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} /></TableHead>
                       <TableHead>Lot</TableHead>
                       <TableHead>Item</TableHead>
                       <TableHead>Barcode</TableHead>
-                      <TableHead>Cones</TableHead>
+                      <TableHead className="text-right">Cones</TableHead>
                       <TableHead>Cut</TableHead>
-                      <TableHead>Net Wt</TableHead>
+                      <TableHead className="text-right">Net Wt</TableHead>
                       <TableHead>Added By</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {openingHistory.coning.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground">No opening coning receive entries found.</TableCell>
-                      </TableRow>
+                      <TableStateRow
+                        colSpan={9}
+                        isLoading={v2Enabled && v2HistoryList.isLoading}
+                        error={v2Enabled ? v2HistoryList.error : null}
+                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        emptyMessage="No opening coning receive entries found."
+                      />
                 ) : openingHistory.coning.map(row => {
                   const issue = row.issue || db.issue_to_coning_machine?.find(i => i.id === row.issueId);
                   const itemName = row.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '—';
@@ -2419,11 +2471,11 @@ export function OpeningStock() {
                         <TableRow key={row.id}>
                           <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.date || row.createdAt)}</TableCell>
                           <TableCell>{issue?.lotNo || row.issue?.lotNo || '—'}</TableCell>
-                          <TableCell>{itemName || '—'}</TableCell>
+                          <TableCell><CellText text={itemName || '—'} /></TableCell>
                           <TableCell className="font-mono text-xs">{row.barcode || '—'}</TableCell>
-                          <TableCell>{row.coneCount || 0}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.coneCount || 0}</TableCell>
                           <TableCell>{cutName}</TableCell>
-                          <TableCell>{formatKg(row.netWeight)}</TableCell>
+                          <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWeight)}</TableCell>
                           <TableCell>
                             <UserBadge user={row.createdByUser} timestamp={row.createdAt} />
                           </TableCell>
@@ -2451,6 +2503,12 @@ export function OpeningStock() {
           )}
           {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
           <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
+          {v2Enabled && v2HistoryList.isLoading && (openingHistory[stage]?.length || 0) > 0 && (
+            <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Loading more…
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

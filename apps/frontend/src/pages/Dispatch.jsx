@@ -5,6 +5,7 @@ import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
     Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge
 } from '../components/ui';
+import { TableStateRow } from '../components/data-table';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, formatDateDDMMYYYY, estimateWeightFromCount } from '../utils';
 import { exportHistoryToExcel, exportHistoryToCsv } from '../services';
@@ -1231,11 +1232,7 @@ export function Dispatch() {
                                         </TableHeader>
                                         <TableBody>
                                             {loadingItems ? (
-                                                <TableRow>
-                                                    <TableCell colSpan={8} className="h-24 text-center">
-                                                        Loading...
-                                                    </TableCell>
-                                                </TableRow>
+                                                <TableStateRow colSpan={8} isLoading />
                                             ) : filteredItems.length === 0 ? (
                                                 <TableRow>
                                                     <TableCell colSpan={8} className="h-32 text-center">
@@ -1467,17 +1464,9 @@ export function Dispatch() {
                                 </TableHeader>
                                 <TableBody>
                                     {loadingDispatches ? (
-                                        <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center">
-                                                Loading...
-                                            </TableCell>
-                                        </TableRow>
+                                        <TableStateRow colSpan={10} isLoading />
                                     ) : filteredDispatches.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
-                                                No dispatches found
-                                            </TableCell>
-                                        </TableRow>
+                                        <TableStateRow colSpan={10} emptyMessage="No dispatches found." />
                                     ) : (
                                         filteredDispatches.map(d => {
                                             const isExpanded = expandedChallan === d.challanNo;

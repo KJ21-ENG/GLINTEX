@@ -774,7 +774,7 @@ export function CutterReceiveForm() {
                                     <TableRow>
                                         <TableHead>Lot</TableHead>
                                         <TableHead>Details</TableHead>
-                                        <TableHead className="">Net Weight</TableHead>
+                                        <TableHead className="text-right">Net Weight</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -801,7 +801,7 @@ export function CutterReceiveForm() {
                                                     </div>
                                                 )}
                                             </TableCell>
-                                            <TableCell className="">{formatKg(entry.netWeight)}</TableCell>
+                                            <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(entry.netWeight)}</TableCell>
                                             <TableCell>
                                                 <Button variant="ghost" size="icon" onClick={() => setCart(c => c.filter(x => x.id !== entry.id))} className="h-6 w-6 text-destructive">
                                                     <Trash2 className="w-4 h-4" />

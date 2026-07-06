@@ -172,6 +172,9 @@ export function Stock() {
   // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
   const v2StockEnabled = flags.v2Stock && (processId === 'holo' || processId === 'coning');
   const [v2Lots, setV2Lots] = useState([]);
+  const [v2LotsLoading, setV2LotsLoading] = useState(false);
+  const [v2LotsError, setV2LotsError] = useState(null);
+  const [v2LotsNonce, setV2LotsNonce] = useState(0);
   const [v2RowsByKey, setV2RowsByKey] = useState({});
   const [v2BarcodeKeys, setV2BarcodeKeys] = useState(new Set());
   const v2BarcodeReqId = useRef(0);
@@ -182,18 +185,23 @@ export function Stock() {
     setV2Lots([]);
     setV2RowsByKey({});
     setV2BarcodeKeys(new Set());
+    setV2LotsLoading(true);
+    setV2LotsError(null);
     v2.getV2StockLots(processId)
       .then((res) => {
         if (cancelled) return;
         setV2Lots(Array.isArray(res?.items) ? res.items : []);
+        setV2LotsLoading(false);
       })
       .catch((err) => {
         if (cancelled) return;
         console.error('Failed to load v2 stock lots', err);
         setV2Lots([]);
+        setV2LotsError(err);
+        setV2LotsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [v2StockEnabled, processId]);
+  }, [v2StockEnabled, processId, v2LotsNonce]);
 
   const loadV2LotRows = async (lotKey) => {
     if (!v2StockEnabled) return [];
@@ -1061,7 +1069,7 @@ export function Stock() {
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
           ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
-          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
+          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys, lotsLoading: v2LotsLoading, lotsError: v2LotsError, retryLots: () => setV2LotsNonce((n) => n + 1) } : null}
         />
       ) : isHolo ? (
         <HoloView
@@ -1072,7 +1080,7 @@ export function Stock() {
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
           ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
-          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys } : null}
+          v2={v2StockEnabled ? { lots: v2Lots, rowsByKey: v2RowsByKey, loadLotRows: loadV2LotRows, barcodeHitKeys: v2BarcodeKeys, lotsLoading: v2LotsLoading, lotsError: v2LotsError, retryLots: () => setV2LotsNonce((n) => n + 1) } : null}
         />
       ) : showBobbins ? (
         <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
@@ -1089,10 +1097,10 @@ export function Stock() {
                   <TableHead>Cut</TableHead>
                   {!groupByItem ? <TableHead>Firm</TableHead> : null}
                   <TableHead>Supplier</TableHead>
-                  <TableHead className="">Pieces</TableHead>
-                  <TableHead className="">Weight</TableHead>
-                  {filters.status !== 'available_to_issue' && <TableHead className="">Pending Wt</TableHead>}
-                  <TableHead className="">Wastage</TableHead>
+                  <TableHead className="text-right">Pieces</TableHead>
+                  <TableHead className="text-right">Weight</TableHead>
+                  {filters.status !== 'available_to_issue' && <TableHead className="text-right">Pending Wt</TableHead>}
+                  <TableHead className="text-right">Wastage</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1205,7 +1213,7 @@ export function Stock() {
                                       <TableHead>Piece ID</TableHead>
                                       <TableHead>Barcode</TableHead>
                                       <TableHead>Seq</TableHead>
-                                      <TableHead className="">Weight</TableHead>
+                                      <TableHead className="text-right">Weight</TableHead>
                                       {filters.status !== 'available_to_issue' && <TableHead className="">Pending</TableHead>}
                                       <TableHead className="">Total Units</TableHead>
                                       <TableHead className="w-[50px]"></TableHead>

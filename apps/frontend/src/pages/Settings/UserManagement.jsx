@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Save, Edit2, X, KeyRound, RefreshCw } from 'lucide-react';
 import { Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui';
+import { TableStateRow } from '../../components/data-table';
 import * as api from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { ACCESS_LEVELS, ISSUE_STAGE_PERMISSIONS, MODULE_PERMISSIONS, RECEIVE_STAGE_PERMISSIONS, normalizePermissions } from '../../utils/permissions';
@@ -537,9 +538,7 @@ export default function UserManagement() {
               </TableHeader>
               <TableBody>
                 {(roles || []).length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No roles</TableCell>
-                  </TableRow>
+                  <TableStateRow colSpan={4} isLoading={loading} emptyMessage="No roles" />
                 ) : (roles || []).map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">{r.key}</TableCell>
@@ -684,9 +683,7 @@ export default function UserManagement() {
               </TableHeader>
               <TableBody>
                 {(users || []).length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">No users</TableCell>
-                  </TableRow>
+                  <TableStateRow colSpan={6} isLoading={loading} emptyMessage="No users" />
                 ) : (users || []).map((u) => (
                   <TableRow key={u.id}>
                     <TableCell className="font-mono text-xs">{u.username}</TableCell>

@@ -399,9 +399,9 @@ export function IssueToHolo() {
                                     <TableHead>Item</TableHead>
                                     <TableHead>Cut</TableHead>
                                     <TableHead>Piece</TableHead>
-                                    <TableHead className="">Avail Count</TableHead>
-                                    <TableHead className="">Issue Count</TableHead>
-                                    <TableHead className="">Issue Wt</TableHead>
+                                    <TableHead className="text-right">Avail Count</TableHead>
+                                    <TableHead className="text-right">Issue Count</TableHead>
+                                    <TableHead className="text-right">Issue Wt</TableHead>
                                     <TableHead className="w-[50px]"></TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -414,7 +414,7 @@ export function IssueToHolo() {
                                         <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
                                         <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceId || c.lotNo}</TableCell>
-                                        <TableCell className="">{c.availCount}</TableCell>
+                                        <TableCell className="text-right tabular-nums">{c.availCount}</TableCell>
                                         <TableCell className="">
                                             <Input
                                                 type="number"
@@ -423,7 +423,7 @@ export function IssueToHolo() {
                                                 onChange={e => updateCrate(c.rowId, 'issuedBobbins', e.target.value)}
                                             />
                                         </TableCell>
-                                        <TableCell className="">{formatKg(c.issuedBobbinWeight)}</TableCell>
+                                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(c.issuedBobbinWeight)}</TableCell>
                                         <TableCell>
                                             <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCrates(p => p.filter(x => x.rowId !== c.rowId))}>X</Button>
                                         </TableCell>

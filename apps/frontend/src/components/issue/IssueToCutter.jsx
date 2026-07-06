@@ -387,8 +387,8 @@ export function IssueToCutter() {
                                         <TableRow>
                                             <TableHead className="w-[40px]"></TableHead>
                                             <TableHead>ID</TableHead>
-                                            <TableHead className="">Available (kg)</TableHead>
-                                            <TableHead className="">Issue Wt (kg)</TableHead>
+                                            <TableHead className="text-right">Available (kg)</TableHead>
+                                            <TableHead className="text-right">Issue Wt (kg)</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -400,7 +400,7 @@ export function IssueToCutter() {
                                                     <input type="checkbox" checked={selectedLineByPieceId.has(p.id)} onChange={() => toggle(p.id)} className="rounded border-gray-300 text-primary focus:ring-primary" />
                                                 </TableCell>
                                                 <TableCell className="font-mono">{p.id}</TableCell>
-                                                <TableCell className="">{formatKg(p.issueableWeight)}</TableCell>
+                                                <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(p.issueableWeight)}</TableCell>
                                                 <TableCell className="w-[150px]">
                                                     {selectedLineByPieceId.has(p.id) ? (
                                                         <Input

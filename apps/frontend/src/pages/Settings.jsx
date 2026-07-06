@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
+import { TableStateRow } from '../components/data-table';
 import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText, Search } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
@@ -2694,11 +2695,7 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
                             </TableHeader>
                             <TableBody>
                                 {logs.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
-                                            No recent logs found. Primary cron jobs run on target schedule.
-                                        </TableCell>
-                                    </TableRow>
+                                    <TableStateRow colSpan={5} isLoading={loadingLogs} emptyMessage="No recent logs found. Primary cron jobs run on target schedule." />
                                 ) : (
                                     logs.map((log) => {
                                         const responseStatusColor = log.responseDetected

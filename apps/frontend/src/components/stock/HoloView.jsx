@@ -3,6 +3,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } 
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { TableStateRow } from '../data-table';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
@@ -545,7 +546,13 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           </TableHeader>
           <TableBody>
             {displayLots.length === 0 ? (
-              <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No holo stock found.</TableCell></TableRow>
+              <TableStateRow
+                colSpan={tableColumnCount}
+                isLoading={Boolean(v2?.lotsLoading)}
+                error={v2?.lotsError || null}
+                onRetry={v2?.retryLots}
+                emptyMessage="No holo stock found."
+              />
             ) : (
               displayLots.map((l, idx) => {
                 // Keys must be unique and stable. Using only lotNo/twistName collides when the same lot is present
@@ -613,8 +620,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       <TableCell>
                         <HighlightMatch text={l.supplierName} query={search} />
                       </TableCell>
-                      <TableCell className="">{l.totalRolls}</TableCell>
-                      <TableCell className="">{formatKg(l.totalWeight)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{l.totalRolls}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(l.totalWeight)}</TableCell>
                       <TableCell>
                         <SteamSummaryPill
                           statusType={l.steamedStatusType}
@@ -660,8 +667,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                       <TableCell>{formatDateDDMMYYYY(r.date)}</TableCell>
                                       <TableCell>{r.rollType?.name || r.rollTypeName || '—'}</TableCell>
                                       <TableCell className="">{r.availableRolls}</TableCell>
-                                      <TableCell className="">{formatKg(r.availableWeight)}</TableCell>
-                                      <TableCell className="">{formatKg(r.grossWeight)}</TableCell>
+                                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.availableWeight)}</TableCell>
+                                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.grossWeight)}</TableCell>
                                       <TableCell>{r.machineNo}</TableCell>
                                       <TableCell>
                                         {r.isSteamed ? (
@@ -700,8 +707,8 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 <TableCell></TableCell>
                 {!groupBy ? <TableCell></TableCell> : null}
                 <TableCell></TableCell>
-                <TableCell className="font-bold text-primary">{grandTotals.totalRolls}</TableCell>
-                <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="text-right tabular-nums font-bold text-primary">{grandTotals.totalRolls}</TableCell>
+                <TableCell className="text-right tabular-nums whitespace-nowrap font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
                 <TableCell className="font-bold text-primary">{grandTotals.steamedRolls} / {grandTotals.totalRolls}</TableCell>
               </TableRow>
             )}

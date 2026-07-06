@@ -4,6 +4,7 @@ import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calc
 import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { TableStateRow } from '../data-table';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
@@ -366,7 +367,13 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           </TableHeader>
           <TableBody>
             {displayLots.length === 0 ? (
-              <TableRow><TableCell colSpan={tableColumnCount} className="text-center py-4 text-muted-foreground">No coning stock found.</TableCell></TableRow>
+              <TableStateRow
+                colSpan={tableColumnCount}
+                isLoading={Boolean(v2?.lotsLoading)}
+                error={v2?.lotsError || null}
+                onRetry={v2?.retryLots}
+                emptyMessage="No coning stock found."
+              />
             ) : (
               displayLots.map((lot, idx) => {
                 const rowKey = groupBy ? (lot.groupKey || idx) : (lot.lotKey || lot.lotNo || idx);
@@ -431,8 +438,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                       <TableCell>
                         <HighlightMatch text={lot.supplierName} query={search} />
                       </TableCell>
-                      <TableCell className="">{lot.totalCones}</TableCell>
-                      <TableCell className="">{formatKg(lot.totalWeight)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{lot.totalCones}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(lot.totalWeight)}</TableCell>
                     </TableRow>
                     {isExpanded && (
                       <TableRow className="bg-muted/30">
@@ -469,7 +476,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell>{row.boxName}</TableCell>
                                       <TableCell>{row.coneType}</TableCell>
                                       <TableCell className="">{row.availableCones}</TableCell>
-                                      <TableCell className="">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
+                                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.availableWeight)}{row.grossWeight ? ` / ${formatKg(row.grossWeight)}` : ''}</TableCell>
                                       <TableCell>{row.machineName}</TableCell>
                                       <TableCell>{row.operatorName}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
@@ -503,7 +510,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                 {!groupBy ? <TableCell></TableCell> : null}
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">{grandTotals.totalCones}</TableCell>
-                <TableCell className="font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="text-right tabular-nums whitespace-nowrap font-bold text-primary">{formatKg(grandTotals.totalWeight)}</TableCell>
               </TableRow>
             )}
           </TableBody>

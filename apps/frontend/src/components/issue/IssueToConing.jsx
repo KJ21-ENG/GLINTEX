@@ -513,9 +513,9 @@ export function IssueToConing() {
                                     <TableHead>Item</TableHead>
                                     <TableHead>Cut</TableHead>
                                     <TableHead>Piece</TableHead>
-                                    <TableHead className="">Avail Rolls</TableHead>
-                                    <TableHead className="">Issue Rolls</TableHead>
-                                    <TableHead className="">Issue Wt</TableHead>
+                                    <TableHead className="text-right">Avail Rolls</TableHead>
+                                    <TableHead className="text-right">Issue Rolls</TableHead>
+                                    <TableHead className="text-right">Issue Wt</TableHead>
                                     <TableHead className="w-[50px]"></TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -528,7 +528,7 @@ export function IssueToConing() {
                                         <TableCell>{c.itemName || (db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
                                         <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceIdsDisplay || c.lotNo}</TableCell>
-                                        <TableCell className="">{c.availRolls}</TableCell>
+                                        <TableCell className="text-right tabular-nums">{c.availRolls}</TableCell>
                                         <TableCell className="">
                                             <Input
                                                 type="number"
@@ -537,7 +537,7 @@ export function IssueToConing() {
                                                 onChange={e => updateCrate(c.rowId, 'issueRolls', e.target.value)}
                                             />
                                         </TableCell>
-                                        <TableCell className="">{formatKg(c.issueWeight)}</TableCell>
+                                        <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(c.issueWeight)}</TableCell>
                                         <TableCell>
                                             <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setCrates(p => p.filter(x => x.rowId !== c.rowId))}>X</Button>
                                         </TableCell>

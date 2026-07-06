@@ -3,6 +3,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '.
 import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
 import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
+import { TableStateRow } from '../data-table';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { useBarcodeAutoExpand } from '../../utils/useBarcodeAutoExpand';
@@ -347,7 +348,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           </TableHeader>
           <TableBody>
             {displayData.length === 0 ? (
-              <TableRow><TableCell colSpan={groupBy ? 8 : 9} className="text-center py-4 text-muted-foreground">No bobbin stock found.</TableCell></TableRow>
+              <TableStateRow colSpan={groupBy ? 8 : 9} emptyMessage="No bobbin stock found." />
             ) : (
               displayData.map((l, idx) => {
                 const isExpanded = !groupBy && expandedLot === l.lotNo;
@@ -391,7 +392,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                         <HighlightMatch text={l.supplierName} query={search} />
                       </TableCell>
                       <TableCell className="">{l.availableBobbins} / {l.totalBobbins}</TableCell>
-                      <TableCell className="">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(l.availableWeight)} / {formatKg(l.totalWeight)}</TableCell>
                       <TableCell className="">{l.crates?.length || l.crateCount}</TableCell>
                     </TableRow>
                     {isExpanded && !groupBy && (
@@ -430,8 +431,8 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell>{formatDateDDMMYYYY(c.date) || '—'}</TableCell>
                                       <TableCell>{c.cutName || '—'}</TableCell>
                                       <TableCell>{c.bobbinName}</TableCell>
-                                      <TableCell className="">{c.availableBobbins} / {c.bobbinQty}</TableCell>
-                                      <TableCell className="">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
+                                      <TableCell className="text-right tabular-nums">{c.availableBobbins} / {c.bobbinQty}</TableCell>
+                                      <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</TableCell>
                                       <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={c.notes || '—'} query={search} /></TableCell>
                                       <TableCell className="p-1">
@@ -463,7 +464,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                 {!groupBy ? <TableCell></TableCell> : null}
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">{grandTotals.availableBobbins} / {grandTotals.totalBobbins}</TableCell>
-                <TableCell className="font-bold text-primary">{formatKg(grandTotals.availableWeight)} / {formatKg(grandTotals.totalWeight)}</TableCell>
+                <TableCell className="text-right tabular-nums whitespace-nowrap font-bold text-primary">{formatKg(grandTotals.availableWeight)} / {formatKg(grandTotals.totalWeight)}</TableCell>
                 <TableCell className="font-bold text-primary">{grandTotals.crateCount}</TableCell>
               </TableRow>
             )}

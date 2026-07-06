@@ -1356,10 +1356,11 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
 
   try {
     if (stage === 'inbound') {
-      const cursorWhere = buildCursorWhere(cursor);
+      const cursorWhere = buildCursorWhere(cursor, order);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'createdAt' });
       const q = normalizeText(search);
       const baseWhere = {
@@ -1376,20 +1377,21 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const where = applyCursorWhere(baseWhere, cursorWhere);
       const rows = await prisma.inboundItem.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = rows.length > limit;
       const page = rows.slice(0, limit);
       const last = page[page.length - 1];
       const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      res.json({ items: page, hasMore, nextCursor, summary: null });
+      const summary = cursor ? null : { totalCount: await prisma.inboundItem.count({ where: baseWhere }) };
+      res.json({ items: page, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'cutter') {
       const model = prisma.receiveFromCutterMachineRow;
-      const cursorWhere = buildCursorWhere(cursor);
+      const cursorWhere = buildCursorWhere(cursor, order);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const baseWhere = {
@@ -1409,7 +1411,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const rowsRaw = await model.findMany({
         where,
         include: { bobbin: true, cutMaster: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
@@ -1417,12 +1419,13 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const pageWithUsers = await resolveUserFields(page);
       const last = pageWithUsers[pageWithUsers.length - 1];
       const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      res.json({ items: pageWithUsers, hasMore, nextCursor, summary: null });
+      const summary = cursor ? null : { totalCount: await model.count({ where: baseWhere }) };
+      res.json({ items: pageWithUsers, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'holo') {
-      const cursorWhere = buildCursorWhere(cursor);
+      const cursorWhere = buildCursorWhere(cursor, order);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
@@ -1443,7 +1446,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const rowsRaw = await prisma.receiveFromHoloMachineRow.findMany({
         where,
         include: { rollType: true, issue: { include: { cut: true, yarn: true, twist: true } } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
@@ -1454,12 +1457,13 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const items = pageWithItems.map((r) => mapReceiveRow('holo', r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
       const last = items[items.length - 1];
       const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      res.json({ items, hasMore, nextCursor, summary: null });
+      const summary = cursor ? null : { totalCount: await prisma.receiveFromHoloMachineRow.count({ where: baseWhere }) };
+      res.json({ items, hasMore, nextCursor, summary });
       return;
     }
 
     if (stage === 'coning') {
-      const cursorWhere = buildCursorWhere(cursor);
+      const cursorWhere = buildCursorWhere(cursor, order);
       const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
       const q = normalizeText(search);
       const itemSearchIds = await itemIdsByNameContains(q);
@@ -1480,7 +1484,7 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const rowsRaw = await prisma.receiveFromConingMachineRow.findMany({
         where,
         include: { issue: { include: { cut: true, yarn: true, twist: true } }, box: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
         take: limit + 1,
       });
       const hasMore = rowsRaw.length > limit;
@@ -1491,7 +1495,8 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const items = pageWithItems.map((r) => mapReceiveRow('coning', r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
       const last = items[items.length - 1];
       const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
-      res.json({ items, hasMore, nextCursor, summary: null });
+      const summary = cursor ? null : { totalCount: await prisma.receiveFromConingMachineRow.count({ where: baseWhere }) };
+      res.json({ items, hasMore, nextCursor, summary });
       return;
     }
 
@@ -1507,6 +1512,7 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
   const search = req.query.search;
+  const order = normalizeOrder(req.query.order);
   try {
     // Export uses "history" endpoint without pagination.
     const fakeReq = { ...req, query: { ...req.query, limit: String(MAX_LIMIT), cursor: null } };
@@ -1549,7 +1555,7 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
       const rowsRaw = await prisma.receiveFromCutterMachineRow.findMany({
         where,
         include: { bobbin: true, cutMaster: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
       });
       const rows = await resolveUserFields(rowsRaw);
       res.json({ items: rows });
@@ -1575,7 +1581,7 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
       const rowsRaw = await prisma.receiveFromHoloMachineRow.findMany({
         where,
         include: { rollType: true, issue: { include: { cut: true, yarn: true, twist: true } } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
       });
       const rowsWithUsers = await resolveUserFields(rowsRaw);
       const rows = await attachItemNamesToReceiveRows(rowsWithUsers);
@@ -1603,7 +1609,7 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
       const rowsRaw = await prisma.receiveFromConingMachineRow.findMany({
         where,
         include: { issue: { include: { cut: true, yarn: true, twist: true } }, box: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: order }, { id: order }],
       });
       const rowsWithUsers = await resolveUserFields(rowsRaw);
       const rows = await attachItemNamesToReceiveRows(rowsWithUsers);

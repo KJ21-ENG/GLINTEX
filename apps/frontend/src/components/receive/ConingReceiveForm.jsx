@@ -703,7 +703,7 @@ export function ConingReceiveForm() {
                                                             />
                                                         </div>
                                                     </TableCell>
-                                                    <TableCell className="">
+                                                    <TableCell className="text-right tabular-nums whitespace-nowrap">
                                                         {formatKg(calcRowNet(row))}
                                                     </TableCell>
                                                     <TableCell className="text-sm">

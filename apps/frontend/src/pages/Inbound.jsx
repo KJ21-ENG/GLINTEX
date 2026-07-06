@@ -517,7 +517,7 @@ export function Inbound() {
                                         <TableRow>
                                             <TableHead className="w-[100px]">#</TableHead>
                                             <TableHead>Piece ID (Preview)</TableHead>
-                                            <TableHead>Weight (kg)</TableHead>
+                                            <TableHead className="text-right">Weight (kg)</TableHead>
                                             <TableHead className="">Action</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -533,7 +533,7 @@ export function Inbound() {
                                                 <TableRow key={r.tempId}>
                                                     <TableCell className="font-medium">{r.seq}</TableCell>
                                                     <TableCell>{previewLotNo ? `${previewLotNo}-${r.seq}` : 'Pending...'}</TableCell>
-                                                    <TableCell>{formatKg(r.weight)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(r.weight)}</TableCell>
                                                     <TableCell className="">
                                                         <Button variant="ghost" size="icon" onClick={() => removeFromCart(r.tempId)} disabled={readOnly} className="h-8 w-8 text-destructive">
                                                             <Trash2 className="w-4 h-4" />
@@ -719,10 +719,10 @@ export function Inbound() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Bobbin</TableHead>
-                                            <TableHead>Qty</TableHead>
+                                            <TableHead className="text-right">Qty</TableHead>
                                             <TableHead>Box</TableHead>
-                                            <TableHead>Gross</TableHead>
-                                            <TableHead>Net</TableHead>
+                                            <TableHead className="text-right">Gross</TableHead>
+                                            <TableHead className="text-right">Net</TableHead>
                                             <TableHead>Cut</TableHead>
                                             <TableHead>Operator</TableHead>
                                             <TableHead className="">Action</TableHead>
@@ -739,10 +739,10 @@ export function Inbound() {
                                             cutterCart.map((row) => (
                                                 <TableRow key={row.id}>
                                                     <TableCell>{getBobbin(row.bobbinId)?.name || '—'}</TableCell>
-                                                    <TableCell>{row.bobbinQuantity}</TableCell>
+                                                    <TableCell className="text-right tabular-nums">{row.bobbinQuantity}</TableCell>
                                                     <TableCell>{getBox(row.boxId)?.name || '—'}</TableCell>
-                                                    <TableCell>{formatKg(row.grossWeight)}</TableCell>
-                                                    <TableCell>{formatKg(row.netWeight)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.grossWeight)}</TableCell>
+                                                    <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.netWeight)}</TableCell>
                                                     <TableCell>{row.cutId ? getCut(row.cutId)?.name || '—' : '—'}</TableCell>
                                                     <TableCell>{row.operatorId ? getOperator(row.operatorId)?.name || '—' : '—'}</TableCell>
                                                     <TableCell className="">
@@ -1790,7 +1790,7 @@ function RecentLotsTable({ db }) {
                                                                         <TableHead className="w-[60px]">Seq</TableHead>
                                                                         <TableHead>Piece ID</TableHead>
                                                                         <TableHead>Barcode</TableHead>
-                                                                        <TableHead>Weight (kg)</TableHead>
+                                                                        <TableHead className="text-right">Weight (kg)</TableHead>
                                                                         <TableHead>Status</TableHead>
                                                                         <TableHead className="w-[50px]">Actions</TableHead>
                                                                     </TableRow>

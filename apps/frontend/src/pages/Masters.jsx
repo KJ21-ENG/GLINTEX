@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label } from '../components/ui';
+import { TableStateRow } from '../components/data-table';
 import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
 import { usePermission } from '../hooks/usePermission';
@@ -205,7 +206,7 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={3} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -412,7 +413,7 @@ function TwistMappingsMasterCrud({ data, machines, twists, settings, onCreate, o
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No mappings yet</TableCell></TableRow>
+                                <TableStateRow colSpan={4} emptyMessage="No mappings yet." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>{machineName(item.machineId)}</TableCell>
@@ -561,7 +562,7 @@ function WeightMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={4} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={4} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -723,7 +724,7 @@ function HoloProductionPerHourCrud({ data, yarns, cuts, onCreate, onUpdate, onDe
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={5} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -849,7 +850,7 @@ function MachinesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCr
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={5} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -1024,7 +1025,7 @@ function WorkersMaster({ data, onCreate, onUpdate, onDelete, loading, canCreate,
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={5} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -1201,7 +1202,7 @@ function BoxesMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={5} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -1367,7 +1368,7 @@ function FirmsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreat
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={3} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>
@@ -1542,7 +1543,7 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canC
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={3} className="text-center py-4 text-muted-foreground">No records found</TableCell></TableRow>
+                                <TableStateRow colSpan={3} emptyMessage="No records found." />
                             ) : filtered.map(item => (
                                 <TableRow key={item.id}>
                                     <TableCell>

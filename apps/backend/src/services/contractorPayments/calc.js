@@ -181,11 +181,13 @@ export function rangesOverlap(aFrom, aTo, bFrom, bTo) {
 // Rate key definitions & matching
 // ---------------------------------------------------------------------------
 
-// Required and optional-override keys per process.
+// Required and optional-override keys per process. For holo and coning the
+// Cut is an OPTIONAL override: a cut-less rate is a wildcard for any cut, and
+// a rate pinning a Cut outranks it (same mechanics as Twist/Cone Type).
 export const RATE_KEY_SPEC = {
   cutter: { required: ['itemId', 'cutId'], optional: [] },
-  holo: { required: ['yarnId', 'cutId'], optional: ['twistId'] },
-  coning: { required: ['yarnId', 'cutId', 'side'], optional: ['twistId', 'coneTypeId'] },
+  holo: { required: ['yarnId'], optional: ['cutId', 'twistId'] },
+  coning: { required: ['yarnId', 'side'], optional: ['cutId', 'twistId', 'coneTypeId'] },
 };
 
 function keyValue(obj, key) {

@@ -176,16 +176,16 @@ function normalizeRatePayload(process, body) {
     if (!data.itemId || !data.cutId) return { error: 'Cutter rate requires Item and Cut' };
   } else if (process === 'holo') {
     data.yarnId = cleanString(body.yarnId, 40);
-    data.cutId = cleanString(body.cutId, 40);
+    data.cutId = cleanString(body.cutId, 40); // optional override
     data.twistId = cleanString(body.twistId, 40); // optional override
-    if (!data.yarnId || !data.cutId) return { error: 'Holo rate requires Yarn and Cut' };
+    if (!data.yarnId) return { error: 'Holo rate requires Yarn' };
   } else if (process === 'coning') {
     data.yarnId = cleanString(body.yarnId, 40);
-    data.cutId = cleanString(body.cutId, 40);
+    data.cutId = cleanString(body.cutId, 40); // optional override
     data.side = normalizeSide(body.side);
     data.twistId = cleanString(body.twistId, 40); // optional override
     data.coneTypeId = cleanString(body.coneTypeId, 40); // optional override
-    if (!data.yarnId || !data.cutId) return { error: 'Coning rate requires Yarn and Cut' };
+    if (!data.yarnId) return { error: 'Coning rate requires Yarn' };
     if (!data.side || data.side === 'UNKNOWN') return { error: 'Coning rate requires a Side (SINGLE or BOTH)' };
   }
   return { data };

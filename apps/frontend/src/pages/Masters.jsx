@@ -2008,7 +2008,6 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const empty = { contractorId: '', process: '', itemId: '', yarnId: '', cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '', effectiveFrom: '', effectiveTo: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
-    const [filterProcess, setFilterProcess] = useState('');
     const [error, setError] = useState('');
     const allowCreate = !!canCreate;
     const allowEdit = !!canEdit;
@@ -2060,31 +2059,27 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const describeKeys = (r) => {
         const parts = [];
         if (r.process === 'cutter') { parts.push(itemName.get(r.itemId) || 'Item?'); parts.push(cutName.get(r.cutId) || 'Cut?'); }
-        else { parts.push(yarnName.get(r.yarnId) || 'Yarn?'); parts.push(cutName.get(r.cutId) || 'Cut?'); }
+        else { parts.push(yarnName.get(r.yarnId) || 'Yarn?'); if (r.cutId) parts.push(`Cut:${cutName.get(r.cutId) || '?'}`); }
         if (r.process === 'coning') parts.push(r.side === 'SINGLE' ? 'S/S' : r.side === 'BOTH' ? 'B/S' : 'Side?');
         if (r.twistId) parts.push(`Twist:${twistName.get(r.twistId) || '?'}`);
         if (r.coneTypeId) parts.push(`Cone:${coneTypeName.get(r.coneTypeId) || '?'}`);
         return parts.join(' · ');
     };
 
-    const rows = (data || []).filter((r) => !filterProcess || r.process === filterProcess);
+    const rows = data || [];
     const process = form.process;
     const rateValue = Number(form.ratePerKg);
     const formReady = !!form.contractorId && !!process && !!form.effectiveFrom && rateValue > 0 && (
         process === 'cutter' ? (!!form.itemId && !!form.cutId)
-            : process === 'holo' ? (!!form.yarnId && !!form.cutId)
-                : process === 'coning' ? (!!form.yarnId && !!form.cutId && !!form.side)
+            : process === 'holo' ? !!form.yarnId
+                : process === 'coning' ? (!!form.yarnId && !!form.side)
                     : false
     );
 
     return (
         <Card>
-            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <CardHeader>
                 <CardTitle>Contractor Rates (₹/KG)</CardTitle>
-                <Select value={filterProcess} onChange={(e) => setFilterProcess(e.target.value)} className="sm:w-40 h-9">
-                    <option value="">All processes</option>
-                    {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </Select>
             </CardHeader>
             <CardContent className="space-y-4">
                 <ErrorNote error={error} />
@@ -2123,9 +2118,9 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                                     </Select>
                                 </div>
                             )}
-                            <div><Label className="text-xs">Cut *</Label>
+                            <div><Label className="text-xs">{process === 'cutter' ? 'Cut *' : 'Cut (optional override)'}</Label>
                                 <Select value={form.cutId} onChange={(e) => set('cutId', e.target.value)}>
-                                    <option value="">Select…</option>
+                                    <option value="">{process === 'cutter' ? 'Select…' : 'Any'}</option>
                                     {(cuts || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </Select>
                             </div>

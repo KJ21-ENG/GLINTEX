@@ -127,6 +127,18 @@ test('matchRate picks most specific optional override', () => {
   assert.equal(withoutTwist.rate.id, 'base'); // twist-specific does not match, falls back to wildcard
 });
 
+test('holo/coning Cut is an optional override: cut-less rates match any cut', () => {
+  const yarnOnly = { id: 'yo', process: 'holo', yarnId: 'Y1', cutId: null, twistId: null, ratePerKg: 5, effectiveFrom: '2026-01-01', effectiveTo: null };
+  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: 'C9' }, '2026-05-01'), true);
+  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: null }, '2026-05-01'), true);
+  const pinned = { ...yarnOnly, id: 'pin', cutId: 'C1' };
+  // A pinned Cut outranks the wildcard for its cut, loses everywhere else.
+  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C1' }, '2026-05-01').rate.id, 'pin');
+  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C2' }, '2026-05-01').rate.id, 'yo');
+  // A pinned Cut never matches a row with no cut.
+  assert.equal(matchRate('holo', [pinned], { yarnId: 'Y1', cutId: null }, '2026-05-01').reason, 'no_rate');
+});
+
 test('matchRate returns no_rate when nothing applies', () => {
   const res = matchRate('holo', HOLO_RATES, { yarnId: 'Y9', cutId: 'C1' }, '2026-05-01');
   assert.equal(res.rate, null);

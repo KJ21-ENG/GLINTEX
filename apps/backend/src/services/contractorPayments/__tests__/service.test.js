@@ -244,6 +244,36 @@ test('conflicting traced Cuts block the row instead of falling back silently', a
   assert.equal(res.blockers[0].reason, 'missing_quality');
 });
 
+test('coning rows price via a cut-less wildcard rate; a pinned Cut outranks it', async () => {
+  const generic = { ...CONING_RATE_BASE, id: 'generic', cutId: null, ratePerKg: 7 };
+  const pinned = { ...CONING_RATE_BASE, id: 'pinned', ratePerKg: 8 }; // pins C1
+  const stub = makeStub({
+    ...MASTERS, cuts: [...MASTERS.cuts, { id: 'C2', name: '60' }],
+    assignments: CONING_ASSIGN, rates: [generic, pinned],
+    coningRows: [coningRow({ id: 'a' }), coningRow({ id: 'b', cutId: 'C2', barcode: 'B2' })],
+  });
+  const res = await preview(stub);
+  assert.equal(res.blockers.length, 0);
+  const rateByRow = Object.fromEntries(res.lines.map((l) => [l.sourceRowId, l.rateId]));
+  assert.equal(rateByRow.a, 'pinned'); // cut C1 → pinned override
+  assert.equal(rateByRow.b, 'generic'); // cut C2 → wildcard
+});
+
+test('a coning row with no Cut anywhere is payable via a cut-less rate (Cut optional)', async () => {
+  const generic = { ...CONING_RATE_BASE, id: 'generic', cutId: null };
+  const cutlessRow = coningRow({});
+  cutlessRow.issue.cutId = null; // no cut on the issue and no lineage refs
+  const stub = makeStub({
+    ...MASTERS, assignments: CONING_ASSIGN, rates: [generic],
+    coningRows: [cutlessRow],
+  });
+  const res = await preview(stub);
+  assert.equal(res.blockers.length, 0);
+  assert.equal(res.lines.length, 1);
+  assert.equal(res.lines[0].rateId, 'generic');
+  assert.equal(res.lines[0].cutId, null);
+});
+
 test('missing Side and missing rate become per-row blockers', async () => {
   const stub = makeStub({
     ...MASTERS, assignments: CONING_ASSIGN, rates: [CONING_RATE_BASE],

@@ -334,12 +334,15 @@ export function resolveRow(process, row, maps) {
     base.yarnId = issue?.yarnId || null;
     base.yarnName = nameOf(maps.yarns, base.yarnId);
     // Cut comes from the traced holo lineage when available (traceConingCuts);
-    // the coning issue's own denormalized cutId is only a fallback, and a
-    // conflicting trace (null) surfaces as a missing-quality blocker.
+    // the coning issue's own denormalized cutId is only a fallback. A
+    // conflicting/partial trace (null) marks the row so the preview blocks it
+    // — even though Cut itself is optional, a KNOWN-ambiguous Cut must not
+    // silently price via a wildcard rate.
     const tracedCut = maps.coningCutTrace && issue?.id && maps.coningCutTrace.has(issue.id)
       ? maps.coningCutTrace.get(issue.id)
       : undefined;
     base.cutId = tracedCut !== undefined ? tracedCut : (issue?.cutId || null);
+    base.cutConflict = tracedCut === null;
     base.cutName = nameOf(maps.cuts, base.cutId);
     base.twistId = issue?.twistId || null;
     base.twistName = nameOf(maps.twists, base.twistId);
@@ -377,17 +380,16 @@ function rowKeysForProcess(process, resolved) {
 }
 
 // Determine which required quality fields are missing on a resolved row.
+// Cut is optional for holo/coning (a cut-less rate is a wildcard), so a
+// missing Cut no longer blocks those rows — but a CONFLICTED Cut lineage
+// (resolved.cutConflict) still does, handled separately in the preview loop.
 function missingQualityFields(process, resolved) {
   const missing = [];
   if (process === 'cutter') {
     if (!resolved.itemId) missing.push('Item');
     if (!resolved.cutId) missing.push('Cut');
-  } else if (process === 'holo') {
+  } else if (process === 'holo' || process === 'coning') {
     if (!resolved.yarnId) missing.push('Yarn');
-    if (!resolved.cutId) missing.push('Cut');
-  } else if (process === 'coning') {
-    if (!resolved.yarnId) missing.push('Yarn');
-    if (!resolved.cutId) missing.push('Cut');
   }
   return missing;
 }
@@ -490,6 +492,18 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
         lotNo: resolved.lotNo,
         reason: 'missing_side',
         message: `Item "${resolved.itemName || '—'}" has no Side set (S/S or B/S).`,
+      });
+      continue;
+    }
+    if (process === 'coning' && resolved.cutConflict) {
+      blockers.push({
+        sourceRowId: resolved.sourceRowId,
+        date: resolved.effectiveDate,
+        netKg: resolved.netKg,
+        barcode: resolved.barcode,
+        lotNo: resolved.lotNo,
+        reason: 'missing_quality',
+        message: 'Conflicting or partially-resolved Cut lineage on this row; fix the referenced holo/coning production data.',
       });
       continue;
     }

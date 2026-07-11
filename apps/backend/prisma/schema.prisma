@@ -8,9 +8,18 @@ datasource db {
   shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
+// Side classification for an Item, used by contractor coning rates.
+// SINGLE = S/S, BOTH = B/S. UNKNOWN requires manual correction before payments.
+enum SideType {
+  SINGLE
+  BOTH
+  UNKNOWN
+}
+
 model Item {
   id              String   @id @default(cuid())
   name            String
+  side            SideType @default(UNKNOWN)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
@@ -953,4 +962,170 @@ model WastageEvent {
   @@index([actorUserId, createdAt])
   @@index([holoRowId])
   @@index([challanId])
+}
+
+// ========== CONTRACTOR KG PAYMENTS FEATURE ==========
+// Contractors are assigned to a process for an effective date range, earn
+// quality-specific per-KG rates, and are paid via settlements covering one
+// contractor + one process + a date range. Money and rates are database
+// decimals; net KG is stored with three decimals. Quality keys reference
+// master IDs by value (resolved in the app layer) to keep rate config
+// decoupled from master-record lifecycle.
+
+model Contractor {
+  id              String                 @id @default(cuid())
+  name            String
+  phone           String?
+  paymentDetails  String?
+  notes           String?
+  isActive        Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  assignments     ContractorAssignment[]
+  rates           ContractorRate[]
+  settlements     ContractorSettlement[]
+
+  @@index([isActive])
+}
+
+model ContractorAssignment {
+  id              String     @id @default(cuid())
+  contractorId    String
+  process         String // 'cutter' | 'holo' | 'coning'
+  effectiveFrom   String // YYYY-MM-DD — contract start; production before this is never eligible
+  effectiveTo     String? // YYYY-MM-DD — null = open-ended
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  contractor      Contractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+
+  @@index([contractorId])
+  @@index([process, effectiveFrom])
+}
+
+model ContractorRate {
+  id              String     @id @default(cuid())
+  contractorId    String
+  process         String // 'cutter' | 'holo' | 'coning'
+  // Quality keys (presence depends on process). Stored as master IDs by value.
+  itemId          String? // cutter (required)
+  yarnId          String? // holo, coning (required)
+  cutId           String? // all processes (required)
+  side            SideType? // coning (required)
+  twistId         String? // optional override (holo, coning)
+  coneTypeId      String? // optional override (coning)
+  ratePerKg       Decimal    @db.Decimal(12, 4)
+  effectiveFrom   String // YYYY-MM-DD
+  effectiveTo     String? // YYYY-MM-DD — null = open-ended
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  contractor      Contractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+
+  @@index([contractorId, process])
+}
+
+model ContractorSettlement {
+  id               String                           @id @default(cuid())
+  contractorId     String
+  process          String // 'cutter' | 'holo' | 'coning'
+  periodFrom       String // YYYY-MM-DD
+  periodTo         String // YYYY-MM-DD
+  status           String                           @default("draft") // 'draft' | 'paid'
+  productionKg     Decimal                          @default(0) @db.Decimal(16, 3)
+  productionAmount Decimal                          @default(0) @db.Decimal(16, 2)
+  adjustmentsTotal Decimal                          @default(0) @db.Decimal(16, 2)
+  finalPayable     Decimal                          @default(0) @db.Decimal(16, 2)
+  notes            String?
+  // Payment metadata (set on Mark Paid)
+  paymentDate      String?
+  paymentMode      String? // 'Cash' | 'Bank' | 'UPI' | 'Other'
+  paymentReference String?
+  paymentNotes     String?
+  paidAt           DateTime?
+  paidByUserId     String?
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @default(now()) @updatedAt
+  createdByUserId  String?
+  updatedByUserId  String?
+  contractor       Contractor                       @relation(fields: [contractorId], references: [id], onDelete: Restrict)
+  lines            ContractorSettlementLine[]
+  adjustments      ContractorSettlementAdjustment[]
+  revisions        ContractorSettlementRevision[]
+
+  @@index([contractorId, process])
+  @@index([status])
+  @@index([process, periodFrom, periodTo])
+}
+
+model ContractorSettlementLine {
+  id           String               @id @default(cuid())
+  settlementId String
+  process      String // 'cutter' | 'holo' | 'coning'
+  sourceRowId  String // receive-row id claimed by this settlement
+  date         String? // YYYY-MM-DD (production date snapshot)
+  netKg        Decimal              @db.Decimal(16, 3)
+  ratePerKg    Decimal              @db.Decimal(12, 4)
+  amount       Decimal              @db.Decimal(16, 2)
+  rateId       String? // matched ContractorRate id (snapshot reference)
+  // Quality snapshots (name + id captured at draft time)
+  itemId       String?
+  itemName     String?
+  yarnId       String?
+  yarnName     String?
+  cutId        String?
+  cutName      String?
+  twistId      String?
+  twistName    String?
+  coneTypeId   String?
+  coneTypeName String?
+  side         SideType?
+  barcode      String?
+  lotNo        String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+  settlement   ContractorSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  // A source row belongs to at most one settlement at a time (drafts + paid).
+  // Deleting a draft frees its rows; admin paid-edit removing a line frees it.
+  @@unique([process, sourceRowId])
+  @@index([settlementId])
+}
+
+model ContractorSettlementAdjustment {
+  id              String               @id @default(cuid())
+  settlementId    String
+  type            String // 'bonus' | 'advance_recovery' | 'deduction' | 'other'
+  amount          Decimal              @db.Decimal(16, 2) // always positive; sign derived from type
+  reason          String
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  settlement      ContractorSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([settlementId])
+}
+
+model ContractorSettlementRevision {
+  id                String               @id @default(cuid())
+  settlementId      String
+  revisionNumber    Int
+  reason            String
+  beforeSnapshot    Json
+  afterSnapshot     Json
+  previousTotal     Decimal              @db.Decimal(16, 2)
+  newTotal          Decimal              @db.Decimal(16, 2)
+  delta             Decimal              @db.Decimal(16, 2) // newTotal - previousTotal
+  changedByUserId   String?
+  changedByUsername String?
+  createdAt         DateTime             @default(now())
+  settlement        ContractorSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@unique([settlementId, revisionNumber])
+  @@index([settlementId])
 }

@@ -31,6 +31,9 @@ export function normalizeDb(raw) {
   const holoOtherWastageItems = ensureArr(raw?.holo_other_wastage_items);
   const coneTypes = ensureArr(raw?.cone_types);
   const wrappers = ensureArr(raw?.wrappers);
+  const contractors = ensureArr(raw?.contractors);
+  const contractorAssignments = ensureArr(raw?.contractor_assignments);
+  const contractorRates = ensureArr(raw?.contractor_rates);
   const issueBalances = raw?.issue_balances && typeof raw.issue_balances === 'object'
     ? raw.issue_balances
     : {};
@@ -86,6 +89,9 @@ export function normalizeDb(raw) {
     holo_other_wastage_items: holoOtherWastageItems,
     cone_types: coneTypes,
     wrappers,
+    contractors,
+    contractor_assignments: contractorAssignments,
+    contractor_rates: contractorRates,
     issue_to_cutter_machine: issueToCutterMachine,
     issue_to_holo_machine: issueToHoloMachine,
     issue_to_coning_machine: issueToConingMachine,

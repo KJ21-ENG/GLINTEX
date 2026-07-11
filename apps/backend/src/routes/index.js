@@ -26,6 +26,9 @@ import { buildHoloWeeklyExportData } from '../utils/holoWeeklyExport.js';
 import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
+import contractorPaymentsRouter from './contractorPayments.js';
+import { normalizeSide } from '../services/contractorPayments/calc.js';
+import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesExclusive, lockItemNamesExclusive } from '../services/contractorPayments/service.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
@@ -58,6 +61,9 @@ let bootstrapToken = null;
 
 // v2 performance endpoints (cursor pagination, server-side filtering, facets, export)
 router.use('/api/v2', v2Router);
+
+// Contractor KG payments (self-authenticating sub-router)
+router.use('/api/contractor-payments', contractorPaymentsRouter);
 
 function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();
@@ -2969,6 +2975,9 @@ router.get('/api/bootstrap', async (req, res) => {
       holo_other_wastage_items: hasReadPermission(req, 'masters'),
       cone_types: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
       wrappers: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
+      contractors: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
+      contractor_assignments: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
+      contractor_rates: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
       settings: hasReadPermission(req, 'settings'),
     };
 
@@ -3011,12 +3020,20 @@ router.get('/api/bootstrap', async (req, res) => {
       : [];
     slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
+    slices.contractors = allowed.contractors ? await prisma.contractor.findMany({ orderBy: { name: 'asc' } }) : [];
+    slices.contractor_assignments = allowed.contractor_assignments
+      ? await prisma.contractorAssignment.findMany({ orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }] })
+      : [];
+    slices.contractor_rates = allowed.contractor_rates
+      ? (await prisma.contractorRate.findMany({ orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }] }))
+        .map((r) => ({ ...r, ratePerKg: r.ratePerKg == null ? null : Number(r.ratePerKg) }))
+      : [];
     slices.settings = allowed.settings
       ? (await prisma.settings.findMany()).map(sanitizeSettingsForResponse)
       : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
-    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers'];
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers', 'contractors', 'contractor_assignments', 'contractor_rates'];
     for (const key of masterSliceKeys) {
       if (slices[key] && slices[key].length > 0) {
         slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
@@ -8592,6 +8609,12 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
     };
 
     const updated = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be edited/removed
+      // here; the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'cutter', [
+        ...updatesToApply.map((u) => u.id),
+        ...removedRowIds,
+      ]);
       for (const update of updatesToApply) {
         await tx.receiveFromCutterMachineRow.update({
           where: { id: update.id },
@@ -8684,6 +8707,7 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
       wastageReset: shouldResetWastage,
     });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update challan', err);
     res.status(500).json({ error: err.message || 'Failed to update challan' });
   }
@@ -8763,6 +8787,9 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
     };
 
     const deleted = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be deleted here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'cutter', rows.map((r) => r.id));
       if (rows.length > 0) {
         await tx.receiveFromCutterMachineRow.updateMany({
           where: { challanId, isDeleted: false },
@@ -8846,6 +8873,7 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
       wastageReset: shouldResetWastage,
     });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete challan', err);
     res.status(500).json({ error: err.message || 'Failed to delete challan' });
   }
@@ -9424,6 +9452,9 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
     const deltaRolls = rollCount - prevRollCount;
 
     const updated = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be edited here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'holo', [id]);
       const totals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
@@ -9483,6 +9514,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
 
     res.json({ ok: true, row: updated });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update holo receive row', err);
     res.status(500).json({ error: err.message || 'Failed to update holo receive row' });
   }
@@ -9557,6 +9589,9 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
     const deltaRolls = -prevRollCount;
 
     const deleted = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be deleted here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'holo', [id]);
       const totals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
@@ -9602,6 +9637,7 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
 
     res.json({ ok: true });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete holo receive row', err);
     res.status(500).json({ error: err.message || 'Failed to delete holo receive row' });
   }
@@ -9663,6 +9699,9 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
     let revertEvent;
     try {
       revertEvent = await prisma.$transaction(async (tx) => {
+        // Rows already paid in a contractor settlement cannot be reverted here;
+        // the lock also serializes against an in-flight Mark Paid.
+        await assertProductionRowsEditable(tx, 'holo', [rowId]);
         // Claim the row atomically: only the request that flips isDeleted false→true
         // proceeds. Concurrent retries see count===0 and abort before decrementing totals.
         const claim = await tx.receiveFromHoloMachineRow.updateMany({
@@ -9730,6 +9769,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
 
     res.json({ ok: true, rowId, reverted: prevNetWeight, reason, note, eventId: revertEvent.id });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to revert holo wastage row', err);
     res.status(500).json({ error: err.message || 'Failed to revert holo wastage row' });
   }
@@ -10642,6 +10682,9 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
 
     const pieceId = row.issueId;
     const updated = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be edited here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'coning', [id]);
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -10702,6 +10745,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
 
     res.json({ ok: true, row: updated });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update coning receive row', err);
     res.status(500).json({ error: err.message || 'Failed to update coning receive row' });
   }
@@ -10745,6 +10789,9 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
 
     const pieceId = row.issueId;
     const deleted = await prisma.$transaction(async (tx) => {
+      // Rows already paid in a contractor settlement cannot be deleted here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'coning', [id]);
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -10790,6 +10837,7 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
 
     res.json({ ok: true });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete coning receive row', err);
     res.status(500).json({ error: err.message || 'Failed to delete coning receive row' });
   }
@@ -10802,149 +10850,169 @@ router.post('/api/import', requireRole('admin'), async (req, res) => {
     const data = req.body;
     if (!data) return res.status(400).json({ error: 'Missing body' });
 
-    // Clear existing tables (simple approach for import)
-    await prisma.receiveFromConingMachineRow.deleteMany();
-    await prisma.receiveFromConingMachinePieceTotal.deleteMany();
-    await prisma.issueToConingMachine.deleteMany();
-    await prisma.issueToCutterMachine.deleteMany();
-    await prisma.receiveFromCutterMachineRow.deleteMany();
-    await prisma.receiveFromCutterMachineUpload.deleteMany();
-    await prisma.receiveFromCutterMachinePieceTotal.deleteMany();
-    await prisma.inboundItem.deleteMany();
-    await prisma.lot.deleteMany();
-    await prisma.item.deleteMany();
-    await prisma.firm.deleteMany();
-    await prisma.supplier.deleteMany();
-    await prisma.operator.deleteMany();
-    await prisma.bobbin.deleteMany();
-    await prisma.box.deleteMany();
-    await prisma.coneType.deleteMany();
-    await prisma.wrapper.deleteMany();
+    // Contractor settlements snapshot production rows (paid ones are immutable
+    // financial records), and this import erases those source rows and Items
+    // wholesale. Guard + destructive deletes run in ONE transaction under the
+    // exclusive side of the settlement-lines lock (line creators hold the
+    // shared side), so an in-flight claim can neither be missed by the count
+    // nor land between the count and the deletes.
+    await prisma.$transaction(async (tx) => {
+      await lockSettlementLinesExclusive(tx);
+      const settlementLineCount = await tx.contractorSettlementLine.count();
+      if (settlementLineCount > 0) {
+        throw Object.assign(
+          new Error('Import is blocked: contractor settlements reference existing production rows. Delete draft settlements and resolve paid settlements before running a destructive import.'),
+          { statusCode: 409 },
+        );
+      }
 
-    // Bulk create
-    if (Array.isArray(data.items)) {
-      for (const it of data.items) {
-        await prisma.item.create({ data: { id: it.id || undefined, name: it.name, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.firms)) {
-      for (const f of data.firms) {
-        await prisma.firm.create({ data: { id: f.id || undefined, name: f.name, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.suppliers)) {
-      for (const s of data.suppliers) {
-        await prisma.supplier.create({ data: { id: s.id || undefined, name: s.name, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.lots)) {
-      for (const l of data.lots) {
-        await prisma.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, supplierId: l.supplierId || null, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0), ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.inbound_items)) {
-      for (const ii of data.inbound_items) {
-        await prisma.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.issue_to_cutter_machine)) {
-      for (const c of data.issue_to_cutter_machine) {
-        await prisma.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.workers)) {
-      for (const w of data.workers) {
-        await prisma.operator.create({ data: { id: w.id || undefined, name: w.name, role: normalizeWorkerRole(w.role), ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.bobbins)) {
-      for (const b of data.bobbins) {
-        await prisma.bobbin.create({ data: { id: b.id || undefined, name: b.name, weight: b.weight != null ? Number(b.weight) : null, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.boxes)) {
-      for (const box of data.boxes) {
-        await prisma.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0), ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.cone_types)) {
-      for (const ct of data.cone_types) {
-        await prisma.coneType.create({ data: { id: ct.id || undefined, name: ct.name, weight: ct.weight != null ? Number(ct.weight) : null, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.wrappers)) {
-      for (const w of data.wrappers) {
-        await prisma.wrapper.create({ data: { id: w.id || undefined, name: w.name, ...actorCreateFields(actorUserId) } });
-      }
-    }
-    if (Array.isArray(data.issue_to_coning_machine)) {
-      for (const c of data.issue_to_coning_machine) {
-        await prisma.issueToConingMachine.create({
-          data: {
-            id: c.id || undefined,
-            date: c.date,
-            itemId: c.itemId,
-            lotNo: c.lotNo,
-            machineId: c.machineId || null,
-            operatorId: c.operatorId || null,
-            barcode: c.barcode,
-            note: c.note || null,
-            rollsIssued: Number(c.rollsIssued || 0),
-            requiredPerConeNetWeight: Number(c.requiredPerConeNetWeight || 0),
-            expectedCones: Number(c.expectedCones || 0),
-            receivedRowRefs: Array.isArray(c.receivedRowRefs) ? c.receivedRowRefs : [],
-            ...actorCreateFields(actorUserId),
-          },
-        });
-      }
-    }
-    if (Array.isArray(data.receive_from_coning_machine_rows)) {
-      for (const row of data.receive_from_coning_machine_rows) {
-        await prisma.receiveFromConingMachineRow.create({
-          data: {
-            id: row.id || undefined,
-            issueId: row.issueId,
-            coneCount: Number(row.coneCount || 0),
-            coneWeight: row.coneWeight != null ? Number(row.coneWeight) : null,
-            netWeight: row.netWeight != null ? Number(row.netWeight) : null,
-            tareWeight: row.tareWeight != null ? Number(row.tareWeight) : null,
-            grossWeight: row.grossWeight != null ? Number(row.grossWeight) : null,
-            barcode: row.barcode || null,
-            date: row.date || null,
-            boxId: row.boxId || null,
-            machineNo: row.machineNo || null,
-            operatorId: row.operatorId || null,
-            helperId: row.helperId || null,
-            notes: row.notes || null,
-            createdBy: row.createdBy || null,
-            ...actorCreateFields(actorUserId),
-          },
-        });
-      }
-    }
-    if (Array.isArray(data.receive_from_coning_machine_piece_totals)) {
-      for (const total of data.receive_from_coning_machine_piece_totals) {
-        await prisma.receiveFromConingMachinePieceTotal.create({
-          data: {
-            pieceId: total.pieceId,
-            totalCones: Number(total.totalCones || 0),
-            totalNetWeight: Number(total.totalNetWeight || 0),
-            wastageNetWeight: Number(total.wastageNetWeight || 0),
-            ...actorCreateFields(actorUserId),
-          },
-        });
-      }
-    }
+      // Clear existing tables (simple approach for import)
+      await tx.receiveFromConingMachineRow.deleteMany();
+      await tx.receiveFromConingMachinePieceTotal.deleteMany();
+      await tx.issueToConingMachine.deleteMany();
+      await tx.issueToCutterMachine.deleteMany();
+      await tx.receiveFromCutterMachineRow.deleteMany();
+      await tx.receiveFromCutterMachineUpload.deleteMany();
+      await tx.receiveFromCutterMachinePieceTotal.deleteMany();
+      await tx.inboundItem.deleteMany();
+      await tx.lot.deleteMany();
+      await tx.item.deleteMany();
+      await tx.firm.deleteMany();
+      await tx.supplier.deleteMany();
+      await tx.operator.deleteMany();
+      await tx.bobbin.deleteMany();
+      await tx.box.deleteMany();
+      await tx.coneType.deleteMany();
+      await tx.wrapper.deleteMany();
 
-    // Settings
-    if (data.ui && data.ui.brand) {
-      const b = data.ui.brand;
-      await prisma.settings.upsert({
-        where: { id: 1 },
-        update: { brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorUpdateFields(actorUserId) },
-        create: { id: 1, brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorCreateFields(actorUserId) },
-      });
-    }
+      // Bulk create — INSIDE the same transaction and exclusive lock: no
+      // contractor-payment path can run against a partially restored
+      // database, and any failure rolls the whole import back.
+      if (Array.isArray(data.items)) {
+        for (const it of data.items) {
+          await tx.item.create({ data: { id: it.id || undefined, name: it.name, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.firms)) {
+        for (const f of data.firms) {
+          await tx.firm.create({ data: { id: f.id || undefined, name: f.name, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.suppliers)) {
+        for (const s of data.suppliers) {
+          await tx.supplier.create({ data: { id: s.id || undefined, name: s.name, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.lots)) {
+        for (const l of data.lots) {
+          await tx.lot.create({ data: { id: l.id || undefined, lotNo: l.lotNo, date: l.date, itemId: l.itemId, firmId: l.firmId, supplierId: l.supplierId || null, totalPieces: l.totalPieces || 0, totalWeight: Number(l.totalWeight || 0), ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.inbound_items)) {
+        for (const ii of data.inbound_items) {
+          await tx.inboundItem.create({ data: { id: ii.id, lotNo: ii.lotNo, itemId: ii.itemId, weight: Number(ii.weight || 0), status: ii.status || 'available', seq: ii.seq || 0, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.issue_to_cutter_machine)) {
+        for (const c of data.issue_to_cutter_machine) {
+          await tx.issueToCutterMachine.create({ data: { id: c.id, date: c.date, itemId: c.itemId, lotNo: c.lotNo, count: c.count || 0, totalWeight: Number(c.totalWeight || 0), pieceIds: Array.isArray(c.pieceIds) ? c.pieceIds.join(',') : (c.pieceIds || ''), reason: c.reason || 'internal', note: c.note || null, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.workers)) {
+        for (const w of data.workers) {
+          await tx.operator.create({ data: { id: w.id || undefined, name: w.name, role: normalizeWorkerRole(w.role), ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.bobbins)) {
+        for (const b of data.bobbins) {
+          await tx.bobbin.create({ data: { id: b.id || undefined, name: b.name, weight: b.weight != null ? Number(b.weight) : null, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.boxes)) {
+        for (const box of data.boxes) {
+          await tx.box.create({ data: { id: box.id || undefined, name: box.name, weight: Number(box.weight || 0), ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.cone_types)) {
+        for (const ct of data.cone_types) {
+          await tx.coneType.create({ data: { id: ct.id || undefined, name: ct.name, weight: ct.weight != null ? Number(ct.weight) : null, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.wrappers)) {
+        for (const w of data.wrappers) {
+          await tx.wrapper.create({ data: { id: w.id || undefined, name: w.name, ...actorCreateFields(actorUserId) } });
+        }
+      }
+      if (Array.isArray(data.issue_to_coning_machine)) {
+        for (const c of data.issue_to_coning_machine) {
+          await tx.issueToConingMachine.create({
+            data: {
+              id: c.id || undefined,
+              date: c.date,
+              itemId: c.itemId,
+              lotNo: c.lotNo,
+              machineId: c.machineId || null,
+              operatorId: c.operatorId || null,
+              barcode: c.barcode,
+              note: c.note || null,
+              rollsIssued: Number(c.rollsIssued || 0),
+              requiredPerConeNetWeight: Number(c.requiredPerConeNetWeight || 0),
+              expectedCones: Number(c.expectedCones || 0),
+              receivedRowRefs: Array.isArray(c.receivedRowRefs) ? c.receivedRowRefs : [],
+              ...actorCreateFields(actorUserId),
+            },
+          });
+        }
+      }
+      if (Array.isArray(data.receive_from_coning_machine_rows)) {
+        for (const row of data.receive_from_coning_machine_rows) {
+          await tx.receiveFromConingMachineRow.create({
+            data: {
+              id: row.id || undefined,
+              issueId: row.issueId,
+              coneCount: Number(row.coneCount || 0),
+              coneWeight: row.coneWeight != null ? Number(row.coneWeight) : null,
+              netWeight: row.netWeight != null ? Number(row.netWeight) : null,
+              tareWeight: row.tareWeight != null ? Number(row.tareWeight) : null,
+              grossWeight: row.grossWeight != null ? Number(row.grossWeight) : null,
+              barcode: row.barcode || null,
+              date: row.date || null,
+              boxId: row.boxId || null,
+              machineNo: row.machineNo || null,
+              operatorId: row.operatorId || null,
+              helperId: row.helperId || null,
+              notes: row.notes || null,
+              createdBy: row.createdBy || null,
+              ...actorCreateFields(actorUserId),
+            },
+          });
+        }
+      }
+      if (Array.isArray(data.receive_from_coning_machine_piece_totals)) {
+        for (const total of data.receive_from_coning_machine_piece_totals) {
+          await tx.receiveFromConingMachinePieceTotal.create({
+            data: {
+              pieceId: total.pieceId,
+              totalCones: Number(total.totalCones || 0),
+              totalNetWeight: Number(total.totalNetWeight || 0),
+              wastageNetWeight: Number(total.wastageNetWeight || 0),
+              ...actorCreateFields(actorUserId),
+            },
+          });
+        }
+      }
+
+      // Settings
+      if (data.ui && data.ui.brand) {
+        const b = data.ui.brand;
+        await tx.settings.upsert({
+          where: { id: 1 },
+          update: { brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorUpdateFields(actorUserId) },
+          create: { id: 1, brandPrimary: b.primary || '#2E4CA6', brandGold: b.gold || '#D4AF37', logoDataUrl: b.logoDataUrl || null, ...actorCreateFields(actorUserId) },
+        });
+      }
+
+    }, { timeout: 300000, maxWait: 10000 });
 
     await logCrudWithActor(req, {
       entityType: 'import',
@@ -10972,6 +11040,7 @@ router.post('/api/import', requireRole('admin'), async (req, res) => {
 
     res.json({ ok: true });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: String(err) });
   }
@@ -10981,8 +11050,18 @@ router.post('/api/import', requireRole('admin'), async (req, res) => {
 router.get('/api/items', requirePermission('masters', PERM_READ), async (req, res) => { res.json(await prisma.item.findMany()); });
 router.post('/api/items', requirePermission('masters', PERM_WRITE), async (req, res) => {
   const actorUserId = req.user?.id;
-  const { name } = req.body;
-  const item = await prisma.item.create({ data: { name, ...actorCreateFields(actorUserId) } });
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return res.status(400).json({ error: 'Item name is required' });
+  const side = normalizeSide(req.body?.side);
+  if (!side || side === 'UNKNOWN') {
+    return res.status(400).json({ error: 'Item Side is required and cannot be UNKNOWN (choose SINGLE or BOTH)' });
+  }
+  // Item names resolve rates for unlinked cutter rows — exclude payments in
+  // flight (they hold the shared side of the item-names lock).
+  const item = await prisma.$transaction(async (tx) => {
+    await lockItemNamesExclusive(tx);
+    return tx.item.create({ data: { name, side, ...actorCreateFields(actorUserId) } });
+  });
   await logCrudWithActor(req, {
     entityType: 'item',
     entityId: item.id,
@@ -11003,7 +11082,10 @@ router.delete('/api/items/:id', requireDeletePermission('masters'), async (req, 
   if (usage > 0) {
     return res.status(400).json({ error: 'Item is referenced and cannot be deleted' });
   }
-  await prisma.item.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await lockItemNamesExclusive(tx);
+    await tx.item.delete({ where: { id } });
+  });
   await logCrudWithActor(req, {
     entityType: 'item',
     entityId: id,
@@ -11016,11 +11098,20 @@ router.delete('/api/items/:id', requireDeletePermission('masters'), async (req, 
 router.put('/api/items/:id', requireEditPermission('masters'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     if (!name) return res.status(400).json({ error: 'Missing name' });
+    const side = normalizeSide(req.body?.side);
+    if (!side || side === 'UNKNOWN') {
+      return res.status(400).json({ error: 'Item Side is required and cannot be UNKNOWN (choose SINGLE or BOTH)' });
+    }
     const existing = await prisma.item.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Item not found' });
-    const updated = await prisma.item.update({ where: { id }, data: { name, ...actorUpdateFields(req.user?.id) } });
+    // Renames can flip unique-name rate resolution for unlinked cutter rows —
+    // exclude payments in flight (shared side of the item-names lock).
+    const updated = await prisma.$transaction(async (tx) => {
+      await lockItemNamesExclusive(tx);
+      return tx.item.update({ where: { id }, data: { name, side, ...actorUpdateFields(req.user?.id) } });
+    });
     await logCrudWithActor(req, {
       entityType: 'item',
       entityId: id,
@@ -11030,6 +11121,8 @@ router.put('/api/items/:id', requireEditPermission('masters'), async (req, res) 
       payload: {
         oldName: existing.name,
         newName: updated.name,
+        oldSide: existing.side,
+        newSide: updated.side,
       },
     });
     res.json(updated);
@@ -12183,6 +12276,9 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid (incl. downstream
+      // coning lineage); corrections go through the paid-edit workflow.
+      await assertIssueEditable(tx, 'cutter', id);
       const data = {};
 
       if (date !== undefined) {
@@ -12339,6 +12435,7 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
 
     res.json({ ok: true, issueToCutterMachine: updatedIssue, issueToMachine: updatedIssue });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update issue_to_cutter_machine', err);
     res.status(400).json({ error: err.message || 'Failed to update issue_to_cutter_machine' });
   }
@@ -12395,6 +12492,9 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid (incl. downstream
+      // coning lineage); corrections go through the paid-edit workflow.
+      await assertIssueEditable(tx, 'holo', id);
       const data = {};
 
       if (date !== undefined) {
@@ -12647,6 +12747,7 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
 
     res.json({ ok: true, issueToHoloMachine: updatedIssue });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update issue_to_holo_machine', err);
     res.status(400).json({ error: err.message || 'Failed to update issue_to_holo_machine' });
   }
@@ -12704,6 +12805,9 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid (incl. re-coning
+      // children); corrections go through the paid-edit workflow.
+      await assertIssueEditable(tx, 'coning', id);
       const data = {};
 
       if (date !== undefined) {
@@ -13087,6 +13191,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
 
     res.json({ ok: true, issueToConingMachine: updatedIssue });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update issue_to_coning_machine', err);
     res.status(400).json({ error: err.message || 'Failed to update issue_to_coning_machine' });
   }
@@ -13132,6 +13237,8 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid; use paid-edit instead.
+      await assertIssueEditable(tx, 'cutter', id);
       // Soft delete the issue_to_cutter_machine record
       await tx.issueToCutterMachine.update({
         where: { id },
@@ -13178,6 +13285,7 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
       sendNotification('issue_to_cutter_machine_deleted', { itemName, lotNo: issueRecord.lotNo, date: issueRecord.date, count: issueRecord.count, totalWeight: issueRecord.totalWeight, pieceIds: cleanPieceIds, machineName: machineNameDel, machineNumber: machineNumberDel, operatorName: operatorNameDel, createdByUserId: issueRecord.createdByUserId || null });
     } catch (e) { console.error('notify issue_to_cutter_machine deleted error', e); }
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete issue_to_cutter_machine record', err);
     res.status(500).json({ error: err.message || 'Failed to delete issue_to_cutter_machine record' });
   }
@@ -13223,6 +13331,9 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid (incl. downstream
+      // coning lineage); use paid-edit instead.
+      await assertIssueEditable(tx, 'holo', id);
       // Revert bobbin counts on source cutter receive rows
       for (const ref of refs) {
         if (!ref.rowId) continue;
@@ -13281,6 +13392,7 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
       });
     } catch (e) { console.error('notify issue_to_holo_machine deleted error', e); }
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete issue_to_holo_machine record', err);
     res.status(500).json({ error: err.message || 'Failed to delete issue_to_holo_machine record' });
   }
@@ -13315,6 +13427,9 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
+      // Frozen once any dependent receive row is paid (incl. re-coning
+      // children); use paid-edit instead.
+      await assertIssueEditable(tx, 'coning', id);
       // Soft delete the issue record (no source row updates needed for coning)
       await tx.issueToConingMachine.update({
         where: { id },
@@ -13354,6 +13469,7 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
       });
     } catch (e) { console.error('notify issue_to_coning_machine deleted error', e); }
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete issue_to_coning_machine record', err);
     res.status(500).json({ error: err.message || 'Failed to delete issue_to_coning_machine record' });
   }
@@ -17943,6 +18059,13 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
     const result = await prisma.$transaction(async (tx) => {
       const EPSILON = 1e-9;
 
+      // A transfer rewrites net weight on both rows — refuse when either row
+      // is already paid in a contractor settlement, and serialize against an
+      // in-flight Mark Paid via the same row locks.
+      if (stage === 'holo' || stage === 'coning' || stage === 'cutter') {
+        await assertProductionRowsEditable(tx, stage, [lookupFrom.itemId, lookupTo.itemId]);
+      }
+
       // Update source - decrease count and weight
       if (stage === 'holo') {
         const sourceRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: lookupFrom.itemId } });
@@ -18162,6 +18285,7 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
 
     res.json({ ok: true, transfer: result });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Box transfer failed', err);
     res.status(500).json({ error: err.message || 'Transfer failed' });
   }
@@ -18222,6 +18346,13 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
     const { stage, pieceCount, weightTransferred } = original;
 
     const result = await prisma.$transaction(async (tx) => {
+      // A reversal rewrites net weight on both rows — refuse when either row
+      // is already paid in a contractor settlement, and serialize against an
+      // in-flight Mark Paid via the same row locks.
+      if (stage === 'holo' || stage === 'coning' || stage === 'cutter') {
+        await assertProductionRowsEditable(tx, stage, [original.fromItemId, original.toItemId]);
+      }
+
       // Reverse the transfer: add back to source, subtract from destination
       if (stage === 'holo') {
         const sourceRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: original.fromItemId } });
@@ -18406,6 +18537,7 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
 
     res.json({ ok: true, reverseTransfer: result });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Box transfer reverse failed', err);
     res.status(500).json({ error: err.message || 'Reverse failed' });
   }

@@ -23,6 +23,7 @@ export const BASE_PERMISSION_KEYS = [
   'opening_stock',
   'box_transfer',
   'send_documents',
+  'contractor_payments',
 ];
 
 export const PERMISSION_KEYS = [
@@ -83,6 +84,7 @@ export const MODULE_PERMISSIONS = [
   { key: 'opening_stock', label: 'Opening Stock', supportsDelete: true },
   { key: 'box_transfer', label: 'Box Transfer', supportsDelete: true },
   { key: 'send_documents', label: 'Send Documents' },
+  { key: 'contractor_payments', label: 'Contractor Payments', supportsDelete: true },
 ];
 
 export const ISSUE_STAGE_PERMISSIONS = [

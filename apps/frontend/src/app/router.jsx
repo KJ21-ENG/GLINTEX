@@ -15,6 +15,7 @@ import {
   BoxTransfer,
   Boiler,
   Masters,
+  ContractorPayments,
   Reports,
   Settings,
   Login,
@@ -116,6 +117,14 @@ export const router = createBrowserRouter([
         element: (
           <PermissionGate permission="masters">
             <Masters />
+          </PermissionGate>
+        ),
+      },
+      {
+        path: "contractor-payments",
+        element: (
+          <PermissionGate permission="contractor_payments">
+            <ContractorPayments />
           </PermissionGate>
         ),
       },

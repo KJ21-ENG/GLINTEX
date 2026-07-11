@@ -23,6 +23,7 @@ export const BASE_PERMISSION_KEYS = [
   'opening_stock',
   'box_transfer',
   'send_documents',
+  'contractor_payments',
 ];
 
 export const PERMISSION_KEYS = [

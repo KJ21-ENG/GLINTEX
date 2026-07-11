@@ -232,9 +232,39 @@ export async function previewReceiveFromMachine(payload) { return await previewR
 export async function manualReceiveFromMachine(payload) { return await manualReceiveFromCutterMachine(payload); }
 export async function updateInboundItem(id, payload) { return await request(`/api/inbound_items/${id}`, { method: 'PUT', body: payload }); }
 export async function listItems() { return await request('/api/items'); }
-export async function createItem(name) { return await request('/api/items', { method: 'POST', body: { name } }); }
+export async function createItem(name, side) { return await request('/api/items', { method: 'POST', body: { name, side } }); }
 export async function deleteItem(id) { return await request(`/api/items/${id}`, { method: 'DELETE' }); }
-export async function updateItem(id, name) { return await request(`/api/items/${id}`, { method: 'PUT', body: { name } }); }
+export async function updateItem(id, name, side) { return await request(`/api/items/${id}`, { method: 'PUT', body: { name, side } }); }
+
+// ---- Contractor KG payments ----
+const CP_BASE = '/api/contractor-payments';
+function cpQuery(params = {}) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') search.append(k, v); });
+  const s = search.toString();
+  return s ? `?${s}` : '';
+}
+export async function listContractors() { return await request(`${CP_BASE}/contractors`); }
+export async function createContractor(payload) { return await request(`${CP_BASE}/contractors`, { method: 'POST', body: payload }); }
+export async function updateContractor(id, payload) { return await request(`${CP_BASE}/contractors/${id}`, { method: 'PUT', body: payload }); }
+export async function deleteContractor(id) { return await request(`${CP_BASE}/contractors/${id}`, { method: 'DELETE' }); }
+export async function listContractorAssignments(params) { return await request(`${CP_BASE}/assignments${cpQuery(params)}`); }
+export async function createContractorAssignment(payload) { return await request(`${CP_BASE}/assignments`, { method: 'POST', body: payload }); }
+export async function updateContractorAssignment(id, payload) { return await request(`${CP_BASE}/assignments/${id}`, { method: 'PUT', body: payload }); }
+export async function deleteContractorAssignment(id) { return await request(`${CP_BASE}/assignments/${id}`, { method: 'DELETE' }); }
+export async function listContractorRates(params) { return await request(`${CP_BASE}/rates${cpQuery(params)}`); }
+export async function createContractorRate(payload) { return await request(`${CP_BASE}/rates`, { method: 'POST', body: payload }); }
+export async function updateContractorRate(id, payload) { return await request(`${CP_BASE}/rates/${id}`, { method: 'PUT', body: payload }); }
+export async function deleteContractorRate(id) { return await request(`${CP_BASE}/rates/${id}`, { method: 'DELETE' }); }
+export async function getContractorPayablePreview(params) { return await request(`${CP_BASE}/preview${cpQuery(params)}`); }
+export async function listContractorSettlements(params) { return await request(`${CP_BASE}/settlements${cpQuery(params)}`); }
+export async function getContractorSettlement(id) { return await request(`${CP_BASE}/settlements/${id}`); }
+export async function createContractorSettlement(payload) { return await request(`${CP_BASE}/settlements`, { method: 'POST', body: payload }); }
+export async function updateContractorSettlementDraft(id, payload) { return await request(`${CP_BASE}/settlements/${id}`, { method: 'PUT', body: payload }); }
+export async function deleteContractorSettlement(id) { return await request(`${CP_BASE}/settlements/${id}`, { method: 'DELETE' }); }
+export async function markContractorSettlementPaid(id, payload) { return await request(`${CP_BASE}/settlements/${id}/mark-paid`, { method: 'POST', body: payload }); }
+export async function adminEditContractorSettlement(id, payload) { return await request(`${CP_BASE}/settlements/${id}/paid-edit`, { method: 'PUT', body: payload }); }
+export async function downloadContractorSettlementPdf(id) { return await downloadBlobResponse(`${CP_BASE}/settlements/${id}/pdf`, `contractor_settlement_${id}.pdf`); }
 export async function listYarns() { return await request('/api/yarns'); }
 export async function createYarn(name) { return await request('/api/yarns', { method: 'POST', body: { name } }); }
 export async function deleteYarn(id) { return await request(`/api/yarns/${id}`, { method: 'DELETE' }); }
@@ -613,6 +643,27 @@ export default {
   createItem,
   deleteItem,
   updateItem,
+  listContractors,
+  createContractor,
+  updateContractor,
+  deleteContractor,
+  listContractorAssignments,
+  createContractorAssignment,
+  updateContractorAssignment,
+  deleteContractorAssignment,
+  listContractorRates,
+  createContractorRate,
+  updateContractorRate,
+  deleteContractorRate,
+  getContractorPayablePreview,
+  listContractorSettlements,
+  getContractorSettlement,
+  createContractorSettlement,
+  updateContractorSettlementDraft,
+  deleteContractorSettlement,
+  markContractorSettlementPaid,
+  adminEditContractorSettlement,
+  downloadContractorSettlementPdf,
   listYarns,
   createYarn,
   deleteYarn,

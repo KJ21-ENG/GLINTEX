@@ -46,6 +46,9 @@ export function Masters() {
         createConeType, updateConeType, deleteConeType,
         createWrapper, updateWrapper, deleteWrapper,
         createBox, updateBox, deleteBox,
+        createContractor, updateContractor, deleteContractor,
+        createContractorAssignment, updateContractorAssignment, deleteContractorAssignment,
+        createContractorRate, updateContractorRate, deleteContractorRate,
         refreshing
     } = useInventory();
     const { canRead, canWrite, canEdit, canDelete } = usePermission('masters');
@@ -66,7 +69,7 @@ export function Masters() {
 
     const renderContent = () => {
         switch (activeTab) {
-            case 'items': return <SimpleMasterCrud title="Items" data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'items': return <ItemsMasterCrud data={db.items} onCreate={createItem} onUpdate={updateItem} onDelete={deleteItem} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'yarns': return <SimpleMasterCrud title="Yarns" data={db.yarns} onCreate={createYarn} onUpdate={updateYarn} onDelete={deleteYarn} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'cuts': return <SimpleMasterCrud title="Cuts" data={db.cuts} onCreate={createCut} onUpdate={updateCut} onDelete={deleteCut} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'twists': return <SimpleMasterCrud title="Twists" data={db.twists} onCreate={createTwist} onUpdate={updateTwist} onDelete={deleteTwist} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
@@ -83,6 +86,9 @@ export function Masters() {
             case 'coneTypes': return <WeightMasterCrud title="Cone Types" data={db.cone_types} onCreate={createConeType} onUpdate={updateConeType} onDelete={deleteConeType} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'wrappers': return <SimpleMasterCrud title="Wrappers" data={db.wrappers} onCreate={createWrapper} onUpdate={updateWrapper} onDelete={deleteWrapper} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'contractors': return <ContractorsMasterCrud data={db.contractors || []} onCreate={createContractor} onUpdate={updateContractor} onDelete={deleteContractor} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'contractorAssignments': return <ContractorAssignmentsMasterCrud data={db.contractor_assignments || []} contractors={db.contractors || []} onCreate={createContractorAssignment} onUpdate={updateContractorAssignment} onDelete={deleteContractorAssignment} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'contractorRates': return <ContractorRatesMasterCrud data={db.contractor_rates || []} contractors={db.contractors || []} items={db.items || []} yarns={db.yarns || []} cuts={db.cuts || []} twists={db.twists || []} coneTypes={db.cone_types || []} onCreate={createContractorRate} onUpdate={updateContractorRate} onDelete={deleteContractorRate} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             default: return null;
         }
     }
@@ -140,6 +146,11 @@ export function Masters() {
                         <TabButton id="machines" label="Machines" />
                         <TabButton id="workers" label="Workers" />
                         <TabButton id="boxes" label="Boxes" />
+
+                        <SectionDivider label="Contractors" />
+                        <TabButton id="contractors" label="Contractors" />
+                        <TabButton id="contractorAssignments" label="Process Assignments" />
+                        <TabButton id="contractorRates" label="Contractor Rates" />
                     </nav>
                 </CardContent>
             </Card>
@@ -1643,6 +1654,556 @@ function CustomersMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canC
                             )}
                         </div>
                     ))}
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+// ============================ Contractor masters ============================
+
+const SIDE_OPTIONS = [
+    { value: 'SINGLE', label: 'Single (S/S)' },
+    { value: 'BOTH', label: 'Both (B/S)' },
+];
+const CONTRACTOR_PROCESS_OPTIONS = [
+    { value: 'cutter', label: 'Cutter' },
+    { value: 'holo', label: 'Holo' },
+    { value: 'coning', label: 'Coning' },
+];
+
+function SideBadge({ side }) {
+    if (side === 'SINGLE') return <Badge variant="secondary">S/S</Badge>;
+    if (side === 'BOTH') return <Badge variant="secondary">B/S</Badge>;
+    return <Badge className="bg-amber-100 text-amber-800 border-amber-300">Unknown</Badge>;
+}
+
+function ErrorNote({ error }) {
+    if (!error) return null;
+    return <div className="rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm px-3 py-2">{error}</div>;
+}
+
+function nameMap(list) {
+    const m = new Map();
+    (list || []).forEach((x) => m.set(x.id, x.name));
+    return m;
+}
+
+function formatDateRange(from, to) {
+    if (!from) return '—';
+    return `${from} → ${to || 'ongoing'}`;
+}
+
+// --- Items master with required Side ---------------------------------------
+function ItemsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const [newName, setNewName] = useState('');
+    const [newSide, setNewSide] = useState('');
+    const [search, setSearch] = useState('');
+    const [onlyUnknown, setOnlyUnknown] = useState(false);
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editSide, setEditSide] = useState('');
+    const [error, setError] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+
+    const unknownCount = (data || []).filter((i) => !i.side || i.side === 'UNKNOWN').length;
+    const filtered = (data || []).filter((i) => {
+        if (onlyUnknown && i.side && i.side !== 'UNKNOWN') return false;
+        return (i.name || '').toLowerCase().includes(search.toLowerCase());
+    });
+
+    const handleCreate = async () => {
+        if (!allowCreate || !newName.trim() || !newSide) return;
+        setError('');
+        try {
+            await onCreate(newName.trim(), newSide);
+            setNewName('');
+            setNewSide('');
+        } catch (err) { setError(err.message || 'Failed to create item'); }
+    };
+    const startEdit = (item) => { setEditingId(item.id); setEditName(item.name); setEditSide(item.side && item.side !== 'UNKNOWN' ? item.side : ''); setError(''); };
+    const handleUpdate = async (id) => {
+        if (!allowEdit || !editName.trim() || !editSide) return;
+        setError('');
+        try { await onUpdate(id, editName.trim(), editSide); setEditingId(null); }
+        catch (err) { setError(err.message || 'Failed to update item'); }
+    };
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle className="flex items-center gap-2">
+                    Items
+                    {unknownCount > 0 && (
+                        <Badge className="bg-amber-100 text-amber-800 border-amber-300">{unknownCount} need Side</Badge>
+                    )}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                    <Button size="sm" variant={onlyUnknown ? 'default' : 'outline'} onClick={() => setOnlyUnknown((v) => !v)}>
+                        Review Unknown
+                    </Button>
+                    <div className="relative w-full sm:w-48">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8 h-9" />
+                    </div>
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <ErrorNote error={error} />
+                <div className="flex flex-col sm:flex-row gap-2">
+                    <Input placeholder="New Item name" value={newName} onChange={(e) => setNewName(e.target.value)} disabled={!allowCreate} />
+                    <Select value={newSide} onChange={(e) => setNewSide(e.target.value)} disabled={!allowCreate} className="sm:w-44">
+                        <option value="">Side…</option>
+                        {SIDE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </Select>
+                    <Button onClick={handleCreate} disabled={loading || !newName.trim() || !newSide || !allowCreate} className="w-full sm:w-auto">
+                        <Plus className="w-4 h-4 mr-2" /> Add
+                    </Button>
+                </div>
+
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Side</TableHead>
+                                <TableHead>Added By</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableStateRow colSpan={4} emptyMessage="No records found." />
+                            ) : filtered.map((item) => (
+                                <TableRow key={item.id} className={(!item.side || item.side === 'UNKNOWN') ? 'bg-amber-50/60' : ''}>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-8" disabled={!allowEdit} />
+                                        ) : item.name}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <Select value={editSide} onChange={(e) => setEditSide(e.target.value)} className="h-8" disabled={!allowEdit}>
+                                                <option value="">Side…</option>
+                                                {SIDE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                            </Select>
+                                        ) : <SideBadge side={item.side} />}
+                                    </TableCell>
+                                    <TableCell><UserBadge user={item.createdByUser} timestamp={item.createdAt} /></TableCell>
+                                    <TableCell>
+                                        {editingId === item.id ? (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => handleUpdate(item.id)}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id); }}><Trash2 className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+// --- Contractors master ----------------------------------------------------
+function ContractorsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const empty = { name: '', phone: '', paymentDetails: '', notes: '', isActive: true };
+    const [form, setForm] = useState(empty);
+    const [search, setSearch] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [error, setError] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+
+    const filtered = (data || []).filter((c) => (c.name || '').toLowerCase().includes(search.toLowerCase()));
+    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const reset = () => { setForm(empty); setEditingId(null); };
+
+    const submit = async () => {
+        if (!form.name.trim()) return;
+        setError('');
+        const payload = { name: form.name.trim(), phone: form.phone.trim() || null, paymentDetails: form.paymentDetails.trim() || null, notes: form.notes.trim() || null, isActive: !!form.isActive };
+        try {
+            if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
+            reset();
+        } catch (err) { setError(err.message || 'Failed to save contractor'); }
+    };
+    const startEdit = (c) => { setEditingId(c.id); setForm({ name: c.name || '', phone: c.phone || '', paymentDetails: c.paymentDetails || '', notes: c.notes || '', isActive: c.isActive !== false }); setError(''); };
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle>Contractors</CardTitle>
+                <div className="relative w-full sm:w-48">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8 h-9" />
+                </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <ErrorNote error={error} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 bg-muted/30">
+                    <div><Label className="text-xs">Name *</Label><Input value={form.name} onChange={(e) => set('name', e.target.value)} disabled={!allowCreate && !editingId} /></div>
+                    <div><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={(e) => set('phone', e.target.value)} disabled={!allowCreate && !editingId} /></div>
+                    <div><Label className="text-xs">Payment details</Label><Input value={form.paymentDetails} onChange={(e) => set('paymentDetails', e.target.value)} placeholder="Bank / UPI / account" disabled={!allowCreate && !editingId} /></div>
+                    <div><Label className="text-xs">Notes</Label><Input value={form.notes} onChange={(e) => set('notes', e.target.value)} disabled={!allowCreate && !editingId} /></div>
+                    <label className="flex items-center gap-2 text-sm mt-1">
+                        <input type="checkbox" checked={form.isActive} onChange={(e) => set('isActive', e.target.checked)} disabled={!allowCreate && !editingId} /> Active
+                    </label>
+                    <div className="flex items-end gap-2 justify-end">
+                        {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
+                        <Button onClick={submit} disabled={loading || !form.name.trim() || (editingId ? !allowEdit : !allowCreate)}>
+                            {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="rounded-md border max-h-[55vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Phone</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableStateRow colSpan={4} emptyMessage="No contractors yet." />
+                            ) : filtered.map((c) => (
+                                <TableRow key={c.id}>
+                                    <TableCell className="font-medium">{c.name}</TableCell>
+                                    <TableCell>{c.phone || '—'}</TableCell>
+                                    <TableCell>{c.isActive !== false ? <Badge variant="secondary">Active</Badge> : <Badge className="bg-muted text-muted-foreground">Inactive</Badge>}</TableCell>
+                                    <TableCell>
+                                        <div className="flex justify-end gap-1">
+                                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(c)}><Edit2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                            <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete contractor?')) onDelete(c.id).catch((err) => setError(err.message)); }}><Trash2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+// --- Process assignments master --------------------------------------------
+function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const empty = { contractorId: '', process: '', effectiveFrom: '', effectiveTo: '' };
+    const [form, setForm] = useState(empty);
+    const [editingId, setEditingId] = useState(null);
+    const [error, setError] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+    const contractorName = nameMap(contractors);
+
+    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const reset = () => { setForm(empty); setEditingId(null); };
+    const submit = async () => {
+        if (!form.contractorId || !form.process || !form.effectiveFrom) return;
+        setError('');
+        const payload = { contractorId: form.contractorId, process: form.process, effectiveFrom: form.effectiveFrom, effectiveTo: form.effectiveTo || null };
+        try {
+            if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
+            reset();
+        } catch (err) { setError(err.message || 'Failed to save assignment'); }
+    };
+    const startEdit = (a) => { setEditingId(a.id); setForm({ contractorId: a.contractorId, process: a.process, effectiveFrom: a.effectiveFrom || '', effectiveTo: a.effectiveTo || '' }); setError(''); };
+
+    return (
+        <Card>
+            <CardHeader><CardTitle>Process Assignments</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+                <ErrorNote error={error} />
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 rounded-md border p-3 bg-muted/30 items-end">
+                    <div><Label className="text-xs">Contractor *</Label>
+                        <Select value={form.contractorId} onChange={(e) => set('contractorId', e.target.value)}>
+                            <option value="">Select…</option>
+                            {(contractors || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </Select>
+                    </div>
+                    <div><Label className="text-xs">Process *</Label>
+                        <Select value={form.process} onChange={(e) => set('process', e.target.value)}>
+                            <option value="">Select…</option>
+                            {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                    </div>
+                    <div><Label className="text-xs">From (contract start) *</Label><Input type="date" value={form.effectiveFrom} onChange={(e) => set('effectiveFrom', e.target.value)} /></div>
+                    <div><Label className="text-xs">To (optional)</Label><Input type="date" value={form.effectiveTo} onChange={(e) => set('effectiveTo', e.target.value)} /></div>
+                    <div className="flex gap-2 justify-end">
+                        {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
+                        <Button onClick={submit} disabled={loading || !form.contractorId || !form.process || !form.effectiveFrom || (editingId ? !allowEdit : !allowCreate)}>
+                            {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
+                        </Button>
+                    </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Production before a contractor's contract start date is never eligible. Overlapping assignments for the same process are rejected.</p>
+
+                <div className="rounded-md border max-h-[55vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Contractor</TableHead>
+                                <TableHead>Process</TableHead>
+                                <TableHead>Effective</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {(data || []).length === 0 ? (
+                                <TableStateRow colSpan={4} emptyMessage="No assignments yet." />
+                            ) : (data || []).map((a) => (
+                                <TableRow key={a.id}>
+                                    <TableCell className="font-medium">{contractorName.get(a.contractorId) || '—'}</TableCell>
+                                    <TableCell className="capitalize">{a.process}</TableCell>
+                                    <TableCell>{formatDateRange(a.effectiveFrom, a.effectiveTo)}</TableCell>
+                                    <TableCell>
+                                        <div className="flex justify-end gap-1">
+                                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(a)}><Edit2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                            <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete assignment?')) onDelete(a.id).catch((err) => setError(err.message)); }}><Trash2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
+// --- Contractor rates master -----------------------------------------------
+function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const empty = { contractorId: '', process: '', itemId: '', yarnId: '', cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '', effectiveFrom: '', effectiveTo: '' };
+    const [form, setForm] = useState(empty);
+    const [editingId, setEditingId] = useState(null);
+    const [filterProcess, setFilterProcess] = useState('');
+    const [error, setError] = useState('');
+    const allowCreate = !!canCreate;
+    const allowEdit = !!canEdit;
+    const allowDelete = !!canDelete;
+
+    const contractorName = nameMap(contractors);
+    const itemName = nameMap(items);
+    const yarnName = nameMap(yarns);
+    const cutName = nameMap(cuts);
+    const twistName = nameMap(twists);
+    const coneTypeName = nameMap(coneTypes);
+
+    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const reset = () => { setForm(empty); setEditingId(null); };
+
+    const submit = async () => {
+        setError('');
+        const rate = Number(form.ratePerKg);
+        if (!form.contractorId || !form.process || !form.effectiveFrom || !(rate > 0)) return;
+        const payload = {
+            contractorId: form.contractorId,
+            process: form.process,
+            ratePerKg: rate,
+            effectiveFrom: form.effectiveFrom,
+            effectiveTo: form.effectiveTo || null,
+            itemId: form.process === 'cutter' ? (form.itemId || null) : null,
+            yarnId: form.process !== 'cutter' ? (form.yarnId || null) : null,
+            cutId: form.cutId || null,
+            side: form.process === 'coning' ? (form.side || null) : null,
+            twistId: form.process !== 'cutter' ? (form.twistId || null) : null,
+            coneTypeId: form.process === 'coning' ? (form.coneTypeId || null) : null,
+        };
+        try {
+            if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
+            reset();
+        } catch (err) { setError(err.message || 'Failed to save rate'); }
+    };
+    const startEdit = (r) => {
+        setEditingId(r.id);
+        setForm({
+            contractorId: r.contractorId, process: r.process,
+            itemId: r.itemId || '', yarnId: r.yarnId || '', cutId: r.cutId || '', side: r.side || '',
+            twistId: r.twistId || '', coneTypeId: r.coneTypeId || '',
+            ratePerKg: r.ratePerKg != null ? String(r.ratePerKg) : '', effectiveFrom: r.effectiveFrom || '', effectiveTo: r.effectiveTo || '',
+        });
+        setError('');
+    };
+
+    const describeKeys = (r) => {
+        const parts = [];
+        if (r.process === 'cutter') { parts.push(itemName.get(r.itemId) || 'Item?'); parts.push(cutName.get(r.cutId) || 'Cut?'); }
+        else { parts.push(yarnName.get(r.yarnId) || 'Yarn?'); parts.push(cutName.get(r.cutId) || 'Cut?'); }
+        if (r.process === 'coning') parts.push(r.side === 'SINGLE' ? 'S/S' : r.side === 'BOTH' ? 'B/S' : 'Side?');
+        if (r.twistId) parts.push(`Twist:${twistName.get(r.twistId) || '?'}`);
+        if (r.coneTypeId) parts.push(`Cone:${coneTypeName.get(r.coneTypeId) || '?'}`);
+        return parts.join(' · ');
+    };
+
+    const rows = (data || []).filter((r) => !filterProcess || r.process === filterProcess);
+    const process = form.process;
+    const rateValue = Number(form.ratePerKg);
+    const formReady = !!form.contractorId && !!process && !!form.effectiveFrom && rateValue > 0 && (
+        process === 'cutter' ? (!!form.itemId && !!form.cutId)
+            : process === 'holo' ? (!!form.yarnId && !!form.cutId)
+                : process === 'coning' ? (!!form.yarnId && !!form.cutId && !!form.side)
+                    : false
+    );
+
+    return (
+        <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle>Contractor Rates (₹/KG)</CardTitle>
+                <Select value={filterProcess} onChange={(e) => setFilterProcess(e.target.value)} className="sm:w-40 h-9">
+                    <option value="">All processes</option>
+                    {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </Select>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <ErrorNote error={error} />
+                <div className="rounded-md border p-3 bg-muted/30 space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div><Label className="text-xs">Contractor *</Label>
+                            <Select value={form.contractorId} onChange={(e) => set('contractorId', e.target.value)}>
+                                <option value="">Select…</option>
+                                {(contractors || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </Select>
+                        </div>
+                        <div><Label className="text-xs">Process *</Label>
+                            <Select value={form.process} onChange={(e) => set('process', e.target.value)}>
+                                <option value="">Select…</option>
+                                {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </Select>
+                        </div>
+                        <div><Label className="text-xs">Rate ₹/KG *</Label><Input type="number" step="0.0001" min="0" value={form.ratePerKg} onChange={(e) => set('ratePerKg', e.target.value)} /></div>
+                    </div>
+
+                    {process && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {process === 'cutter' && (
+                                <div><Label className="text-xs">Item *</Label>
+                                    <Select value={form.itemId} onChange={(e) => set('itemId', e.target.value)}>
+                                        <option value="">Select…</option>
+                                        {(items || []).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                    </Select>
+                                </div>
+                            )}
+                            {process !== 'cutter' && (
+                                <div><Label className="text-xs">Yarn *</Label>
+                                    <Select value={form.yarnId} onChange={(e) => set('yarnId', e.target.value)}>
+                                        <option value="">Select…</option>
+                                        {(yarns || []).map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
+                                    </Select>
+                                </div>
+                            )}
+                            <div><Label className="text-xs">Cut *</Label>
+                                <Select value={form.cutId} onChange={(e) => set('cutId', e.target.value)}>
+                                    <option value="">Select…</option>
+                                    {(cuts || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </Select>
+                            </div>
+                            {process === 'coning' && (
+                                <div><Label className="text-xs">Side *</Label>
+                                    <Select value={form.side} onChange={(e) => set('side', e.target.value)}>
+                                        <option value="">Select…</option>
+                                        {SIDE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </Select>
+                                </div>
+                            )}
+                            {process !== 'cutter' && (
+                                <div><Label className="text-xs">Twist (optional override)</Label>
+                                    <Select value={form.twistId} onChange={(e) => set('twistId', e.target.value)}>
+                                        <option value="">Any</option>
+                                        {(twists || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                    </Select>
+                                </div>
+                            )}
+                            {process === 'coning' && (
+                                <div><Label className="text-xs">Cone Type (optional override)</Label>
+                                    <Select value={form.coneTypeId} onChange={(e) => set('coneTypeId', e.target.value)}>
+                                        <option value="">Any</option>
+                                        {(coneTypes || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    </Select>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                        <div><Label className="text-xs">Effective From *</Label><Input type="date" value={form.effectiveFrom} onChange={(e) => set('effectiveFrom', e.target.value)} /></div>
+                        <div><Label className="text-xs">Effective To (optional)</Label><Input type="date" value={form.effectiveTo} onChange={(e) => set('effectiveTo', e.target.value)} /></div>
+                        <div className="flex gap-2 justify-end">
+                            {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
+                            <Button onClick={submit} disabled={loading || !formReady || (editingId ? !allowEdit : !allowCreate)}>
+                                {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-md border max-h-[50vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Contractor</TableHead>
+                                <TableHead>Process</TableHead>
+                                <TableHead>Quality keys</TableHead>
+                                <TableHead className="text-right">₹/KG</TableHead>
+                                <TableHead>Effective</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {rows.length === 0 ? (
+                                <TableStateRow colSpan={6} emptyMessage="No rates configured." />
+                            ) : rows.map((r) => (
+                                <TableRow key={r.id}>
+                                    <TableCell className="font-medium">{contractorName.get(r.contractorId) || '—'}</TableCell>
+                                    <TableCell className="capitalize">{r.process}</TableCell>
+                                    <TableCell className="text-sm">{describeKeys(r)}</TableCell>
+                                    <TableCell className="text-right tabular-nums">{Number(r.ratePerKg).toFixed(2)}</TableCell>
+                                    <TableCell className="text-sm">{formatDateRange(r.effectiveFrom, r.effectiveTo)}</TableCell>
+                                    <TableCell>
+                                        <div className="flex justify-end gap-1">
+                                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(r)}><Edit2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                            <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete rate?')) onDelete(r.id).catch((err) => setError(err.message)); }}><Trash2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
                 </div>
             </CardContent>
         </Card>

@@ -32,6 +32,9 @@ const BOOTSTRAP_KEYS = [
   'holo_other_wastage_items',
   'cone_types',
   'wrappers',
+  'contractors',
+  'contractor_assignments',
+  'contractor_rates',
   'settings',
 ];
 
@@ -55,6 +58,9 @@ const buildRawFromDb = (db) => ({
   holo_other_wastage_items: db?.holo_other_wastage_items || [],
   cone_types: db?.cone_types || [],
   wrappers: db?.wrappers || [],
+  contractors: db?.contractors || [],
+  contractor_assignments: db?.contractor_assignments || [],
+  contractor_rates: db?.contractor_rates || [],
   issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
   issue_to_cutter_machine_lines: db?.issue_to_cutter_machine_lines || [],
   issue_to_holo_machine: db?.issue_to_holo_machine || [],
@@ -462,10 +468,21 @@ export const InventoryProvider = ({ children }) => {
       await refreshProcessData('cutter');
     },
 
-    // Masters - Items
-    createItem: async (name) => { await api.createItem(name); await refreshDb(); },
-    updateItem: async (id, name) => { await api.updateItem(id, name); await refreshDb(); },
+    // Masters - Items (Side required)
+    createItem: async (name, side) => { await api.createItem(name, side); await refreshDb(); },
+    updateItem: async (id, name, side) => { await api.updateItem(id, name, side); await refreshDb(); },
     deleteItem: async (id) => { await api.deleteItem(id); await refreshDb(); },
+
+    // Masters - Contractors / Assignments / Rates
+    createContractor: async (payload) => { const r = await api.createContractor(payload); await refreshDb(); return r; },
+    updateContractor: async (id, payload) => { const r = await api.updateContractor(id, payload); await refreshDb(); return r; },
+    deleteContractor: async (id) => { await api.deleteContractor(id); await refreshDb(); },
+    createContractorAssignment: async (payload) => { const r = await api.createContractorAssignment(payload); await refreshDb(); return r; },
+    updateContractorAssignment: async (id, payload) => { const r = await api.updateContractorAssignment(id, payload); await refreshDb(); return r; },
+    deleteContractorAssignment: async (id) => { await api.deleteContractorAssignment(id); await refreshDb(); },
+    createContractorRate: async (payload) => { const r = await api.createContractorRate(payload); await refreshDb(); return r; },
+    updateContractorRate: async (id, payload) => { const r = await api.updateContractorRate(id, payload); await refreshDb(); return r; },
+    deleteContractorRate: async (id) => { await api.deleteContractorRate(id); await refreshDb(); },
 
     // Masters - Yarns
     createYarn: async (name) => { await api.createYarn(name); await refreshDb(); },

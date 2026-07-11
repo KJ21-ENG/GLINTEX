@@ -18,7 +18,8 @@ import {
   Flame,
   Lock,
   FileText,
-  RefreshCw
+  RefreshCw,
+  Wallet
 } from "lucide-react";
 import { useInventory } from "../../context/InventoryContext";
 import { Button, Select } from "../ui";
@@ -38,6 +39,7 @@ const NAV_ITEMS = [
   { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo", permissions: ["boiler"] },
   { key: "send-documents", label: "Send Documents", icon: FileText, permissions: ["send_documents"] },
   { key: "masters", label: "Masters", icon: Database, permissions: ["masters"] },
+  { key: "contractor-payments", label: "Contractor Payments", icon: Wallet, permissions: ["contractor_payments"] },
   { key: "reports", label: "Reports", icon: BarChart3, permissions: ["reports"] },
   { key: "settings", label: "Settings", icon: Settings, permissions: ["settings"] },
 ];

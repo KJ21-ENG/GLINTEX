@@ -3022,10 +3022,10 @@ router.get('/api/bootstrap', async (req, res) => {
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
     slices.contractors = allowed.contractors ? await prisma.contractor.findMany({ orderBy: { name: 'asc' } }) : [];
     slices.contractor_assignments = allowed.contractor_assignments
-      ? await prisma.contractorAssignment.findMany({ orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }] })
+      ? await prisma.contractorAssignment.findMany({ orderBy: { process: 'asc' } })
       : [];
     slices.contractor_rates = allowed.contractor_rates
-      ? (await prisma.contractorRate.findMany({ orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }] }))
+      ? (await prisma.contractorRate.findMany({ orderBy: [{ process: 'asc' }, { createdAt: 'desc' }] }))
         .map((r) => ({ ...r, ratePerKg: r.ratePerKg == null ? null : Number(r.ratePerKg) }))
       : [];
     slices.settings = allowed.settings

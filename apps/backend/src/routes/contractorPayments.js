@@ -8,7 +8,6 @@ import {
   ADJUSTMENT_TYPES,
   PAYMENT_MODES,
   isValidDateStr,
-  rangesOverlap,
   normalizeSide,
   computeAmount,
   roundKg,
@@ -152,17 +151,10 @@ function serializeRate(r) {
 function normalizeRatePayload(process, body) {
   const ratePerKg = num(body.ratePerKg);
   if (ratePerKg === null || ratePerKg <= 0 || ratePerKg > MAX_RATE) return { error: 'ratePerKg must be a positive number within range' };
-  const effectiveFrom = cleanString(body.effectiveFrom, 10);
-  const effectiveTo = cleanString(body.effectiveTo, 10);
-  if (!isValidDateStr(effectiveFrom)) return { error: 'effectiveFrom must be YYYY-MM-DD' };
-  if (effectiveTo && !isValidDateStr(effectiveTo)) return { error: 'effectiveTo must be YYYY-MM-DD' };
-  if (effectiveTo && effectiveTo < effectiveFrom) return { error: 'effectiveTo cannot be before effectiveFrom' };
 
   const data = {
     process,
     ratePerKg,
-    effectiveFrom,
-    effectiveTo: effectiveTo || null,
     itemId: null,
     yarnId: null,
     cutId: null,
@@ -296,7 +288,7 @@ router.get('/assignments', requireAnyRead([MASTERS, PERM]), async (req, res) => 
     if (process) where.process = process;
     const rows = await prisma.contractorAssignment.findMany({
       where,
-      orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }],
+      orderBy: { process: 'asc' },
     });
     res.json(await resolveUserFields(rows, ['createdByUserId', 'updatedByUserId']));
   } catch (err) {
@@ -315,6 +307,18 @@ async function withAdvisoryLock(lockName, fn) {
   });
 }
 
+// Acquire multiple logical locks in a stable order when a master row changes
+// process/contractor, preventing a lock-order inversion between two edits.
+async function withAdvisoryLocks(lockNames, fn) {
+  const names = Array.from(new Set(lockNames.filter(Boolean))).sort();
+  return prisma.$transaction(async (tx) => {
+    for (const name of names) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${name}))`;
+    }
+    return fn(tx);
+  });
+}
+
 const overlapError = (message) => Object.assign(new Error(message), { statusCode: 409 });
 const httpError = (statusCode, message, extra) => Object.assign(new Error(message), { statusCode, extra });
 
@@ -329,36 +333,21 @@ async function withSettlementLock(id, fn) {
   }, { timeout: 20000, maxWait: 10000 });
 }
 
-// Reject overlapping active assignments for the same PROCESS across ALL
-// contractors. Production rows carry only process + date (no contractor tag),
-// so at most one contractor may own a process on any given date — otherwise
-// attribution of that production would be arbitrary/first-come.
-async function assertNoAssignmentOverlap(tx, process, from, to, excludeId) {
-  const existing = await tx.contractorAssignment.findMany({ where: { process } });
-  return existing.some((a) => a.id !== excludeId && rangesOverlap(from, to, a.effectiveFrom, a.effectiveTo));
-}
-
 router.post('/assignments', requirePermission(MASTERS, PERM_WRITE), async (req, res) => {
   try {
     const contractorId = cleanString(req.body?.contractorId, 40);
     const process = parseProcess(req.body?.process);
-    const effectiveFrom = cleanString(req.body?.effectiveFrom, 10);
-    const effectiveTo = cleanString(req.body?.effectiveTo, 10);
     if (!contractorId) return res.status(400).json({ error: 'contractorId is required' });
     if (!process) return res.status(400).json({ error: 'process must be cutter, holo, or coning' });
-    if (!isValidDateStr(effectiveFrom)) return res.status(400).json({ error: 'effectiveFrom must be YYYY-MM-DD' });
-    if (effectiveTo && !isValidDateStr(effectiveTo)) return res.status(400).json({ error: 'effectiveTo must be YYYY-MM-DD' });
-    if (effectiveTo && effectiveTo < effectiveFrom) return res.status(400).json({ error: 'effectiveTo cannot be before effectiveFrom' });
     const contractor = await prisma.contractor.findUnique({ where: { id: contractorId } });
     if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
     let created;
     try {
       created = await withAdvisoryLock(`contractor_assignment:${process}`, async (tx) => {
-        if (await assertNoAssignmentOverlap(tx, process, effectiveFrom, effectiveTo || null, null)) {
-          throw overlapError('Another contractor is already assigned to this process for an overlapping date range.');
-        }
+        const existing = await tx.contractorAssignment.findUnique({ where: { process } });
+        if (existing) throw overlapError('This process already has a contractor. Edit the current assignment to change the owner.');
         return tx.contractorAssignment.create({
-          data: { contractorId, process, effectiveFrom, effectiveTo: effectiveTo || null, ...actorCreateFields(req.user?.id) },
+          data: { contractorId, process, ...actorCreateFields(req.user?.id) },
         });
       });
     } catch (e) {
@@ -380,25 +369,22 @@ router.put('/assignments/:id', requireEditPermission(MASTERS), async (req, res) 
     if (!existing) return res.status(404).json({ error: 'Assignment not found' });
     const process = parseProcess(req.body?.process ?? existing.process);
     const contractorId = cleanString(req.body?.contractorId, 40) || existing.contractorId;
-    const effectiveFrom = cleanString(req.body?.effectiveFrom, 10) || existing.effectiveFrom;
-    const effectiveTo = req.body?.effectiveTo === undefined ? existing.effectiveTo : cleanString(req.body?.effectiveTo, 10);
     if (!process) return res.status(400).json({ error: 'process must be cutter, holo, or coning' });
-    if (!isValidDateStr(effectiveFrom)) return res.status(400).json({ error: 'effectiveFrom must be YYYY-MM-DD' });
-    if (effectiveTo && !isValidDateStr(effectiveTo)) return res.status(400).json({ error: 'effectiveTo must be YYYY-MM-DD' });
-    if (effectiveTo && effectiveTo < effectiveFrom) return res.status(400).json({ error: 'effectiveTo cannot be before effectiveFrom' });
-    if (contractorId !== existing.contractorId) {
-      const contractor = await prisma.contractor.findUnique({ where: { id: contractorId } });
-      if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
-    }
+    const contractor = await prisma.contractor.findUnique({ where: { id: contractorId } });
+    if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
     let updated;
     try {
-      updated = await withAdvisoryLock(`contractor_assignment:${process}`, async (tx) => {
-        if (await assertNoAssignmentOverlap(tx, process, effectiveFrom, effectiveTo || null, id)) {
-          throw overlapError('Another contractor is already assigned to this process for an overlapping date range.');
+      updated = await withAdvisoryLocks([
+        `contractor_assignment:${existing.process}`,
+        `contractor_assignment:${process}`,
+      ], async (tx) => {
+        const conflicting = await tx.contractorAssignment.findUnique({ where: { process } });
+        if (conflicting && conflicting.id !== id) {
+          throw overlapError('This process already has a contractor. Edit the current assignment to change the owner.');
         }
         return tx.contractorAssignment.update({
           where: { id },
-          data: { contractorId, process, effectiveFrom, effectiveTo: effectiveTo || null, ...actorUpdateFields(req.user?.id) },
+          data: { contractorId, process, ...actorUpdateFields(req.user?.id) },
         });
       });
     } catch (e) {
@@ -418,8 +404,8 @@ router.delete('/assignments/:id', requireDeletePermission(MASTERS), async (req, 
     const { id } = req.params;
     const existing = await prisma.contractorAssignment.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Assignment not found' });
-    // Same advisory lock as create/update/Mark Paid, so deleting an assignment
-    // can't race a settlement payment that depends on it.
+    // Serialize owner deletion with create/update and preview-backed draft
+    // creation for this process.
     await withAdvisoryLock(`contractor_assignment:${existing.process}`, async (tx) => {
       await tx.contractorAssignment.deleteMany({ where: { id } });
     });
@@ -444,7 +430,7 @@ router.get('/rates', requireAnyRead([MASTERS, PERM]), async (req, res) => {
     if (process) where.process = process;
     const rows = await prisma.contractorRate.findMany({
       where,
-      orderBy: [{ process: 'asc' }, { effectiveFrom: 'desc' }],
+      orderBy: [{ process: 'asc' }, { createdAt: 'desc' }],
     });
     const resolved = await resolveUserFields(rows.map(serializeRate), ['createdByUserId', 'updatedByUserId']);
     res.json(resolved);
@@ -454,14 +440,13 @@ router.get('/rates', requireAnyRead([MASTERS, PERM]), async (req, res) => {
   }
 });
 
-// Reject a new/updated rate that could match the same row at equal specificity
-// as an existing rate over an overlapping date range (would be ambiguous at
-// match time) — covers identical tuples AND cross-override conflicts.
+// Reject a new/updated current rate that could match the same row at equal
+// specificity as an existing rate (would be ambiguous at match time) — this
+// covers identical tuples AND cross-override conflicts.
 async function assertNoRateOverlap(tx, contractorId, process, data, excludeId) {
   const existing = await tx.contractorRate.findMany({ where: { contractorId, process } });
   return existing.some((r) => r.id !== excludeId
-    && ratesConflict(process, data, r)
-    && rangesOverlap(data.effectiveFrom, data.effectiveTo, r.effectiveFrom, r.effectiveTo));
+    && ratesConflict(process, data, r));
 }
 
 router.post('/rates', requirePermission(MASTERS, PERM_WRITE), async (req, res) => {
@@ -480,7 +465,7 @@ router.post('/rates', requirePermission(MASTERS, PERM_WRITE), async (req, res) =
     try {
       created = await withAdvisoryLock(`contractor_rate:${contractorId}:${process}`, async (tx) => {
         if (await assertNoRateOverlap(tx, contractorId, process, data, null)) {
-          throw overlapError('An equally-specific rate already covers an overlapping date range.');
+          throw overlapError('An equally-specific current rate already covers this quality.');
         }
         return tx.contractorRate.create({ data: { contractorId, ...data, ...actorCreateFields(req.user?.id) } });
       });
@@ -515,9 +500,12 @@ router.put('/rates/:id', requireEditPermission(MASTERS), async (req, res) => {
     if (refError) return res.status(400).json({ error: refError });
     let updated;
     try {
-      updated = await withAdvisoryLock(`contractor_rate:${contractorId}:${process}`, async (tx) => {
+      updated = await withAdvisoryLocks([
+        `contractor_rate:${existing.contractorId}:${existing.process}`,
+        `contractor_rate:${contractorId}:${process}`,
+      ], async (tx) => {
         if (await assertNoRateOverlap(tx, contractorId, process, data, id)) {
-          throw overlapError('An equally-specific rate already covers an overlapping date range.');
+          throw overlapError('An equally-specific current rate already covers this quality.');
         }
         return tx.contractorRate.update({ where: { id }, data: { contractorId, ...data, ...actorUpdateFields(req.user?.id) } });
       });
@@ -556,29 +544,53 @@ router.delete('/rates/:id', requireDeletePermission(MASTERS), async (req, res) =
 // ===========================================================================
 
 function parsePreviewQuery(source) {
-  const contractorId = cleanString(source.contractorId, 40);
   const process = parseProcess(source.process);
+  const requestedContractorId = cleanString(source.contractorId, 40);
+  const date = cleanString(source.date, 10);
   const from = cleanString(source.from, 10);
   const to = cleanString(source.to, 10);
-  if (!contractorId) return { error: 'contractorId is required' };
   if (!process) return { error: 'process must be cutter, holo, or coning' };
-  if (!isValidDateStr(from) || !isValidDateStr(to)) return { error: 'from and to must be YYYY-MM-DD' };
-  if (to < from) return { error: 'to cannot be before from' };
-  return { contractorId, process, from, to };
+  if (!date && from && to && from === to) {
+    if (!isValidDateStr(from)) return { error: 'date must be YYYY-MM-DD' };
+    return { process, date: from, requestedContractorId };
+  }
+  if (!date) return { error: 'date must be YYYY-MM-DD' };
+  if (!isValidDateStr(date)) return { error: 'date must be YYYY-MM-DD' };
+  if (from || to) return { error: 'Use one selected date; from and to are no longer supported for contractor payments.' };
+  return { process, date, requestedContractorId };
+}
+
+// Production rows carry process and date, not contractor identity. Resolve the
+// current process owner once at the API boundary so preview and settlement
+// creation always use the same contractor/rate-card namespace.
+async function resolvePreviewContext(parsed, client = prisma) {
+  const assignment = await client.contractorAssignment.findUnique({ where: { process: parsed.process } });
+  if (!assignment) throw httpError(409, `No contractor is assigned to the ${parsed.process} process.`);
+  if (parsed.requestedContractorId && parsed.requestedContractorId !== assignment.contractorId) {
+    throw httpError(409, 'The selected contractor is not the current owner of this process.');
+  }
+  const contractor = await client.contractor.findUnique({ where: { id: assignment.contractorId } });
+  if (!contractor) throw httpError(409, 'The current process contractor no longer exists.');
+  return {
+    process: parsed.process,
+    date: parsed.date,
+    contractorId: assignment.contractorId,
+    contractor,
+  };
 }
 
 router.get('/preview', requirePermission(PERM, PERM_READ), async (req, res) => {
   try {
     const parsed = parsePreviewQuery(req.query);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
-    const contractor = await prisma.contractor.findUnique({ where: { id: parsed.contractorId } });
-    if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
+    const context = await resolvePreviewContext(parsed);
     // When re-previewing for an existing settlement (admin paid-edit "add rows"),
     // that settlement's own claimed rows remain available.
     const excludeSettlementId = cleanString(req.query.excludeSettlementId, 40);
-    const preview = await computePayablePreview(prisma, { ...parsed, excludeSettlementId });
-    res.json({ contractor, ...preview });
+    const preview = await computePayablePreview(prisma, { ...context, excludeSettlementId });
+    res.json({ contractor: context.contractor, ...preview });
   } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message, ...(err.extra || {}) });
     console.error('Failed to compute preview', err);
     res.status(500).json({ error: err.message || 'Failed to compute preview' });
   }
@@ -682,8 +694,7 @@ router.post('/settlements', requirePermission(PERM, PERM_WRITE), async (req, res
   try {
     const parsed = parsePreviewQuery(req.body);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
-    const contractor = await prisma.contractor.findUnique({ where: { id: parsed.contractorId } });
-    if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
+    const context = await resolvePreviewContext(parsed);
 
     const sourceRowIds = Array.isArray(req.body?.sourceRowIds)
       ? req.body.sourceRowIds.map((x) => cleanString(x, 40)).filter(Boolean)
@@ -699,6 +710,13 @@ router.post('/settlements', requirePermission(PERM, PERM_WRITE), async (req, res
     let created;
     try {
       created = await prisma.$transaction(async (tx) => {
+        // Keep the process owner stable while the server recomputes and claims
+        // this daily report. Owner changes use the same logical lock.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contractor_assignment:${context.process}`}))`;
+        const currentOwner = await tx.contractorAssignment.findUnique({ where: { process: context.process } });
+        if (!currentOwner || currentOwner.contractorId !== context.contractorId) {
+          throw httpError(409, 'The process contractor changed. Refresh the daily preview and try again.');
+        }
         // Shared side of the settlement-lines lock BEFORE pricing: an
         // exclusive import cannot replace production between the preview read
         // and the line insert, so the snapshot below is priced against the
@@ -706,17 +724,17 @@ router.post('/settlements', requirePermission(PERM, PERM_WRITE), async (req, res
         // scan a full production window.
         await lockSettlementLineCreation(tx);
         // Server recomputes rather than trusting client amounts.
-        const preview = await computePayablePreview(tx, parsed);
+        const preview = await computePayablePreview(tx, context);
         const selection = selectPayableLines(preview, sourceRowIds);
         if (selection.error) throw httpError(400, selection.error, { blockers: selection.blockers });
         const lines = selection.lines;
         const totals = recomputeSettlementTotals(lines, adjustments);
         const settlement = await tx.contractorSettlement.create({
           data: {
-            contractorId: parsed.contractorId,
-            process: parsed.process,
-            periodFrom: parsed.from,
-            periodTo: parsed.to,
+            contractorId: context.contractorId,
+            process: context.process,
+            periodFrom: context.date,
+            periodTo: context.date,
             status: 'draft',
             notes,
             productionKg: totals.productionKg,
@@ -781,7 +799,7 @@ router.put('/settlements/:id', requirePermission(PERM, PERM_WRITE), async (req, 
         // Recompute line selection if sourceRowIds provided; else keep existing lines.
         if (sourceRowIds) {
           const preview = await computePayablePreview(tx, {
-            contractorId: existing.contractorId, process: existing.process, from: existing.periodFrom, to: existing.periodTo, excludeSettlementId: id,
+            contractorId: existing.contractorId, process: existing.process, date: existing.periodFrom, excludeSettlementId: id,
           });
           const selection = selectPayableLines(preview, sourceRowIds);
           if (selection.error) throw httpError(400, selection.error, { blockers: selection.blockers });
@@ -861,7 +879,7 @@ router.delete('/settlements/:id', requireDeletePermission(PERM), async (req, res
 
 // Re-resolve a settlement's production lines against CURRENT production and
 // return the lines that no longer reconcile — the source row was edited,
-// deleted, made ineligible (Side/quality/assignment/rate change), or its KG/
+// deleted, made ineligible (Side/quality/rate change), or its KG/
 // rate/amount drifted from the snapshot. Empty array = snapshot still valid.
 async function revalidateSettlementProduction(client, settlement) {
   const lines = settlement.lines || [];
@@ -869,8 +887,7 @@ async function revalidateSettlementProduction(client, settlement) {
   const preview = await computePayablePreview(client, {
     contractorId: settlement.contractorId,
     process: settlement.process,
-    from: settlement.periodFrom,
-    to: settlement.periodTo,
+    date: settlement.periodFrom,
     excludeSettlementId: settlement.id,
   });
   return diffSettlementProduction(lines, preview.lines);
@@ -1003,7 +1020,7 @@ router.put('/settlements/:id/paid-edit', requireRole('admin'), async (req, res) 
         let addLines = [];
         if (addSourceRowIds.length) {
           const preview = await computePayablePreview(tx, {
-            contractorId: fresh.contractorId, process: fresh.process, from: fresh.periodFrom, to: fresh.periodTo, excludeSettlementId: id,
+            contractorId: fresh.contractorId, process: fresh.process, date: fresh.periodFrom, excludeSettlementId: id,
           });
           const selection = selectPayableLines(preview, addSourceRowIds);
           if (selection.error) throw httpError(400, selection.error, { blockers: selection.blockers });

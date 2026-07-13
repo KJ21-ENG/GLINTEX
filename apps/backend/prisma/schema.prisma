@@ -965,9 +965,10 @@ model WastageEvent {
 }
 
 // ========== CONTRACTOR KG PAYMENTS FEATURE ==========
-// Contractors are assigned to a process for an effective date range, earn
-// quality-specific per-KG rates, and are paid via settlements covering one
-// contractor + one process + a date range. Money and rates are database
+// Each process has one current contractor owner, with quality-specific per-KG
+// rates. Reports select one production date and settlements snapshot the
+// contractor + process + rate inputs for immutable payment history. Money and
+// rates are database
 // decimals; net KG is stored with three decimals. Quality keys reference
 // master IDs by value (resolved in the app layer) to keep rate config
 // decoupled from master-record lifecycle.
@@ -993,9 +994,7 @@ model Contractor {
 model ContractorAssignment {
   id              String     @id @default(cuid())
   contractorId    String
-  process         String // 'cutter' | 'holo' | 'coning'
-  effectiveFrom   String // YYYY-MM-DD — contract start; production before this is never eligible
-  effectiveTo     String? // YYYY-MM-DD — null = open-ended
+  process         String     @unique // 'cutter' | 'holo' | 'coning' — one current owner per process
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @default(now()) @updatedAt
   createdByUserId String?
@@ -1003,7 +1002,6 @@ model ContractorAssignment {
   contractor      Contractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
 
   @@index([contractorId])
-  @@index([process, effectiveFrom])
 }
 
 model ContractorRate {
@@ -1018,8 +1016,6 @@ model ContractorRate {
   twistId         String? // optional override (holo, coning)
   coneTypeId      String? // optional override (coning)
   ratePerKg       Decimal    @db.Decimal(12, 4)
-  effectiveFrom   String // YYYY-MM-DD
-  effectiveTo     String? // YYYY-MM-DD — null = open-ended
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @default(now()) @updatedAt
   createdByUserId String?
@@ -1033,8 +1029,8 @@ model ContractorSettlement {
   id               String                           @id @default(cuid())
   contractorId     String
   process          String // 'cutter' | 'holo' | 'coning'
-  periodFrom       String // YYYY-MM-DD
-  periodTo         String // YYYY-MM-DD
+  periodFrom       String // selected production date (YYYY-MM-DD)
+  periodTo         String // same as periodFrom; retained for report/history compatibility
   status           String                           @default("draft") // 'draft' | 'paid'
   productionKg     Decimal                          @default(0) @db.Decimal(16, 3)
   productionAmount Decimal                          @default(0) @db.Decimal(16, 2)

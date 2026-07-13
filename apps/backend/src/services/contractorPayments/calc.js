@@ -159,24 +159,6 @@ export function isValidDateStr(value) {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
-// True when `date` falls within [from, to] inclusive. `to` null/'' = open-ended.
-export function isWithinRange(date, from, to) {
-  if (!isValidDateStr(date)) return false;
-  const d = date.trim();
-  if (isValidDateStr(from) && d < from.trim()) return false;
-  if (isValidDateStr(to) && d > to.trim()) return false;
-  return true;
-}
-
-// True when two [from, to] ranges overlap (inclusive; null `to` = open-ended).
-export function rangesOverlap(aFrom, aTo, bFrom, bTo) {
-  const aStart = isValidDateStr(aFrom) ? aFrom.trim() : '0000-00-00';
-  const aEnd = isValidDateStr(aTo) ? aTo.trim() : '9999-99-99';
-  const bStart = isValidDateStr(bFrom) ? bFrom.trim() : '0000-00-00';
-  const bEnd = isValidDateStr(bTo) ? bTo.trim() : '9999-99-99';
-  return aStart <= bEnd && bStart <= aEnd;
-}
-
 // ---------------------------------------------------------------------------
 // Rate key definitions & matching
 // ---------------------------------------------------------------------------
@@ -196,15 +178,14 @@ function keyValue(obj, key) {
   return value;
 }
 
-// A rate is applicable to a row when: it is effective on the row date, every
-// required key matches exactly, and every optional key is either a wildcard
-// (null on the rate) or matches the row exactly.
-export function rateApplies(process, rate, rowKeys, date) {
+// A current rate is applicable to a row when every required key matches
+// exactly, and every optional key is either a wildcard (null on the rate) or
+// matches the row exactly.
+export function rateApplies(process, rate, rowKeys) {
   const spec = RATE_KEY_SPEC[process];
   if (!spec) return false;
   if (!rate) return false;
   if (rate.process && rate.process !== process) return false;
-  if (!isWithinRange(date, rate.effectiveFrom, rate.effectiveTo)) return false;
 
   for (const key of spec.required) {
     const rateVal = keyValue(rate, key);
@@ -255,9 +236,9 @@ export function ratesConflict(process, a, b) {
 // Select the single most-specific applicable rate for a row.
 // Returns { rate } on success, or { rate: null, reason } when none apply
 // ('no_rate') or when multiple equally-specific rates tie ('ambiguous_rate').
-export function matchRate(process, rates, rowKeys, date) {
+export function matchRate(process, rates, rowKeys) {
   const applicable = (Array.isArray(rates) ? rates : []).filter(
-    (rate) => rateApplies(process, rate, rowKeys, date),
+    (rate) => rateApplies(process, rate, rowKeys),
   );
   if (applicable.length === 0) return { rate: null, reason: 'no_rate' };
 

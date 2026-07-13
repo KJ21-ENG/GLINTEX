@@ -9,9 +9,7 @@ import {
   normalizeSide,
   isOpeningStockRow,
   isPurchasedRow,
-  isWithinRange,
   isValidDateStr,
-  rangesOverlap,
   rateApplies,
   matchRate,
   ratesConflict,
@@ -93,96 +91,73 @@ test('isPurchasedRow detects cutter-purchase (non-production) rows', () => {
   assert.equal(isPurchasedRow({ createdBy: 'opening' }), false); // opening handled separately
 });
 
-test('isWithinRange inclusive with open-ended to', () => {
-  assert.equal(isWithinRange('2026-07-05', '2026-07-01', '2026-07-31'), true);
-  assert.equal(isWithinRange('2026-07-01', '2026-07-01', '2026-07-31'), true);
-  assert.equal(isWithinRange('2026-06-30', '2026-07-01', '2026-07-31'), false);
-  assert.equal(isWithinRange('2026-09-01', '2026-07-01', null), true);
-  assert.equal(isWithinRange('bad', '2026-07-01', null), false);
-});
-
-test('rangesOverlap handles open-ended bounds', () => {
-  assert.equal(rangesOverlap('2026-01-01', '2026-06-30', '2026-06-01', '2026-12-31'), true);
-  assert.equal(rangesOverlap('2026-01-01', '2026-05-31', '2026-06-01', '2026-12-31'), false);
-  assert.equal(rangesOverlap('2026-01-01', null, '2030-01-01', null), true);
-});
-
 // ---- Rate matching ----
 
 const HOLO_RATES = [
-  { id: 'base', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 10, effectiveFrom: '2026-01-01', effectiveTo: null },
-  { id: 'twist', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: 'T1', ratePerKg: 12, effectiveFrom: '2026-01-01', effectiveTo: null },
+  { id: 'base', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 10 },
+  { id: 'twist', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: 'T1', ratePerKg: 12 },
 ];
 
 test('rateApplies requires all required keys to match', () => {
-  assert.equal(rateApplies('holo', HOLO_RATES[0], { yarnId: 'Y1', cutId: 'C1' }, '2026-05-01'), true);
-  assert.equal(rateApplies('holo', HOLO_RATES[0], { yarnId: 'Y2', cutId: 'C1' }, '2026-05-01'), false);
-  assert.equal(rateApplies('holo', HOLO_RATES[0], { cutId: 'C1' }, '2026-05-01'), false); // missing yarn
+  assert.equal(rateApplies('holo', HOLO_RATES[0], { yarnId: 'Y1', cutId: 'C1' }), true);
+  assert.equal(rateApplies('holo', HOLO_RATES[0], { yarnId: 'Y2', cutId: 'C1' }), false);
+  assert.equal(rateApplies('holo', HOLO_RATES[0], { cutId: 'C1' }), false); // missing yarn
 });
 
 test('matchRate picks most specific optional override', () => {
-  const withTwist = matchRate('holo', HOLO_RATES, { yarnId: 'Y1', cutId: 'C1', twistId: 'T1' }, '2026-05-01');
+  const withTwist = matchRate('holo', HOLO_RATES, { yarnId: 'Y1', cutId: 'C1', twistId: 'T1' });
   assert.equal(withTwist.rate.id, 'twist');
-  const withoutTwist = matchRate('holo', HOLO_RATES, { yarnId: 'Y1', cutId: 'C1', twistId: 'T9' }, '2026-05-01');
+  const withoutTwist = matchRate('holo', HOLO_RATES, { yarnId: 'Y1', cutId: 'C1', twistId: 'T9' });
   assert.equal(withoutTwist.rate.id, 'base'); // twist-specific does not match, falls back to wildcard
 });
 
 test('holo/coning Cut is an optional override: cut-less rates match any cut', () => {
-  const yarnOnly = { id: 'yo', process: 'holo', yarnId: 'Y1', cutId: null, twistId: null, ratePerKg: 5, effectiveFrom: '2026-01-01', effectiveTo: null };
-  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: 'C9' }, '2026-05-01'), true);
-  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: null }, '2026-05-01'), true);
+  const yarnOnly = { id: 'yo', process: 'holo', yarnId: 'Y1', cutId: null, twistId: null, ratePerKg: 5 };
+  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: 'C9' }), true);
+  assert.equal(rateApplies('holo', yarnOnly, { yarnId: 'Y1', cutId: null }), true);
   const pinned = { ...yarnOnly, id: 'pin', cutId: 'C1' };
   // A pinned Cut outranks the wildcard for its cut, loses everywhere else.
-  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C1' }, '2026-05-01').rate.id, 'pin');
-  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C2' }, '2026-05-01').rate.id, 'yo');
+  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C1' }).rate.id, 'pin');
+  assert.equal(matchRate('holo', [yarnOnly, pinned], { yarnId: 'Y1', cutId: 'C2' }).rate.id, 'yo');
   // A pinned Cut never matches a row with no cut.
-  assert.equal(matchRate('holo', [pinned], { yarnId: 'Y1', cutId: null }, '2026-05-01').reason, 'no_rate');
+  assert.equal(matchRate('holo', [pinned], { yarnId: 'Y1', cutId: null }).reason, 'no_rate');
 });
 
 test('matchRate returns no_rate when nothing applies', () => {
-  const res = matchRate('holo', HOLO_RATES, { yarnId: 'Y9', cutId: 'C1' }, '2026-05-01');
+  const res = matchRate('holo', HOLO_RATES, { yarnId: 'Y9', cutId: 'C1' });
   assert.equal(res.rate, null);
   assert.equal(res.reason, 'no_rate');
 });
 
 test('matchRate rejects equally-specific ambiguity', () => {
   const dupes = [
-    { id: 'a', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 10, effectiveFrom: '2026-01-01', effectiveTo: null },
-    { id: 'b', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 11, effectiveFrom: '2026-03-01', effectiveTo: null },
+    { id: 'a', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 10 },
+    { id: 'b', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 11 },
   ];
-  const res = matchRate('holo', dupes, { yarnId: 'Y1', cutId: 'C1' }, '2026-05-01');
+  const res = matchRate('holo', dupes, { yarnId: 'Y1', cutId: 'C1' });
   assert.equal(res.rate, null);
   assert.equal(res.reason, 'ambiguous_rate');
 });
 
-test('matchRate respects effective dating (versioning)', () => {
-  const versions = [
-    { id: 'v1', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 10, effectiveFrom: '2026-01-01', effectiveTo: '2026-03-31' },
-    { id: 'v2', process: 'holo', yarnId: 'Y1', cutId: 'C1', twistId: null, ratePerKg: 15, effectiveFrom: '2026-04-01', effectiveTo: null },
-  ];
-  assert.equal(matchRate('holo', versions, { yarnId: 'Y1', cutId: 'C1' }, '2026-02-15').rate.id, 'v1');
-  assert.equal(matchRate('holo', versions, { yarnId: 'Y1', cutId: 'C1' }, '2026-05-15').rate.id, 'v2');
-});
-
 test('coning rate matching keys on side', () => {
   const rates = [
-    { id: 'single', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', ratePerKg: 8, effectiveFrom: '2026-01-01', effectiveTo: null },
-    { id: 'both', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'BOTH', ratePerKg: 12, effectiveFrom: '2026-01-01', effectiveTo: null },
+    { id: 'single', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', ratePerKg: 8 },
+    { id: 'both', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'BOTH', ratePerKg: 12 },
   ];
-  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'SINGLE' }, '2026-05-01').rate.id, 'single');
-  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'BOTH' }, '2026-05-01').rate.id, 'both');
-  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'UNKNOWN' }, '2026-05-01').reason, 'no_rate');
+  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'SINGLE' }).rate.id, 'single');
+  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'BOTH' }).rate.id, 'both');
+  assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'UNKNOWN' }).reason, 'no_rate');
 });
 
 test('cutter rate matching keys on item + cut', () => {
   const rates = [
-    { id: 'r', process: 'cutter', itemId: 'I1', cutId: 'C1', ratePerKg: 5, effectiveFrom: '2026-01-01', effectiveTo: null },
+    { id: 'r', process: 'cutter', itemId: 'I1', cutId: 'C1', ratePerKg: 5 },
   ];
-  assert.equal(matchRate('cutter', rates, { itemId: 'I1', cutId: 'C1' }, '2026-05-01').rate.id, 'r');
-  assert.equal(matchRate('cutter', rates, { itemId: 'I2', cutId: 'C1' }, '2026-05-01').reason, 'no_rate');
+  assert.equal(matchRate('cutter', rates, { itemId: 'I1', cutId: 'C1' }).rate.id, 'r');
+  assert.equal(matchRate('cutter', rates, { itemId: 'I2', cutId: 'C1' }).reason, 'no_rate');
 });
 
-// ---- Rate conflict detection (overlap validation) ----
+// ---- Rate conflict detection ----------------------------------------------
 
 test('ratesConflict flags identical coning tuples', () => {
   const a = { yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', twistId: null, coneTypeId: null };

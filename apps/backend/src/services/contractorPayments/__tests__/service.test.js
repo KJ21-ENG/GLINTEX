@@ -12,12 +12,17 @@ function makeStub({
   items = [], yarns = [], cuts = [], twists = [], coneTypes = [],
   claimedLines = [], holoIssues = [], coningIssues = [],
 } = {}) {
+  const rowsForDate = (rows, args = {}) => {
+    const date = args.where?.OR?.find((condition) => typeof condition.date === 'string')?.date;
+    if (!date) return rows;
+    return rows.filter((row) => (row.date || row.issue?.date) === date);
+  };
   return {
     contractorAssignment: { findMany: async () => assignments },
     contractorRate: { findMany: async () => rates },
-    receiveFromCutterMachineRow: { findMany: async () => cutterRows },
-    receiveFromHoloMachineRow: { findMany: async () => holoRows },
-    receiveFromConingMachineRow: { findMany: async () => coningRows },
+    receiveFromCutterMachineRow: { findMany: async (args) => rowsForDate(cutterRows, args) },
+    receiveFromHoloMachineRow: { findMany: async (args) => rowsForDate(holoRows, args) },
+    receiveFromConingMachineRow: { findMany: async (args) => rowsForDate(coningRows, args) },
     issueToHoloMachine: { findMany: async () => holoIssues },
     issueToConingMachine: { findMany: async () => coningIssues },
     item: { findMany: async () => items },
@@ -57,11 +62,11 @@ function coningRow(over = {}) {
   };
 }
 
-const CONING_ASSIGN = [{ id: 'a1', contractorId: 'K', process: 'coning', effectiveFrom: '2026-01-01', effectiveTo: null }];
-const CONING_RATE_BASE = { id: 'rateBase', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', twistId: null, coneTypeId: null, ratePerKg: 8, effectiveFrom: '2026-01-01', effectiveTo: null };
+const CONING_ASSIGN = [{ id: 'a1', contractorId: 'K', process: 'coning' }];
+const CONING_RATE_BASE = { id: 'rateBase', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', twistId: null, coneTypeId: null, ratePerKg: 8 };
 
 async function preview(stub, extra = {}) {
-  return computePayablePreview(stub, { contractorId: 'K', process: 'coning', from: '2026-03-01', to: '2026-03-31', ...extra });
+  return computePayablePreview(stub, { contractorId: 'K', process: 'coning', date: '2026-03-05', ...extra });
 }
 
 test('resolveConeTypeId parses array and JSON-string refs', () => {
@@ -93,13 +98,13 @@ test('cone-type override wins over the base rate', async () => {
   assert.equal(res.lines[0].amount, 110);
 });
 
-test('excludes opening, purchased, non-positive, out-of-assignment, and claimed rows', async () => {
+test('excludes opening, purchased, non-positive, and claimed rows', async () => {
   const rows = [
     coningRow({ id: 'ok' }),
     coningRow({ id: 'opening', createdBy: 'opening' }),
     coningRow({ id: 'purchase', lotNo: 'CP-001' }),
     coningRow({ id: 'zero', netWeight: 0, coneWeight: 0, grossWeight: 0 }),
-    coningRow({ id: 'old', date: '2025-12-01' }), // before assignment
+    coningRow({ id: 'old', date: '2025-12-01' }), // outside selected report date
     coningRow({ id: 'claimed' }),
   ];
   const stub = makeStub({
@@ -111,7 +116,6 @@ test('excludes opening, purchased, non-positive, out-of-assignment, and claimed 
   assert.equal(res.excluded.opening, 1);
   assert.equal(res.excluded.purchased, 1);
   assert.equal(res.excluded.nonPositiveKg, 1);
-  assert.equal(res.excluded.outsideAssignment, 1);
   assert.equal(res.excluded.claimed, 1);
 });
 
@@ -287,24 +291,23 @@ test('missing Side and missing rate become per-row blockers', async () => {
 });
 
 test('ambiguous equally-specific rates block the row', async () => {
-  const dup = { ...CONING_RATE_BASE, id: 'dup', effectiveFrom: '2026-02-01' };
+  const dup = { ...CONING_RATE_BASE, id: 'dup' };
   const stub = makeStub({ ...MASTERS, assignments: CONING_ASSIGN, rates: [CONING_RATE_BASE, dup], coningRows: [coningRow()] });
   const res = await preview(stub);
   assert.equal(res.lines.length, 0);
   assert.equal(res.blockers[0].reason, 'ambiguous_rate');
 });
 
-test('quality totals flag mixed rates across effective versions', async () => {
-  const v1 = { ...CONING_RATE_BASE, id: 'v1', effectiveFrom: '2026-01-01', effectiveTo: '2026-03-10', ratePerKg: 8 };
-  const v2 = { ...CONING_RATE_BASE, id: 'v2', effectiveFrom: '2026-03-11', effectiveTo: null, ratePerKg: 9 };
+test('quality totals use the one current rate card', async () => {
   const stub = makeStub({
-    ...MASTERS, assignments: CONING_ASSIGN, rates: [v1, v2],
-    coningRows: [coningRow({ id: 'a', date: '2026-03-05' }), coningRow({ id: 'b', date: '2026-03-20' })],
+    ...MASTERS, assignments: CONING_ASSIGN, rates: [CONING_RATE_BASE],
+    coningRows: [coningRow({ id: 'a' }), coningRow({ id: 'b', barcode: 'B2' })],
   });
   const res = await preview(stub);
   assert.equal(res.lines.length, 2);
   assert.equal(res.qualityTotals.length, 1);
-  assert.equal(res.qualityTotals[0].rateMixed, true);
+  assert.equal(res.qualityTotals[0].ratePerKg, 8);
+  assert.equal('rateMixed' in res.qualityTotals[0], false);
 });
 
 test('truncation flag set when the fetch exceeds the row limit', async () => {

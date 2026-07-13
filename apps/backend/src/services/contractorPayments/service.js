@@ -7,7 +7,6 @@ import {
   resolveNetKg,
   isOpeningStockRow,
   isPurchasedRow,
-  isWithinRange,
   matchRate,
   computeAmount,
   computeTotals,
@@ -255,20 +254,18 @@ export async function traceConingCuts(prisma, rows) {
   return traced;
 }
 
-// Fetch candidate production receive rows whose effective date falls in the
-// [from, to] window. The effective date is the row date, falling back to the
-// issue date when the row itself carries none.
-async function fetchProductionRows(prisma, process, from, to) {
-  const dateWindow = { gte: from, lte: to };
+// Fetch candidate production receive rows for one selected production date.
+// The row date falls back to the issue date when the row itself carries none.
+async function fetchProductionRows(prisma, process, date) {
   const rowDateOr = {
     OR: [
-      { date: dateWindow },
-      { date: null, issue: { is: { date: dateWindow } } },
+      { date },
+      { date: null, issue: { is: { date } } },
     ],
   };
   // Deterministic ordering so a truncated fetch is reproducible (createdAt is
   // not unique, so id is the tie-breaker), and take LIMIT+1 to detect (and
-  // report) when the window exceeds the cap.
+  // report) when the daily fetch exceeds the cap.
   const common = { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: ROW_FETCH_LIMIT + 1 };
   if (process === 'cutter') {
     return prisma.receiveFromCutterMachineRow.findMany({
@@ -294,11 +291,11 @@ async function fetchProductionRows(prisma, process, from, to) {
 // Resolve the quality keys, snapshot names, and metadata for one production row.
 export function resolveRow(process, row, maps) {
   const issue = row.issue || null;
-  const effectiveDate = row.date || issue?.date || null;
+  const productionDate = row.date || issue?.date || null;
   const netKg = resolveNetKg(process, row);
   const base = {
     sourceRowId: row.id,
-    effectiveDate,
+    productionDate,
     netKg,
     createdBy: row.createdBy || null,
     lotNo: issue?.lotNo || row.lotNo || row.challan?.lotNo || null,
@@ -359,11 +356,6 @@ export function resolveRow(process, row, maps) {
   return base;
 }
 
-// True when a resolved row's effective date is covered by any assignment.
-function isCoveredByAssignment(effectiveDate, assignments) {
-  return assignments.some((a) => isWithinRange(effectiveDate, a.effectiveFrom, a.effectiveTo));
-}
-
 // The row's quality keys required by matchRate for this process.
 function rowKeysForProcess(process, resolved) {
   if (process === 'cutter') return { itemId: resolved.itemId, cutId: resolved.cutId };
@@ -401,7 +393,7 @@ function buildLine(process, resolved, rate) {
   return {
     process,
     sourceRowId: resolved.sourceRowId,
-    date: resolved.effectiveDate,
+    date: resolved.productionDate,
     netKg: roundKg(resolved.netKg),
     ratePerKg,
     amount,
@@ -423,21 +415,22 @@ function buildLine(process, resolved, rate) {
 }
 
 // Core preview computation. Returns eligible payable lines, per-row blockers,
-// quality-wise totals, grand totals, and an exclusion summary.
+// quality-wise totals, grand totals, and an exclusion summary for one selected
+// production date. The contractorId is explicit for settlement revalidation;
+// the preview route resolves it from the current process owner first.
 //
 // excludeSettlementId: when re-previewing for an existing settlement (admin
 // paid-edit "add lines"), rows already claimed by THAT settlement are still
 // treated as available.
-export async function computePayablePreview(prisma, { contractorId, process, from, to, excludeSettlementId = null }) {
+export async function computePayablePreview(prisma, { contractorId, process, date, excludeSettlementId = null }) {
   const [assignments, rates, fetchedRows, maps] = await Promise.all([
     prisma.contractorAssignment.findMany({ where: { contractorId, process } }),
     prisma.contractorRate.findMany({ where: { contractorId, process } }),
-    fetchProductionRows(prisma, process, from, to),
+    fetchProductionRows(prisma, process, date),
     loadMasterMaps(prisma),
   ]);
-  // fetchProductionRows takes LIMIT+1; if we got more than LIMIT the window is
-  // too large and results are truncated — surface this instead of silently
-  // dropping rows.
+  // fetchProductionRows takes LIMIT+1; if we got more than LIMIT for the day,
+  // results are truncated — surface this instead of silently dropping rows.
   const truncated = fetchedRows.length > ROW_FETCH_LIMIT;
   const rows = truncated ? fetchedRows.slice(0, ROW_FETCH_LIMIT) : fetchedRows;
 
@@ -445,13 +438,6 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
   if (process === 'coning') {
     maps.coningCutTrace = await traceConingCuts(prisma, rows);
   }
-
-  // Assignment coverage over the requested window.
-  const hasAssignmentInWindow = assignments.some((a) =>
-    // any assignment that overlaps [from, to]
-    isWithinRange(from, a.effectiveFrom, a.effectiveTo)
-    || isWithinRange(to, a.effectiveFrom, a.effectiveTo)
-    || isWithinRange(a.effectiveFrom, from, to));
 
   // Which candidate rows are already claimed by another current settlement.
   const candidateIds = rows.map((r) => r.id);
@@ -469,7 +455,7 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
 
   const lines = [];
   const blockers = [];
-  const excluded = { nonPositiveKg: 0, opening: 0, purchased: 0, outsideAssignment: 0, claimed: 0 };
+  const excluded = { nonPositiveKg: 0, opening: 0, purchased: 0, claimed: 0 };
 
   for (const row of rows) {
     const resolved = resolveRow(process, row, maps);
@@ -479,14 +465,13 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
     if (resolved.netKg === null || resolved.netKg <= 0) { excluded.nonPositiveKg += 1; continue; }
     if (isOpeningStockRow(marker)) { excluded.opening += 1; continue; }
     if (isPurchasedRow(marker)) { excluded.purchased += 1; continue; }
-    if (!isCoveredByAssignment(resolved.effectiveDate, assignments)) { excluded.outsideAssignment += 1; continue; }
     if (claimedRowIds.has(resolved.sourceRowId)) { excluded.claimed += 1; continue; }
 
     // Blockers (visible; must be resolved before payment) -------------------
     if (process === 'coning' && (!resolved.side || resolved.side === 'UNKNOWN')) {
       blockers.push({
         sourceRowId: resolved.sourceRowId,
-        date: resolved.effectiveDate,
+        date: resolved.productionDate,
         netKg: resolved.netKg,
         barcode: resolved.barcode,
         lotNo: resolved.lotNo,
@@ -498,7 +483,7 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
     if (process === 'coning' && resolved.cutConflict) {
       blockers.push({
         sourceRowId: resolved.sourceRowId,
-        date: resolved.effectiveDate,
+        date: resolved.productionDate,
         netKg: resolved.netKg,
         barcode: resolved.barcode,
         lotNo: resolved.lotNo,
@@ -511,7 +496,7 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
     if (missing.length) {
       blockers.push({
         sourceRowId: resolved.sourceRowId,
-        date: resolved.effectiveDate,
+        date: resolved.productionDate,
         netKg: resolved.netKg,
         barcode: resolved.barcode,
         lotNo: resolved.lotNo,
@@ -522,18 +507,18 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
     }
 
     const rowKeys = rowKeysForProcess(process, resolved);
-    const match = matchRate(process, rates, rowKeys, resolved.effectiveDate);
+    const match = matchRate(process, rates, rowKeys);
     if (!match.rate) {
       blockers.push({
         sourceRowId: resolved.sourceRowId,
-        date: resolved.effectiveDate,
+        date: resolved.productionDate,
         netKg: resolved.netKg,
         barcode: resolved.barcode,
         lotNo: resolved.lotNo,
         reason: match.reason, // 'no_rate' | 'ambiguous_rate'
         message: match.reason === 'ambiguous_rate'
           ? 'Multiple equally-specific rates match this row; resolve the overlap.'
-          : 'No effective rate configured for this quality/date.',
+          : 'No current rate configured for this quality.',
       });
       continue;
     }
@@ -553,13 +538,10 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
       side: line.side,
       coneTypeName: line.coneTypeName,
       ratePerKg: line.ratePerKg,
-      rateMixed: false,
       netKg: 0,
       amount: 0,
       rowCount: 0,
     };
-    // A quality group can span more than one effective-dated rate version.
-    if (existing.ratePerKg !== line.ratePerKg) existing.rateMixed = true;
     existing.netKg = roundKg(existing.netKg + line.netKg);
     existing.amount = roundCurrency(existing.amount + line.amount);
     existing.rowCount += 1;
@@ -573,9 +555,8 @@ export async function computePayablePreview(prisma, { contractorId, process, fro
   return {
     contractorId,
     process,
-    from,
-    to,
-    hasAssignment: hasAssignmentInWindow,
+    date,
+    hasAssignment: assignments.length > 0,
     assignments,
     lines,
     blockers,
@@ -691,9 +672,9 @@ export async function lockItemNamesExclusive(tx) {
 }
 
 // Acquire every lock that stabilizes a settlement's payment inputs inside `tx`:
-//  1. advisory locks: process assignment + contractor rate (the same keys the
-//     assignment/rate CRUD routes hold while mutating), the shared
-//     settlement-lines lock, and — for cutter — the shared item-names lock;
+//  1. advisory locks: the contractor rate (the same key the rate CRUD route
+//     holds while mutating), the shared settlement-lines lock, and — for cutter
+//     — the shared item-names lock;
 //  2. FOR UPDATE locks on the claimed production rows (plus extraRowIds);
 //  3. FOR UPDATE locks on the issue rows supplying quality keys — direct
 //     issues, and for coning the full Cut lineage (holo rows → holo issues →
@@ -701,13 +682,11 @@ export async function lockItemNamesExclusive(tx) {
 //  4. FOR UPDATE locks on the Items defining rate identity (line snapshots ∪
 //     current issues ∪ name-resolved fallbacks for unlinked cutter rows).
 // The acquisition order is fixed (advisories → rows → issues → upstream →
-// items); every other path locks a subset in the same relative order, and the
-// exclusive assignment advisory means at most one settlement of a process
-// locks its lineage graph at a time, so callers cannot deadlock.
+// items); every other path locks a subset in the same relative order, so
+// callers cannot deadlock.
 // Used by Mark Paid and admin paid-edit before revalidating/pricing.
 export async function lockSettlementInputs(tx, settlement, extraRowIds = []) {
   const process = settlement.process;
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contractor_assignment:${process}`}))`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contractor_rate:${settlement.contractorId}:${process}`}))`;
   await lockSettlementLineCreation(tx);
   if (process === 'cutter') await lockItemNamesShared(tx);

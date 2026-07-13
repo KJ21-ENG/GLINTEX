@@ -1689,11 +1689,6 @@ function nameMap(list) {
     return m;
 }
 
-function formatDateRange(from, to) {
-    if (!from) return '—';
-    return `${from} → ${to || 'ongoing'}`;
-}
-
 // --- Items master with required Side ---------------------------------------
 function ItemsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
     const [newName, setNewName] = useState('');
@@ -1914,7 +1909,7 @@ function ContractorsMasterCrud({ data, onCreate, onUpdate, onDelete, loading, ca
 
 // --- Process assignments master --------------------------------------------
 function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
-    const empty = { contractorId: '', process: '', effectiveFrom: '', effectiveTo: '' };
+    const empty = { contractorId: '', process: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState('');
@@ -1926,22 +1921,22 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
     const reset = () => { setForm(empty); setEditingId(null); };
     const submit = async () => {
-        if (!form.contractorId || !form.process || !form.effectiveFrom) return;
+        if (!form.contractorId || !form.process) return;
         setError('');
-        const payload = { contractorId: form.contractorId, process: form.process, effectiveFrom: form.effectiveFrom, effectiveTo: form.effectiveTo || null };
+        const payload = { contractorId: form.contractorId, process: form.process };
         try {
             if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
             reset();
         } catch (err) { setError(err.message || 'Failed to save assignment'); }
     };
-    const startEdit = (a) => { setEditingId(a.id); setForm({ contractorId: a.contractorId, process: a.process, effectiveFrom: a.effectiveFrom || '', effectiveTo: a.effectiveTo || '' }); setError(''); };
+    const startEdit = (a) => { setEditingId(a.id); setForm({ contractorId: a.contractorId, process: a.process }); setError(''); };
 
     return (
         <Card>
             <CardHeader><CardTitle>Process Assignments</CardTitle></CardHeader>
             <CardContent className="space-y-4">
                 <ErrorNote error={error} />
-                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 rounded-md border p-3 bg-muted/30 items-end">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 rounded-md border p-3 bg-muted/30 items-end">
                     <div><Label className="text-xs">Contractor *</Label>
                         <Select value={form.contractorId} onChange={(e) => set('contractorId', e.target.value)}>
                             <option value="">Select…</option>
@@ -1954,16 +1949,14 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
                             {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </Select>
                     </div>
-                    <div><Label className="text-xs">From (contract start) *</Label><Input type="date" value={form.effectiveFrom} onChange={(e) => set('effectiveFrom', e.target.value)} /></div>
-                    <div><Label className="text-xs">To (optional)</Label><Input type="date" value={form.effectiveTo} onChange={(e) => set('effectiveTo', e.target.value)} /></div>
                     <div className="flex gap-2 justify-end">
                         {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
-                        <Button onClick={submit} disabled={loading || !form.contractorId || !form.process || !form.effectiveFrom || (editingId ? !allowEdit : !allowCreate)}>
+                        <Button onClick={submit} disabled={loading || !form.contractorId || !form.process || (editingId ? !allowEdit : !allowCreate)}>
                             {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
                         </Button>
                     </div>
                 </div>
-                <p className="text-xs text-muted-foreground">Production before a contractor's contract start date is never eligible. Overlapping assignments for the same process are rejected.</p>
+                <p className="text-xs text-muted-foreground">Each process has one current contractor. Edit the row when responsibility changes; daily reports always use the current owner.</p>
 
                 <div className="rounded-md border max-h-[55vh] overflow-auto">
                     <Table>
@@ -1971,18 +1964,16 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
                             <TableRow>
                                 <TableHead>Contractor</TableHead>
                                 <TableHead>Process</TableHead>
-                                <TableHead>Effective</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {(data || []).length === 0 ? (
-                                <TableStateRow colSpan={4} emptyMessage="No assignments yet." />
+                                <TableStateRow colSpan={3} emptyMessage="No assignments yet." />
                             ) : (data || []).map((a) => (
                                 <TableRow key={a.id}>
                                     <TableCell className="font-medium">{contractorName.get(a.contractorId) || '—'}</TableCell>
                                     <TableCell className="capitalize">{a.process}</TableCell>
-                                    <TableCell>{formatDateRange(a.effectiveFrom, a.effectiveTo)}</TableCell>
                                     <TableCell>
                                         <div className="flex justify-end gap-1">
                                             <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
@@ -2005,7 +1996,7 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
 
 // --- Contractor rates master -----------------------------------------------
 function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
-    const empty = { contractorId: '', process: '', itemId: '', yarnId: '', cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '', effectiveFrom: '', effectiveTo: '' };
+    const empty = { contractorId: '', process: '', itemId: '', yarnId: '', cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState('');
@@ -2026,13 +2017,11 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const submit = async () => {
         setError('');
         const rate = Number(form.ratePerKg);
-        if (!form.contractorId || !form.process || !form.effectiveFrom || !(rate > 0)) return;
+        if (!form.contractorId || !form.process || !(rate > 0)) return;
         const payload = {
             contractorId: form.contractorId,
             process: form.process,
             ratePerKg: rate,
-            effectiveFrom: form.effectiveFrom,
-            effectiveTo: form.effectiveTo || null,
             itemId: form.process === 'cutter' ? (form.itemId || null) : null,
             yarnId: form.process !== 'cutter' ? (form.yarnId || null) : null,
             cutId: form.cutId || null,
@@ -2051,7 +2040,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
             contractorId: r.contractorId, process: r.process,
             itemId: r.itemId || '', yarnId: r.yarnId || '', cutId: r.cutId || '', side: r.side || '',
             twistId: r.twistId || '', coneTypeId: r.coneTypeId || '',
-            ratePerKg: r.ratePerKg != null ? String(r.ratePerKg) : '', effectiveFrom: r.effectiveFrom || '', effectiveTo: r.effectiveTo || '',
+            ratePerKg: r.ratePerKg != null ? String(r.ratePerKg) : '',
         });
         setError('');
     };
@@ -2069,7 +2058,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const rows = data || [];
     const process = form.process;
     const rateValue = Number(form.ratePerKg);
-    const formReady = !!form.contractorId && !!process && !!form.effectiveFrom && rateValue > 0 && (
+    const formReady = !!form.contractorId && !!process && rateValue > 0 && (
         process === 'cutter' ? (!!form.itemId && !!form.cutId)
             : process === 'holo' ? !!form.yarnId
                 : process === 'coning' ? (!!form.yarnId && !!form.side)
@@ -2151,15 +2140,11 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
-                        <div><Label className="text-xs">Effective From *</Label><Input type="date" value={form.effectiveFrom} onChange={(e) => set('effectiveFrom', e.target.value)} /></div>
-                        <div><Label className="text-xs">Effective To (optional)</Label><Input type="date" value={form.effectiveTo} onChange={(e) => set('effectiveTo', e.target.value)} /></div>
-                        <div className="flex gap-2 justify-end">
-                            {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
-                            <Button onClick={submit} disabled={loading || !formReady || (editingId ? !allowEdit : !allowCreate)}>
-                                {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
-                            </Button>
-                        </div>
+                    <div className="flex justify-end gap-2">
+                        {editingId && <Button variant="ghost" onClick={reset}>Cancel</Button>}
+                        <Button onClick={submit} disabled={loading || !formReady || (editingId ? !allowEdit : !allowCreate)}>
+                            {editingId ? <><Save className="w-4 h-4 mr-2" />Save</> : <><Plus className="w-4 h-4 mr-2" />Add</>}
+                        </Button>
                     </div>
                 </div>
 
@@ -2171,20 +2156,18 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                                 <TableHead>Process</TableHead>
                                 <TableHead>Quality keys</TableHead>
                                 <TableHead className="text-right">₹/KG</TableHead>
-                                <TableHead>Effective</TableHead>
                                 <TableHead className="w-[100px]">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {rows.length === 0 ? (
-                                <TableStateRow colSpan={6} emptyMessage="No rates configured." />
+                                <TableStateRow colSpan={5} emptyMessage="No rates configured." />
                             ) : rows.map((r) => (
                                 <TableRow key={r.id}>
                                     <TableCell className="font-medium">{contractorName.get(r.contractorId) || '—'}</TableCell>
                                     <TableCell className="capitalize">{r.process}</TableCell>
                                     <TableCell className="text-sm">{describeKeys(r)}</TableCell>
                                     <TableCell className="text-right tabular-nums">{Number(r.ratePerKg).toFixed(2)}</TableCell>
-                                    <TableCell className="text-sm">{formatDateRange(r.effectiveFrom, r.effectiveTo)}</TableCell>
                                     <TableCell>
                                         <div className="flex justify-end gap-1">
                                             <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">

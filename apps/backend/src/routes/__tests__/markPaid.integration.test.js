@@ -81,9 +81,9 @@ if (!TEST_DB) {
     const yarn = await prisma.yarn.create({ data: { name: '40s' } });
     const cut = await prisma.cut.create({ data: { name: '40' } });
     const contractor = await prisma.contractor.create({ data: { name: 'Ravi' } });
-    await prisma.contractorAssignment.create({ data: { contractorId: contractor.id, process: 'coning', effectiveFrom: '2026-01-01' } });
+    await prisma.contractorAssignment.create({ data: { contractorId: contractor.id, process: 'coning' } });
     await prisma.contractorRate.create({
-      data: { contractorId: contractor.id, process: 'coning', yarnId: yarn.id, cutId: cut.id, side: 'SINGLE', ratePerKg: 8, effectiveFrom: '2026-01-01' },
+      data: { contractorId: contractor.id, process: 'coning', yarnId: yarn.id, cutId: cut.id, side: 'SINGLE', ratePerKg: 8 },
     });
 
     async function makeRow(suffix, netWeight) {
@@ -115,7 +115,7 @@ if (!TEST_DB) {
     return `Bearer ${token}`;
   }
 
-  const base = { process: 'coning', from: '2026-03-01', to: '2026-03-31' };
+  const base = { process: 'coning', date: '2026-03-15' };
 
   // Run `mutate(tx)` on a SECOND connection and hold the transaction open
   // (uncommitted) while `during()` runs; then commit the held edit and return
@@ -199,7 +199,7 @@ if (!TEST_DB) {
     // identical, but the payment identity changed — must still block.
     const row = await prisma.receiveFromConingMachineRow.findUnique({ where: { id: rowB }, include: { issue: true } });
     const yarnId = row.issue.yarnId; const cutId = row.issue.cutId;
-    await prisma.contractorRate.create({ data: { contractorId, process: 'coning', yarnId, cutId, side: 'BOTH', ratePerKg: 8, effectiveFrom: '2026-01-01' } });
+    await prisma.contractorRate.create({ data: { contractorId, process: 'coning', yarnId, cutId, side: 'BOTH', ratePerKg: 8 } });
     await prisma.item.update({ where: { id: row.issue.itemId }, data: { side: 'BOTH' } });
 
     const paid = await request(app).post(`${CP}/settlements/${draft.body.id}/mark-paid`).set('Authorization', auth)
@@ -298,7 +298,7 @@ if (!TEST_DB) {
       data: { pieceId: coningIssue.id, totalCones: 1, totalNetWeight: 10, wastageNetWeight: 0 },
     });
     await prisma.contractorRate.create({
-      data: { contractorId, process: 'coning', yarnId: yarn.id, cutId: cut60.id, side: 'SINGLE', ratePerKg: 12, effectiveFrom: '2026-01-01' },
+      data: { contractorId, process: 'coning', yarnId: yarn.id, cutId: cut60.id, side: 'SINGLE', ratePerKg: 12 },
     });
     return { row, holoIssue, coningIssue, cut60 };
   }
@@ -447,7 +447,7 @@ if (!TEST_DB) {
     // transaction, invisible to a naive count(). The import must serialize on
     // the shared lock and then see it.
     const settlement = await prisma.contractorSettlement.create({
-      data: { contractorId, process: 'coning', periodFrom: base.from, periodTo: base.to, status: 'draft' },
+      data: { contractorId, process: 'coning', periodFrom: base.date, periodTo: base.date, status: 'draft' },
     });
     const res = await withHeldEdit(
       async (tx) => {
@@ -604,16 +604,16 @@ if (!TEST_DB) {
     assert.equal((await request(app).get(`${CP}/preview`).query({ contractorId, ...base }).set('Authorization', none)).status, 403);
   });
 
-  test('assignment overlap is rejected per-process across contractors', async () => {
-    const { contractorId } = await seed(); // seed already gives this contractor an open-ended coning assignment
+  test('a second current owner is rejected per process', async () => {
+    const { contractorId } = await seed(); // seed already gives this contractor the current coning owner
     const other = await prisma.contractor.create({ data: { name: 'Other' } });
-    // Overlapping coning assignment for a DIFFERENT contractor → 409.
+    // A second current coning owner for a DIFFERENT contractor → 409.
     const clash = await request(app).post(`${CP}/assignments`).set('Authorization', auth)
-      .send({ contractorId: other.id, process: 'coning', effectiveFrom: '2026-06-01' });
+      .send({ contractorId: other.id, process: 'coning' });
     assert.equal(clash.status, 409);
     // A different process is fine.
     const ok = await request(app).post(`${CP}/assignments`).set('Authorization', auth)
-      .send({ contractorId: other.id, process: 'holo', effectiveFrom: '2026-06-01' });
+      .send({ contractorId: other.id, process: 'holo' });
     assert.equal(ok.status, 200);
   });
 
@@ -626,10 +626,10 @@ if (!TEST_DB) {
     const twist = await prisma.twist.create({ data: { name: 'TW-x' } });
     const cone = await prisma.coneType.create({ data: { name: 'Cone-x' } });
     const r1 = await request(app).post(`${CP}/rates`).set('Authorization', auth)
-      .send({ contractorId, process: 'coning', yarnId, cutId, side: 'SINGLE', twistId: twist.id, ratePerKg: 9, effectiveFrom: '2026-01-01' });
+      .send({ contractorId, process: 'coning', yarnId, cutId, side: 'SINGLE', twistId: twist.id, ratePerKg: 9 });
     assert.equal(r1.status, 200);
     const r2 = await request(app).post(`${CP}/rates`).set('Authorization', auth)
-      .send({ contractorId, process: 'coning', yarnId, cutId, side: 'SINGLE', coneTypeId: cone.id, ratePerKg: 11, effectiveFrom: '2026-01-01' });
+      .send({ contractorId, process: 'coning', yarnId, cutId, side: 'SINGLE', coneTypeId: cone.id, ratePerKg: 11 });
     assert.equal(r2.status, 409);
   });
 
@@ -645,15 +645,15 @@ if (!TEST_DB) {
   test('settlements are separated per process (coning preview excludes other processes)', async () => {
     const { contractorId } = await seed();
     // The coning preview only ever queries coning receive rows; a holo/cutter row
-    // in the same window is structurally absent. Assert every previewed line is coning.
+    // on the same date is structurally absent. Assert every previewed line is coning.
     const res = await request(app).get(`${CP}/preview`).query({ contractorId, ...base }).set('Authorization', auth);
     assert.equal(res.status, 200);
     assert.ok(res.body.lines.length > 0);
     assert.ok(res.body.lines.every((l) => l.process === 'coning'));
-    // A cutter preview for the same contractor/period has no assignment/rate → no lines.
-    const cutter = await request(app).get(`${CP}/preview`).query({ contractorId, process: 'cutter', from: base.from, to: base.to }).set('Authorization', auth);
-    assert.equal(cutter.status, 200);
-    assert.equal(cutter.body.lines.length, 0);
+    // A cutter preview cannot resolve a process owner until one is assigned.
+    const cutter = await request(app).get(`${CP}/preview`).query({ contractorId, process: 'cutter', date: base.date }).set('Authorization', auth);
+    assert.equal(cutter.status, 409);
+    assert.match(cutter.body.error, /No contractor is assigned/);
   });
 
   test('settlement PDF endpoint returns a PDF document', async () => {

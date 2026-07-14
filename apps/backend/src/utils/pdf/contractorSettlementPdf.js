@@ -1,7 +1,7 @@
 /**
  * Contractor Settlement PDF
- * Contractor/process/period, quality & Side breakdown, row details,
- * adjustments, final payable, and payment reference.
+ * Contractor/process/period, quality & Side summary, adjustments,
+ * final payable, and payment reference.
  */
 
 import { getJsPDF, formatDateDDMMYYYY, formatWeight, drawHeader, drawTable, drawFooter } from './pdfHelpers.js';
@@ -71,7 +71,7 @@ export async function generateContractorSettlementPdf(settlement) {
   const adjustments = Array.isArray(settlement.adjustments) ? settlement.adjustments : [];
 
   let y = drawHeader(doc, {
-    title: `Contractor Settlement — ${titleCase(process)}`,
+    title: `Contractor Settlement - ${titleCase(process)}`,
     date: settlement.paymentDate || settlement.periodTo,
     pageWidth,
   });
@@ -94,7 +94,7 @@ export async function generateContractorSettlementPdf(settlement) {
   });
   y += Math.ceil(info.length / 2) * 6 + 4;
 
-  // --- Quality & Side breakdown --------------------------------------------
+  // --- Quality & Side summary ----------------------------------------------
   const groups = groupLines(process, lines);
   if (groups.length) {
     const showSide = process === 'coning';
@@ -142,36 +142,6 @@ export async function generateContractorSettlementPdf(settlement) {
     rows.push({ cells: totalsCells, isTotal: true });
 
     y = drawTable(doc, { y, title: 'Quality & Side Breakdown', headers, rows, colWidths, pageWidth });
-  }
-
-  // --- Row detail -----------------------------------------------------------
-  if (lines.length) {
-    const showSide = process === 'coning';
-    const headers = [
-      { text: 'Date', align: 'left' },
-      { text: 'Barcode / Lot', align: 'left', wrap: true },
-      { text: 'Quality', align: 'left', wrap: true },
-      ...(showSide ? [{ text: 'Side', align: 'center' }] : []),
-      { text: 'Net KG', align: 'right' },
-      { text: 'Rate', align: 'right' },
-      { text: 'Amount', align: 'right' },
-    ];
-    const colWidths = showSide ? [22, 34, 40, 14, 24, 22, 24] : [24, 40, 46, 26, 22, 22];
-    const rows = lines.map((l) => {
-      const cells = [
-        { text: formatDateDDMMYYYY(l.date) },
-        { text: l.barcode || l.lotNo || '—' },
-        { text: [qualityLabel(process, l), l.cutName].filter(Boolean).join(' · ') || '—' },
-      ];
-      if (showSide) cells.push({ text: sideLabel(l.side), align: 'center' });
-      cells.push(
-        { text: formatWeight(l.netKg), align: 'right' },
-        { text: money(l.ratePerKg), align: 'right' },
-        { text: money(l.amount), align: 'right' },
-      );
-      return { cells };
-    });
-    y = drawTable(doc, { y, title: 'Production Rows', headers, rows, colWidths, pageWidth });
   }
 
   // --- Adjustments ----------------------------------------------------------

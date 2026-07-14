@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computePayablePreview, resolveRow, resolveConeTypeId, recomputeSettlementTotals, diffSettlementProduction } from '../service.js';
-import { groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
+import { generateContractorSettlementPdf, groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
 
 // Minimal Prisma stub — computePayablePreview only reads (findMany) and does no
 // writes, so a plain in-memory stub is sufficient (no DB required).
@@ -360,6 +360,30 @@ test('PDF groupLines splits a quality group by rate version', () => {
   for (const g of groups) {
     assert.equal(Math.round(g.ratePerKg * g.netKg * 100) / 100, g.amount); // Rate × KG reconciles with Amount
   }
+});
+
+test('contractor settlement PDF is summary-only', async () => {
+  const pdf = await generateContractorSettlementPdf({
+    contractor: { name: 'Birendra bhai', phone: '9999999999' },
+    process: 'coning',
+    periodFrom: '2026-03-05',
+    periodTo: '2026-03-06',
+    status: 'paid',
+    paymentDate: '2026-03-07',
+    paymentMode: 'Cash',
+    productionAmount: 125,
+    adjustmentsTotal: 0,
+    finalPayable: 125,
+    lines: [{
+      itemId: null, yarnId: 'Y1', yarnName: '40s', cutId: 'C1', cutName: '40',
+      twistId: 'T1', twistName: 'TW', side: 'SINGLE', coneTypeId: 'CT1', coneTypeName: 'Big',
+      ratePerKg: 10, netKg: 12.5, amount: 125, date: '2026-03-05', barcode: 'B1',
+    }],
+    adjustments: [],
+  });
+  assert.ok(pdf.length > 0);
+  assert.equal(pdf.includes('Quality & Side Breakdown'), true);
+  assert.equal(pdf.includes('Production Rows'), false);
 });
 
 test('diffSettlementProduction flags no drift on an unchanged snapshot', () => {

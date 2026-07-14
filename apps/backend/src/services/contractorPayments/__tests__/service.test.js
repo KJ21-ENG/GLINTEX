@@ -408,6 +408,7 @@ test('PDF summary labels and ordering are yarn-first', () => {
     '110 NYLON/S/S WATER B',
   ]);
   assert.equal(qualityLabel('coning', groups[0]), '30 NO COTTON · S/S WATER A · S-Twist · Cone:PUTHA 90');
+  assert.equal(qualityLabel('holo', { yarnName: '40/2 COTTON', itemName: 'S/S HORIZON-SML', twistName: 'Z-Twist' }), '40/2 COTTON · S/S HORIZON-SML · Z-Twist');
 });
 
 test('PDF summary widths expand Quality and resize the remaining columns to the page', () => {

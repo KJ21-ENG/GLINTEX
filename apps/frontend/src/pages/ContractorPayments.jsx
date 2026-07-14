@@ -122,7 +122,7 @@ function sortSettlementGroups(groups) {
 
 function settlementQualityText(process, line) {
   if (process === 'cutter') return line.itemName || '—';
-  if (process === 'holo') return [line.yarnName, line.twistName].filter(Boolean).join(' / ') || '—';
+  if (process === 'holo') return [line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ') || '—';
   const base = [line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ');
   const cone = line.coneTypeName ? ` · Cone:${line.coneTypeName}` : '';
   return (base + cone) || '—';

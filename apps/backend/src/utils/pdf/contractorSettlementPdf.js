@@ -64,7 +64,7 @@ function summarizeQuantities(lines) {
 export function qualityLabel(process, item) {
   if (process === 'cutter') return item.itemName || '-';
   if (process === 'holo') {
-    return [item.yarnName, item.twistName].filter(Boolean).join(' / ') || '-';
+    return [item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ') || '-';
   }
   const parts = [item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ');
   const cone = item.coneTypeName ? ` · Cone:${item.coneTypeName}` : '';

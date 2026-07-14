@@ -612,14 +612,15 @@ function parsePreviewQuery(source) {
   const from = cleanString(source.from, 10);
   const to = cleanString(source.to, 10);
   if (!process) return { error: 'process must be cutter, holo, or coning' };
-  if (!date && from && to && from === to) {
-    if (!isValidDateStr(from)) return { error: 'date must be YYYY-MM-DD' };
-    return { process, date: from, requestedContractorId };
+  if (date && (from || to)) return { error: 'Use either date or both from and to.' };
+  if (date) {
+    if (!isValidDateStr(date)) return { error: 'date must be YYYY-MM-DD' };
+    return { process, from: date, to: date, requestedContractorId };
   }
-  if (!date) return { error: 'date must be YYYY-MM-DD' };
-  if (!isValidDateStr(date)) return { error: 'date must be YYYY-MM-DD' };
-  if (from || to) return { error: 'Use one selected date; from and to are no longer supported for contractor payments.' };
-  return { process, date, requestedContractorId };
+  if (!from || !to) return { error: 'from and to must be YYYY-MM-DD' };
+  if (!isValidDateStr(from) || !isValidDateStr(to)) return { error: 'from and to must be YYYY-MM-DD' };
+  if (from > to) return { error: 'from must be on or before to' };
+  return { process, from, to, requestedContractorId };
 }
 
 // Production rows carry process and date, not contractor identity. Resolve the
@@ -635,7 +636,9 @@ async function resolvePreviewContext(parsed, client = prisma) {
   if (!contractor) throw httpError(409, 'The current process contractor no longer exists.');
   return {
     process: parsed.process,
-    date: parsed.date,
+    date: parsed.from,
+    from: parsed.from,
+    to: parsed.to,
     contractorId: assignment.contractorId,
     contractor,
   };
@@ -773,11 +776,11 @@ router.post('/settlements', requirePermission(PERM, PERM_WRITE), async (req, res
     try {
       created = await prisma.$transaction(async (tx) => {
         // Keep the process owner stable while the server recomputes and claims
-        // this daily report. Owner changes use the same logical lock.
+        // this period report. Owner changes use the same logical lock.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contractor_assignment:${context.process}`}))`;
         const currentOwner = await tx.contractorAssignment.findUnique({ where: { process: context.process } });
         if (!currentOwner || currentOwner.contractorId !== context.contractorId) {
-          throw httpError(409, 'The process contractor changed. Refresh the daily preview and try again.');
+          throw httpError(409, 'The process contractor changed. Refresh the production preview and try again.');
         }
         // Shared side of the settlement-lines lock BEFORE pricing: an
         // exclusive import cannot replace production between the preview read
@@ -795,8 +798,8 @@ router.post('/settlements', requirePermission(PERM, PERM_WRITE), async (req, res
           data: {
             contractorId: context.contractorId,
             process: context.process,
-            periodFrom: context.date,
-            periodTo: context.date,
+            periodFrom: context.from,
+            periodTo: context.to,
             status: 'draft',
             notes,
             productionKg: totals.productionKg,
@@ -861,7 +864,11 @@ router.put('/settlements/:id', requirePermission(PERM, PERM_WRITE), async (req, 
         // Recompute line selection if sourceRowIds provided; else keep existing lines.
         if (sourceRowIds) {
           const preview = await computePayablePreview(tx, {
-            contractorId: existing.contractorId, process: existing.process, date: existing.periodFrom, excludeSettlementId: id,
+            contractorId: existing.contractorId,
+            process: existing.process,
+            from: existing.periodFrom,
+            to: existing.periodTo,
+            excludeSettlementId: id,
           });
           const selection = selectPayableLines(preview, sourceRowIds);
           if (selection.error) throw httpError(400, selection.error, { blockers: selection.blockers });
@@ -949,7 +956,8 @@ async function revalidateSettlementProduction(client, settlement) {
   const preview = await computePayablePreview(client, {
     contractorId: settlement.contractorId,
     process: settlement.process,
-    date: settlement.periodFrom,
+    from: settlement.periodFrom,
+    to: settlement.periodTo,
     excludeSettlementId: settlement.id,
   });
   return diffSettlementProduction(lines, preview.lines);
@@ -1082,7 +1090,11 @@ router.put('/settlements/:id/paid-edit', requireRole('admin'), async (req, res) 
         let addLines = [];
         if (addSourceRowIds.length) {
           const preview = await computePayablePreview(tx, {
-            contractorId: fresh.contractorId, process: fresh.process, date: fresh.periodFrom, excludeSettlementId: id,
+            contractorId: fresh.contractorId,
+            process: fresh.process,
+            from: fresh.periodFrom,
+            to: fresh.periodTo,
+            excludeSettlementId: id,
           });
           const selection = selectPayableLines(preview, addSourceRowIds);
           if (selection.error) throw httpError(400, selection.error, { blockers: selection.blockers });

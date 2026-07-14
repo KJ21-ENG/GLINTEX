@@ -37,8 +37,8 @@ function isoDate(d) {
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10);
 }
 /*
- * Contractor settlements are daily reports. Keep the settlement pair display
- * helper only for backwards-compatible records created before this change.
+ * Contractor settlements use a production period. Keep the pair display
+ * helper compatible with older single-day records.
  */
 function settlementDate(s) {
   return s.periodFrom === s.periodTo ? s.periodFrom : `${s.periodFrom} → ${s.periodTo}`;
@@ -70,7 +70,7 @@ export function ContractorPayments() {
 
   const contractors = useMemo(() => (db.contractors || []).filter((c) => c.isActive !== false), [db.contractors]);
 
-  const [filters, setFilters] = useState({ process: 'coning', date: isoDate(new Date()) });
+  const [filters, setFilters] = useState({ process: 'coning', from: isoDate(new Date()), to: isoDate(new Date()) });
   const [preview, setPreview] = useState(null);
   const [previewErr, setPreviewErr] = useState('');
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -84,15 +84,19 @@ export function ContractorPayments() {
   const [loadingList, setLoadingList] = useState(false);
   const [detail, setDetail] = useState(null);
 
-  // Changing any filter invalidates the current preview (its process/date no
+  // Changing any filter invalidates the current preview (its process/period no
   // longer match), so clear it to avoid showing stale rows/headers.
   const clearPreview = () => { setPreview(null); setSelected(new Set()); setCreateMsg(''); setPreviewErr(''); };
   const setF = (k, v) => { setFilters((f) => ({ ...f, [k]: v })); clearPreview(); };
 
   const runPreview = useCallback(async () => {
     setPreviewErr(''); setCreateMsg('');
-    if (!filters.process || !filters.date) {
-      setPreviewErr('Select a process and production date.');
+    if (!filters.process || !filters.from || !filters.to) {
+      setPreviewErr('Select a process and production date range.');
+      return;
+    }
+    if (filters.from > filters.to) {
+      setPreviewErr('From date must be on or before To date.');
       return;
     }
     setLoadingPreview(true);
@@ -138,7 +142,8 @@ export function ContractorPayments() {
     try {
       const payload = {
         process: filters.process,
-        date: filters.date,
+        from: filters.from,
+        to: filters.to,
         sourceRowIds: Array.from(selected),
         adjustments: cleanAdjustments(),
       };
@@ -215,7 +220,7 @@ export function ContractorPayments() {
           {/* Filters */}
           <Card>
             <CardContent className="pt-6 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <Label className="text-xs">Process contractor</Label>
                   <div className="h-10 rounded-md border bg-muted/30 px-3 flex items-center text-sm">
@@ -229,8 +234,12 @@ export function ContractorPayments() {
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs">Production date</Label>
-                  <Input type="date" value={filters.date} onChange={(e) => setF('date', e.target.value)} />
+                  <Label className="text-xs">From date</Label>
+                  <Input type="date" value={filters.from} onChange={(e) => setF('from', e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs">To date</Label>
+                  <Input type="date" value={filters.to} onChange={(e) => setF('to', e.target.value)} />
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -249,7 +258,7 @@ export function ContractorPayments() {
             <>
               {preview.truncated && (
                 <div className="rounded-md border border-amber-300 bg-amber-50 text-amber-800 text-sm px-3 py-2 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4" /> Too many production rows for this date (over {preview.rowFetchLimit}).
+                  <AlertTriangle className="w-4 h-4" /> Too many production rows for this date range (over {preview.rowFetchLimit}).
                 </div>
               )}
 
@@ -433,7 +442,7 @@ function SettlementList({ rows, loading, status, contractorName, onOpen }) {
         <div className="rounded-md border overflow-auto">
           <Table>
             <TableHeader><TableRow>
-              <TableHead>Contractor</TableHead><TableHead>Process</TableHead><TableHead>Date</TableHead>
+              <TableHead>Contractor</TableHead><TableHead>Process</TableHead><TableHead>Period</TableHead>
               <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">Final ₹</TableHead>
               {status === 'paid' && <TableHead>Paid</TableHead>}
               <TableHead className="w-20"></TableHead>
@@ -687,7 +696,10 @@ function PaidEditDialog({ settlement, onClose, onDone }) {
     setLoadingAvail(true); setErr('');
     try {
       const res = await api.getContractorPayablePreview({
-        process: settlement.process, date: settlement.periodFrom, excludeSettlementId: settlement.id,
+        process: settlement.process,
+        from: settlement.periodFrom,
+        to: settlement.periodTo,
+        excludeSettlementId: settlement.id,
       });
       setAvailable((res.lines || []).filter((l) => !existingRowIds.has(l.sourceRowId)));
     } catch (e) { setErr(e.message || 'Failed to load available rows'); }
@@ -821,7 +833,7 @@ function PaidEditDialog({ settlement, onClose, onDone }) {
         </div>
         {available !== null && (
           available.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No additional unclaimed rows for this date.</p>
+            <p className="text-sm text-muted-foreground">No additional unclaimed rows for this date range.</p>
           ) : (
             <div className="rounded-md border max-h-[25vh] overflow-auto">
               <Table>

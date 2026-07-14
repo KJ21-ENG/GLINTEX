@@ -254,13 +254,14 @@ export async function traceConingCuts(prisma, rows) {
   return traced;
 }
 
-// Fetch candidate production receive rows for one selected production date.
+// Fetch candidate production receive rows for the selected production period.
 // The row date falls back to the issue date when the row itself carries none.
-async function fetchProductionRows(prisma, process, date) {
+async function fetchProductionRows(prisma, process, from, to = from) {
+  const dateFilter = from === to ? from : { gte: from, lte: to };
   const rowDateOr = {
     OR: [
-      { date },
-      { date: null, issue: { is: { date } } },
+      { date: dateFilter },
+      { date: null, issue: { is: { date: dateFilter } } },
     ],
   };
   // Deterministic ordering so a truncated fetch is reproducible (createdAt is
@@ -422,14 +423,26 @@ function buildLine(process, resolved, rate) {
 // excludeSettlementId: when re-previewing for an existing settlement (admin
 // paid-edit "add lines"), rows already claimed by THAT settlement are still
 // treated as available.
-export async function computePayablePreview(prisma, { contractorId, process, date, excludeSettlementId = null }) {
+export async function computePayablePreview(prisma, {
+  contractorId,
+  process,
+  from,
+  to,
+  date,
+  excludeSettlementId = null,
+}) {
+  // `date` remains supported for older callers; new callers use the explicit
+  // period pair so settlement snapshots and revalidation cover the same rows.
+  const periodFrom = from || date;
+  const periodTo = to || date || periodFrom;
   const [assignments, rates, fetchedRows, maps] = await Promise.all([
     prisma.contractorAssignment.findMany({ where: { contractorId, process } }),
     prisma.contractorRate.findMany({ where: { contractorId, process } }),
-    fetchProductionRows(prisma, process, date),
+    fetchProductionRows(prisma, process, periodFrom, periodTo),
     loadMasterMaps(prisma),
   ]);
-  // fetchProductionRows takes LIMIT+1; if we got more than LIMIT for the day,
+  // fetchProductionRows takes LIMIT+1; if we got more than LIMIT for the
+  // selected period,
   // results are truncated — surface this instead of silently dropping rows.
   const truncated = fetchedRows.length > ROW_FETCH_LIMIT;
   const rows = truncated ? fetchedRows.slice(0, ROW_FETCH_LIMIT) : fetchedRows;
@@ -555,7 +568,9 @@ export async function computePayablePreview(prisma, { contractorId, process, dat
   return {
     contractorId,
     process,
-    date,
+    date: periodFrom,
+    from: periodFrom,
+    to: periodTo,
     hasAssignment: assignments.length > 0,
     assignments,
     lines,

@@ -1029,8 +1029,8 @@ model ContractorSettlement {
   id               String                           @id @default(cuid())
   contractorId     String
   process          String // 'cutter' | 'holo' | 'coning'
-  periodFrom       String // selected production date (YYYY-MM-DD)
-  periodTo         String // same as periodFrom; retained for report/history compatibility
+  periodFrom       String // selected production period start (YYYY-MM-DD)
+  periodTo         String // selected production period end (YYYY-MM-DD)
   status           String                           @default("draft") // 'draft' | 'paid'
   productionKg     Decimal                          @default(0) @db.Decimal(16, 3)
   productionAmount Decimal                          @default(0) @db.Decimal(16, 2)

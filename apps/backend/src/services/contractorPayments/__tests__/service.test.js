@@ -13,9 +13,12 @@ function makeStub({
   claimedLines = [], holoIssues = [], coningIssues = [],
 } = {}) {
   const rowsForDate = (rows, args = {}) => {
-    const date = args.where?.OR?.find((condition) => typeof condition.date === 'string')?.date;
+    const date = args.where?.OR?.find((condition) => condition.date !== undefined)?.date;
     if (!date) return rows;
-    return rows.filter((row) => (row.date || row.issue?.date) === date);
+    const matches = (value) => typeof date === 'string'
+      ? value === date
+      : value >= date.gte && value <= date.lte;
+    return rows.filter((row) => matches(row.date || row.issue?.date));
   };
   return {
     contractorAssignment: { findMany: async () => assignments },
@@ -86,6 +89,23 @@ test('eligible coning row produces a payable line at the matched rate', async ()
   assert.equal(res.lines[0].amount, 80);
   assert.equal(res.lines[0].side, 'SINGLE');
   assert.equal(res.productionAmount, 80);
+});
+
+test('range preview includes payable rows from both boundary dates', async () => {
+  const stub = makeStub({
+    ...MASTERS,
+    assignments: CONING_ASSIGN,
+    rates: [CONING_RATE_BASE],
+    coningRows: [
+      coningRow({ id: 'start', date: '2026-03-05' }),
+      coningRow({ id: 'end', date: '2026-03-06', barcode: 'B2' }),
+      coningRow({ id: 'outside', date: '2026-03-07', barcode: 'B3' }),
+    ],
+  });
+  const res = await preview(stub, { from: '2026-03-05', to: '2026-03-06' });
+  assert.equal(res.from, '2026-03-05');
+  assert.equal(res.to, '2026-03-06');
+  assert.deepEqual(res.lines.map((l) => l.sourceRowId), ['start', 'end']);
 });
 
 test('cone-type override wins over the base rate', async () => {

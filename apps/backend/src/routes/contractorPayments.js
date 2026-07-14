@@ -86,6 +86,7 @@ const MAX_AMOUNT = 1e11; // ₹ per adjustment
 const MAX_KG = 1e7;
 const MAX_RATE = 1e5; // ₹/KG
 const MAX_ADJUSTMENTS = 200;
+const MAX_RATE_BATCH = 100;
 
 function num(value) {
   if (value === null || value === undefined) return null;
@@ -98,6 +99,11 @@ function cleanString(value, max = 500) {
   const s = String(value).trim();
   if (!s) return null;
   return s.slice(0, max);
+}
+
+function cleanStringList(value, max = 40) {
+  const values = Array.isArray(value) ? value : [value];
+  return Array.from(new Set(values.map((item) => cleanString(item, max)).filter(Boolean)));
 }
 
 function parseProcess(value) {
@@ -457,24 +463,54 @@ router.post('/rates', requirePermission(MASTERS, PERM_WRITE), async (req, res) =
     if (!process) return res.status(400).json({ error: 'process must be cutter, holo, or coning' });
     const contractor = await prisma.contractor.findUnique({ where: { id: contractorId } });
     if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
-    const { data, error } = normalizeRatePayload(process, req.body || {});
-    if (error) return res.status(400).json({ error });
-    const refError = await validateRateReferences(data);
-    if (refError) return res.status(400).json({ error: refError });
-    let created;
+    const hasYarnIds = req.body?.yarnIds !== undefined;
+    if (hasYarnIds && process === 'cutter') {
+      return res.status(400).json({ error: 'yarnIds are supported only for holo and coning rates' });
+    }
+    const yarnIds = process === 'cutter'
+      ? [null]
+      : (hasYarnIds ? cleanStringList(req.body?.yarnIds) : [cleanString(req.body?.yarnId, 40)]);
+    if (yarnIds.length > MAX_RATE_BATCH) {
+      return res.status(400).json({ error: `A maximum of ${MAX_RATE_BATCH} yarns can be selected at once` });
+    }
+    if (process !== 'cutter' && yarnIds.length === 0) {
+      const { error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId: null });
+      return res.status(400).json({ error });
+    }
+
+    const normalizedRates = [];
+    for (const yarnId of yarnIds) {
+      const { data, error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId });
+      if (error) return res.status(400).json({ error });
+      const refError = await validateRateReferences(data);
+      if (refError) return res.status(400).json({ error: refError });
+      normalizedRates.push(data);
+    }
+
+    let createdRows;
     try {
-      created = await withAdvisoryLock(`contractor_rate:${contractorId}:${process}`, async (tx) => {
-        if (await assertNoRateOverlap(tx, contractorId, process, data, null)) {
-          throw overlapError('An equally-specific current rate already covers this quality.');
+      createdRows = await withAdvisoryLock(`contractor_rate:${contractorId}:${process}`, async (tx) => {
+        // Check the complete batch before creating any rows so a conflict never
+        // leaves a partial multi-yarn rate configuration behind.
+        for (const data of normalizedRates) {
+          if (await assertNoRateOverlap(tx, contractorId, process, data, null)) {
+            throw overlapError('An equally-specific current rate already covers this quality.');
+          }
         }
-        return tx.contractorRate.create({ data: { contractorId, ...data, ...actorCreateFields(req.user?.id) } });
+        const rows = [];
+        for (const data of normalizedRates) {
+          rows.push(await tx.contractorRate.create({ data: { contractorId, ...data, ...actorCreateFields(req.user?.id) } }));
+        }
+        return rows;
       });
     } catch (e) {
       if (e?.statusCode === 409) return res.status(409).json({ error: e.message });
       throw e;
     }
-    await audit(req, { entityType: 'contractor_rate', entityId: created.id, action: 'create', payload: created });
-    res.json(serializeRate(created));
+    for (const created of createdRows) {
+      await audit(req, { entityType: 'contractor_rate', entityId: created.id, action: 'create', payload: created });
+    }
+    res.json(createdRows.length === 1 ? serializeRate(createdRows[0]) : createdRows.map(serializeRate));
   } catch (err) {
     console.error('Failed to create rate', err);
     res.status(500).json({ error: err.message || 'Failed to create rate' });

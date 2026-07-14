@@ -633,6 +633,26 @@ if (!TEST_DB) {
     assert.equal(r2.status, 409);
   });
 
+  test('multi-yarn rate creation creates one rate row per selected yarn', async () => {
+    const { contractorId } = await seed();
+    const yarnA = await prisma.yarn.create({ data: { name: '60s' } });
+    const yarnB = await prisma.yarn.create({ data: { name: '80s' } });
+    const selectedIds = [yarnA.id, yarnB.id];
+
+    const response = await request(app).post(`${CP}/rates`).set('Authorization', auth)
+      .send({ contractorId, process: 'holo', yarnIds: selectedIds, ratePerKg: 9 });
+
+    assert.equal(response.status, 200);
+    assert.ok(Array.isArray(response.body));
+    assert.equal(response.body.length, 2);
+    assert.deepEqual(response.body.map((rate) => rate.yarnId).sort(), selectedIds.sort());
+
+    const rows = await prisma.contractorRate.findMany({ where: { contractorId, process: 'holo' } });
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map((rate) => rate.yarnId).sort(), selectedIds.sort());
+    assert.ok(rows.every((rate) => Number(rate.ratePerKg) === 9));
+  });
+
   test('deleted production rows are excluded from the preview', async () => {
     const { contractorId } = await seed();
     // Mark every coning receive row deleted → nothing eligible.

@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
-import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label } from '../components/ui';
+import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Checkbox, Label } from '../components/ui';
 import { TableStateRow } from '../components/data-table';
-import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { ChevronDown, Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
@@ -1995,8 +1995,110 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
 }
 
 // --- Contractor rates master -----------------------------------------------
+function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = false, maxSelections = null }) {
+    const [open, setOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const containerRef = useRef(null);
+
+    useEffect(() => {
+        if (!open) return undefined;
+        const handlePointerDown = (event) => {
+            if (!containerRef.current?.contains(event.target)) setOpen(false);
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [open]);
+
+    const selectedSet = new Set(selectedIds);
+    const query = search.trim().toLowerCase();
+    const visibleYarns = yarns.filter((yarn) => !query || String(yarn.name || '').toLowerCase().includes(query));
+    const selectedNames = selectedIds
+        .map((id) => yarns.find((yarn) => yarn.id === id)?.name)
+        .filter(Boolean);
+    const label = selectedIds.length === 0
+        ? 'Select…'
+        : selectedIds.length === 1
+            ? (selectedNames[0] || '1 yarn selected')
+            : `${selectedIds.length} yarns selected`;
+
+    const toggle = (id) => {
+        if (disabled) return;
+        if (selectedSet.has(id)) {
+            onChange(selectedIds.filter((selectedId) => selectedId !== id));
+        } else if (maxSelections === 1) {
+            onChange([id]);
+        } else {
+            onChange([...selectedIds, id]);
+        }
+    };
+
+    const close = () => {
+        setOpen(false);
+        setSearch('');
+    };
+
+    return (
+        <div ref={containerRef} className="relative">
+            <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-between font-normal"
+                onClick={() => setOpen((value) => !value)}
+                disabled={disabled || yarns.length === 0}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+            >
+                <span className="truncate text-left">{label}</span>
+                <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-60" />
+            </Button>
+            {open && (
+                <div className="absolute left-0 right-0 z-50 mt-1 rounded-md border border-input bg-background p-2 shadow-lg">
+                    <Input
+                        autoFocus
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                        placeholder="Search yarns..."
+                        aria-label="Search yarns"
+                        className="mb-2 h-9"
+                    />
+                    <div className="max-h-48 overflow-auto" role="listbox" aria-label="Yarns">
+                        {visibleYarns.length === 0 ? (
+                            <div className="px-2 py-2 text-xs text-muted-foreground">No matching yarns.</div>
+                        ) : visibleYarns.map((yarn) => {
+                            const checked = selectedSet.has(yarn.id);
+                            const atLimit = maxSelections !== null && selectedIds.length >= maxSelections && !checked;
+                            return (
+                                <label key={yarn.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-accent">
+                                    <Checkbox
+                                        checked={checked}
+                                        disabled={disabled || atLimit}
+                                        onCheckedChange={() => toggle(yarn.id)}
+                                        aria-label={yarn.name}
+                                    />
+                                    <span className="truncate">{yarn.name}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                    <div className="mt-2 flex justify-between gap-2 border-t pt-2">
+                        <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])} disabled={disabled || selectedIds.length === 0}>Clear</Button>
+                        <Button type="button" size="sm" onClick={close}>Done</Button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
-    const empty = { contractorId: '', process: '', itemId: '', yarnId: '', cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '' };
+    const empty = { contractorId: '', process: '', itemId: '', yarnIds: [], cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState('');
@@ -2023,12 +2125,15 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
             process: form.process,
             ratePerKg: rate,
             itemId: form.process === 'cutter' ? (form.itemId || null) : null,
-            yarnId: form.process !== 'cutter' ? (form.yarnId || null) : null,
             cutId: form.cutId || null,
             side: form.process === 'coning' ? (form.side || null) : null,
             twistId: form.process !== 'cutter' ? (form.twistId || null) : null,
             coneTypeId: form.process === 'coning' ? (form.coneTypeId || null) : null,
         };
+        if (form.process !== 'cutter') {
+            if (editingId) payload.yarnId = form.yarnIds[0] || null;
+            else payload.yarnIds = form.yarnIds;
+        }
         try {
             if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
             reset();
@@ -2038,7 +2143,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
         setEditingId(r.id);
         setForm({
             contractorId: r.contractorId, process: r.process,
-            itemId: r.itemId || '', yarnId: r.yarnId || '', cutId: r.cutId || '', side: r.side || '',
+            itemId: r.itemId || '', yarnIds: r.yarnId ? [r.yarnId] : [], cutId: r.cutId || '', side: r.side || '',
             twistId: r.twistId || '', coneTypeId: r.coneTypeId || '',
             ratePerKg: r.ratePerKg != null ? String(r.ratePerKg) : '',
         });
@@ -2060,8 +2165,8 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const rateValue = Number(form.ratePerKg);
     const formReady = !!form.contractorId && !!process && rateValue > 0 && (
         process === 'cutter' ? (!!form.itemId && !!form.cutId)
-            : process === 'holo' ? !!form.yarnId
-                : process === 'coning' ? (!!form.yarnId && !!form.side)
+            : process === 'holo' ? form.yarnIds.length > 0
+                : process === 'coning' ? (form.yarnIds.length > 0 && !!form.side)
                     : false
     );
 
@@ -2101,10 +2206,16 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                             )}
                             {process !== 'cutter' && (
                                 <div><Label className="text-xs">Yarn *</Label>
-                                    <Select value={form.yarnId} onChange={(e) => set('yarnId', e.target.value)}>
-                                        <option value="">Select…</option>
-                                        {(yarns || []).map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
-                                    </Select>
+                                    <YarnMultiSelect
+                                        yarns={yarns || []}
+                                        selectedIds={form.yarnIds}
+                                        onChange={(ids) => set('yarnIds', ids)}
+                                        disabled={loading}
+                                        maxSelections={editingId ? 1 : null}
+                                    />
+                                    <p className="mt-1 text-[11px] text-muted-foreground">
+                                        {editingId ? 'Editing updates this one rate row.' : 'Select multiple yarns to apply the same rate to each one.'}
+                                    </p>
                                 </div>
                             )}
                             <div><Label className="text-xs">{process === 'cutter' ? 'Cut *' : 'Cut (optional override)'}</Label>

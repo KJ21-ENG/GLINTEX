@@ -217,6 +217,8 @@ export function drawTable(doc, {
             }
             hadPageBreak = true;
             doc.addPage();
+            doc.setFillColor(255, 255, 255);
+            doc.rect(0, 0, pageWidth, pageHeight, 'F');
             y = pageStartY;
 
             // Redraw header on new page

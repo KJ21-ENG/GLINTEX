@@ -382,7 +382,10 @@ test('contractor settlement PDF is summary-only', async () => {
     adjustments: [],
   });
   assert.ok(pdf.length > 0);
+  assert.match(pdf.toString('latin1'), /\/MediaBox \[0 0 841\.[0-9]+ 595\.[0-9]+\]/);
   assert.equal(pdf.includes('Quality & Side Breakdown'), true);
+  assert.equal(pdf.includes('Qty'), true);
+  assert.equal(pdf.includes('Rows'), false);
   assert.equal(pdf.includes('Production Rows'), false);
 });
 

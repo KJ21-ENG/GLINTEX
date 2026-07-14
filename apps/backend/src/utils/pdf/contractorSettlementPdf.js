@@ -107,6 +107,88 @@ function fitText(doc, value, maxWidth) {
   return text;
 }
 
+const SUMMARY_COLUMN_MIN_WIDTHS = {
+  Quality: 50,
+  Cut: 18,
+  Side: 14,
+  Qty: 22,
+  'Net KG': 22,
+  Rate: 16,
+  Amount: 23,
+};
+
+function cellText(cell) {
+  return String(cell?.text ?? cell ?? '');
+}
+
+function headerText(header) {
+  return String(header?.text ?? header ?? '');
+}
+
+function shrinkWidthsToFit(widths, minimums, availableWidth, protectedIndex) {
+  let excess = widths.reduce((sum, width) => sum + width, 0) - availableWidth;
+  if (excess <= 0) return widths;
+
+  const shrinkOrder = widths.map((_, index) => index).filter((index) => index !== protectedIndex);
+  for (const index of shrinkOrder) {
+    const reducible = Math.max(0, widths[index] - minimums[index]);
+    const reduction = Math.min(reducible, excess);
+    widths[index] -= reduction;
+    excess -= reduction;
+    if (excess <= 0) return widths;
+  }
+
+  const reducibleTotal = widths.reduce((sum, width, index) => sum + Math.max(0, width - minimums[index]), 0);
+  if (reducibleTotal > 0 && excess > 0) {
+    widths.forEach((width, index) => {
+      const reducible = Math.max(0, width - minimums[index]);
+      widths[index] -= excess * (reducible / reducibleTotal);
+    });
+  }
+  return widths;
+}
+
+// Calculate the summary table widths from the actual labels and values. The
+// Quality column gets a little more of the spare landscape width so long item
+// names stay readable on one line while the other columns remain content-sized.
+export function calculateSummaryColumnWidths(doc, { headers, rows, pageWidth, padding = 1.7, qualityIndex = 0 }) {
+  const availableWidth = pageWidth - 30;
+  const cellPadding = padding * 2;
+  const desiredWidths = headers.map((header, index) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    const headerWidth = doc.getTextWidth(headerText(header));
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    const contentWidth = rows.reduce(
+      (maxWidth, row) => Math.max(maxWidth, doc.getTextWidth(cellText(row.cells[index]))),
+      0,
+    );
+    return Math.max(headerWidth, contentWidth) + cellPadding;
+  });
+  const minimumWidths = headers.map((header, index) => {
+    const minimum = SUMMARY_COLUMN_MIN_WIDTHS[headerText(header)] || 18;
+    return Math.min(desiredWidths[index], minimum);
+  });
+  const desiredTotal = desiredWidths.reduce((sum, width) => sum + width, 0);
+
+  if (desiredTotal <= availableWidth) {
+    const spareWidth = availableWidth - desiredTotal;
+    const growthWeights = desiredWidths.map((width, index) => (index === qualityIndex ? width * 2 : width));
+    const totalGrowthWeight = growthWeights.reduce((sum, weight) => sum + weight, 0);
+    return desiredWidths.map((width, index) => width + (spareWidth * growthWeights[index]) / totalGrowthWeight);
+  }
+
+  const fittedWidths = shrinkWidthsToFit([...desiredWidths], minimumWidths, availableWidth, qualityIndex);
+  const fittedTotal = fittedWidths.reduce((sum, width) => sum + width, 0);
+  if (fittedTotal > availableWidth) {
+    const scale = availableWidth / fittedTotal;
+    return fittedWidths.map((width) => width * scale);
+  }
+  fittedWidths[fittedWidths.length - 1] += availableWidth - fittedTotal;
+  return fittedWidths;
+}
+
 function paymentPanelHeight(paymentLineCount, notesLineCount) {
   return Math.max(30, 11 + (paymentLineCount + notesLineCount) * 4.5);
 }
@@ -321,7 +403,6 @@ export async function generateContractorSettlementPdf(settlement) {
         { text: 'Rate', align: 'right' },
         { text: 'Amount', align: 'right' },
       ];
-    const colWidths = showSide ? [84, 37, 20, 26, 35, 28, 37] : [100, 42, 27, 37, 28, 33];
     const rows = groups.map((g) => {
       const cells = [{ text: qualityLabel(process, g) }, { text: g.cutName || '-' }];
       if (showSide) cells.push({ text: sideLabel(g.side), align: 'center' });
@@ -332,6 +413,12 @@ export async function generateContractorSettlementPdf(settlement) {
         { text: money(g.amount), align: 'right' },
       );
       return { cells };
+    });
+    const colWidths = calculateSummaryColumnWidths(doc, {
+      headers,
+      rows,
+      pageWidth,
+      padding: 1.7,
     });
     // Totals row
     const totalKg = groups.reduce((a, g) => a + g.netKg, 0);

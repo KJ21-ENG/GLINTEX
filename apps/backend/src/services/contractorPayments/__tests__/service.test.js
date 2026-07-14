@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computePayablePreview, resolveRow, resolveConeTypeId, resolveQuantity, recomputeSettlementTotals, diffSettlementProduction } from '../service.js';
-import { generateContractorSettlementPdf, groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
+import { calculateSummaryColumnWidths, generateContractorSettlementPdf, groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
 
 // Minimal Prisma stub — computePayablePreview only reads (findMany) and does no
 // writes, so a plain in-memory stub is sufficient (no DB required).
@@ -393,6 +393,34 @@ test('PDF groupLines keeps distinct coning items separate when visible quality m
   ];
   const groups = groupLines('coning', lines);
   assert.equal(groups.length, 2); // item identity is part of the settlement grouping key
+});
+
+test('PDF summary widths expand Quality and resize the remaining columns to the page', () => {
+  const doc = {
+    setFont: () => {},
+    setFontSize: () => {},
+    getTextWidth: (value) => String(value).length,
+  };
+  const headers = [
+    { text: 'Quality', align: 'left', wrap: true },
+    { text: 'Cut', align: 'left' },
+    { text: 'Side', align: 'center' },
+    { text: 'Qty (Cones)', align: 'right' },
+    { text: 'Net KG', align: 'right' },
+    { text: 'Rate', align: 'right' },
+    { text: 'Amount', align: 'right' },
+  ];
+  const rows = [{ cells: [
+    { text: 'S/S WATER D-SML · 30 NO COTTON / S-Twist · Cone:PUTHA 90' },
+    { text: '50/303' }, { text: 'B/S' }, { text: '3,399' },
+    { text: '3079.140' }, { text: '13.00' }, { text: '24,633.12' },
+  ] }];
+  const widths = calculateSummaryColumnWidths(doc, { headers, rows, pageWidth: 297, padding: 1.7 });
+
+  assert.equal(Math.round(widths.reduce((sum, width) => sum + width, 0)), 267);
+  assert.ok(widths[0] > 84); // the previous fixed Quality width
+  assert.ok(widths[0] >= 'S/S WATER D-SML · 30 NO COTTON / S-Twist · Cone:PUTHA 90'.length + 3.4);
+  assert.ok(widths[1] < 37); // Cut no longer reserves the old fixed width
 });
 
 test('contractor settlement PDF is summary-only', async () => {

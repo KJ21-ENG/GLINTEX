@@ -24,6 +24,42 @@ const ADJUSTMENT_LABELS = {
   other: 'Other',
 };
 
+const PROCESS_QUANTITY_META = {
+  cutter: { unit: 'Bobbins', header: 'Qty (Bobbins)' },
+  holo: { unit: 'Rolls', header: 'Qty (Rolls)' },
+  coning: { unit: 'Cones', header: 'Qty (Cones)' },
+};
+
+function quantityMeta(process) {
+  return PROCESS_QUANTITY_META[process] || { unit: 'Units', header: 'Qty' };
+}
+
+function asQuantity(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? Math.trunc(quantity) : null;
+}
+
+function formatQuantity(value, known = true) {
+  const quantity = asQuantity(value);
+  if (!known || quantity === null) return '-';
+  return quantity.toLocaleString('en-IN');
+}
+
+function summarizeQuantities(lines) {
+  let total = 0;
+  let known = true;
+  for (const line of lines) {
+    const quantity = asQuantity(line.quantity);
+    if (quantity === null) {
+      known = false;
+    } else {
+      total += quantity;
+    }
+  }
+  return { total, known };
+}
+
 // Quality label for a line/group depending on process.
 function qualityLabel(process, item) {
   if (process === 'cutter') return item.itemName || '-';
@@ -50,11 +86,13 @@ export function groupLines(process, lines) {
     const key = [l.itemId, l.yarnId, l.cutId, l.twistId, l.side, l.coneTypeId, l.ratePerKg].join('|');
     const existing = map.get(key) || {
       itemName: l.itemName, yarnName: l.yarnName, cutName: l.cutName, twistName: l.twistName, side: l.side,
-      coneTypeName: l.coneTypeName, ratePerKg: l.ratePerKg, netKg: 0, amount: 0, rows: 0,
+      coneTypeName: l.coneTypeName, ratePerKg: l.ratePerKg, netKg: 0, amount: 0, quantity: 0, quantityKnown: true,
     };
     existing.netKg += Number(l.netKg || 0);
     existing.amount += Number(l.amount || 0);
-    existing.rows += 1;
+    const quantity = asQuantity(l.quantity);
+    if (quantity === null) existing.quantityKnown = false;
+    else existing.quantity += quantity;
     map.set(key, existing);
   }
   return Array.from(map.values());
@@ -83,7 +121,7 @@ function getPaymentPanelHeight(doc, settlement, pageWidth) {
   return paymentPanelHeight(paymentLineCount, notesLines.length);
 }
 
-function drawCompactHeader(doc, { settlement, process, totalKg, pageWidth }) {
+function drawCompactHeader(doc, { settlement, process, totalKg, totalQuantity, quantityKnown, pageWidth }) {
   const startX = 15;
   const endX = pageWidth - 15;
   const availableWidth = endX - startX;
@@ -137,8 +175,9 @@ function drawCompactHeader(doc, { settlement, process, totalKg, pageWidth }) {
 
   const metricY = infoY + infoHeight + 4;
   const metricHeight = 11;
+  const qtyMeta = quantityMeta(process);
   const metrics = [
-    ['QTY', String(Array.isArray(settlement.lines) ? settlement.lines.length : 0)],
+    [`QTY (${qtyMeta.unit})`, formatQuantity(totalQuantity, quantityKnown)],
     ['NET KG', formatWeight(totalKg)],
     ['PRODUCTION', `Rs. ${money(settlement.productionAmount)}`],
     ['FINAL PAYABLE', `Rs. ${money(settlement.finalPayable)}`],
@@ -248,23 +287,27 @@ export async function generateContractorSettlementPdf(settlement) {
   const adjustments = Array.isArray(settlement.adjustments) ? settlement.adjustments : [];
   const groups = groupLines(process, lines);
   const totalKg = groups.reduce((sum, group) => sum + group.netKg, 0);
+  const quantitySummary = summarizeQuantities(lines);
 
   let y = drawCompactHeader(doc, {
     settlement,
     process,
     totalKg,
+    totalQuantity: quantitySummary.total,
+    quantityKnown: quantitySummary.known,
     pageWidth,
   });
 
   // --- Quality & Side summary ----------------------------------------------
   if (groups.length) {
     const showSide = process === 'coning';
+    const qtyHeader = quantityMeta(process).header;
     const headers = showSide
       ? [
         { text: 'Quality', align: 'left', wrap: true },
         { text: 'Cut', align: 'left' },
         { text: 'Side', align: 'center' },
-        { text: 'Qty', align: 'right' },
+        { text: qtyHeader, align: 'right' },
         { text: 'Net KG', align: 'right' },
         { text: 'Rate', align: 'right' },
         { text: 'Amount', align: 'right' },
@@ -272,17 +315,17 @@ export async function generateContractorSettlementPdf(settlement) {
       : [
         { text: 'Quality', align: 'left', wrap: true },
         { text: 'Cut', align: 'left' },
-        { text: 'Qty', align: 'right' },
+        { text: qtyHeader, align: 'right' },
         { text: 'Net KG', align: 'right' },
         { text: 'Rate', align: 'right' },
         { text: 'Amount', align: 'right' },
       ];
-    const colWidths = showSide ? [88, 38, 20, 18, 36, 28, 39] : [105, 44, 20, 37, 28, 33];
+    const colWidths = showSide ? [84, 37, 20, 26, 35, 28, 37] : [100, 42, 27, 37, 28, 33];
     const rows = groups.map((g) => {
       const cells = [{ text: qualityLabel(process, g) }, { text: g.cutName || '-' }];
       if (showSide) cells.push({ text: sideLabel(g.side), align: 'center' });
       cells.push(
-        { text: String(g.rows), align: 'right' },
+        { text: formatQuantity(g.quantity, g.quantityKnown), align: 'right' },
         { text: formatWeight(g.netKg), align: 'right' },
         { text: money(g.ratePerKg), align: 'right' },
         { text: money(g.amount), align: 'right' },
@@ -295,7 +338,7 @@ export async function generateContractorSettlementPdf(settlement) {
     const totalsCells = [{ text: 'TOTAL' }, { text: '' }];
     if (showSide) totalsCells.push({ text: '' });
     totalsCells.push(
-      { text: String(lines.length), align: 'right' },
+      { text: formatQuantity(quantitySummary.total, quantitySummary.known), align: 'right' },
       { text: formatWeight(totalKg), align: 'right' },
       { text: '', align: 'right' },
       { text: money(totalAmt), align: 'right' },

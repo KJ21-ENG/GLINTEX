@@ -71,6 +71,21 @@ function nameOf(map, id) {
   return rec ? rec.name : null;
 }
 
+// Contractor settlement QTY is the process-specific physical count, not the
+// number of source rows: cutter=bobbins, holo=rolls, coning=cones.
+export function resolveQuantity(process, row) {
+  const raw = process === 'cutter'
+    ? row?.bobbinQuantity
+    : process === 'holo'
+      ? row?.rollCount
+      : process === 'coning'
+        ? row?.coneCount
+        : null;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const quantity = Number(raw);
+  return Number.isFinite(quantity) ? Math.trunc(quantity) : null;
+}
+
 // A coning issue records exactly one cone type in receivedRowRefs[0].coneTypeId
 // (enforced at issue creation). Parse it defensively (refs may be a JSON string).
 export function resolveConeTypeId(issue) {
@@ -298,6 +313,7 @@ export function resolveRow(process, row, maps) {
     sourceRowId: row.id,
     productionDate,
     netKg,
+    quantity: resolveQuantity(process, row),
     createdBy: row.createdBy || null,
     lotNo: issue?.lotNo || row.lotNo || row.challan?.lotNo || null,
     barcode: row.barcode || row.vchNo || null,
@@ -395,6 +411,7 @@ function buildLine(process, resolved, rate) {
     process,
     sourceRowId: resolved.sourceRowId,
     date: resolved.productionDate,
+    quantity: resolved.quantity,
     netKg: roundKg(resolved.netKg),
     ratePerKg,
     amount,
@@ -589,7 +606,7 @@ export async function computePayablePreview(prisma, {
 // The full payment-defining identity of a line, beyond the numbers. A change to
 // any of these must invalidate the snapshot even when the amount is unchanged
 // (e.g. Side SINGLE->BOTH at the same ₹ rate, or a different matched rate row).
-const LINE_IDENTITY_KEYS = ['rateId', 'itemId', 'yarnId', 'cutId', 'twistId', 'coneTypeId', 'side', 'date'];
+const LINE_IDENTITY_KEYS = ['rateId', 'itemId', 'yarnId', 'cutId', 'twistId', 'coneTypeId', 'side', 'date', 'quantity'];
 
 function identityValue(value) {
   return value === null || value === undefined ? '' : String(value);

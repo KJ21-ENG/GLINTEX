@@ -1064,6 +1064,7 @@ model ContractorSettlementLine {
   process      String // 'cutter' | 'holo' | 'coning'
   sourceRowId  String // receive-row id claimed by this settlement
   date         String? // YYYY-MM-DD (production date snapshot)
+  quantity     Int? // cutter=bobbins, holo=rolls, coning=cones
   netKg        Decimal              @db.Decimal(16, 3)
   ratePerKg    Decimal              @db.Decimal(12, 4)
   amount       Decimal              @db.Decimal(16, 2)

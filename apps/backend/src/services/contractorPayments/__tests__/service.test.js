@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computePayablePreview, resolveRow, resolveConeTypeId, recomputeSettlementTotals, diffSettlementProduction } from '../service.js';
+import { computePayablePreview, resolveRow, resolveConeTypeId, resolveQuantity, recomputeSettlementTotals, diffSettlementProduction } from '../service.js';
 import { generateContractorSettlementPdf, groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
 
 // Minimal Prisma stub — computePayablePreview only reads (findMany) and does no
@@ -49,6 +49,7 @@ function coningRow(over = {}) {
   return {
     id: over.id || 'r1',
     date: over.date || '2026-03-05',
+    coneCount: over.coneCount ?? 3,
     netWeight: over.netWeight ?? 10,
     coneWeight: over.coneWeight,
     grossWeight: over.grossWeight,
@@ -87,6 +88,7 @@ test('eligible coning row produces a payable line at the matched rate', async ()
   assert.equal(res.lines[0].ratePerKg, 8);
   assert.equal(res.lines[0].netKg, 10);
   assert.equal(res.lines[0].amount, 80);
+  assert.equal(res.lines[0].quantity, 3);
   assert.equal(res.lines[0].side, 'SINGLE');
   assert.equal(res.productionAmount, 80);
 });
@@ -350,16 +352,38 @@ test('resolveRow resolves cutter Item from unique itemName when issue link is ab
   assert.equal(resolved.netKg, 12.5);
 });
 
+test('resolveQuantity uses the physical count for each contractor process', () => {
+  assert.equal(resolveQuantity('cutter', { bobbinQuantity: 12 }), 12);
+  assert.equal(resolveQuantity('holo', { rollCount: 8 }), 8);
+  assert.equal(resolveQuantity('coning', { coneCount: 24 }), 24);
+  assert.equal(resolveQuantity('coning', { coneCount: null }), null);
+});
+
+test('resolveRow carries process-specific quantity into the settlement snapshot', () => {
+  const maps = {
+    items: new Map([['I1', { id: 'I1', name: 'S/S 40', side: 'SINGLE' }]]),
+    yarns: new Map([['Y1', { id: 'Y1', name: '40s' }]]),
+    cuts: new Map([['C1', { id: 'C1', name: '40' }]]),
+    twists: new Map([['T1', { id: 'T1', name: 'TW' }]]),
+    coneTypes: new Map([['CT1', { id: 'CT1', name: 'Big' }]]),
+    itemsByName: new Map([['s/s 40', 'I1']]),
+  };
+  assert.equal(resolveRow('cutter', { id: 'c1', bobbinQuantity: 12, netWt: 10, itemName: 'S/S 40', cutId: 'C1' }, maps).quantity, 12);
+  assert.equal(resolveRow('holo', { id: 'h1', rollCount: 8, rollWeight: 10, issue: { yarnId: 'Y1', cutId: 'C1', twistId: 'T1' } }, maps).quantity, 8);
+  assert.equal(resolveRow('coning', { id: 'n1', coneCount: 24, netWeight: 10, issue: { yarnId: 'Y1', cutId: 'C1', twistId: 'T1', itemId: 'I1', receivedRowRefs: [{ coneTypeId: 'CT1' }] } }, maps).quantity, 24);
+});
+
 test('PDF groupLines splits a quality group by rate version', () => {
   const lines = [
-    { itemId: null, yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 8, netKg: 10, amount: 80 },
-    { itemId: null, yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 9, netKg: 5, amount: 45 },
+    { itemId: null, yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 8, netKg: 10, quantity: 4, amount: 80 },
+    { itemId: null, yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 9, netKg: 5, quantity: 2, amount: 45 },
   ];
   const groups = groupLines('coning', lines);
   assert.equal(groups.length, 2); // same quality, two rates → two rows
   for (const g of groups) {
     assert.equal(Math.round(g.ratePerKg * g.netKg * 100) / 100, g.amount); // Rate × KG reconciles with Amount
   }
+  assert.deepEqual(groups.map((g) => g.quantity), [4, 2]);
 });
 
 test('contractor settlement PDF is summary-only', async () => {
@@ -377,14 +401,15 @@ test('contractor settlement PDF is summary-only', async () => {
     lines: [{
       itemId: null, yarnId: 'Y1', yarnName: '40s', cutId: 'C1', cutName: '40',
       twistId: 'T1', twistName: 'TW', side: 'SINGLE', coneTypeId: 'CT1', coneTypeName: 'Big',
-      ratePerKg: 10, netKg: 12.5, amount: 125, date: '2026-03-05', barcode: 'B1',
+      ratePerKg: 10, netKg: 12.5, quantity: 24, amount: 125, date: '2026-03-05', barcode: 'B1',
     }],
     adjustments: [],
   });
   assert.ok(pdf.length > 0);
   assert.match(pdf.toString('latin1'), /\/MediaBox \[0 0 841\.[0-9]+ 595\.[0-9]+\]/);
   assert.equal(pdf.includes('Quality & Side Breakdown'), true);
-  assert.equal(pdf.includes('Qty'), true);
+  assert.match(pdf.toString('latin1'), /QTY \\\(Cones\\\)/);
+  assert.match(pdf.toString('latin1'), /Qty \\\(Cones\\\)/);
   assert.equal(pdf.includes('Rows'), false);
   assert.equal(pdf.includes('Production Rows'), false);
 });
@@ -438,6 +463,12 @@ test('diffSettlementProduction flags identity drift even when the amount is unch
   const stored2 = [{ sourceRowId: 'r1', netKg: 10, ratePerKg: 8, amount: 80, cutId: 'C1' }];
   const cutChanged = [{ sourceRowId: 'r1', netKg: 10, ratePerKg: 8, amount: 80, cutId: 'C2' }];
   assert.equal(diffSettlementProduction(stored2, cutChanged)[0].reason, 'changed');
+});
+
+test('diffSettlementProduction flags physical quantity drift', () => {
+  const stored = [{ sourceRowId: 'r1', quantity: 12, netKg: 10, ratePerKg: 8, amount: 80 }];
+  const current = [{ sourceRowId: 'r1', quantity: 13, netKg: 10, ratePerKg: 8, amount: 80 }];
+  assert.equal(diffSettlementProduction(stored, current)[0].reason, 'changed');
 });
 
 test('recomputeSettlementTotals sums lines and applies signed adjustments', () => {

@@ -32,6 +32,87 @@ const kg = (v) => Number(v || 0).toFixed(3);
 const isAddition = (type) => type === 'bonus' || type === 'other';
 const signedAdj = (type, amount) => (isAddition(type) ? 1 : -1) * Math.abs(Number(amount) || 0);
 
+const PROCESS_QUANTITY_META = {
+  cutter: { unit: 'Bobbins', header: 'Qty (Bobbins)' },
+  holo: { unit: 'Rolls', header: 'Qty (Rolls)' },
+  coning: { unit: 'Cones', header: 'Qty (Cones)' },
+};
+
+function quantityMeta(process) {
+  return PROCESS_QUANTITY_META[process] || { unit: 'Units', header: 'Qty' };
+}
+
+function asQuantity(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? Math.trunc(quantity) : null;
+}
+
+function formatQuantity(value, known = true) {
+  const quantity = asQuantity(value);
+  if (!known || quantity === null) return '—';
+  return quantity.toLocaleString('en-IN');
+}
+
+function summarizeQuantities(lines) {
+  let total = 0;
+  let known = true;
+  for (const line of lines) {
+    const quantity = asQuantity(line.quantity);
+    if (quantity === null) known = false;
+    else total += quantity;
+  }
+  return { total, known };
+}
+
+function groupSettlementLines(lines) {
+  const map = new Map();
+  for (const line of lines) {
+    const key = [
+      line.itemId,
+      line.yarnId,
+      line.cutId,
+      line.twistId,
+      line.side,
+      line.coneTypeId,
+      line.ratePerKg,
+    ].join('|');
+    const existing = map.get(key) || {
+      key,
+      itemName: line.itemName,
+      yarnName: line.yarnName,
+      cutName: line.cutName,
+      twistName: line.twistName,
+      side: line.side,
+      coneTypeName: line.coneTypeName,
+      ratePerKg: line.ratePerKg,
+      quantity: 0,
+      quantityKnown: true,
+      netKg: 0,
+      amount: 0,
+    };
+    existing.netKg += Number(line.netKg || 0);
+    existing.amount += Number(line.amount || 0);
+    const quantity = asQuantity(line.quantity);
+    if (quantity === null) existing.quantityKnown = false;
+    else existing.quantity += quantity;
+    map.set(key, existing);
+  }
+  return Array.from(map.values());
+}
+
+function settlementQualityText(process, line) {
+  if (process === 'cutter') return line.itemName || '—';
+  if (process === 'holo') return [line.yarnName, line.twistName].filter(Boolean).join(' / ') || '—';
+  const base = [line.yarnName, line.twistName].filter(Boolean).join(' / ');
+  const cone = line.coneTypeName ? ` · Cone:${line.coneTypeName}` : '';
+  return (base + cone) || '—';
+}
+
+function settlementSideText(side) {
+  return side === 'SINGLE' ? 'S/S' : side === 'BOTH' ? 'B/S' : '—';
+}
+
 function isoDate(d) {
   const off = d.getTimezoneOffset();
   return new Date(d.getTime() - off * 60000).toISOString().slice(0, 10);
@@ -492,6 +573,15 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
   const [err, setErr] = useState('');
   const showSide = settlement.process === 'coning';
   const isDraft = settlement.status === 'draft';
+  const lines = settlement.lines || [];
+  const groups = useMemo(() => groupSettlementLines(lines), [lines]);
+  const quantitySummary = useMemo(() => summarizeQuantities(lines), [lines]);
+  const quantityInfo = quantityMeta(settlement.process);
+  const quantityHeader = quantityInfo.header;
+  const groupTotals = useMemo(() => groups.reduce((totals, group) => ({
+    netKg: totals.netKg + group.netKg,
+    amount: totals.amount + group.amount,
+  }), { netKg: 0, amount: 0 }), [groups]);
 
   const doDelete = async () => {
     if (!confirm('Delete this draft settlement? Its rows will be freed.')) return;
@@ -518,35 +608,49 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
       {err && <div className="rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm px-3 py-2">{err}</div>}
 
       {/* Totals */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">
+        <Stat label={`QTY (${quantityInfo.unit})`} value={formatQuantity(quantitySummary.total, quantitySummary.known)} />
         <Stat label="Net KG" value={kg(settlement.productionKg)} />
         <Stat label="Production ₹" value={money(settlement.productionAmount)} />
         <Stat label="Adjustments ₹" value={money(settlement.adjustmentsTotal)} />
         <Stat label="Final Payable ₹" value={money(settlement.finalPayable)} bold />
       </div>
 
-      {/* Lines */}
+      {/* Quality & Side summary */}
       <div className="rounded-md border max-h-[35vh] overflow-auto">
+        <div className="px-3 pt-3 text-sm font-medium">Quality &amp; Side Breakdown</div>
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Date</TableHead><TableHead>Barcode / Lot</TableHead><TableHead>Quality</TableHead>
+            <TableHead>Quality</TableHead><TableHead>Cut</TableHead>
             {showSide && <TableHead>Side</TableHead>}
-            <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">₹/KG</TableHead><TableHead className="text-right">Amount</TableHead>
+            <TableHead className="text-right">{quantityHeader}</TableHead>
+            <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">Rate</TableHead><TableHead className="text-right">Amount</TableHead>
           </TableRow></TableHeader>
           <TableBody>
-            {(settlement.lines || []).length === 0 ? (
-              <TableStateRow colSpan={showSide ? 7 : 6} emptyMessage="No production lines." />
-            ) : settlement.lines.map((l) => (
-              <TableRow key={l.id}>
-                <TableCell>{l.date || '—'}</TableCell>
-                <TableCell>{l.barcode || l.lotNo || '—'}</TableCell>
-                <TableCell>{qualityText(settlement.process, l)}</TableCell>
-                {showSide && <TableCell>{sideText(l.side)}</TableCell>}
-                <TableCell className="text-right tabular-nums">{kg(l.netKg)}</TableCell>
-                <TableCell className="text-right tabular-nums">{money(l.ratePerKg)}</TableCell>
-                <TableCell className="text-right tabular-nums">{money(l.amount)}</TableCell>
-              </TableRow>
-            ))}
+            {groups.length === 0 ? <TableStateRow colSpan={showSide ? 7 : 6} emptyMessage="No production lines." /> : (
+              <>
+                {groups.map((group) => (
+                  <TableRow key={group.key}>
+                    <TableCell>{settlementQualityText(settlement.process, group)}</TableCell>
+                    <TableCell>{group.cutName || '—'}</TableCell>
+                    {showSide && <TableCell>{settlementSideText(group.side)}</TableCell>}
+                    <TableCell className="text-right tabular-nums">{formatQuantity(group.quantity, group.quantityKnown)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{kg(group.netKg)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(group.ratePerKg)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{money(group.amount)}</TableCell>
+                  </TableRow>
+                ))}
+                <TableRow className="bg-muted/30 font-semibold">
+                  <TableCell>TOTAL</TableCell>
+                  <TableCell />
+                  {showSide && <TableCell />}
+                  <TableCell className="text-right tabular-nums">{formatQuantity(quantitySummary.total, quantitySummary.known)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{kg(groupTotals.netKg)}</TableCell>
+                  <TableCell />
+                  <TableCell className="text-right tabular-nums">{money(groupTotals.amount)}</TableCell>
+                </TableRow>
+              </>
+            )}
           </TableBody>
         </Table>
       </div>

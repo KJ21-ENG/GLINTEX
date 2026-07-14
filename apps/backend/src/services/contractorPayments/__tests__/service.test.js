@@ -386,6 +386,15 @@ test('PDF groupLines splits a quality group by rate version', () => {
   assert.deepEqual(groups.map((g) => g.quantity), [4, 2]);
 });
 
+test('PDF groupLines keeps distinct coning items separate when visible quality matches', () => {
+  const lines = [
+    { itemId: 'I1', itemName: 'S/S WATER A', yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 8, netKg: 10, quantity: 4, amount: 80 },
+    { itemId: 'I2', itemName: 'S/S WATER B', yarnId: 'Y1', cutId: 'C1', twistId: 'T1', side: 'SINGLE', coneTypeId: 'CT1', ratePerKg: 8, netKg: 5, quantity: 2, amount: 40 },
+  ];
+  const groups = groupLines('coning', lines);
+  assert.equal(groups.length, 2); // item identity is part of the settlement grouping key
+});
+
 test('contractor settlement PDF is summary-only', async () => {
   const pdf = await generateContractorSettlementPdf({
     contractor: { name: 'Birendra bhai', phone: '9999999999' },
@@ -399,7 +408,7 @@ test('contractor settlement PDF is summary-only', async () => {
     adjustmentsTotal: 0,
     finalPayable: 125,
     lines: [{
-      itemId: null, yarnId: 'Y1', yarnName: '40s', cutId: 'C1', cutName: '40',
+      itemId: 'I1', itemName: 'S/S WATER A', yarnId: 'Y1', yarnName: '40s', cutId: 'C1', cutName: '40',
       twistId: 'T1', twistName: 'TW', side: 'SINGLE', coneTypeId: 'CT1', coneTypeName: 'Big',
       ratePerKg: 10, netKg: 12.5, quantity: 24, amount: 125, date: '2026-03-05', barcode: 'B1',
     }],
@@ -410,6 +419,7 @@ test('contractor settlement PDF is summary-only', async () => {
   assert.equal(pdf.includes('Quality & Side Breakdown'), true);
   assert.match(pdf.toString('latin1'), /QTY \\\(Cones\\\)/);
   assert.match(pdf.toString('latin1'), /Qty \\\(Cones\\\)/);
+  assert.equal(pdf.includes('S/S WATER A'), true);
   assert.equal(pdf.includes('Rows'), false);
   assert.equal(pdf.includes('Production Rows'), false);
 });

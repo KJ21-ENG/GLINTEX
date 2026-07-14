@@ -66,9 +66,10 @@ function qualityLabel(process, item) {
   if (process === 'holo') {
     return [item.yarnName, item.twistName].filter(Boolean).join(' / ') || '-';
   }
+  const itemName = item.itemName ? `${item.itemName} · ` : '';
   const parts = [item.yarnName, item.twistName].filter(Boolean).join(' / ');
   const cone = item.coneTypeName ? ` · Cone:${item.coneTypeName}` : '';
-  return (parts + cone) || '-';
+  return (itemName + parts + cone) || '-';
 }
 
 function sideLabel(side) {

@@ -104,9 +104,10 @@ function groupSettlementLines(lines) {
 function settlementQualityText(process, line) {
   if (process === 'cutter') return line.itemName || '—';
   if (process === 'holo') return [line.yarnName, line.twistName].filter(Boolean).join(' / ') || '—';
+  const itemName = line.itemName ? `${line.itemName} · ` : '';
   const base = [line.yarnName, line.twistName].filter(Boolean).join(' / ');
   const cone = line.coneTypeName ? ` · Cone:${line.coneTypeName}` : '';
-  return (base + cone) || '—';
+  return (itemName + base + cone) || '—';
 }
 
 function settlementSideText(side) {

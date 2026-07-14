@@ -61,15 +61,14 @@ function summarizeQuantities(lines) {
 }
 
 // Quality label for a line/group depending on process.
-function qualityLabel(process, item) {
+export function qualityLabel(process, item) {
   if (process === 'cutter') return item.itemName || '-';
   if (process === 'holo') {
     return [item.yarnName, item.twistName].filter(Boolean).join(' / ') || '-';
   }
-  const itemName = item.itemName ? `${item.itemName} · ` : '';
-  const parts = [item.yarnName, item.twistName].filter(Boolean).join(' / ');
+  const parts = [item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ');
   const cone = item.coneTypeName ? ` · Cone:${item.coneTypeName}` : '';
-  return (itemName + parts + cone) || '-';
+  return (parts + cone) || '-';
 }
 
 function sideLabel(side) {
@@ -97,6 +96,27 @@ export function groupLines(process, lines) {
     map.set(key, existing);
   }
   return Array.from(map.values());
+}
+
+function compareSummaryText(left, right) {
+  return String(left || '').trim().localeCompare(String(right || '').trim(), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
+// Keep the PDF readable by grouping every row for the same yarn together,
+// then using the remaining quality fields as deterministic tie-breakers.
+export function sortSummaryGroups(groups) {
+  return [...groups].sort((left, right) => (
+    compareSummaryText(left.yarnName, right.yarnName)
+    || compareSummaryText(left.itemName, right.itemName)
+    || compareSummaryText(left.cutName, right.cutName)
+    || compareSummaryText(left.twistName, right.twistName)
+    || compareSummaryText(left.coneTypeName, right.coneTypeName)
+    || compareSummaryText(left.side, right.side)
+    || Number(left.ratePerKg || 0) - Number(right.ratePerKg || 0)
+  ));
 }
 
 function fitText(doc, value, maxWidth) {
@@ -368,7 +388,7 @@ export async function generateContractorSettlementPdf(settlement) {
   const process = settlement.process;
   const lines = Array.isArray(settlement.lines) ? settlement.lines : [];
   const adjustments = Array.isArray(settlement.adjustments) ? settlement.adjustments : [];
-  const groups = groupLines(process, lines);
+  const groups = sortSummaryGroups(groupLines(process, lines));
   const totalKg = groups.reduce((sum, group) => sum + group.netKg, 0);
   const quantitySummary = summarizeQuantities(lines);
 

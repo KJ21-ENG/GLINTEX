@@ -101,13 +101,31 @@ function groupSettlementLines(lines) {
   return Array.from(map.values());
 }
 
+function compareSettlementText(left, right) {
+  return String(left || '').trim().localeCompare(String(right || '').trim(), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
+function sortSettlementGroups(groups) {
+  return [...groups].sort((left, right) => (
+    compareSettlementText(left.yarnName, right.yarnName)
+    || compareSettlementText(left.itemName, right.itemName)
+    || compareSettlementText(left.cutName, right.cutName)
+    || compareSettlementText(left.twistName, right.twistName)
+    || compareSettlementText(left.coneTypeName, right.coneTypeName)
+    || compareSettlementText(left.side, right.side)
+    || Number(left.ratePerKg || 0) - Number(right.ratePerKg || 0)
+  ));
+}
+
 function settlementQualityText(process, line) {
   if (process === 'cutter') return line.itemName || '—';
   if (process === 'holo') return [line.yarnName, line.twistName].filter(Boolean).join(' / ') || '—';
-  const itemName = line.itemName ? `${line.itemName} · ` : '';
-  const base = [line.yarnName, line.twistName].filter(Boolean).join(' / ');
+  const base = [line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ');
   const cone = line.coneTypeName ? ` · Cone:${line.coneTypeName}` : '';
-  return (itemName + base + cone) || '—';
+  return (base + cone) || '—';
 }
 
 function settlementSideText(side) {
@@ -575,7 +593,7 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
   const showSide = settlement.process === 'coning';
   const isDraft = settlement.status === 'draft';
   const lines = settlement.lines || [];
-  const groups = useMemo(() => groupSettlementLines(lines), [lines]);
+  const groups = useMemo(() => sortSettlementGroups(groupSettlementLines(lines)), [lines]);
   const quantitySummary = useMemo(() => summarizeQuantities(lines), [lines]);
   const quantityInfo = quantityMeta(settlement.process);
   const quantityHeader = quantityInfo.header;

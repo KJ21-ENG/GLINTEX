@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computePayablePreview, resolveRow, resolveConeTypeId, resolveQuantity, recomputeSettlementTotals, diffSettlementProduction } from '../service.js';
-import { calculateSummaryColumnWidths, generateContractorSettlementPdf, groupLines } from '../../../utils/pdf/contractorSettlementPdf.js';
+import { calculateSummaryColumnWidths, generateContractorSettlementPdf, groupLines, qualityLabel, sortSummaryGroups } from '../../../utils/pdf/contractorSettlementPdf.js';
 
 // Minimal Prisma stub — computePayablePreview only reads (findMany) and does no
 // writes, so a plain in-memory stub is sufficient (no DB required).
@@ -393,6 +393,21 @@ test('PDF groupLines keeps distinct coning items separate when visible quality m
   ];
   const groups = groupLines('coning', lines);
   assert.equal(groups.length, 2); // item identity is part of the settlement grouping key
+});
+
+test('PDF summary labels and ordering are yarn-first', () => {
+  const groups = sortSummaryGroups([
+    { yarnName: '110 NYLON', itemName: 'S/S WATER B', cutName: '50/69', twistName: 'Z-Twist', coneTypeName: 'Y-BLACK', side: 'SINGLE', ratePerKg: 14 },
+    { yarnName: '30 NO COTTON', itemName: 'S/S WATER A', cutName: '50/2', twistName: 'S-Twist', coneTypeName: 'PUTHA 90', side: 'SINGLE', ratePerKg: 8 },
+    { yarnName: '110 NYLON', itemName: 'S/S WATER A', cutName: '50/69', twistName: 'Z-Twist', coneTypeName: 'Y-BLACK', side: 'SINGLE', ratePerKg: 14 },
+  ]);
+
+  assert.deepEqual(groups.map((group) => `${group.yarnName}/${group.itemName}`), [
+    '30 NO COTTON/S/S WATER A',
+    '110 NYLON/S/S WATER A',
+    '110 NYLON/S/S WATER B',
+  ]);
+  assert.equal(qualityLabel('coning', groups[0]), '30 NO COTTON · S/S WATER A · S-Twist · Cone:PUTHA 90');
 });
 
 test('PDF summary widths expand Quality and resize the remaining columns to the page', () => {

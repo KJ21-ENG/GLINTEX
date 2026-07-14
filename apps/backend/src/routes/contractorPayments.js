@@ -464,27 +464,53 @@ router.post('/rates', requirePermission(MASTERS, PERM_WRITE), async (req, res) =
     const contractor = await prisma.contractor.findUnique({ where: { id: contractorId } });
     if (!contractor) return res.status(404).json({ error: 'Contractor not found' });
     const hasYarnIds = req.body?.yarnIds !== undefined;
+    const hasSides = req.body?.sides !== undefined;
+    const hasConeTypeIds = req.body?.coneTypeIds !== undefined;
     if (hasYarnIds && process === 'cutter') {
       return res.status(400).json({ error: 'yarnIds are supported only for holo and coning rates' });
+    }
+    if ((hasSides || hasConeTypeIds) && process !== 'coning') {
+      return res.status(400).json({ error: 'sides and coneTypeIds are supported only for coning rates' });
     }
     const yarnIds = process === 'cutter'
       ? [null]
       : (hasYarnIds ? cleanStringList(req.body?.yarnIds) : [cleanString(req.body?.yarnId, 40)]);
-    if (yarnIds.length > MAX_RATE_BATCH) {
-      return res.status(400).json({ error: `A maximum of ${MAX_RATE_BATCH} yarns can be selected at once` });
-    }
     if (process !== 'cutter' && yarnIds.length === 0) {
       const { error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId: null });
       return res.status(400).json({ error });
     }
 
+    const rawSides = process === 'coning'
+      ? (hasSides ? cleanStringList(req.body?.sides) : [cleanString(req.body?.side, 40)])
+      : [null];
+    const sides = process === 'coning'
+      ? Array.from(new Set(rawSides.map((side) => normalizeSide(side))))
+      : [null];
+    if (process === 'coning' && sides.length === 0) {
+      const { error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId: yarnIds[0], side: null });
+      return res.status(400).json({ error });
+    }
+
+    const rawConeTypeIds = process === 'coning'
+      ? (hasConeTypeIds ? cleanStringList(req.body?.coneTypeIds) : [cleanString(req.body?.coneTypeId, 40)])
+      : [null];
+    const coneTypeIds = process === 'coning' && rawConeTypeIds.length === 0 ? [null] : rawConeTypeIds;
+    const batchSize = yarnIds.length * sides.length * coneTypeIds.length;
+    if (batchSize > MAX_RATE_BATCH) {
+      return res.status(400).json({ error: `A maximum of ${MAX_RATE_BATCH} rate combinations can be selected at once` });
+    }
+
     const normalizedRates = [];
     for (const yarnId of yarnIds) {
-      const { data, error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId });
-      if (error) return res.status(400).json({ error });
-      const refError = await validateRateReferences(data);
-      if (refError) return res.status(400).json({ error: refError });
-      normalizedRates.push(data);
+      for (const side of sides) {
+        for (const coneTypeId of coneTypeIds) {
+          const { data, error } = normalizeRatePayload(process, { ...(req.body || {}), yarnId, side, coneTypeId });
+          if (error) return res.status(400).json({ error });
+          const refError = await validateRateReferences(data);
+          if (refError) return res.status(400).json({ error: refError });
+          normalizedRates.push(data);
+        }
+      }
     }
 
     let createdRows;

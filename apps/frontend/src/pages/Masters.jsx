@@ -1995,18 +1995,27 @@ function ContractorAssignmentsMasterCrud({ data, contractors, onCreate, onUpdate
 }
 
 // --- Contractor rates master -----------------------------------------------
-function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = false, maxSelections = null }) {
+function MultiSelect({ options = [], selectedIds = [], onChange, disabled = false, disabledWhenEmpty = true, maxSelections = null, placeholder = 'Select…', noun = 'items', searchPlaceholder = 'Search...', ariaLabel = 'Options' }) {
     const [open, setOpen] = useState(false);
     const [search, setSearch] = useState('');
     const containerRef = useRef(null);
 
+    const optionId = (option) => String(option.id ?? option.value ?? '');
+    const optionLabel = (option) => String(option.name ?? option.label ?? optionId(option));
+
     useEffect(() => {
         if (!open) return undefined;
         const handlePointerDown = (event) => {
-            if (!containerRef.current?.contains(event.target)) setOpen(false);
+            if (!containerRef.current?.contains(event.target)) {
+                setOpen(false);
+                setSearch('');
+            }
         };
         const handleKeyDown = (event) => {
-            if (event.key === 'Escape') setOpen(false);
+            if (event.key === 'Escape') {
+                setOpen(false);
+                setSearch('');
+            }
         };
         document.addEventListener('mousedown', handlePointerDown);
         document.addEventListener('keydown', handleKeyDown);
@@ -2016,22 +2025,23 @@ function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = fa
         };
     }, [open]);
 
-    const selectedSet = new Set(selectedIds);
+    const selectedSet = new Set(selectedIds.map(String));
     const query = search.trim().toLowerCase();
-    const visibleYarns = yarns.filter((yarn) => !query || String(yarn.name || '').toLowerCase().includes(query));
+    const visibleOptions = options.filter((option) => !query || optionLabel(option).toLowerCase().includes(query));
     const selectedNames = selectedIds
-        .map((id) => yarns.find((yarn) => yarn.id === id)?.name)
-        .filter(Boolean);
+        .map((id) => options.find((option) => optionId(option) === String(id)))
+        .filter(Boolean)
+        .map(optionLabel);
     const label = selectedIds.length === 0
-        ? 'Select…'
+        ? placeholder
         : selectedIds.length === 1
-            ? (selectedNames[0] || '1 yarn selected')
-            : `${selectedIds.length} yarns selected`;
+            ? (selectedNames[0] || `1 ${noun} selected`)
+            : `${selectedIds.length} ${noun} selected`;
 
     const toggle = (id) => {
         if (disabled) return;
         if (selectedSet.has(id)) {
-            onChange(selectedIds.filter((selectedId) => selectedId !== id));
+            onChange(selectedIds.filter((selectedId) => String(selectedId) !== id));
         } else if (maxSelections === 1) {
             onChange([id]);
         } else {
@@ -2051,7 +2061,7 @@ function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = fa
                 variant="outline"
                 className="w-full justify-between font-normal"
                 onClick={() => setOpen((value) => !value)}
-                disabled={disabled || yarns.length === 0}
+                disabled={disabled || (disabledWhenEmpty && options.length === 0)}
                 aria-haspopup="listbox"
                 aria-expanded={open}
             >
@@ -2064,25 +2074,26 @@ function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = fa
                         autoFocus
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Search yarns..."
-                        aria-label="Search yarns"
+                        placeholder={searchPlaceholder}
+                        aria-label={`Search ${ariaLabel.toLowerCase()}`}
                         className="mb-2 h-9"
                     />
-                    <div className="max-h-48 overflow-auto" role="listbox" aria-label="Yarns">
-                        {visibleYarns.length === 0 ? (
-                            <div className="px-2 py-2 text-xs text-muted-foreground">No matching yarns.</div>
-                        ) : visibleYarns.map((yarn) => {
-                            const checked = selectedSet.has(yarn.id);
+                    <div className="max-h-48 overflow-auto" role="listbox" aria-label={ariaLabel}>
+                        {visibleOptions.length === 0 ? (
+                            <div className="px-2 py-2 text-xs text-muted-foreground">No matching options.</div>
+                        ) : visibleOptions.map((option) => {
+                            const id = optionId(option);
+                            const checked = selectedSet.has(id);
                             const atLimit = maxSelections !== null && selectedIds.length >= maxSelections && !checked;
                             return (
-                                <label key={yarn.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-accent">
+                                <label key={id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-accent">
                                     <Checkbox
                                         checked={checked}
                                         disabled={disabled || atLimit}
-                                        onCheckedChange={() => toggle(yarn.id)}
-                                        aria-label={yarn.name}
+                                        onCheckedChange={() => toggle(id)}
+                                        aria-label={optionLabel(option)}
                                     />
-                                    <span className="truncate">{yarn.name}</span>
+                                    <span className="truncate">{optionLabel(option)}</span>
                                 </label>
                             );
                         })}
@@ -2098,7 +2109,7 @@ function YarnMultiSelect({ yarns = [], selectedIds = [], onChange, disabled = fa
 }
 
 function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
-    const empty = { contractorId: '', process: '', itemId: '', yarnIds: [], cutId: '', side: '', twistId: '', coneTypeId: '', ratePerKg: '' };
+    const empty = { contractorId: '', process: '', itemId: '', yarnIds: [], cutId: '', sides: [], twistId: '', coneTypeIds: [], ratePerKg: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState('');
@@ -2126,13 +2137,20 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
             ratePerKg: rate,
             itemId: form.process === 'cutter' ? (form.itemId || null) : null,
             cutId: form.cutId || null,
-            side: form.process === 'coning' ? (form.side || null) : null,
             twistId: form.process !== 'cutter' ? (form.twistId || null) : null,
-            coneTypeId: form.process === 'coning' ? (form.coneTypeId || null) : null,
         };
         if (form.process !== 'cutter') {
             if (editingId) payload.yarnId = form.yarnIds[0] || null;
             else payload.yarnIds = form.yarnIds;
+        }
+        if (form.process === 'coning') {
+            if (editingId) {
+                payload.side = form.sides[0] || null;
+                payload.coneTypeId = form.coneTypeIds[0] || null;
+            } else {
+                payload.sides = form.sides;
+                payload.coneTypeIds = form.coneTypeIds;
+            }
         }
         try {
             if (editingId) await onUpdate(editingId, payload); else await onCreate(payload);
@@ -2143,8 +2161,8 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
         setEditingId(r.id);
         setForm({
             contractorId: r.contractorId, process: r.process,
-            itemId: r.itemId || '', yarnIds: r.yarnId ? [r.yarnId] : [], cutId: r.cutId || '', side: r.side || '',
-            twistId: r.twistId || '', coneTypeId: r.coneTypeId || '',
+            itemId: r.itemId || '', yarnIds: r.yarnId ? [r.yarnId] : [], cutId: r.cutId || '', sides: r.side ? [r.side] : [],
+            twistId: r.twistId || '', coneTypeIds: r.coneTypeId ? [r.coneTypeId] : [],
             ratePerKg: r.ratePerKg != null ? String(r.ratePerKg) : '',
         });
         setError('');
@@ -2166,7 +2184,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const formReady = !!form.contractorId && !!process && rateValue > 0 && (
         process === 'cutter' ? (!!form.itemId && !!form.cutId)
             : process === 'holo' ? form.yarnIds.length > 0
-                : process === 'coning' ? (form.yarnIds.length > 0 && !!form.side)
+                : process === 'coning' ? (form.yarnIds.length > 0 && form.sides.length > 0)
                     : false
     );
 
@@ -2206,12 +2224,15 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                             )}
                             {process !== 'cutter' && (
                                 <div><Label className="text-xs">Yarn *</Label>
-                                    <YarnMultiSelect
-                                        yarns={yarns || []}
+                                    <MultiSelect
+                                        options={yarns || []}
                                         selectedIds={form.yarnIds}
                                         onChange={(ids) => set('yarnIds', ids)}
                                         disabled={loading}
                                         maxSelections={editingId ? 1 : null}
+                                        noun="yarns"
+                                        searchPlaceholder="Search yarns..."
+                                        ariaLabel="Yarns"
                                     />
                                     <p className="mt-1 text-[11px] text-muted-foreground">
                                         {editingId ? 'Editing updates this one rate row.' : 'Select multiple yarns to apply the same rate to each one.'}
@@ -2226,10 +2247,18 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                             </div>
                             {process === 'coning' && (
                                 <div><Label className="text-xs">Side *</Label>
-                                    <Select value={form.side} onChange={(e) => set('side', e.target.value)}>
-                                        <option value="">Select…</option>
-                                        {SIDE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                                    </Select>
+                                    <MultiSelect
+                                        options={SIDE_OPTIONS}
+                                        selectedIds={form.sides}
+                                        onChange={(ids) => set('sides', ids)}
+                                        disabled={loading}
+                                        maxSelections={editingId ? 1 : null}
+                                        noun="sides"
+                                        ariaLabel="Sides"
+                                    />
+                                    <p className="mt-1 text-[11px] text-muted-foreground">
+                                        {editingId ? 'Editing updates this one rate row.' : 'Select multiple sides to apply the same rate to each one.'}
+                                    </p>
                                 </div>
                             )}
                             {process !== 'cutter' && (
@@ -2242,10 +2271,19 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                             )}
                             {process === 'coning' && (
                                 <div><Label className="text-xs">Cone Type (optional override)</Label>
-                                    <Select value={form.coneTypeId} onChange={(e) => set('coneTypeId', e.target.value)}>
-                                        <option value="">Any</option>
-                                        {(coneTypes || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                    </Select>
+                                    <MultiSelect
+                                        options={coneTypes || []}
+                                        selectedIds={form.coneTypeIds}
+                                        onChange={(ids) => set('coneTypeIds', ids)}
+                                        disabled={loading}
+                                        disabledWhenEmpty={false}
+                                        maxSelections={editingId ? 1 : null}
+                                        placeholder="Any"
+                                        noun="cone types"
+                                        searchPlaceholder="Search cone types..."
+                                        ariaLabel="Cone types"
+                                    />
+                                    <p className="mt-1 text-[11px] text-muted-foreground">Leave empty for Any.</p>
                                 </div>
                             )}
                         </div>

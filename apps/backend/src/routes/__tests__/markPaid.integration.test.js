@@ -653,6 +653,46 @@ if (!TEST_DB) {
     assert.ok(rows.every((rate) => Number(rate.ratePerKg) === 9));
   });
 
+  test('multi-yarn, side, and cone-type rate creation expands all combinations', async () => {
+    const { contractorId } = await seed();
+    const yarnA = await prisma.yarn.create({ data: { name: '60s-combo' } });
+    const yarnB = await prisma.yarn.create({ data: { name: '80s-combo' } });
+    const coneA = await prisma.coneType.create({ data: { name: 'Cone-A-combo' } });
+    const coneB = await prisma.coneType.create({ data: { name: 'Cone-B-combo' } });
+    const yarnIds = [yarnA.id, yarnB.id];
+    const sides = ['SINGLE', 'BOTH'];
+    const coneTypeIds = [coneA.id, coneB.id];
+
+    const response = await request(app).post(`${CP}/rates`).set('Authorization', auth)
+      .send({ contractorId, process: 'coning', yarnIds, sides, coneTypeIds, ratePerKg: 10 });
+
+    assert.equal(response.status, 200);
+    assert.ok(Array.isArray(response.body));
+    assert.equal(response.body.length, 8);
+    const expectedKeys = yarnIds.flatMap((yarnId) => sides.flatMap((side) => coneTypeIds.map((coneTypeId) => `${yarnId}:${side}:${coneTypeId}`))).sort();
+    const responseKeys = response.body.map((rate) => `${rate.yarnId}:${rate.side}:${rate.coneTypeId}`).sort();
+    assert.deepEqual(responseKeys, expectedKeys);
+
+    const rows = await prisma.contractorRate.findMany({
+      where: { contractorId, process: 'coning', yarnId: { in: yarnIds } },
+    });
+    assert.equal(rows.length, 8);
+    assert.ok(rows.every((rate) => Number(rate.ratePerKg) === 10));
+  });
+
+  test('empty cone-type selection creates the existing Any wildcard rate', async () => {
+    const { contractorId } = await seed();
+    const yarn = await prisma.yarn.create({ data: { name: 'wildcard-combo' } });
+
+    const response = await request(app).post(`${CP}/rates`).set('Authorization', auth)
+      .send({ contractorId, process: 'coning', yarnIds: [yarn.id], sides: ['SINGLE'], coneTypeIds: [], ratePerKg: 11 });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.yarnId, yarn.id);
+    assert.equal(response.body.side, 'SINGLE');
+    assert.equal(response.body.coneTypeId, null);
+  });
+
   test('deleted production rows are excluded from the preview', async () => {
     const { contractorId } = await seed();
     // Mark every coning receive row deleted → nothing eligible.

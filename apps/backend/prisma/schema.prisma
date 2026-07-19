@@ -937,6 +937,7 @@ model BoilerSteamLog {
   updatedByUserId  String?
 
   @@index([boilerMachineId])
+  @@index([holoReceiveRowId])
 }
 
 // ========== WASTAGE EVENTS (mark/revert audit trail with notes) ==========

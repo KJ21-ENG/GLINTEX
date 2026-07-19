@@ -9,6 +9,13 @@ const getApiBase = () => {
 
 const BASE = getApiBase();
 
+// AbortSignal.timeout is missing on older WebViews/Safari (<16); fall back to no timeout there.
+const requestTimeoutSignal = () => (
+  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(30000)
+    : undefined
+);
+
 async function request(path, params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {
@@ -16,7 +23,15 @@ async function request(path, params = {}) {
     qs.set(k, String(v));
   });
   const url = `${BASE}${path}${qs.toString() ? `?${qs.toString()}` : ''}`;
-  const res = await fetch(url, { method: 'GET', credentials: 'include' });
+  let res;
+  try {
+    res = await fetch(url, { method: 'GET', credentials: 'include', signal: requestTimeoutSignal() });
+  } catch (err) {
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error('Request timed out — check connection');
+    }
+    throw err;
+  }
   if (!res.ok) {
     // Keep auth/session expiry behavior consistent with src/api/client.js
     if (res.status === 401 && typeof window !== 'undefined') {

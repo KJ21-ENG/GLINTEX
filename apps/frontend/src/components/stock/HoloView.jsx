@@ -1,12 +1,11 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
-import { TableStateRow } from '../data-table';
+import { TableStateRow, ListState } from '../data-table';
 import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
-import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
 
@@ -124,7 +123,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return set;
   }, [barcodeHitKeys]);
 
-  const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const findById = (rows, id) => (rows || []).find((row) => String(row?.id ?? '') === String(id ?? ''));
   const hasActiveRollAvailability = (row) => {
     const rolls = Number(row?.availableRolls || 0);
@@ -134,212 +132,32 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
   // --- Data Prep ---
 
-  // 1. Map Issue Metadata (to link back to Lot)
-  const holoIssueMap = useMemo(() => {
-    const map = new Map();
-    (db.issue_to_holo_machine || []).forEach((issue) => { if (issue?.id) map.set(issue.id, issue); });
-    return map;
-  }, [db.issue_to_holo_machine]);
-
-  const cutByIssueId = useMemo(() => {
-    const map = new Map();
-    (db.issue_to_holo_machine || []).forEach((issue) => {
-      if (!issue?.id) return;
-      const resolved = resolveHoloTrace(issue, traceContext);
-      map.set(issue.id, resolved.cutName || '—');
-    });
-    return map;
-  }, [db.issue_to_holo_machine, traceContext]);
-
-  // 2. Map Lot Metadata
-  const lotMetaMap = useMemo(() => {
-    const map = new Map();
-    (db.lots || []).forEach((lot) => {
-      const item = db.items.find(i => i.id === lot.itemId);
-      const firm = db.firms.find(f => f.id === lot.firmId);
-      const supplier = db.suppliers.find(s => s.id === lot.supplierId);
-      map.set(lot.lotNo, {
-        ...lot,
-        itemName: item?.name || lot.itemName || '—',
-        firmName: firm?.name || lot.firmName || '—',
-        supplierName: supplier?.name || lot.supplierName || '—',
-      });
-    });
-    return map;
-  }, [db.lots, db.items, db.firms, db.suppliers]);
-
-  // 3. Process Rows
-  const holoRows = useMemo(() => {
-    if (Array.isArray(v2Lots)) return [];
-    return (db.receive_from_holo_machine_rows || []).map((row) => {
-      const issue = row?.issueId ? holoIssueMap.get(row.issueId) : null;
-      const lotNoRaw = issue?.lotNo || '';
-      const lotLabel = issue?.lotLabel || lotNoRaw || '';
-      const lotNos = Array.isArray(issue?.lotNos) ? issue.lotNos : (lotNoRaw ? [lotNoRaw] : []);
-      const lotMeta = lotNoRaw ? lotMetaMap.get(lotNoRaw) : null;
-      const hasMixedLots = Array.isArray(issue?.lotNos) && issue.lotNos.length > 1;
-
-      const yarn = db.yarns?.find(y => y.id === issue?.yarnId);
-      const twist = db.twists?.find(t => t.id === issue?.twistId);
-      const itemName = lotMeta?.itemName || db.items?.find(i => i.id === issue?.itemId)?.name || '—';
-      const firmName = lotMeta?.firmName || (hasMixedLots ? 'Mixed' : '—');
-      const supplierName = lotMeta?.supplierName || (hasMixedLots ? 'Mixed' : '—');
-
-      const baseNetWeight = Number.isFinite(row.rollWeight)
-        ? Number(row.rollWeight)
-        : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
-      const dispatchedRolls = Number(row.dispatchedCount || 0);
-      const dispatchedWeight = Number(row.dispatchedWeight || 0);
-      const issuedToConingRolls = Number(row.issuedToConingRolls || 0);
-      const issuedToConingWeight = Number(row.issuedToConingWeight || 0);
-      const availableWeightRaw = Math.max(0, baseNetWeight - dispatchedWeight - issuedToConingWeight);
-      const availableWeight = availableWeightRaw > EPSILON ? availableWeightRaw : 0;
-      const availableRolls = calcAvailableCountFromWeight({
-        totalCount: Number(row.rollCount || 0),
-        issuedCount: issuedToConingRolls,
-        dispatchedCount: dispatchedRolls,
-        totalWeight: baseNetWeight,
-        availableWeight,
-      }) || 0;
-
-      return {
-        ...row,
-        lotNo: lotLabel,
-        lotNoRaw,
-        lotNos,
-        itemId: issue?.itemId || lotMeta?.itemId || '',
-        itemName,
-        firmId: lotMeta?.firmId || '',
-        firmName,
-        supplierId: lotMeta?.supplierId || '',
-        supplierName,
-        yarnId: issue?.yarnId || '',
-        yarnName: yarn?.name || '—',
-        twistName: twist?.name || '—',
-        cutName: row.issue?.cut?.name || (issue?.id ? cutByIssueId.get(issue.id) : null) || '—',
-        rollCount: Number(row.rollCount || 0),
-        dispatchedRolls,
-        availableRolls,
-        rollWeight: Number(row.rollWeight || 0),
-        netWeight: baseNetWeight,
-        availableWeight,
-        issuedToConingRolls,
-        issuedToConingWeight,
-        isSteamed: !!row.isSteamed,
-        steamedAt: row.steamedAt || null,
-        boilerMachineId: row.boilerMachineId || null,
-        boilerMachineName: row.boilerMachineName || null,
-        boilerNumber: row.boilerNumber || null,
-      };
-    });
-  }, [db.receive_from_holo_machine_rows, holoIssueMap, lotMetaMap, db.items, db.yarns, db.twists, cutByIssueId, v2Lots]);
-
-  // 4. Group by Lot
+  // Map v2 lots into the shape the table renders.
   const holoLots = useMemo(() => {
-    if (Array.isArray(v2Lots)) {
-      return v2Lots.map((lot) => {
-        const lotNosArr = Array.isArray(lot.lotNos) ? lot.lotNos : [];
-        const cutNamesArr = Array.isArray(lot.cutNames) ? lot.cutNames : [];
-        const cutNamesSet = new Set(cutNamesArr.length ? cutNamesArr : [lot.cutName].filter(Boolean));
-        return {
-          ...lot,
-          boilerLabelsStr: Array.isArray(lot.boilerLabels)
-            ? lot.boilerLabels.filter(Boolean).join(', ')
-            : (lot.boilerLabelsStr || ''),
-          boilerMachineNamesStr: Array.isArray(lot.boilerMachineNames)
-            ? lot.boilerMachineNames.filter(Boolean).join(', ')
-            : (lot.boilerMachineNamesStr || ''),
-          lotNos: lotNosArr,
-          lotSearch: lotNosArr.join(' '),
-          barcodeStr: '',
-          barcodes: [],
-          cutNames: cutNamesSet,
-          rows: [], // expanded rows are fetched on-demand in v2 mode
-        };
-      });
-    }
-    const map = new Map();
-    holoRows.forEach((row) => {
-      const lotKey = [
-        row.lotNo || '(No Lot)',
-        row.itemId || '',
-        row.yarnId || '',
-        row.cutName || '',
-        row.twistName || '',
-        row.supplierId || ''
-      ].join('::');
-      const existing = map.get(lotKey) || {
-        lotKey,
-        lotNo: row.lotNo || '(No Lot)',
-        twistKey: row.twistName || '—',
-        itemId: row.itemId || '',
-        firmId: row.firmId || '',
-        supplierId: row.supplierId || '',
-        yarnId: row.yarnId || '',
-        itemName: row.itemName,
-        firmName: row.firmName,
-        supplierName: row.supplierName,
-        yarnName: row.yarnName,
-        twistName: row.twistName,
-        cutNames: new Set(),
-        totalRolls: 0,
-        totalWeight: 0,
-        steamedRolls: 0,
-        steamedWeight: 0,
-        boilerLabels: new Set(),
-        boilerMachineNames: new Set(),
-        lotNos: new Set(),
-        rows: [],
-        barcodes: [],
-        notes: [],
-      };
-
-      existing.rows.push(row);
-      existing.totalRolls += row.availableRolls;
-      existing.totalWeight += row.availableWeight;
-      existing.cutNames.add(row.cutName || '—');
-      (row.lotNos || []).forEach(lot => existing.lotNos.add(lot));
-      if (row.barcode) existing.barcodes.push(row.barcode);
-      if (row.notes) existing.notes.push(row.notes);
-      // Track steamed status
-      if (row.isSteamed) {
-        existing.steamedRolls += row.availableRolls;
-        existing.steamedWeight += row.availableWeight;
-      }
-      const boilerLabel = formatBoilerSteamLabel(row.boilerMachineName, row.boilerNumber);
-      if (boilerLabel) existing.boilerLabels.add(boilerLabel);
-      if (row.boilerMachineName) existing.boilerMachineNames.add(row.boilerMachineName);
-      map.set(lotKey, existing);
-    });
-    return Array.from(map.values()).map((lot) => {
-      const cutName = lot.cutNames.size > 1 ? 'Mixed' : Array.from(lot.cutNames)[0] || '—';
-      const lotNosArr = Array.from(lot.lotNos || []);
-      const { lotNos, ...rest } = lot;
-      // Determine steamed status type for filtering
-      const steamedStatusType = rest.steamedRolls === 0 ? 'not_steamed'
-        : rest.steamedRolls >= rest.totalRolls ? 'steamed'
-          : 'partial';
+    return (v2?.lots || []).map((lot) => {
+      const lotNosArr = Array.isArray(lot.lotNos) ? lot.lotNos : [];
+      const cutNamesArr = Array.isArray(lot.cutNames) ? lot.cutNames : [];
+      const cutNamesSet = new Set(cutNamesArr.length ? cutNamesArr : [lot.cutName].filter(Boolean));
       return {
-        ...rest,
-        lotKey: rest.lotKey || lot.lotKey,
-        cutName,
-        cutNames: lot.cutNames,
+        ...lot,
+        boilerLabelsStr: Array.isArray(lot.boilerLabels)
+          ? lot.boilerLabels.filter(Boolean).join(', ')
+          : (lot.boilerLabelsStr || ''),
+        boilerMachineNamesStr: Array.isArray(lot.boilerMachineNames)
+          ? lot.boilerMachineNames.filter(Boolean).join(', ')
+          : (lot.boilerMachineNamesStr || ''),
         lotNos: lotNosArr,
         lotSearch: lotNosArr.join(' '),
-        barcodeStr: (lot.barcodes || []).join(' '),
-        notesStr: (lot.notes || []).join(' '),
-        statusType: rest.totalWeight > EPSILON ? 'active' : 'inactive',
-        steamedStatusType,
-        boilerLabelsStr: Array.from(lot.boilerLabels).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
-        boilerMachineNamesStr: Array.from(lot.boilerMachineNames).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
-        date: rest.rows?.[0]?.date || rest.rows?.[0]?.createdAt || '',
+        barcodeStr: '',
+        barcodes: [],
+        cutNames: cutNamesSet,
+        rows: [], // expanded rows are fetched on-demand in v2 mode
       };
     });
-  }, [holoRows]);
+  }, [v2Lots]);
 
   // Auto-expand on a single barcode hit (keeps barcode UX consistent without shipping all barcodes).
   useEffect(() => {
-    if (!Array.isArray(v2Lots)) return;
     if (!barcodeHitKeys || typeof barcodeHitKeys.size !== 'number') return;
     if (barcodeHitKeys.size !== 1) return;
     const sourceKey = Array.from(barcodeHitKeys)[0];
@@ -379,15 +197,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       } else {
         score = 1;
       }
-      // Check for direct barcode or notes hit (v2 uses server lookup for barcodes; notes checked client-side).
-      const searchLower = search ? search.trim().toLowerCase() : '';
-      const hasBarcodeHit = Array.isArray(v2Lots)
-        ? (
-          (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
-          || barcodeHitIdentitySet.has(normalizeLotKeyIdentity(l.lotKey))
-        )
-        : (searchLower.length >= 6 && (l.barcodes || []).some(b => String(b || '').toLowerCase().includes(searchLower)))
-          || (searchLower.length >= 3 && (l.notes || []).some(n => String(n || '').toLowerCase().includes(searchLower)));
+      // Direct barcode hit comes from the server-side v2 lookup keyed by lotKey/identity.
+      const hasBarcodeHit = (barcodeHitKeys ? barcodeHitKeys.has(l.lotKey) : false)
+        || barcodeHitIdentitySet.has(normalizeLotKeyIdentity(l.lotKey));
       return { ...l, searchScore: score, hasBarcodeHit };
     });
 
@@ -559,10 +371,10 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                 // with multiple yarns/cuts, which can cause stale rows to remain visible after filtering.
                 const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
                 const hasBarcodeHit = !!l.hasBarcodeHit;
-                const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[l.lotKey] || []) : (l.rows || []);
+                const rowsForLot = v2RowsByKey[l.lotKey] || [];
                 const isExpanded = !groupBy && (
                   expandedLot === l.lotKey
-                  || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+                  || (hasBarcodeHit && rowsForLot.length > 0)
                 );
                 const expandedRows = rowsForLot.filter(hasActiveRollAvailability);
                 return (
@@ -571,10 +383,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                       className="hover:bg-muted/50 cursor-pointer"
                       onClick={() => {
                         if (groupBy) return;
-                        if (!Array.isArray(v2Lots)) {
-                          setExpandedLot(isExpanded ? null : l.lotKey);
-                          return;
-                        }
                         if (isExpanded) {
                           setExpandedLot(null);
                           return;
@@ -719,15 +527,21 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
       {/* Mobile Card View for Holo Stock */}
       <div className="block sm:hidden space-y-3">
         {displayLots.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">No holo stock found.</div>
+          <ListState
+            isLoading={Boolean(v2?.lotsLoading)}
+            error={v2?.lotsError || null}
+            onRetry={v2?.retryLots}
+            emptyMessage="No holo stock found."
+            className="border rounded-lg bg-card"
+          />
         ) : (
           displayLots.map((l, idx) => {
             const rowKey = groupBy ? (l.groupKey || idx) : (l.lotKey || idx);
             const hasBarcodeHit = !!l.hasBarcodeHit;
-            const rowsForLot = Array.isArray(v2Lots) ? (v2RowsByKey[l.lotKey] || []) : (l.rows || []);
+            const rowsForLot = v2RowsByKey[l.lotKey] || [];
             const isExpanded = !groupBy && (
               expandedLot === l.lotKey
-              || (hasBarcodeHit && (!Array.isArray(v2Lots) || rowsForLot.length > 0))
+              || (hasBarcodeHit && rowsForLot.length > 0)
             );
             const expandedRows = rowsForLot.filter(hasActiveRollAvailability);
 
@@ -737,10 +551,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                   className="p-4"
                   onClick={() => {
                     if (groupBy) return;
-                    if (!Array.isArray(v2Lots)) {
-                      setExpandedLot(isExpanded ? null : l.lotKey);
-                      return;
-                    }
                     if (isExpanded) {
                       setExpandedLot(null);
                       return;

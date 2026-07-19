@@ -620,6 +620,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
     const [v2FacetsById, setV2FacetsById] = useState({});
     useEffect(() => {
+        setV2FacetsById({});
+    }, [process]);
+
+    useEffect(() => {
         if (!v2Enabled) return;
         if (!showHistory) return;
         if (!openFilterId) return;
@@ -685,7 +689,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!col) return col;
         if (!v2Enabled || col.kind !== 'values') return col;
         const facetOptions = v2FacetsById?.[id];
-        return Array.isArray(facetOptions) ? { ...col, facetOptions } : col;
+        // While the server facet request is in flight, keep the values from
+        // the loaded page instead of replacing them with an empty list.
+        return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
     };
 
     function resolveConingConeType(issue) {

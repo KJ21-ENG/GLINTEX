@@ -66,6 +66,26 @@ function coningRow(over = {}) {
   };
 }
 
+function holoRow(over = {}) {
+  return {
+    id: over.id || 'hr1',
+    date: over.date || '2026-03-05',
+    rollCount: over.rollCount ?? 1,
+    rollWeight: over.rollWeight ?? 10,
+    isDeleted: false,
+    createdBy: over.createdBy || 'manual',
+    barcode: over.barcode || 'HB1',
+    issue: {
+      id: over.issueId || 'hi1',
+      date: over.date || '2026-03-05',
+      lotNo: over.lotNo || 'L1',
+      yarnId: over.yarnId ?? 'Y1',
+      cutId: over.cutId ?? 'C1',
+      twistId: over.twistId ?? 'T1',
+    },
+  };
+}
+
 const CONING_ASSIGN = [{ id: 'a1', contractorId: 'K', process: 'coning' }];
 const CONING_RATE_BASE = { id: 'rateBase', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', twistId: null, coneTypeId: null, ratePerKg: 8 };
 
@@ -120,11 +140,13 @@ test('cone-type override wins over the base rate', async () => {
   assert.equal(res.lines[0].amount, 110);
 });
 
-test('excludes opening, purchased, non-positive, and claimed rows', async () => {
+test('excludes stage markers without excluding downstream OP/CP lot references', async () => {
   const rows = [
     coningRow({ id: 'ok' }),
     coningRow({ id: 'opening', createdBy: 'opening' }),
-    coningRow({ id: 'purchase', lotNo: 'CP-001' }),
+    coningRow({ id: 'purchase', createdBy: 'cutter_purchase' }),
+    coningRow({ id: 'downstream-opening-ref', lotNo: 'OP-001' }),
+    coningRow({ id: 'downstream-purchase-ref', lotNo: 'CP-001' }),
     coningRow({ id: 'zero', netWeight: 0, coneWeight: 0, grossWeight: 0 }),
     coningRow({ id: 'old', date: '2025-12-01' }), // outside selected report date
     coningRow({ id: 'claimed' }),
@@ -134,11 +156,28 @@ test('excludes opening, purchased, non-positive, and claimed rows', async () => 
     claimedLines: [{ sourceRowId: 'claimed', settlementId: 'other' }],
   });
   const res = await preview(stub);
-  assert.deepEqual(res.lines.map((l) => l.sourceRowId), ['ok']);
+  assert.deepEqual(res.lines.map((l) => l.sourceRowId), ['ok', 'downstream-opening-ref', 'downstream-purchase-ref']);
   assert.equal(res.excluded.opening, 1);
   assert.equal(res.excluded.purchased, 1);
   assert.equal(res.excluded.nonPositiveKg, 1);
   assert.equal(res.excluded.claimed, 1);
+});
+
+test('holo preview includes production whose upstream lot uses OP/CP prefixes', async () => {
+  const stub = makeStub({
+    ...MASTERS,
+    assignments: [{ id: 'ha1', contractorId: 'K', process: 'holo' }],
+    rates: [{ id: 'hrate', contractorId: 'K', process: 'holo', yarnId: 'Y1', cutId: null, twistId: null, ratePerKg: 25 }],
+    holoRows: [
+      holoRow({ id: 'cotton-cp', lotNo: 'CP-040', rollWeight: 11.354 }),
+      holoRow({ id: 'cotton-op', issueId: 'hi2', lotNo: 'OP-080', rollWeight: 35.585, barcode: 'HB2' }),
+    ],
+  });
+  const res = await computePayablePreview(stub, { contractorId: 'K', process: 'holo', date: '2026-03-05' });
+  assert.deepEqual(res.lines.map((line) => line.sourceRowId), ['cotton-cp', 'cotton-op']);
+  assert.equal(res.productionKg, 46.939);
+  assert.equal(res.excluded.opening, 0);
+  assert.equal(res.excluded.purchased, 0);
 });
 
 test('excludeSettlementId re-admits rows claimed by that settlement only', async () => {

@@ -70,6 +70,9 @@ test('isOpeningStockRow detects markers', () => {
   assert.equal(isOpeningStockRow({ createdBy: 'opening' }), true);
   assert.equal(isOpeningStockRow({ createdBy: 'opening_bulk' }), true);
   assert.equal(isOpeningStockRow({ lotNo: 'OP-001' }), true);
+  assert.equal(isOpeningStockRow({ process: 'cutter', lotNo: 'OP-001' }), true);
+  assert.equal(isOpeningStockRow({ process: 'holo', createdBy: 'manual', lotNo: 'OP-001' }), false);
+  assert.equal(isOpeningStockRow({ process: 'coning', createdBy: 'manual', lotNo: 'OP-001' }), false);
   assert.equal(isOpeningStockRow({ createdBy: 'user', lotNo: 'L-1' }), false);
 });
 
@@ -87,6 +90,9 @@ test('isValidDateStr rejects malformed and impossible calendar dates', () => {
 test('isPurchasedRow detects cutter-purchase (non-production) rows', () => {
   assert.equal(isPurchasedRow({ createdBy: 'cutter_purchase' }), true);
   assert.equal(isPurchasedRow({ lotNo: 'CP-001' }), true);
+  assert.equal(isPurchasedRow({ process: 'cutter', lotNo: 'CP-001' }), true);
+  assert.equal(isPurchasedRow({ process: 'holo', createdBy: 'manual', lotNo: 'CP-001' }), false);
+  assert.equal(isPurchasedRow({ process: 'coning', createdBy: 'manual', lotNo: 'CP-001' }), false);
   assert.equal(isPurchasedRow({ createdBy: 'user', lotNo: 'L-1' }), false);
   assert.equal(isPurchasedRow({ createdBy: 'opening' }), false); // opening handled separately
 });

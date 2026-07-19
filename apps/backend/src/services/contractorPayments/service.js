@@ -489,7 +489,7 @@ export async function computePayablePreview(prisma, {
 
   for (const row of rows) {
     const resolved = resolveRow(process, row, maps);
-    const marker = { createdBy: resolved.createdBy, lotNo: resolved.lotNo };
+    const marker = { createdBy: resolved.createdBy, lotNo: resolved.lotNo, process };
 
     // Silent exclusions (non-production income never creates earnings) -------
     if (resolved.netKg === null || resolved.netKg <= 0) { excluded.nonPositiveKg += 1; continue; }

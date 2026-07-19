@@ -612,6 +612,30 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
     try { await api.downloadContractorSettlementPdf(settlement.id); }
     catch (e) { setErr(e.message || 'Failed to download PDF'); }
   };
+  const doRefreshProduction = async () => {
+    if (!confirm('Sync this draft with all currently eligible production rows for its date range?')) return;
+    setBusy(true); setErr('');
+    try {
+      const preview = await api.getContractorPayablePreview({
+        process: settlement.process,
+        from: settlement.periodFrom,
+        to: settlement.periodTo,
+        excludeSettlementId: settlement.id,
+      });
+      if (preview.truncated) throw new Error('Production preview is truncated; narrow the date range before syncing.');
+      if (preview.blockers?.length) {
+        throw new Error(`Cannot sync while ${preview.blockers.length} production row(s) have missing data or rates.`);
+      }
+      await api.updateContractorSettlementDraft(settlement.id, {
+        sourceRowIds: (preview.lines || []).map((line) => line.sourceRowId),
+      });
+      await onChanged(settlement.id);
+    } catch (e) {
+      setErr(e.message || 'Failed to sync production rows');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Modal title={`${settlement.contractor?.name || 'Settlement'} — ${settlement.process}`} onClose={onClose} wide>
@@ -620,6 +644,7 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
         <span className="text-muted-foreground">{settlementDate(settlement)}</span>
         <div className="flex-1" />
         <Button size="sm" variant="outline" onClick={doPdf}><FileText className="w-4 h-4 mr-1" /> PDF</Button>
+        {isDraft && canWrite && <Button size="sm" variant="outline" onClick={doRefreshProduction} disabled={busy}><RefreshCw className={`w-4 h-4 mr-1 ${busy ? 'animate-spin' : ''}`} /> Sync Production</Button>}
         {isDraft && canWrite && <Button size="sm" onClick={() => setMarkPaidOpen(true)}><Check className="w-4 h-4 mr-1" /> Mark Paid</Button>}
         {isDraft && canDelete && <Button size="sm" variant="outline" className="text-destructive" onClick={doDelete} disabled={busy}><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         {!isDraft && isAdmin && <Button size="sm" variant="outline" onClick={() => setPaidEditOpen(true)}><Pencil className="w-4 h-4 mr-1" /> Admin Edit</Button>}

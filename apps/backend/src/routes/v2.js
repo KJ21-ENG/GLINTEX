@@ -1250,7 +1250,11 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
     };
     // Global facets: from masters + operators; consistent with paging.
     const [machines, operators, helpers, items, cuts, yarns, twists, boxes] = await Promise.all([
-      prisma.machine.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.machine.findMany({
+        where: { processType: { in: ['all', process] } },
+        select: { name: true },
+        orderBy: { name: 'asc' },
+      }),
       prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.item.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),

@@ -118,11 +118,15 @@ export function normalizeSide(value) {
 const OPENING_CREATED_BY = new Set(['opening', 'opening_bulk']);
 
 // A production row is opening stock when its createdBy marker is an opening
-// marker, or when its lot number carries the opening lot prefix (OP-).
+// marker. The OP- lot prefix is only authoritative at the cutter stage: Holo
+// and Coning issues can legitimately carry OP-prefixed upstream references
+// while still representing contractor-produced output at their own stage.
 export function isOpeningStockRow(row) {
   if (!row || typeof row !== 'object') return false;
   const createdBy = typeof row.createdBy === 'string' ? row.createdBy.trim().toLowerCase() : '';
   if (OPENING_CREATED_BY.has(createdBy)) return true;
+  const process = typeof row.process === 'string' ? row.process.trim().toLowerCase() : '';
+  if (process && process !== 'cutter') return false;
   const lotNo = typeof row.lotNo === 'string' ? row.lotNo.trim().toUpperCase() : '';
   if (lotNo.startsWith('OP-')) return true;
   return false;
@@ -130,11 +134,14 @@ export function isOpeningStockRow(row) {
 
 // Externally-purchased pre-cut goods enter the cutter receive table via the
 // inbound cutter-purchase flow (createdBy 'cutter_purchase', lot prefix CP-).
-// They are not the contractor's production and must never create earnings.
+// They are not the cutter contractor's production. As with OP-, the CP- prefix
+// alone must not exclude downstream Holo/Coning work performed on that input.
 export function isPurchasedRow(row) {
   if (!row || typeof row !== 'object') return false;
   const createdBy = typeof row.createdBy === 'string' ? row.createdBy.trim().toLowerCase() : '';
   if (createdBy === 'cutter_purchase') return true;
+  const process = typeof row.process === 'string' ? row.process.trim().toLowerCase() : '';
+  if (process && process !== 'cutter') return false;
   const lotNo = typeof row.lotNo === 'string' ? row.lotNo.trim().toUpperCase() : '';
   if (lotNo.startsWith('CP-')) return true;
   return false;

@@ -141,7 +141,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     // Helper for Coning Machine Lookup
     const getConingMachineName = (row) => {
         if (row.machineNo) return row.machineNo;
-        // Fallback to looking up the issue's machine
+        if (row.machineName) return row.machineName;
+        // Legacy fallback for rows that did not come from the v2 history endpoint.
         if (row.issueId) {
             const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
             if (issue && issue.machineId) {

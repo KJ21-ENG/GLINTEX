@@ -28,3 +28,9 @@ export function buildReceiveMachineContainsFilter(value, { process } = {}) {
   if (process === 'coning') return buildConingMachineFilter(match);
   return { machineNo: match };
 }
+
+export function resolveDisplayedReceiveMachineName(row, { process } = {}) {
+  if (row?.machineNo) return row.machineNo;
+  if (process === 'coning') return row?.issue?.machine?.name || '';
+  return '';
+}

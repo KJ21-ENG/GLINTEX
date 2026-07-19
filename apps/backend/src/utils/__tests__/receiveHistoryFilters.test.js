@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildReceiveMachineContainsFilter,
   buildReceiveMachineInFilter,
+  resolveDisplayedReceiveMachineName,
 } from '../receiveHistoryFilters.js';
 
 test('non-coning receive machine filters use the receive row machine number', () => {
@@ -51,4 +52,16 @@ test('coning receive contains filters preserve explicit machine precedence', () 
       },
     ],
   });
+});
+
+test('coning receive rows resolve their displayed machine in the initial API response', () => {
+  assert.equal(resolveDisplayedReceiveMachineName({
+    machineNo: null,
+    issue: { machine: { name: 'Coning Machine' } },
+  }, { process: 'coning' }), 'Coning Machine');
+
+  assert.equal(resolveDisplayedReceiveMachineName({
+    machineNo: 'PALTI-UTM',
+    issue: { machine: { name: 'Coning Machine' } },
+  }, { process: 'coning' }), 'PALTI-UTM');
 });

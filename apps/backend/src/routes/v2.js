@@ -8,6 +8,7 @@ import { ACCESS_LEVELS } from '../utils/permissions.js';
 import {
   buildReceiveMachineContainsFilter,
   buildReceiveMachineInFilter,
+  resolveDisplayedReceiveMachineName,
 } from '../utils/receiveHistoryFilters.js';
 
 const router = Router();
@@ -988,7 +989,7 @@ function receiveIncludesForProcess(process) {
   if (process === 'holo') {
     return { rollType: true, box: true, operator: true, helper: true, issue: { include: { cut: true, yarn: true, twist: true } } };
   }
-  return { box: true, operator: true, helper: true, issue: { include: { cut: true, yarn: true, twist: true } } };
+  return { box: true, operator: true, helper: true, issue: { include: { cut: true, yarn: true, twist: true, machine: true } } };
 }
 
 function pickReceiveSearchFields(process) {
@@ -1092,6 +1093,7 @@ function mapReceiveRow(process, row, extras = {}) {
       // Returning them from v2 eliminates UI dependence on late-loaded legacy module data.
       base.perConeTargetG = Number(row.issue?.requiredPerConeNetWeight || 0);
       base.coneTypeName = extras.coneTypeName || '';
+      base.machineName = resolveDisplayedReceiveMachineName(row, { process });
     }
     if (Array.isArray(extras.computedPieceIds)) {
       base.computedPieceIds = extras.computedPieceIds;

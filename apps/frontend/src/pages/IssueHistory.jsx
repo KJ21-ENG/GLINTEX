@@ -10,22 +10,19 @@ import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
 import { InfoPopover } from '../components/common/InfoPopover';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
-import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
-import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { UserBadge } from '../components/common/UserBadge';
-import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
+import { SheetColumnFilter } from '../components/common/SheetColumnFilters';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
-import { getFeatureFlags } from '../utils/featureFlags';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useV2CursorList } from '../hooks/useV2CursorList';
 import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
 
+const EMPTY_TOTALS = { qty: 0, weight: 0, metallicBobbins: 0, metallicBobbinsWeight: 0, yarnKg: 0, rollsProducedEstimate: 0, rollsIssued: 0, takenBackWeight: 0, netIssuedWeight: 0 };
+
 export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const { process, patchIssueRecord, refreshProcessData, reverseIssueTakeBack, emitInvalidation, subscribeInvalidation } = useInventory();
-  const flags = getFeatureFlags();
-  const v2Enabled = flags.v2IssueTracking;
   const [deletingId, setDeletingId] = useState(null);
   const [reversingTakeBackId, setReversingTakeBackId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -43,8 +40,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [savingIssue, setSavingIssue] = useState(false);
   const [revertTarget, setRevertTarget] = useState(null);
   const [revertBusy, setRevertBusy] = useState(false);
-  const traceContext = useMemo(() => (v2Enabled ? null : buildConingTraceContext(db)), [db, v2Enabled]);
-  const holoTraceContext = useMemo(() => (v2Enabled ? null : buildHoloTraceContext(db)), [db, v2Enabled]);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
   const formatInputDate = (value) => (value ? String(value).slice(0, 10) : '');
   const parseIssuePieceIds = (row) => (
@@ -74,10 +69,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!holoIssue) return '';
     const directCut = holoIssue.cut?.name
       || (holoIssue.cutId ? db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '' : '');
-    if (directCut) return directCut;
-    if (!holoTraceContext) return '';
-    const resolved = resolveHoloTrace(holoIssue, holoTraceContext);
-    return resolved?.cutName && resolved.cutName !== '—' ? resolved.cutName : '';
+    return directCut || '';
   };
   const resolveConingSourceMeta = (sourceRow) => {
     if (!sourceRow) return { lotNo: '', itemId: '', cut: '' };
@@ -102,7 +94,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     return Number.isFinite(ms) ? ms : null;
   };
   const cutterIssueTimelineByPiece = useMemo(() => {
-    if (v2Enabled) return new Map();
     const map = new Map();
     (db.issue_to_cutter_machine || [])
       .filter((issue) => !issue?.isDeleted && issue?.id)
@@ -148,44 +139,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const resolveIssueNames = (row) => {
     if (!row) return { cutName: '—', yarnName: '—', twistName: '—', itemName: '—' };
-    // v2 list rows are expected to be pre-flattened; avoid heavy tracing during render.
-    if (v2Enabled) {
-      return {
-        itemName: pickName(row.itemName, ''),
-        cutName: pickName(row.cutName, ''),
-        yarnName: pickName(row.yarnName, ''),
-        twistName: pickName(row.twistName, ''),
-      };
-    }
-
-    if (process === 'holo') {
-      if (!holoTraceContext) return { itemName: '—', cutName: '—', yarnName: '—', twistName: '—' };
-      const resolved = resolveHoloTrace(row, holoTraceContext);
-      return {
-        itemName: pickName(db.items?.find(i => i.id === row.itemId)?.name, ''),
-        cutName: pickName(resolved?.cutName, ''),
-        yarnName: pickName(resolved?.yarnName, ''),
-        twistName: pickName(resolved?.twistName, ''),
-      };
-    }
-
-    if (process === 'coning') {
-      if (!traceContext) return { itemName: '—', cutName: '—', yarnName: '—', twistName: '—' };
-      const resolved = resolveConingTrace(row, traceContext);
-      return {
-        itemName: pickName(db.items?.find(i => i.id === row.itemId)?.name, ''),
-        cutName: pickName(resolved?.cutName, ''),
-        yarnName: pickName(resolved?.yarnName, ''),
-        twistName: pickName(resolved?.twistName, ''),
-      };
-    }
-
-    // cutter doesn't have yarn/twist (use placeholders for parity).
+    // v2 list rows are pre-flattened; avoid heavy tracing during render.
     return {
-      itemName: pickName(db.items?.find(i => i.id === row.itemId)?.name, ''),
-      cutName: pickName(db.cuts?.find(c => c.id === row.cutId)?.name, ''),
-      yarnName: '—',
-      twistName: '—',
+      itemName: pickName(row.itemName, ''),
+      cutName: pickName(row.cutName, ''),
+      yarnName: pickName(row.yarnName, ''),
+      twistName: pickName(row.twistName, ''),
     };
   };
 
@@ -253,11 +212,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     setDeletingId(issueId);
     try {
       await api.deleteIssueToMachine(issueId, process);
-      if (!v2Enabled) {
-        await refreshProcessData(process);
-      } else {
-        v2List.refresh();
-      }
+      v2List.refresh();
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
       ], { source: 'deleteIssueToMachine', issueId });
@@ -270,7 +225,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   };
 
   const getIssueHasReceives = (row) => {
-    if (v2Enabled && typeof row?.hasReceives === 'boolean') return row.hasReceives;
+    if (typeof row?.hasReceives === 'boolean') return row.hasReceives;
     if (!row) return false;
     if (process === 'cutter') {
       const pieceIds = parseIssuePieceIds(row);
@@ -739,6 +694,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       } else {
         await refreshProcessData(process);
       }
+      // Refresh the v2 list so the edited row's flattened values update immediately.
+      v2List.refresh();
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
       ], { source: 'updateIssueToMachine', issueId: editingIssue.id });
@@ -904,13 +861,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             twistName = names.twistName === '—' ? '' : names.twistName;
             twist = twistName;
 
-            // rollType still needs tracing as it's not flattened in v2 yet
-            if (traceContext) {
-              const resTrace = resolveConingTrace(row, traceContext);
-              rollType = resTrace.rollTypeName === '—' ? '' : resTrace.rollTypeName;
-            } else {
-              rollType = row.rollTypeName || row.rollType || '';
-            }
+            rollType = row.rollTypeName || row.rollType || '';
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 
@@ -1105,52 +1056,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       };
     }
 
-    if (process === 'holo') {
-      if (!holoTraceContext) {
-        // Fallback to row fields if context is missing (v2 mode)
-        return {
-          cutName: row.cutName || '—',
-          yarnName: row.yarnName || '—',
-          twistName: row.twistName || '—',
-        };
-      }
-      return resolveHoloTrace(row, holoTraceContext);
-    }
-    if (process === 'coning') {
-      if (!traceContext) {
-        // Fallback to row fields if context is missing (v2 mode)
-        return {
-          cutName: row.cutName || '—',
-          yarnName: row.yarnName || '—',
-          twistName: row.twistName || '—',
-        };
-      }
-      return resolveConingTrace(row, traceContext);
+    if (process === 'holo' || process === 'coning') {
+      return {
+        cutName: row.cutName || '—',
+        yarnName: row.yarnName || '—',
+        twistName: row.twistName || '—',
+      };
     }
     return resolveCutterIssueDetails(row);
   };
-
-  const stageTakeBacks = useMemo(() => {
-    if (v2Enabled) return [];
-    return (db.issue_take_backs || [])
-      .filter((tb) => tb.stage === process)
-      .slice()
-      .sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-  }, [db.issue_take_backs, process]);
-
-  const takeBackTotalsByIssue = useMemo(() => {
-    if (v2Enabled) return new Map();
-    const map = new Map();
-    stageTakeBacks
-      .filter((tb) => !tb.isReverse && !tb.isReversed)
-      .forEach((tb) => {
-        const prev = map.get(tb.issueId) || { count: 0, weight: 0 };
-        prev.count += Number(tb.totalCount || 0);
-        prev.weight += Number(tb.totalWeight || 0);
-        map.set(tb.issueId, prev);
-      });
-    return map;
-  }, [stageTakeBacks]);
 
   const handleReverseTakeBack = async (takeBack) => {
     if (!takeBack || takeBack.isReverse || takeBack.isReversed) return;
@@ -1164,52 +1078,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         note: 'Reversed from Issue History',
         stage: process,
       });
-      if (v2Enabled) {
-        emitInvalidation([INVENTORY_INVALIDATION_KEYS.issueHistory(process)], { source: 'reverseTakeBack', id: takeBack.id });
-      }
+      emitInvalidation([INVENTORY_INVALIDATION_KEYS.issueHistory(process)], { source: 'reverseTakeBack', id: takeBack.id });
     } catch (err) {
       alert(err.message || 'Failed to reverse take-back');
     } finally {
       setReversingTakeBackId(null);
     }
   };
-
-  const issuesBase = useMemo(() => {
-    if (v2Enabled) return [];
-    let rows = [];
-    if (process === 'holo') {
-      rows = (db.issue_to_holo_machine || []).filter(r => !r.isDeleted);
-    } else if (process === 'coning') {
-      rows = (db.issue_to_coning_machine || []).filter(r => !r.isDeleted);
-    } else {
-      rows = (db.issue_to_cutter_machine || []).filter(r => !r.isDeleted);
-    }
-
-    const filtered = rows.map((row) => {
-      const takeBackTotals = takeBackTotalsByIssue.get(row.id) || { count: 0, weight: 0 };
-      const balance = row.issueBalance || db.issue_balances?.[row.id] || null;
-      const originalIssuedWeight = Number(balance?.originalWeight ?? (process === 'cutter'
-        ? row.totalWeight
-        : process === 'holo'
-          ? row.metallicBobbinsWeight
-          : 0));
-      const takenBackWeight = Number(balance?.takeBackWeight ?? takeBackTotals.weight ?? 0);
-      const netIssuedWeight = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takenBackWeight));
-      const wastageWeight = Number(process === 'cutter' ? (balance?.wastageWeight ?? 0) : 0);
-      const takenBackCount = Number(takeBackTotals.count || 0);
-      return {
-        ...row,
-        takenBackWeight,
-        takenBackCount,
-        originalIssuedWeight,
-        netIssuedWeight,
-        ...(process === 'cutter' ? { wastageWeight } : {}),
-      };
-    });
-
-    // Sort by createdAt timestamp descending (latest first, considering time)
-    return filtered.slice().sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-  }, [db, process, takeBackTotalsByIssue]);
 
   const filterColumns = useMemo(() => {
     // In v2 mode, row objects already include flattened names; avoid expensive tracing.
@@ -1259,83 +1134,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       { id: 'netIssuedWeight', label: 'Net Issued (kg)', kind: 'number', getValue: (r) => r.netIssuedWeight ?? 0 },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [process, itemNameById, operatorNameById, machineNameById, db, traceContext, holoTraceContext, v2Enabled]);
-
-  const legacyIssues = useMemo(() => {
-    if (v2Enabled) return [];
-    let rows = applySheetFilters(issuesBase, filterColumns, sheetFilters);
-
-    // Search across all filterColumns
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      rows = rows.filter(r =>
-        filterColumns.some(col => {
-          const val = col.getValue(r);
-          return String(val).toLowerCase().includes(term);
-        })
-      );
-    }
-
-    // Match the v2 server ordering (createdAt, then id) so the Date sort toggle
-    // behaves the same in both modes.
-    const dir = sortOrder === 'asc' ? 1 : -1;
-    return [...rows].sort((a, b) => {
-      const aKey = String(a.createdAt || a.date || '');
-      const bKey = String(b.createdAt || b.date || '');
-      if (aKey !== bKey) return aKey < bKey ? -dir : dir;
-      const aId = String(a.id || '');
-      const bId = String(b.id || '');
-      if (aId === bId) return 0;
-      return aId < bId ? -dir : dir;
-    });
-  }, [issuesBase, filterColumns, sheetFilters, searchTerm, sortOrder]);
-
-  const legacyTotals = useMemo(() => {
-    if (v2Enabled) {
-      return {
-        qty: 0,
-        weight: 0,
-        metallicBobbins: 0,
-        metallicBobbinsWeight: 0,
-        yarnKg: 0,
-        rollsProducedEstimate: 0,
-        rollsIssued: 0,
-        takenBackWeight: 0,
-        netIssuedWeight: 0,
-      };
-    }
-    const t = {
-      qty: 0,
-      weight: 0,
-      metallicBobbins: 0,
-      metallicBobbinsWeight: 0,
-      yarnKg: 0,
-      rollsProducedEstimate: 0,
-      rollsIssued: 0,
-      takenBackWeight: 0,
-      netIssuedWeight: 0,
-    };
-    for (const r of legacyIssues || []) {
-      if (process === 'cutter') {
-        t.qty += Number(r.count || 0);
-        t.weight += Number(r.totalWeight || 0);
-        t.takenBackWeight += Number(r.takenBackWeight || 0);
-        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
-      } else if (process === 'holo') {
-        t.metallicBobbins += Number(r.metallicBobbins || 0);
-        t.metallicBobbinsWeight += Number(r.metallicBobbinsWeight || 0);
-        t.takenBackWeight += Number(r.takenBackWeight || 0);
-        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
-        t.yarnKg += Number(r.yarnKg || 0);
-        t.rollsProducedEstimate += Number(r.rollsProducedEstimate || 0);
-      } else if (process === 'coning') {
-        t.rollsIssued += Number(r.count || r.rollsIssued || 0);
-        t.takenBackWeight += Number(r.takenBackWeight || 0);
-        t.netIssuedWeight += Number(r.netIssuedWeight ?? 0);
-      }
-    }
-    return t;
-  }, [legacyIssues, process, v2Enabled]);
+  }, [process, itemNameById, operatorNameById, machineNameById, db]);
 
   const v2DateFilter = sheetFilters?.date && sheetFilters.date.kind === 'date' ? sheetFilters.date : null;
   const v2DateFrom = v2DateFilter?.from || '';
@@ -1360,7 +1159,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   }, [sheetFilters]);
 
   const v2List = useV2PagedList({
-    enabled: v2Enabled,
+    enabled: true,
     scopeKey: `issue-history:${process}`,
     fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
       v2.getV2IssueTracking(process, {
@@ -1382,7 +1181,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   });
 
   const v2TakeBackList = useV2CursorList({
-    enabled: v2Enabled,
+    enabled: true,
     scopeKey: `take-back-history:${process}`,
     fetchPage: ({ limit, cursor, search, dateFrom, dateTo }) => (
       v2.getV2TakeBackHistory(process, {
@@ -1400,22 +1199,20 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   });
 
   useEffect(() => {
-    if (!v2Enabled) return;
     const key = INVENTORY_INVALIDATION_KEYS.issueHistory(process);
     return subscribeInvalidation(key, () => {
       v2List.refresh();
       v2TakeBackList.refresh();
     });
-  }, [process, subscribeInvalidation, v2Enabled, v2List.refresh, v2TakeBackList.refresh]);
+  }, [process, subscribeInvalidation, v2List.refresh, v2TakeBackList.refresh]);
 
-  const issues = v2Enabled ? v2List.items : legacyIssues;
-  const takeBacks = v2Enabled ? v2TakeBackList.items : stageTakeBacks;
+  const issues = v2List.items;
+  const takeBacks = v2TakeBackList.items;
   const totals = useMemo(() => {
-    if (!v2Enabled) return legacyTotals;
     const s = v2List.summary || {};
     if (process === 'cutter') {
       return {
-        ...legacyTotals,
+        ...EMPTY_TOTALS,
         qty: Number(s.qty || 0),
         weight: Number(s.weight || 0),
         takenBackWeight: Number(s.takenBackWeight || 0),
@@ -1424,7 +1221,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
     if (process === 'holo') {
       return {
-        ...legacyTotals,
+        ...EMPTY_TOTALS,
         metallicBobbins: Number(s.metallicBobbins || 0),
         metallicBobbinsWeight: Number(s.metallicBobbinsWeight || 0),
         yarnKg: Number(s.yarnKg || 0),
@@ -1434,15 +1231,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       };
     }
     return {
-      ...legacyTotals,
+      ...EMPTY_TOTALS,
       rollsIssued: Number(s.rollsIssued || 0),
       takenBackWeight: Number(s.takenBackWeight || 0),
       netIssuedWeight: Number(s.netIssuedWeight || 0),
     };
-  }, [v2Enabled, v2List.summary, process, legacyTotals]);
+  }, [v2List.summary, process]);
 
   const takeBackLoadMoreRef = useInfiniteScrollSentinel({
-    enabled: v2Enabled && v2TakeBackList.hasMore && !v2TakeBackList.isLoading,
+    enabled: v2TakeBackList.hasMore && !v2TakeBackList.isLoading,
     onLoadMore: v2TakeBackList.loadMore,
     rootRef: takeBackScrollRef,
   });
@@ -1450,7 +1247,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [v2FacetsById, setV2FacetsById] = useState({});
 
   useEffect(() => {
-    if (!v2Enabled) return;
     if (!openFilterId) return;
     const col = filterColumns.find(c => c.id === openFilterId);
     if (!col || col.kind !== 'values') return;
@@ -1473,11 +1269,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [v2Enabled, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+  }, [openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
   // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
   useEffect(() => {
-    if (!v2Enabled) return;
     let cancelled = false;
     const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'operator'] : ['item', 'cut', 'yarn', 'twist', 'machine', 'operator', 'shift'];
     (async () => {
@@ -1508,25 +1303,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Enabled, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+  }, [process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
   const columnFor = (id) => {
     const col = filterColumns.find(c => c.id === id);
     if (!col) return col;
-    if (!v2Enabled || col.kind !== 'values') return col;
+    if (col.kind !== 'values') return col;
     const facetOptions = v2FacetsById?.[id];
     return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
   };
-
-  const issueById = useMemo(() => {
-    if (v2Enabled) return new Map((issues || []).map((row) => [row.id, row]));
-    const rows = process === 'holo'
-      ? (db.issue_to_holo_machine || [])
-      : process === 'coning'
-        ? (db.issue_to_coning_machine || [])
-        : (db.issue_to_cutter_machine || []);
-    return new Map(rows.map((row) => [row.id, row]));
-  }, [db, process, v2Enabled, issues]);
 
   const getActions = (row) => {
     const actions = [
@@ -1599,21 +1384,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   };
 
   const handleExport = async () => {
-    let sourceRows = issues;
-    if (v2Enabled) {
-      try {
-        const res = await v2.exportV2IssueTrackingJson(process, {
-          search: debouncedSearchTerm,
-          dateFrom: v2DateFrom,
-          dateTo: v2DateTo,
-          filters: JSON.stringify(v2Filters || []),
-          order: sortOrder,
-        });
-        sourceRows = Array.isArray(res?.items) ? res.items : [];
-      } catch (err) {
-        alert(err?.message || 'Failed to export');
-        return;
-      }
+    let sourceRows;
+    try {
+      const res = await v2.exportV2IssueTrackingJson(process, {
+        search: debouncedSearchTerm,
+        dateFrom: v2DateFrom,
+        dateTo: v2DateTo,
+        filters: JSON.stringify(v2Filters || []),
+        order: sortOrder,
+      });
+      sourceRows = Array.isArray(res?.items) ? res.items : [];
+    } catch (err) {
+      alert(err?.message || 'Failed to export');
+      return;
     }
 
     // Build export data with resolved names
@@ -1809,9 +1592,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         </div>
         <TableResultCount
           shown={issues.length}
-          total={v2Enabled ? v2List.totalCount : issuesBase.length}
-          rangeStart={v2Enabled ? v2List.rangeStart : undefined}
-          isLoading={v2Enabled && v2List.isLoading}
+          total={v2List.totalCount}
+          rangeStart={v2List.rangeStart}
+          isLoading={v2List.isLoading}
           className="self-center"
         />
         <button
@@ -2149,9 +1932,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             {issues.length === 0 ? (
               <TableStateRow
                 colSpan={emptyColSpan}
-                isLoading={v2Enabled && v2List.isLoading}
-                error={v2Enabled ? v2List.error : null}
-                onRetry={v2Enabled ? v2List.refresh : undefined}
+                isLoading={v2List.isLoading}
+                error={v2List.error}
+                onRetry={v2List.refresh}
                 emptyMessage={`No issue records found for ${process}.`}
               />
             ) : (
@@ -2270,25 +2053,23 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           )}
         </div>
       </div>
-      {v2Enabled && (
-        <TablePagination
-          page={v2List.page}
-          totalPages={v2List.totalPages}
-          hasMore={v2List.hasMore}
-          onPageChange={v2List.setPage}
-          isLoading={v2List.isLoading}
-          className="hidden sm:flex"
-        />
-      )}
+      <TablePagination
+        page={v2List.page}
+        totalPages={v2List.totalPages}
+        hasMore={v2List.hasMore}
+        onPageChange={v2List.setPage}
+        isLoading={v2List.isLoading}
+        className="hidden sm:flex"
+      />
 
       {/* Mobile Card View */}
       <div className="block sm:hidden space-y-3">
         {issues.length === 0 ? (
           <ListState
             className="border rounded-lg bg-card"
-            isLoading={v2Enabled && v2List.isLoading}
-            error={v2Enabled ? v2List.error : null}
-            onRetry={v2Enabled ? v2List.refresh : undefined}
+            isLoading={v2List.isLoading}
+            error={v2List.error}
+            onRetry={v2List.refresh}
             emptyMessage={`No issue records found for ${process}.`}
           />
         ) : (
@@ -2331,16 +2112,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           })
         )}
       </div>
-      {v2Enabled && (
-        <TablePagination
-          page={v2List.page}
-          totalPages={v2List.totalPages}
-          hasMore={v2List.hasMore}
-          onPageChange={v2List.setPage}
-          isLoading={v2List.isLoading}
-          className="sm:hidden"
-        />
-      )}
+      <TablePagination
+        page={v2List.page}
+        totalPages={v2List.totalPages}
+        hasMore={v2List.hasMore}
+        onPageChange={v2List.setPage}
+        isLoading={v2List.isLoading}
+        className="sm:hidden"
+      />
 
       <div className="rounded-md border">
         <div className="px-3 py-2 border-b bg-muted/30 text-sm font-semibold">Take-Back Ledger</div>
@@ -2365,19 +2144,18 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               {takeBacks.length === 0 ? (
                 <TableStateRow
                   colSpan={11}
-                  isLoading={v2Enabled && v2TakeBackList.isLoading}
-                  error={v2Enabled ? v2TakeBackList.error : null}
-                  onRetry={v2Enabled ? v2TakeBackList.refresh : undefined}
+                  isLoading={v2TakeBackList.isLoading}
+                  error={v2TakeBackList.error}
+                  onRetry={v2TakeBackList.refresh}
                   emptyMessage={`No take-back entries for ${process}.`}
                 />
               ) : (
                 takeBacks.map((tb) => {
-                  const issue = !v2Enabled && issueById.get(tb.issueId) ? issueById.get(tb.issueId) : null;
                   const isActiveOriginal = !tb.isReverse && !tb.isReversed;
                   const typeLabel = tb.isReverse ? 'Reverse' : (tb.isReversed ? 'Take Back (Reversed)' : 'Take Back');
-                  const displayBarcode = v2Enabled ? (tb.issueBarcode || '') : (issue?.barcode || tb.issueId || '');
-                  const displayLot = v2Enabled ? (tb.issueLotNo || '') : (lotLabelFor(issue) || '—');
-                  const displayItem = v2Enabled ? (tb.itemName || '') : (itemNameById.get(issue?.itemId) || '—');
+                  const displayBarcode = tb.issueBarcode || '';
+                  const displayLot = tb.issueLotNo || '';
+                  const displayItem = tb.itemName || '';
                   return (
                     <TableRow key={tb.id}>
                       <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(tb.date || tb.createdAt)}</TableCell>

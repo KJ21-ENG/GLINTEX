@@ -92,7 +92,6 @@ export async function getModuleProcess(process, options = {}) {
   const qs = params.toString();
   return await request(`/api/module/process/${process}${qs ? `?${qs}` : ''}`);
 }
-export async function getModuleOpeningStock() { return await request('/api/module/opening_stock'); }
 export async function getLotSequenceNext() { return await request('/api/sequence/next'); }
 export async function getOpeningLotSequenceNext() { return await request('/api/opening_stock/sequence/next'); }
 export async function getCutterPurchaseSequenceNext() { return await request('/api/inbound/cutter_purchase/sequence/next'); }

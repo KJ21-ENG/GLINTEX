@@ -209,8 +209,6 @@ export const InventoryProvider = ({ children }) => {
         } else if (module === 'process') {
           const process = options.process || 'cutter';
           raw = await api.getModuleProcess(process, { full: options.full });
-        } else if (module === 'opening_stock') {
-          raw = await api.getModuleOpeningStock();
         } else {
           throw new Error(`Unknown module ${module}`);
         }

@@ -4,16 +4,13 @@ import { formatKg, formatDateDDMMYYYY } from '../../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
 import { ArrowRight, Download, Loader2, RotateCcw, Search, X } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
-import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
-import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { KeyValueGrid } from '../common/KeyValueGrid';
-import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
+import { SheetColumnFilter } from '../common/SheetColumnFilters';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../data-table';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Dialog, DialogContent } from '../ui/Dialog';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
-import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../../api/v2';
@@ -28,8 +25,6 @@ import { InfoPopover } from '../common/InfoPopover';
 export function OnMachineTable({ db, process }) {
     const navigate = useNavigate();
     const { createIssueTakeBack, reverseIssueTakeBack, subscribeInvalidation } = useInventory();
-    const flags = getFeatureFlags();
-    const v2Enabled = flags.v2OnMachine;
     const [searchTerm, setSearchTerm] = useState('');
     // Debounced copy for server queries so each keystroke doesn't reset the list.
     const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
@@ -45,8 +40,6 @@ export function OnMachineTable({ db, process }) {
     const [takeBackLinesDraft, setTakeBackLinesDraft] = useState([]);
     const [takeBackSaving, setTakeBackSaving] = useState(false);
     const scrollRootRef = useRef(null);
-    const traceContext = useMemo(() => (v2Enabled ? null : buildConingTraceContext(db)), [db, v2Enabled]);
-    const holoTraceContext = useMemo(() => (v2Enabled ? null : buildHoloTraceContext(db)), [db, v2Enabled]);
     const boxById = useMemo(() => {
         const map = new Map();
         (db.boxes || []).forEach((box) => {
@@ -131,52 +124,6 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.operators]);
 
-    const cutNameById = useMemo(() => {
-        const map = new Map();
-        (db.cuts || []).forEach(c => map.set(c.id, c.name || '—'));
-        return map;
-    }, [db.cuts]);
-
-    const yarnNameById = useMemo(() => {
-        const map = new Map();
-        (db.yarns || []).forEach(y => map.set(y.id, y.name || '—'));
-        return map;
-    }, [db.yarns]);
-
-    const twistNameById = useMemo(() => {
-        const map = new Map();
-        (db.twists || []).forEach(t => map.set(t.id, t.name || '—'));
-        return map;
-    }, [db.twists]);
-
-    const resolvePieceCutName = (piece) => {
-        if (!piece) return '';
-        const cutVal = piece.cut;
-        return piece.cutName
-            || (typeof cutVal === 'string' ? cutVal : cutVal?.name)
-            || piece.cutMaster?.name
-            || (piece.cutId ? cutNameById.get(piece.cutId) : '')
-            || '';
-    };
-
-    const resolvePieceYarnName = (piece) => {
-        if (!piece) return '';
-        const yarnVal = piece.yarn;
-        return piece.yarnName
-            || (typeof yarnVal === 'string' ? yarnVal : yarnVal?.name)
-            || (piece.yarnId ? yarnNameById.get(piece.yarnId) : '')
-            || '';
-    };
-
-    const resolvePieceTwistName = (piece) => {
-        if (!piece) return '';
-        const twistVal = piece.twist;
-        return piece.twistName
-            || (typeof twistVal === 'string' ? twistVal : twistVal?.name)
-            || (piece.twistId ? twistNameById.get(piece.twistId) : '')
-            || '';
-    };
-
     const pickName = (primary, fallback) => {
         const primaryClean = String(primary || '').trim();
         if (primaryClean && primaryClean !== '—') return primaryClean;
@@ -187,65 +134,13 @@ export function OnMachineTable({ db, process }) {
     const resolveEntryNames = (entry) => {
         if (!entry) return { cutName: '—', yarnName: '—', twistName: '—' };
 
-        // In v2 mode we deliberately do not build trace contexts and we expect the API to send
-        // already-resolved display fields. Avoid doing any DB lookups that can "fill in later"
-        // (causes flicker) and can be expensive during scroll.
-        if (v2Enabled) {
-            return {
-                cutName: pickName(entry.cutName, ''),
-                yarnName: pickName(entry.yarnName, ''),
-                twistName: pickName(entry.twistName, ''),
-            };
-        }
-
-        const firstPieceId = Array.isArray(entry.pieceIdsList) ? entry.pieceIdsList[0] : null;
-        const piece = firstPieceId ? db.inbound_items?.find(p => p.id === firstPieceId) : null;
-        const fallbackCut = resolvePieceCutName(piece);
-        const fallbackYarn = resolvePieceYarnName(piece);
-        const fallbackTwist = resolvePieceTwistName(piece);
-
-        if (process === 'cutter') {
-            const directCut = cutNameById.get(entry.cutId) || '';
-            return {
-                cutName: pickName(directCut, fallbackCut),
-                yarnName: pickName('', fallbackYarn),
-                twistName: pickName('', fallbackTwist),
-            };
-        }
-
-        if (process === 'holo') {
-            if (!holoTraceContext) {
-                return {
-                    cutName: pickName(entry.cutName, fallbackCut),
-                    yarnName: pickName(entry.yarnName, fallbackYarn),
-                    twistName: pickName(entry.twistName, fallbackTwist),
-                };
-            }
-            const resolved = resolveHoloTrace(entry, holoTraceContext);
-            return {
-                cutName: pickName(resolved.cutName, fallbackCut),
-                yarnName: pickName(resolved.yarnName, fallbackYarn),
-                twistName: pickName(resolved.twistName, fallbackTwist),
-            };
-        }
-
-        if (process === 'coning') {
-            if (!traceContext) {
-                return {
-                    cutName: pickName(entry.cutName, fallbackCut),
-                    yarnName: pickName(entry.yarnName, fallbackYarn),
-                    twistName: pickName(entry.twistName, fallbackTwist),
-                };
-            }
-            const resolved = resolveConingTrace(entry, traceContext);
-            return {
-                cutName: pickName(resolved.cutName, fallbackCut),
-                yarnName: pickName(resolved.yarnName, fallbackYarn),
-                twistName: pickName(resolved.twistName, fallbackTwist),
-            };
-        }
-
-        return { cutName: '—', yarnName: '—', twistName: '—' };
+        // The API sends already-resolved display fields. Avoid any DB lookups that can
+        // "fill in later" (causes flicker) and can be expensive during scroll.
+        return {
+            cutName: pickName(entry.cutName, ''),
+            yarnName: pickName(entry.yarnName, ''),
+            twistName: pickName(entry.twistName, ''),
+        };
     };
 
     const resolvePieceDisplay = (entry) => {
@@ -280,32 +175,6 @@ export function OnMachineTable({ db, process }) {
         if (!Number.isFinite(num) || num <= 0) return '—';
         return `${num} g`;
     };
-
-    // Build piece totals lookup maps for each process
-    const cutterPieceTotals = useMemo(() => {
-        const map = new Map();
-        (db.receive_from_cutter_machine_piece_totals || []).forEach(pt => {
-            map.set(pt.pieceId, {
-                totalNetWeight: pt.totalNetWeight || 0,
-                wastageNetWeight: pt.wastageNetWeight || 0,
-            });
-        });
-        return map;
-    }, [db.receive_from_cutter_machine_piece_totals]);
-
-    // Note: holoPieceTotals removed - we now calculate received weight directly from receive rows
-    // linked by issueId to fix the bug where all issues sharing a piece would disappear
-
-    const coningPieceTotals = useMemo(() => {
-        const map = new Map();
-        (db.receive_from_coning_machine_piece_totals || []).forEach(pt => {
-            map.set(pt.pieceId, {
-                totalNetWeight: pt.totalNetWeight || 0,
-                wastageNetWeight: pt.wastageNetWeight || 0,
-            });
-        });
-        return map;
-    }, [db.receive_from_coning_machine_piece_totals]);
 
     const inboundBarcodeById = useMemo(() => {
         const map = new Map();
@@ -503,7 +372,7 @@ export function OnMachineTable({ db, process }) {
 
             const stagePendingWeight = Math.max(
                 0,
-                Number(entry?.issueBalance?.pendingWeight ?? Number.POSITIVE_INFINITY),
+                Number(entry?.pendingWeight ?? Number.POSITIVE_INFINITY),
             );
             let pendingPool = stagePendingWeight;
             return issueLines.map((line) => {
@@ -718,204 +587,6 @@ export function OnMachineTable({ db, process }) {
         }
     };
 
-    // Compute on-machine entries based on process
-    const onMachineEntries = useMemo(() => {
-        if (v2Enabled) return [];
-        let entries = [];
-
-        if (process === 'cutter') {
-            const issues = db.issue_to_cutter_machine || [];
-            entries = issues.map(issue => {
-                // For cutter: pieceIds can be a comma-separated string or an array
-                let pieceIds = [];
-                if (Array.isArray(issue.pieceIds)) {
-                    pieceIds = issue.pieceIds;
-                } else if (typeof issue.pieceIds === 'string') {
-                    pieceIds = issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean);
-                }
-
-                // Sum up received + wastage for all pieces in this issue
-                let totalReceived = 0;
-                let totalWastage = 0;
-                pieceIds.forEach(pieceId => {
-                    const totals = cutterPieceTotals.get(pieceId);
-                    if (totals) {
-                        totalReceived += totals.totalNetWeight;
-                        totalWastage += totals.wastageNetWeight;
-                    }
-                });
-
-                const balance = issue.issueBalance || {};
-                const originalIssuedWeight = Number(balance.originalWeight ?? issue.totalWeight ?? 0);
-                const takeBackWeight = Number(balance.takeBackWeight || 0);
-                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
-                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
-                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
-                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
-
-                return {
-                    ...issue,
-                    originalIssuedWeight,
-                    takeBackWeight,
-                    netIssuedWeight,
-                    issuedWeight: netIssuedWeight,
-                    receivedWeight,
-                    wastageWeight,
-                    pendingWeight: Math.max(0, pendingWeight),
-                    pieceIdsList: pieceIds,
-                };
-            }).filter(e => e.pendingWeight > 0.001); // Filter entries with pending weight > 0 (with small tolerance)
-
-        } else if (process === 'holo') {
-            const issues = db.issue_to_holo_machine || [];
-            entries = issues.map(issue => {
-                // Trace pieces for holo: trace back to cutter receive rows
-                let pieceIds = [];
-                try {
-                    const refs = typeof issue.receivedRowRefs === 'string'
-                        ? JSON.parse(issue.receivedRowRefs)
-                        : issue.receivedRowRefs;
-                    if (Array.isArray(refs)) {
-                        const idsSet = new Set();
-                        refs.forEach(ref => {
-                            const cutterRow = (db.receive_from_cutter_machine_rows || []).find(r => r.id === ref.rowId);
-                            if (cutterRow?.pieceId) {
-                                idsSet.add(cutterRow.pieceId);
-                            }
-                        });
-                        pieceIds = Array.from(idsSet);
-                    }
-                } catch (e) {
-                    pieceIds = [];
-                }
-                if (pieceIds.length === 0 && issue.lotNo) {
-                    pieceIds = [`${issue.lotNo}-1`];
-                }
-
-                // FIX: Calculate received weight from receive rows directly linked to THIS issue
-                // instead of using shared piece totals (which caused all issues sharing a piece to disappear)
-                let totalReceived = 0;
-                let totalWastage = 0;
-                const holoReceiveRows = db.receive_from_holo_machine_rows || [];
-                holoReceiveRows.forEach(row => {
-                    if (row.issueId === issue.id && !row.isDeleted) {
-                        // Calculate net weight for this row
-                        const netWeight = Number.isFinite(row.rollWeight)
-                            ? Number(row.rollWeight)
-                            : (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
-                        // Check if this is a wastage row (rollType with 'wastage' in name or specific flag)
-                        const rollType = db.roll_types?.find(rt => rt.id === row.rollTypeId);
-                        const isWastage = rollType?.name?.toLowerCase().includes('wastage');
-                        if (isWastage) {
-                            totalWastage += netWeight;
-                        } else {
-                            totalReceived += netWeight;
-                        }
-                    }
-                });
-
-                const balance = issue.issueBalance || {};
-                const originalIssuedWeight = Number(balance.originalWeight ?? issue.metallicBobbinsWeight ?? 0);
-                const takeBackWeight = Number(balance.takeBackWeight || 0);
-                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
-                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
-                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
-                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
-
-                return {
-                    ...issue,
-                    originalIssuedWeight,
-                    takeBackWeight,
-                    netIssuedWeight,
-                    issuedWeight: netIssuedWeight,
-                    receivedWeight,
-                    wastageWeight,
-                    pendingWeight: Math.max(0, pendingWeight),
-                    pieceIdsList: pieceIds,
-                };
-            }).filter(e => e.pendingWeight > 0.001);
-
-        } else if (process === 'coning') {
-            const issues = db.issue_to_coning_machine || [];
-            entries = issues.map(issue => {
-                // For coning: use issue.id as the pieceId key for totals
-                const totals = coningPieceTotals.get(issue.id);
-                const totalReceived = totals?.totalNetWeight || 0;
-                const totalWastage = totals?.wastageNetWeight || 0;
-
-                // Calculate issued weight from receivedRowRefs
-                let issuedWeight = 0;
-                let rollsIssued = 0;
-                let pieceIds = [];
-                try {
-                    const refs = typeof issue.receivedRowRefs === 'string'
-                        ? JSON.parse(issue.receivedRowRefs)
-                        : issue.receivedRowRefs;
-                    if (Array.isArray(refs)) {
-                        const idsSet = new Set();
-                        refs.forEach(ref => {
-                            issuedWeight += Number(ref.issueWeight || 0);
-                            rollsIssued += Number(ref.issueRolls || ref.baseRolls || 0);
-
-                            // Trace back to piece: coning issue -> holo receive -> holo issue -> cutter receive -> pieceId
-                            const holoRow = (db.receive_from_holo_machine_rows || []).find(r => r.id === ref.rowId);
-                            if (holoRow) {
-                                if (holoRow.pieceId) {
-                                    idsSet.add(holoRow.pieceId);
-                                }
-                                const holoIssue = (db.issue_to_holo_machine || []).find(i => i.id === holoRow.issueId);
-                                if (holoIssue) {
-                                    const holoRefs = typeof holoIssue.receivedRowRefs === 'string'
-                                        ? JSON.parse(holoIssue.receivedRowRefs)
-                                        : holoIssue.receivedRowRefs;
-                                    if (Array.isArray(holoRefs)) {
-                                        holoRefs.forEach(hRef => {
-                                            const cutterRow = (db.receive_from_cutter_machine_rows || []).find(r => r.id === hRef.rowId);
-                                            if (cutterRow?.pieceId) {
-                                                idsSet.add(cutterRow.pieceId);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                        });
-                        pieceIds = Array.from(idsSet);
-                    }
-                } catch (e) {
-                    // If parsing fails, use rollsIssued as fallback (less accurate)
-                    issuedWeight = 0;
-                    pieceIds = [];
-                }
-
-                const balance = issue.issueBalance || {};
-                const originalIssuedWeight = Number(balance.originalWeight ?? issuedWeight);
-                const takeBackWeight = Number(balance.takeBackWeight || 0);
-                const netIssuedWeight = Number(balance.netIssuedWeight ?? Math.max(0, originalIssuedWeight - takeBackWeight));
-                const receivedWeight = Number(balance.receivedWeight ?? totalReceived);
-                const wastageWeight = Number(balance.wastageWeight ?? totalWastage);
-                const pendingWeight = Number(balance.pendingWeight ?? Math.max(0, netIssuedWeight - receivedWeight - wastageWeight));
-
-                return {
-                    ...issue,
-                    originalIssuedWeight,
-                    takeBackWeight,
-                    netIssuedWeight,
-                    issuedWeight: netIssuedWeight,
-                    rollsIssued,
-                    receivedWeight,
-                    wastageWeight,
-                    pendingWeight: Math.max(0, pendingWeight),
-                    pieceIdsList: pieceIds,
-                };
-            }).filter(e => e.pendingWeight > 0.001);
-        }
-
-        // Sort by date descending (most recent first)
-        let sorted = entries.sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
-
-        return sorted;
-    }, [db, process, cutterPieceTotals, coningPieceTotals, v2Enabled]);
-
     const filterColumns = useMemo(() => {
         const common = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
@@ -945,36 +616,7 @@ export function OnMachineTable({ db, process }) {
         }
         return common;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [process, itemNameById, machineNameById, operatorNameById, db, traceContext, holoTraceContext, v2Enabled]);
-
-    const legacyFilteredEntries = useMemo(() => {
-        if (v2Enabled) return [];
-        let rows = applySheetFilters(onMachineEntries, filterColumns, sheetFilters);
-
-        // Search across all filterColumns
-        if (searchTerm) {
-            const term = searchTerm.toLowerCase();
-            rows = rows.filter(r =>
-                filterColumns.some(col => {
-                    const val = col.getValue(r);
-                    return String(val).toLowerCase().includes(term);
-                })
-            );
-        }
-
-        // Match the v2 server ordering (date via createdAt, then id) so the
-        // Date sort toggle behaves the same in both modes.
-        const dir = sortOrder === 'asc' ? 1 : -1;
-        return [...rows].sort((a, b) => {
-            const aKey = String(a.createdAt || a.date || '');
-            const bKey = String(b.createdAt || b.date || '');
-            if (aKey !== bKey) return aKey < bKey ? -dir : dir;
-            const aId = String(a.id || '');
-            const bId = String(b.id || '');
-            if (aId === bId) return 0;
-            return aId < bId ? -dir : dir;
-        });
-    }, [onMachineEntries, filterColumns, sheetFilters, searchTerm, sortOrder, v2Enabled]);
+    }, [process, itemNameById, machineNameById, operatorNameById]);
 
     const v2DateFilter = sheetFilters?.date && sheetFilters.date.kind === 'date' ? sheetFilters.date : null;
     const v2DateFrom = v2DateFilter?.from || '';
@@ -999,7 +641,7 @@ export function OnMachineTable({ db, process }) {
     }, [sheetFilters]);
 
     const v2List = useV2CursorList({
-        enabled: v2Enabled,
+        enabled: true,
         scopeKey: `on-machine:${process}`,
         fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
             v2.getV2OnMachine(process, {
@@ -1021,18 +663,17 @@ export function OnMachineTable({ db, process }) {
     });
 
     useEffect(() => {
-        if (!v2Enabled) return;
         const key = INVENTORY_INVALIDATION_KEYS.issueOnMachine(process);
         return subscribeInvalidation(key, () => {
             v2List.refresh();
         });
-    }, [process, subscribeInvalidation, v2Enabled, v2List.refresh]);
+    }, [process, subscribeInvalidation, v2List.refresh]);
 
-    const filteredEntries = v2Enabled ? v2List.items : legacyFilteredEntries;
-    const filterRows = v2Enabled ? filteredEntries : onMachineEntries;
+    const filteredEntries = v2List.items;
+    const filterRows = filteredEntries;
 
     const loadMoreRef = useInfiniteScrollSentinel({
-        enabled: v2Enabled && v2List.hasMore && !v2List.isLoading,
+        enabled: v2List.hasMore && !v2List.isLoading,
         onLoadMore: v2List.loadMore,
         rootRef: scrollRootRef,
     });
@@ -1042,7 +683,6 @@ export function OnMachineTable({ db, process }) {
     const [v2FacetsById, setV2FacetsById] = useState({});
 
     useEffect(() => {
-        if (!v2Enabled) return;
         let cancelled = false;
         (async () => {
             try {
@@ -1055,19 +695,19 @@ export function OnMachineTable({ db, process }) {
             }
         })();
         return () => { cancelled = true; };
-    }, [v2Enabled, process]);
+    }, [process]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
         if (!col) return col;
-        if (!v2Enabled || col.kind !== 'values') return col;
+        if (col.kind !== 'values') return col;
         const facetOptions = v2FacetsById?.[id];
         return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
     };
 
     const totals = useMemo(() => {
-        // When v2 is enabled, prefer the server-computed summary (covers ALL records, not just loaded pages).
-        if (v2Enabled && v2List.summary) {
+        // Prefer the server-computed summary (covers ALL records, not just loaded pages).
+        if (v2List.summary) {
             return {
                 originalIssuedWeight: Number(v2List.summary.originalIssuedWeight || 0),
                 takeBackWeight: Number(v2List.summary.takeBackWeight || 0),
@@ -1098,7 +738,7 @@ export function OnMachineTable({ db, process }) {
             if (process === 'coning') base.rollsIssued += Number(r.rollsIssued || 0);
         }
         return base;
-    }, [filteredEntries, process, v2Enabled, v2List.summary]);
+    }, [filteredEntries, process, v2List.summary]);
 
     const handleGoToReceive = (entry) => {
         // Navigate to receive page with barcode param for auto-scan
@@ -1144,23 +784,21 @@ export function OnMachineTable({ db, process }) {
     };
 
     const handleExport = async () => {
-        // v2 mode paginates, so the loaded rows are only a slice of the dataset.
+        // The list paginates, so the loaded rows are only a slice of the dataset.
         // Export must go through the server endpoint or the file is silently truncated.
-        let sourceRows = filteredEntries;
-        if (v2Enabled) {
-            try {
-                const res = await v2.exportV2OnMachineJson(process, {
-                    search: debouncedSearchTerm,
-                    dateFrom: v2DateFrom,
-                    dateTo: v2DateTo,
-                    filters: JSON.stringify(v2Filters || []),
-                    order: sortOrder,
-                });
-                sourceRows = Array.isArray(res?.items) ? res.items : [];
-            } catch (err) {
-                alert(err?.message || 'Failed to export');
-                return;
-            }
+        let sourceRows;
+        try {
+            const res = await v2.exportV2OnMachineJson(process, {
+                search: debouncedSearchTerm,
+                dateFrom: v2DateFrom,
+                dateTo: v2DateTo,
+                filters: JSON.stringify(v2Filters || []),
+                order: sortOrder,
+            });
+            sourceRows = Array.isArray(res?.items) ? res.items : [];
+        } catch (err) {
+            alert(err?.message || 'Failed to export');
+            return;
         }
         const exportData = sourceRows.map(entry => {
             const progressPercent = getProgressPercent(entry);
@@ -1273,8 +911,8 @@ export function OnMachineTable({ db, process }) {
                 </div>
                 <TableResultCount
                     shown={filteredEntries.length}
-                    total={v2Enabled ? v2List.summary?.totalCount : onMachineEntries.length}
-                    isLoading={v2Enabled && v2List.isLoading}
+                    total={v2List.summary?.totalCount}
+                    isLoading={v2List.isLoading}
                     className="self-center"
                 />
                 <button
@@ -1555,9 +1193,9 @@ export function OnMachineTable({ db, process }) {
                         {filteredEntries.length === 0 ? (
                             <TableStateRow
                                 colSpan={emptyColSpan}
-                                isLoading={v2Enabled && v2List.isLoading}
-                                error={v2Enabled ? v2List.error : null}
-                                onRetry={v2Enabled ? v2List.refresh : undefined}
+                                isLoading={v2List.isLoading}
+                                error={v2List.error}
+                                onRetry={v2List.refresh}
                                 emptyMessage={`No pending entries on machine for ${process}.`}
                             />
                         ) : (
@@ -1644,9 +1282,9 @@ export function OnMachineTable({ db, process }) {
                         )}
                     </TableBody>
                 </Table>
-                {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
+                {/* Invisible infinite-scroll sentinel (no UI change). */}
                 <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
-                {v2Enabled && v2List.isLoading && filteredEntries.length > 0 && (
+                {v2List.isLoading && filteredEntries.length > 0 && (
                     <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         Loading more…
@@ -1672,9 +1310,9 @@ export function OnMachineTable({ db, process }) {
                 {filteredEntries.length === 0 ? (
                     <ListState
                         className="border rounded-lg bg-card"
-                        isLoading={v2Enabled && v2List.isLoading}
-                        error={v2Enabled ? v2List.error : null}
-                        onRetry={v2Enabled ? v2List.refresh : undefined}
+                        isLoading={v2List.isLoading}
+                        error={v2List.error}
+                        onRetry={v2List.refresh}
                         emptyMessage={`No pending entries on machine for ${process}.`}
                     />
                 ) : (

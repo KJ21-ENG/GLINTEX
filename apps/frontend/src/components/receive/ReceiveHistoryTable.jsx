@@ -13,10 +13,9 @@ import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningT
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
-import { SheetColumnFilter, applySheetFilters } from '../common/SheetColumnFilters';
+import { SheetColumnFilter } from '../common/SheetColumnFilters';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../data-table';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { getFeatureFlags } from '../../utils/featureFlags';
 import { useV2PagedList } from '../../hooks/useV2PagedList';
 import * as v2 from '../../api/v2';
 import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
@@ -24,8 +23,6 @@ import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWrite = false }) {
     const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
-    const flags = getFeatureFlags();
-    const v2Enabled = flags.v2ReceiveHistory;
     const { canDelete: canDeleteInbound } = usePermission('inbound');
     const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
@@ -63,80 +60,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         const net = gross - tare;
         return Number.isFinite(net) ? net : 0;
     };
-
-    const history = useMemo(() => {
-        if (v2Enabled) return [];
-        let rows = [];
-        if (process === 'holo') {
-            rows = (db.receive_from_holo_machine_rows || []).filter(row => !row.isDeleted);
-        } else if (process === 'coning') {
-            rows = (db.receive_from_coning_machine_rows || []).filter(row => !row.isDeleted);
-        } else {
-            rows = (db.receive_from_cutter_machine_rows || []).filter(row => !row.isDeleted);
-        }
-        // Sort by created date descending
-        let sorted = rows.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-
-        // Filter based on search and date
-        return sorted.map(r => {
-            let pieceIdsList = [];
-            if (process === 'holo') {
-                // Use server-computed pieceIds if available
-                if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.length > 0) {
-                    pieceIdsList = r.computedPieceIds;
-                } else {
-                    // Fallback to client-side tracing
-                    const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-                    if (issue) {
-                        try {
-                            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                            if (Array.isArray(refs)) {
-                                const ids = new Set();
-                                refs.forEach(ref => {
-                                    const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === ref.rowId);
-                                    if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
-                                });
-                                pieceIdsList = Array.from(ids);
-                            }
-                        } catch (e) { }
-                    }
-                }
-            } else if (process === 'coning') {
-                // Use server-computed pieceIds if available
-                if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.length > 0) {
-                    pieceIdsList = r.computedPieceIds;
-                } else {
-                    // Fallback to client-side tracing
-                    const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-                    if (issue) {
-                        try {
-                            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                            if (Array.isArray(refs)) {
-                                const ids = new Set();
-                                refs.forEach(ref => {
-                                    const holoRow = db.receive_from_holo_machine_rows?.find(hr => hr.id === ref.rowId);
-                                    if (holoRow) {
-                                        const holoIssue = db.issue_to_holo_machine?.find(hi => hi.id === holoRow.issueId);
-                                        if (holoIssue) {
-                                            const hRefs = typeof holoIssue.receivedRowRefs === 'string' ? JSON.parse(holoIssue.receivedRowRefs) : holoIssue.receivedRowRefs;
-                                            if (Array.isArray(hRefs)) {
-                                                hRefs.forEach(hRef => {
-                                                    const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
-                                                    if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
-                                                });
-                                            }
-                                        }
-                                    }
-                                });
-                                pieceIdsList = Array.from(ids);
-                            }
-                        } catch (e) { }
-                    }
-                }
-            }
-            return { ...r, pieceIdsList };
-        });
-    }, [db, process, v2Enabled]);
 
     // Helper for Coning Machine Lookup
     const getConingMachineName = (row) => {
@@ -486,54 +409,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (r.twistName || legacyIssueNamesByIssueId.get(r.issueId)?.twistName || '')
             },
         ];
-    }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue, v2Enabled, legacyIssueNamesByIssueId]);
-
-    const legacyFilteredHistory = useMemo(() => {
-        if (v2Enabled) return [];
-        let rows = applySheetFilters(history, filterColumns, sheetFilters);
-
-        // Search across all filterColumns
-        if (searchTerm) {
-            const term = searchTerm.toLowerCase();
-            rows = rows.filter(r =>
-                filterColumns.some(col => {
-                    const val = col.getValue(r);
-                    return String(val).toLowerCase().includes(term);
-                })
-            );
-        }
-
-        // Match the v2 server ordering (createdAt, then id) so the Date sort toggle
-        // behaves the same in both modes.
-        const dir = sortOrder === 'asc' ? 1 : -1;
-        return [...rows].sort((a, b) => {
-            const aKey = String(a.createdAt || a.date || '');
-            const bKey = String(b.createdAt || b.date || '');
-            if (aKey !== bKey) return aKey < bKey ? -dir : dir;
-            const aId = String(a.id || '');
-            const bId = String(b.id || '');
-            if (aId === bId) return 0;
-            return aId < bId ? -dir : dir;
-        });
-    }, [history, filterColumns, sheetFilters, searchTerm, sortOrder]);
-
-    const legacyTotals = useMemo(() => {
-        if (v2Enabled) return { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
-        const t = { netWt: 0, bobbinQty: 0, rolls: 0, weight: 0, cones: 0 };
-        for (const r of legacyFilteredHistory || []) {
-            if (process === 'cutter') {
-                t.netWt += Number(r.netWt || 0);
-                t.bobbinQty += Number(r.bobbinQuantity || 0);
-            } else if (process === 'holo') {
-                t.rolls += Number(r.rollCount || 0);
-                t.weight += Number(r.rollWeight || calcNetFromGrossTare(r) || 0);
-            } else if (process === 'coning') {
-                t.cones += Number(r.coneCount || 0);
-                t.weight += Number(r.netWeight || 0);
-            }
-        }
-        return t;
-    }, [legacyFilteredHistory, process, v2Enabled]);
+    }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue, legacyIssueNamesByIssueId]);
 
     const showHistory = process !== 'cutter' || activeTab === 'history';
     const showChallans = process === 'cutter' && activeTab === 'challan';
@@ -561,7 +437,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     }, [sheetFilters]);
 
     const v2List = useV2PagedList({
-        enabled: v2Enabled && showHistory,
+        enabled: showHistory,
         scopeKey: `receive-history:${process}`,
         fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
             v2.getV2ReceiveHistory(process, {
@@ -589,7 +465,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     };
 
     useEffect(() => {
-        if (!v2Enabled) return;
         const key = INVENTORY_INVALIDATION_KEYS.receiveHistory(process);
         return subscribeInvalidation(key, () => {
             if (showHistory) {
@@ -598,26 +473,26 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             }
             setHistoryDirtyWhileHidden(true);
         });
-    }, [process, showHistory, subscribeInvalidation, v2Enabled]);
+    }, [process, showHistory, subscribeInvalidation]);
 
     useEffect(() => {
-        if (!v2Enabled || !showHistory || !historyDirtyWhileHidden) return;
+        if (!showHistory || !historyDirtyWhileHidden) return;
         refreshV2List();
         setHistoryDirtyWhileHidden(false);
-    }, [historyDirtyWhileHidden, showHistory, v2Enabled]);
+    }, [historyDirtyWhileHidden, showHistory]);
 
     useEffect(() => {
         setHistoryDirtyWhileHidden(false);
     }, [process]);
 
-    const filteredHistory = v2Enabled && showHistory ? v2List.items : legacyFilteredHistory;
+    const filteredHistory = showHistory ? v2List.items : [];
     const totals = useMemo(() => {
-        if (!v2Enabled || !showHistory) return legacyTotals;
-        const s = v2List.summary || {};
-        if (process === 'cutter') return { ...legacyTotals, netWt: Number(s.netWt || 0), bobbinQty: Number(s.bobbinQty || 0) };
-        if (process === 'holo') return { ...legacyTotals, rolls: Number(s.rolls || 0), weight: Number(s.weight || 0) };
-        return { ...legacyTotals, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
-    }, [v2Enabled, showHistory, v2List.summary, process, legacyTotals]);
+        // The paged list keeps its last summary while hidden (Challan tab); report zeros there.
+        const s = showHistory ? (v2List.summary || {}) : {};
+        if (process === 'cutter') return { netWt: Number(s.netWt || 0), bobbinQty: Number(s.bobbinQty || 0), rolls: 0, weight: 0, cones: 0 };
+        if (process === 'holo') return { netWt: 0, bobbinQty: 0, rolls: Number(s.rolls || 0), weight: Number(s.weight || 0), cones: 0 };
+        return { netWt: 0, bobbinQty: 0, rolls: 0, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
+    }, [v2List.summary, process, showHistory]);
 
     const [v2FacetsById, setV2FacetsById] = useState({});
     useEffect(() => {
@@ -625,7 +500,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     }, [process]);
 
     useEffect(() => {
-        if (!v2Enabled) return;
         if (!showHistory) return;
         if (!openFilterId) return;
         const col = filterColumns.find(c => c.id === openFilterId);
@@ -647,11 +521,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             } catch (_) { }
         })();
         return () => { cancelled = true; };
-    }, [v2Enabled, showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+    }, [showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
     // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
     useEffect(() => {
-        if (!v2Enabled) return;
         if (!showHistory) return;
         let cancelled = false;
         const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift'];
@@ -683,12 +556,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [v2Enabled, showHistory, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+    }, [showHistory, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
         if (!col) return col;
-        if (!v2Enabled || col.kind !== 'values') return col;
+        if (col.kind !== 'values') return col;
         const facetOptions = v2FacetsById?.[id];
         // While the server facet request is in flight, keep the values from
         // the loaded page instead of replacing them with an empty list.
@@ -1149,13 +1022,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                             receive_from_holo_machine_rows: nextRows,
                             receive_from_holo_machine_piece_totals: nextTotals,
                         });
+                        refreshV2List();
                     } else {
-                        if (!v2Enabled) await refreshProcessData(process);
-                        else refreshV2List();
+                        refreshV2List();
                     }
                 } else {
-                    if (!v2Enabled) await refreshProcessData(process);
-                    else refreshV2List();
+                    refreshV2List();
                 }
             } else if (process === 'coning') {
                 const payload = {
@@ -1209,9 +1081,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                         receive_from_coning_machine_rows: nextRows,
                         receive_from_coning_machine_piece_totals: nextTotals,
                     });
+                    refreshV2List();
                 } else {
-                    if (!v2Enabled) await refreshProcessData(process);
-                    else refreshV2List();
+                    refreshV2List();
                 }
             }
 
@@ -1273,9 +1145,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                         receive_from_holo_machine_rows: nextRows,
                         receive_from_holo_machine_piece_totals: nextTotals,
                     });
+                    refreshV2List();
                 } else {
-                    if (!v2Enabled) await refreshProcessData(process);
-                    else refreshV2List();
+                    refreshV2List();
                 }
             } else {
                 await api.deleteConingReceiveRow(row.id);
@@ -1297,6 +1169,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     receive_from_coning_machine_rows: nextRows,
                     receive_from_coning_machine_piece_totals: nextTotals,
                 });
+                refreshV2List();
             }
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -1338,6 +1211,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 receive_from_holo_machine_rows: nextRows,
                 receive_from_holo_machine_piece_totals: nextTotals,
             });
+            refreshV2List();
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');
@@ -1454,8 +1328,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         setSavingEdit(true);
         try {
             await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
-            if (!v2Enabled) await refreshProcessData(process);
-            else refreshV2List();
+            refreshV2List();
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1507,8 +1380,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 );
                 if (ok) {
                     await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
-                    if (!v2Enabled) await refreshProcessData(process);
-                    else refreshV2List();
+                    refreshV2List();
                     closeEditDialog();
                 }
             } else {
@@ -1525,8 +1397,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!ok) return;
         try {
             await api.deleteCutterReceiveChallan(challan.id);
-            if (!v2Enabled) await refreshProcessData(process);
-            else refreshV2List();
+            refreshV2List();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
@@ -1562,8 +1433,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 );
                 if (confirm) {
                     await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
-                    if (!v2Enabled) await refreshProcessData(process);
-                    else refreshV2List();
+                    refreshV2List();
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');
@@ -1916,6 +1786,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             await api.deleteCutterPurchaseLot(lotNo);
             await refreshProcessData(process || 'cutter');
             await refreshModuleData('inbound');
+            refreshV2List();
         } catch (err) {
             alert(err.message || 'Failed to delete cutter purchase');
         }
@@ -1961,10 +1832,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     receive_from_holo_machine_rows: nextRows,
                     receive_from_holo_machine_piece_totals: nextTotals,
                 });
+                refreshV2List();
             } else {
                 patchDb({ receive_from_holo_machine_rows: nextRows });
-                if (v2Enabled) refreshV2List();
-                else await refreshProcessData('holo');
+                refreshV2List();
             }
             setHoloRevertTarget(null);
         } catch (err) {
@@ -2089,21 +1960,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     }, [process, receiveDraft, editingReceiveRow, db.boxes, db.issue_to_coning_machine, db.cone_types]);
 
     const handleExportHistory = async () => {
-        let sourceRows = filteredHistory;
-        if (v2Enabled && showHistory) {
-            try {
-                const res = await v2.exportV2ReceiveHistoryJson(process, {
-                    search: debouncedSearchTerm,
-                    dateFrom: v2DateFrom,
-                    dateTo: v2DateTo,
-                    filters: JSON.stringify(v2Filters || []),
-                    order: sortOrder,
-                });
-                sourceRows = Array.isArray(res?.items) ? res.items : [];
-            } catch (err) {
-                alert(err?.message || 'Failed to export');
-                return;
-            }
+        let sourceRows;
+        try {
+            const res = await v2.exportV2ReceiveHistoryJson(process, {
+                search: debouncedSearchTerm,
+                dateFrom: v2DateFrom,
+                dateTo: v2DateTo,
+                filters: JSON.stringify(v2Filters || []),
+                order: sortOrder,
+            });
+            sourceRows = Array.isArray(res?.items) ? res.items : [];
+        } catch (err) {
+            alert(err?.message || 'Failed to export');
+            return;
         }
         let exportData;
         let columns;
@@ -2310,9 +2179,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     {showHistory && (
                         <TableResultCount
                             shown={filteredHistory.length}
-                            total={v2Enabled ? v2List.totalCount : history.length}
-                            rangeStart={v2Enabled ? v2List.rangeStart : undefined}
-                            isLoading={v2Enabled && v2List.isLoading}
+                            total={v2List.totalCount}
+                            rangeStart={v2List.rangeStart}
+                            isLoading={v2List.isLoading}
                             className="self-center"
                         />
                     )}
@@ -2336,74 +2205,74 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
-                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Shift</span>
-                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
 
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Employee</span>
-                                                        <SheetColumnFilter column={columnFor('employee')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('employee')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Net Wt (kg)</span>
-                                                        <SheetColumnFilter column={columnFor('netWt')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('netWt')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Bobbin Qty</span>
-                                                        <SheetColumnFilter column={columnFor('bobbinQty')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('bobbinQty')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Bobbin</span>
-                                                        <SheetColumnFilter column={columnFor('bobbin')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('bobbin')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2414,91 +2283,91 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
-                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Shift</span>
-                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Yarn</span>
-                                                        <SheetColumnFilter column={columnFor('yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('yarn')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Twist</span>
-                                                        <SheetColumnFilter column={columnFor('twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('twist')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Rolls</span>
-                                                        <SheetColumnFilter column={columnFor('rolls')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('rolls')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Weight (kg)</span>
-                                                        <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('weight')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Operator</span>
-                                                        <SheetColumnFilter column={columnFor('operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('operator')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Helper</span>
-                                                        <SheetColumnFilter column={columnFor('helper')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('helper')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Notes</span>
-                                                        <SheetColumnFilter column={columnFor('notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('notes')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2509,109 +2378,109 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <SortToggle label="Date" order={sortOrder} onToggle={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))} />
-                                                        <SheetColumnFilter column={columnFor('date')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('date')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Shift</span>
-                                                        <SheetColumnFilter column={columnFor('shift')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('shift')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Item</span>
-                                                        <SheetColumnFilter column={columnFor('item')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('item')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cut</span>
-                                                        <SheetColumnFilter column={columnFor('cut')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cut')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Yarn</span>
-                                                        <SheetColumnFilter column={columnFor('yarn')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('yarn')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Twist</span>
-                                                        <SheetColumnFilter column={columnFor('twist')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('twist')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Piece</span>
-                                                        <SheetColumnFilter column={columnFor('piece')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('piece')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Barcode</span>
-                                                        <SheetColumnFilter column={columnFor('barcode')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('barcode')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Cone Type</span>
-                                                        <SheetColumnFilter column={columnFor('coneType')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('coneType')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Per Cone (g)</span>
-                                                        <SheetColumnFilter column={columnFor('perCone')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('perCone')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Actual (g)</span>
-                                                        <SheetColumnFilter column={columnFor('actualG')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('actualG')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Box</span>
-                                                        <SheetColumnFilter column={columnFor('box')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('box')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Cones</span>
-                                                        <SheetColumnFilter column={columnFor('cones')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('cones')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <span className="whitespace-nowrap">Weight (kg)</span>
-                                                        <SheetColumnFilter column={columnFor('weight')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('weight')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Machine</span>
-                                                        <SheetColumnFilter column={columnFor('machine')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('machine')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Operator</span>
-                                                        <SheetColumnFilter column={columnFor('operator')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('operator')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Notes</span>
-                                                        <SheetColumnFilter column={columnFor('notes')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('notes')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span>Added By</span>
-                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={history} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+                                                        <SheetColumnFilter column={columnFor('addedBy')} rows={filteredHistory} filters={sheetFilters} setFilters={setSheetFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
                                                     </div>
                                                 </TableHead>
                                                 <TableHead className="w-[50px]">Actions</TableHead>
@@ -2623,9 +2492,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                     {filteredHistory.length === 0 ? (
                                         <TableStateRow
                                             colSpan={emptyColSpan}
-                                            isLoading={v2Enabled && v2List.isLoading}
-                                            error={v2Enabled ? v2List.error : null}
-                                            onRetry={v2Enabled ? v2List.refresh : undefined}
+                                            isLoading={v2List.isLoading}
+                                            error={v2List.error}
+                                            onRetry={v2List.refresh}
                                             emptyMessage="No records found."
                                         />
                                     ) : (
@@ -2783,25 +2652,23 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                 )}
                             </div>
                         </div>
-                        {v2Enabled && (
-                            <TablePagination
-                                page={v2List.page}
-                                totalPages={v2List.totalPages}
-                                hasMore={v2List.hasMore}
-                                onPageChange={v2List.setPage}
-                                isLoading={v2List.isLoading}
-                                className="hidden sm:flex"
-                            />
-                        )}
+                        <TablePagination
+                            page={v2List.page}
+                            totalPages={v2List.totalPages}
+                            hasMore={v2List.hasMore}
+                            onPageChange={v2List.setPage}
+                            isLoading={v2List.isLoading}
+                            className="hidden sm:flex"
+                        />
 
                         {/* Mobile Card View for Receive History */}
                         <div className="block sm:hidden space-y-3">
                             {filteredHistory.length === 0 ? (
                                 <ListState
                                     className="border rounded-lg bg-card"
-                                    isLoading={v2Enabled && v2List.isLoading}
-                                    error={v2Enabled ? v2List.error : null}
-                                    onRetry={v2Enabled ? v2List.refresh : undefined}
+                                    isLoading={v2List.isLoading}
+                                    error={v2List.error}
+                                    onRetry={v2List.refresh}
                                     emptyMessage="No records found."
                                 />
                             ) : (
@@ -2927,16 +2794,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                 })
                             )}
                         </div>
-                        {v2Enabled && (
-                            <TablePagination
-                                page={v2List.page}
-                                totalPages={v2List.totalPages}
-                                hasMore={v2List.hasMore}
-                                onPageChange={v2List.setPage}
-                                isLoading={v2List.isLoading}
-                                className="sm:hidden"
-                            />
-                        )}
+                        <TablePagination
+                            page={v2List.page}
+                            totalPages={v2List.totalPages}
+                            hasMore={v2List.hasMore}
+                            onPageChange={v2List.setPage}
+                            isLoading={v2List.isLoading}
+                            className="sm:hidden"
+                        />
                     </>
                 )}
 

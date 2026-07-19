@@ -27,7 +27,6 @@ import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
-import { getFeatureFlags } from '../utils/featureFlags';
 import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
@@ -55,10 +54,8 @@ const round3 = (val) => {
 };
 
 export function OpeningStock() {
-  const { db, refreshModuleData, ensureModuleData, emitInvalidation, subscribeInvalidation } = useInventory();
+  const { db, emitInvalidation, subscribeInvalidation } = useInventory();
   const { canRead, canWrite, canDelete } = usePermission('opening_stock');
-  const flags = getFeatureFlags();
-  const v2Enabled = flags.v2OpeningStock;
   const isReadOnly = canRead && !canWrite;
   const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
   const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
@@ -77,12 +74,6 @@ export function OpeningStock() {
   const fileInputRef = useRef(null);
   const holoCrateSeqRef = useRef(0);
   const coningCrateSeqRef = useRef(0);
-
-  useEffect(() => {
-    if (canRead) {
-      if (!v2Enabled) ensureModuleData('opening_stock');
-    }
-  }, [canRead, ensureModuleData, v2Enabled]);
 
   // Search and date filter state for history section
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -191,7 +182,6 @@ export function OpeningStock() {
             ? `Uploaded successfully! Created ${res.lotsCreated} Lots: ${res.lotNos.join(', ')} (Total: ${res.totalCount} entries)`
             : `Uploaded successfully! Lot: ${res.lotNos?.[0] || res.lotNo}, Count: ${res.totalCount || res.count}`;
           alert(message);
-          if (!v2Enabled) await refreshModuleData('opening_stock');
           emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory(stage), {
             source: 'uploadOpeningStock',
             stage,
@@ -297,112 +287,8 @@ export function OpeningStock() {
 
   const itemName = useMemo(() => db.items?.find(i => i.id === itemId)?.name || '', [db.items, itemId]);
 
-  // History data for opening stock entries
-  const legacyOpeningHistory = useMemo(() => {
-    if (v2Enabled) return { inbound: [], cutter: [], holo: [], coning: [] };
-    const result = { inbound: [], cutter: [], holo: [], coning: [] };
-
-    // Helper function for date filtering
-    const matchesDateFilter = (itemDate) => {
-      if (!historyStartDate && !historyEndDate) return true;
-      const date = new Date(itemDate);
-      if (historyStartDate && date < new Date(historyStartDate)) return false;
-      if (historyEndDate) {
-        const end = new Date(historyEndDate);
-        end.setHours(23, 59, 59, 999);
-        if (date > end) return false;
-      }
-      return true;
-    };
-
-    // Helper function for search filtering
-    const matchesSearch = (searchFields) => {
-      if (!historySearchTerm) return true;
-      const term = historySearchTerm.toLowerCase();
-      return searchFields.some(field => (field || '').toLowerCase().includes(term));
-    };
-
-    // Inbound: filter by isOpeningStock flag
-    result.inbound = (db.inbound_items || [])
-      .filter(p => p.isOpeningStock)
-      .filter(p => matchesDateFilter(p.createdAt))
-      .filter(p => matchesSearch([
-        p.lotNo,
-        p.id,
-        db.items?.find(i => i.id === p.itemId)?.name,
-        p.status
-      ]))
-      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
-
-    // Cutter Receive: filter by lotNo starting with OP-
-    result.cutter = (db.receive_from_cutter_machine_rows || [])
-      .filter(r => !r.isDeleted && (r.pieceId || '').startsWith('OP-'))
-      .filter(r => matchesDateFilter(r.date || r.createdAt))
-      .filter(r => {
-        const inboundItem = db.inbound_items?.find(p => p.id === r.pieceId);
-        const itemName = r.itemName || (inboundItem ? db.items?.find(i => i.id === inboundItem.itemId)?.name : '');
-        return matchesSearch([
-          r.pieceId?.split('-').slice(0, 2).join('-'),
-          itemName,
-          r.barcode || r.vchNo,
-          r.bobbin?.name || db.bobbins?.find(b => b.id === r.bobbinId)?.name,
-          r.cutMaster?.name || (typeof r.cut === 'string' ? r.cut : r.cut?.name) || db.cuts?.find(c => c.id === r.cutId)?.name
-        ]);
-      })
-      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
-
-    // Holo Receive: filter by lotNo starting with OP-
-    result.holo = (db.receive_from_holo_machine_rows || [])
-      .filter(r => {
-        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-        if (!issue) return false;
-        if ((issue.lotNo || '').startsWith('OP-')) return true;
-        if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
-        if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
-        return false;
-      })
-      .filter(r => matchesDateFilter(r.date || r.createdAt))
-      .filter(r => {
-        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-        const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '';
-        const cutName = issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '';
-        return matchesSearch([
-          issue?.lotNo,
-          itemName,
-          r.barcode,
-          r.rollType?.name || db.rollTypes?.find(rt => rt.id === r.rollTypeId)?.name,
-          cutName
-        ]);
-      })
-      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
-
-    // Coning Receive: filter by lotNo starting with OP-
-    result.coning = (db.receive_from_coning_machine_rows || [])
-      .filter(r => {
-        const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-        if (!issue) return false;
-        if ((issue.lotNo || '').startsWith('OP-')) return true;
-        if (Array.isArray(issue.lotNos) && issue.lotNos.some(l => (l || '').startsWith('OP-'))) return true;
-        if (Array.isArray(r.computedPieceIds) && r.computedPieceIds.some(pid => (pid || '').startsWith('OP-'))) return true;
-        return false;
-      })
-      .filter(r => matchesDateFilter(r.date || r.createdAt))
-      .filter(r => {
-        const issue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-        const itemName = issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '';
-        return matchesSearch([
-          issue?.lotNo,
-          itemName,
-          r.barcode
-        ]);
-      })
-      .slice().sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * ((a.createdAt || '').localeCompare(b.createdAt || '')));
-
-    return result;
-  }, [db, historySearchTerm, historyStartDate, historyEndDate, sortOrder, v2Enabled]);
-
   const v2HistoryList = useV2PagedList({
-    enabled: v2Enabled,
+    enabled: true,
     scopeKey: `opening-stock:${stage}`,
     fetchPage: ({ limit, page, search, dateFrom, dateTo, order }) => (
       v2.getV2OpeningStockHistory(stage, { limit, page, search, dateFrom, dateTo, order })
@@ -416,15 +302,13 @@ export function OpeningStock() {
   });
 
   useEffect(() => {
-    if (!v2Enabled) return;
     const key = INVENTORY_INVALIDATION_KEYS.openingStockHistory(stage);
     return subscribeInvalidation(key, () => {
       v2HistoryList.refresh();
     });
-  }, [stage, subscribeInvalidation, v2Enabled, v2HistoryList.refresh]);
+  }, [stage, subscribeInvalidation, v2HistoryList.refresh]);
 
   const openingHistory = useMemo(() => {
-    if (!v2Enabled) return legacyOpeningHistory;
     const items = v2HistoryList.items || [];
     return {
       inbound: stage === 'inbound' ? items : [],
@@ -432,7 +316,7 @@ export function OpeningStock() {
       holo: stage === 'holo' ? items : [],
       coning: stage === 'coning' ? items : [],
     };
-  }, [v2Enabled, legacyOpeningHistory, stage, v2HistoryList.items]);
+  }, [stage, v2HistoryList.items]);
 
   const getBobbin = (id) => db.bobbins?.find(b => b.id === id);
   const getBox = (id) => db.boxes?.find(b => b.id === id);
@@ -822,7 +706,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningInbound(payload);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('inbound'), {
         source: 'createOpeningInbound',
       });
@@ -849,7 +732,6 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteInboundItem(pieceId);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('inbound'), {
         source: 'deleteInboundItem',
         rowId: pieceId,
@@ -870,7 +752,6 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningCutterReceiveRow(rowId);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('cutter'), {
         source: 'deleteOpeningCutterReceiveRow',
         rowId,
@@ -891,7 +772,6 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningHoloReceiveRow(rowId);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('holo'), {
         source: 'deleteOpeningHoloReceiveRow',
         rowId,
@@ -912,7 +792,6 @@ export function OpeningStock() {
     setDeletingKey(key);
     try {
       await api.deleteOpeningConingReceiveRow(rowId);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('coning'), {
         source: 'deleteOpeningConingReceiveRow',
         rowId,
@@ -952,7 +831,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningCutterReceive(payload);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('cutter'), {
         source: 'createOpeningCutterReceive',
       });
@@ -995,7 +873,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningHoloReceive(payload);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('holo'), {
         source: 'createOpeningHoloReceive',
       });
@@ -1040,7 +917,6 @@ export function OpeningStock() {
         })),
       };
       const result = await api.createOpeningConingReceive(payload);
-      if (!v2Enabled) await refreshModuleData('opening_stock');
       emitInvalidation(INVENTORY_INVALIDATION_KEYS.openingStockHistory('coning'), {
         source: 'createOpeningConingReceive',
       });
@@ -1977,9 +1853,9 @@ export function OpeningStock() {
           <div className="mt-3">
             <TableResultCount
               shown={openingHistory[stage]?.length || 0}
-              total={v2Enabled ? v2HistoryList.totalCount : undefined}
-              rangeStart={v2Enabled ? v2HistoryList.rangeStart : undefined}
-              isLoading={v2Enabled && v2HistoryList.isLoading}
+              total={v2HistoryList.totalCount}
+              rangeStart={v2HistoryList.rangeStart}
+              isLoading={v2HistoryList.isLoading}
             />
             {(historySearchTerm || historyStartDate || historyEndDate) && (
               <span className="text-xs text-muted-foreground"> (filtered)</span>
@@ -1994,9 +1870,9 @@ export function OpeningStock() {
                 {openingHistory.inbound.length === 0 ? (
                   <ListState
                     className="border rounded-lg bg-card"
-                    isLoading={v2Enabled && v2HistoryList.isLoading}
-                    error={v2Enabled ? v2HistoryList.error : null}
-                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    isLoading={v2HistoryList.isLoading}
+                    error={v2HistoryList.error}
+                    onRetry={v2HistoryList.refresh}
                     emptyMessage="No opening inbound entries found."
                   />
                 ) : openingHistory.inbound.map(row => (
@@ -2067,9 +1943,9 @@ export function OpeningStock() {
                     {openingHistory.inbound.length === 0 ? (
                       <TableStateRow
                         colSpan={8}
-                        isLoading={v2Enabled && v2HistoryList.isLoading}
-                        error={v2Enabled ? v2HistoryList.error : null}
-                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        isLoading={v2HistoryList.isLoading}
+                        error={v2HistoryList.error}
+                        onRetry={v2HistoryList.refresh}
                         emptyMessage="No opening inbound entries found."
                       />
                     ) : openingHistory.inbound.map(row => (
@@ -2115,9 +1991,9 @@ export function OpeningStock() {
                 {openingHistory.cutter.length === 0 ? (
                   <ListState
                     className="border rounded-lg bg-card"
-                    isLoading={v2Enabled && v2HistoryList.isLoading}
-                    error={v2Enabled ? v2HistoryList.error : null}
-                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    isLoading={v2HistoryList.isLoading}
+                    error={v2HistoryList.error}
+                    onRetry={v2HistoryList.refresh}
                     emptyMessage="No opening cutter receive entries found."
                   />
                 ) : openingHistory.cutter.map(row => {
@@ -2195,9 +2071,9 @@ export function OpeningStock() {
                     {openingHistory.cutter.length === 0 ? (
                       <TableStateRow
                         colSpan={10}
-                        isLoading={v2Enabled && v2HistoryList.isLoading}
-                        error={v2Enabled ? v2HistoryList.error : null}
-                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        isLoading={v2HistoryList.isLoading}
+                        error={v2HistoryList.error}
+                        onRetry={v2HistoryList.refresh}
                         emptyMessage="No opening cutter receive entries found."
                       />
                     ) : openingHistory.cutter.map(row => {
@@ -2245,9 +2121,9 @@ export function OpeningStock() {
                 {openingHistory.holo.length === 0 ? (
                   <ListState
                     className="border rounded-lg bg-card"
-                    isLoading={v2Enabled && v2HistoryList.isLoading}
-                    error={v2Enabled ? v2HistoryList.error : null}
-                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    isLoading={v2HistoryList.isLoading}
+                    error={v2HistoryList.error}
+                    onRetry={v2HistoryList.refresh}
                     emptyMessage="No opening holo receive entries found."
                   />
                 ) : openingHistory.holo.map(row => {
@@ -2325,9 +2201,9 @@ export function OpeningStock() {
                     {openingHistory.holo.length === 0 ? (
                       <TableStateRow
                         colSpan={10}
-                        isLoading={v2Enabled && v2HistoryList.isLoading}
-                        error={v2Enabled ? v2HistoryList.error : null}
-                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        isLoading={v2HistoryList.isLoading}
+                        error={v2HistoryList.error}
+                        onRetry={v2HistoryList.refresh}
                         emptyMessage="No opening holo receive entries found."
                       />
                 ) : openingHistory.holo.map(row => {
@@ -2376,9 +2252,9 @@ export function OpeningStock() {
                 {openingHistory.coning.length === 0 ? (
                   <ListState
                     className="border rounded-lg bg-card"
-                    isLoading={v2Enabled && v2HistoryList.isLoading}
-                    error={v2Enabled ? v2HistoryList.error : null}
-                    onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                    isLoading={v2HistoryList.isLoading}
+                    error={v2HistoryList.error}
+                    onRetry={v2HistoryList.refresh}
                     emptyMessage="No opening coning receive entries found."
                   />
                 ) : openingHistory.coning.map(row => {
@@ -2454,9 +2330,9 @@ export function OpeningStock() {
                     {openingHistory.coning.length === 0 ? (
                       <TableStateRow
                         colSpan={9}
-                        isLoading={v2Enabled && v2HistoryList.isLoading}
-                        error={v2Enabled ? v2HistoryList.error : null}
-                        onRetry={v2Enabled ? v2HistoryList.refresh : undefined}
+                        isLoading={v2HistoryList.isLoading}
+                        error={v2HistoryList.error}
+                        onRetry={v2HistoryList.refresh}
                         emptyMessage="No opening coning receive entries found."
                       />
                 ) : openingHistory.coning.map(row => {
@@ -2498,15 +2374,13 @@ export function OpeningStock() {
             </>
           )}
           {/* Invisible infinite-scroll sentinel for v2 (no UI change). */}
-          {v2Enabled && (
-            <TablePagination
-              page={v2HistoryList.page}
-              totalPages={v2HistoryList.totalPages}
-              hasMore={v2HistoryList.hasMore}
-              onPageChange={v2HistoryList.setPage}
-              isLoading={v2HistoryList.isLoading}
-            />
-          )}
+          <TablePagination
+            page={v2HistoryList.page}
+            totalPages={v2HistoryList.totalPages}
+            hasMore={v2HistoryList.hasMore}
+            onPageChange={v2HistoryList.setPage}
+            isLoading={v2HistoryList.isLoading}
+          />
         </CardContent>
       </Card>
     </div>

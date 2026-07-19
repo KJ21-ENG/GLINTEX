@@ -1,9 +1,14 @@
 import { Router } from 'express';
+import XLSX from 'xlsx';
+
 import prisma from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { resolveUserFields } from '../utils/userResolver.js';
 import { ACCESS_LEVELS } from '../utils/permissions.js';
-import XLSX from 'xlsx';
+import {
+  buildReceiveMachineContainsFilter,
+  buildReceiveMachineInFilter,
+} from '../utils/receiveHistoryFilters.js';
 
 const router = Router();
 const PERM_READ = ACCESS_LEVELS.READ;
@@ -1022,8 +1027,8 @@ const RECEIVE_FILTERS = {
     between: () => ({}),
   },
   machine: {
-    in: (values) => ({ machineNo: { in: values } }),
-    contains: (value) => ({ machineNo: { contains: value, mode: 'insensitive' } }),
+    in: (values, ctx) => buildReceiveMachineInFilter(values, ctx),
+    contains: (value, ctx) => buildReceiveMachineContainsFilter(value, ctx),
     between: () => ({}),
   },
   operator: {

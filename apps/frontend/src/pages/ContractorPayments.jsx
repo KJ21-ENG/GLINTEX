@@ -588,6 +588,7 @@ function Modal({ title, children, onClose, wide }) {
 function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClose, onChanged }) {
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [paidEditOpen, setPaidEditOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const showSide = settlement.process === 'coning';
@@ -613,7 +614,6 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
     catch (e) { setErr(e.message || 'Failed to download PDF'); }
   };
   const doRefreshProduction = async () => {
-    if (!confirm('Sync this draft with all currently eligible production rows for its date range?')) return;
     setBusy(true); setErr('');
     try {
       const preview = await api.getContractorPayablePreview({
@@ -629,8 +629,10 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
       await api.updateContractorSettlementDraft(settlement.id, {
         sourceRowIds: (preview.lines || []).map((line) => line.sourceRowId),
       });
+      setSyncOpen(false);
       await onChanged(settlement.id);
     } catch (e) {
+      setSyncOpen(false);
       setErr(e.message || 'Failed to sync production rows');
     } finally {
       setBusy(false);
@@ -644,7 +646,7 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
         <span className="text-muted-foreground">{settlementDate(settlement)}</span>
         <div className="flex-1" />
         <Button size="sm" variant="outline" onClick={doPdf}><FileText className="w-4 h-4 mr-1" /> PDF</Button>
-        {isDraft && canWrite && <Button size="sm" variant="outline" onClick={doRefreshProduction} disabled={busy}><RefreshCw className={`w-4 h-4 mr-1 ${busy ? 'animate-spin' : ''}`} /> Sync Production</Button>}
+        {isDraft && canWrite && <Button size="sm" variant="outline" onClick={() => setSyncOpen(true)} disabled={busy}><RefreshCw className={`w-4 h-4 mr-1 ${busy ? 'animate-spin' : ''}`} /> Sync Production</Button>}
         {isDraft && canWrite && <Button size="sm" onClick={() => setMarkPaidOpen(true)}><Check className="w-4 h-4 mr-1" /> Mark Paid</Button>}
         {isDraft && canDelete && <Button size="sm" variant="outline" className="text-destructive" onClick={doDelete} disabled={busy}><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         {!isDraft && isAdmin && <Button size="sm" variant="outline" onClick={() => setPaidEditOpen(true)}><Pencil className="w-4 h-4 mr-1" /> Admin Edit</Button>}
@@ -757,6 +759,20 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
             </Table>
           </div>
         </div>
+      )}
+
+      {syncOpen && (
+        <Modal title="Sync Production" onClose={() => setSyncOpen(false)}>
+          <p className="text-sm text-muted-foreground">
+            Replace this draft's production lines with every currently eligible row from {settlementDate(settlement)}. Existing adjustments are preserved.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setSyncOpen(false)} disabled={busy}>Cancel</Button>
+            <Button onClick={doRefreshProduction} disabled={busy}>
+              <RefreshCw className={`w-4 h-4 mr-1 ${busy ? 'animate-spin' : ''}`} /> Sync Production
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {markPaidOpen && (

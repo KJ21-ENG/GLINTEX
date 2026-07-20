@@ -578,8 +578,17 @@ export async function downloadProductionWeeklyExport({ process, from, to, signal
 export async function boilerLookup(barcode) {
   return await request(`/api/boiler/lookup?barcode=${encodeURIComponent(barcode)}`);
 }
-export async function boilerMarkSteamed(barcodes, boilerMachineId, boilerNumber) {
-  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes, boilerMachineId, boilerNumber } });
+export async function boilerMarkSteamed(barcodes, boilerMachineId) {
+  return await request('/api/boiler/steam', { method: 'POST', body: { barcodes, boilerMachineId } });
+}
+export async function boilerSequenceNext(machineId) {
+  return await request(`/api/boiler/sequence/next?machineId=${encodeURIComponent(machineId)}`);
+}
+export async function boilerSequenceList() {
+  return await request('/api/boiler/sequence');
+}
+export async function boilerSequenceSet(machineId, lastUsed) {
+  return await request('/api/boiler/sequence/set', { method: 'POST', body: { machineId, lastUsed } });
 }
 export async function boilerListSteamed(from, to) {
   const qs = new URLSearchParams();

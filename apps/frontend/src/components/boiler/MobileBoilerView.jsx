@@ -147,11 +147,11 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     };
 
     // Confirm steam with selected boiler machine
-    const confirmSteam = async (boilerMachineId, boilerNumber) => {
+    const confirmSteam = async (boilerMachineId) => {
         setSubmitting(true);
         try {
             const barcodes = steamableItems.map(item => item.barcode || item.scannedBarcode);
-            const result = await api.boilerMarkSteamed(barcodes, boilerMachineId, boilerNumber);
+            const result = await api.boilerMarkSteamed(barcodes, boilerMachineId);
 
             if (result.ok) {
                 setScannedItems(prev =>

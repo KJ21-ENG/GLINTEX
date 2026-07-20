@@ -19807,24 +19807,126 @@ router.get('/api/boiler/lookup', requirePermission('boiler', PERM_READ), async (
   }
 });
 
+// ===== Boiler number sequence (per boiler machine) =====
+// Sequence semantics: nextValue = last used boiler number for that machine.
+// Effective next = GREATEST(sequence.nextValue, MAX(BoilerSteamLog.boilerNumber)) + 1.
+
+const boilerSequenceId = (machineId) => `boiler_number:${machineId}`;
+
+async function getBoilerNextNumber(machineId) {
+  const [seq, agg] = await Promise.all([
+    prisma.sequence.findUnique({ where: { id: boilerSequenceId(machineId) } }),
+    prisma.boilerSteamLog.aggregate({
+      where: { boilerMachineId: machineId },
+      _max: { boilerNumber: true },
+    }),
+  ]);
+  const lastUsed = Math.max(seq?.nextValue || 0, agg._max.boilerNumber || 0);
+  return lastUsed + 1;
+}
+
+// Preview the next boiler number for a machine (value assigned server-side on save)
+router.get('/api/boiler/sequence/next', requirePermission('boiler', PERM_READ), async (req, res) => {
+  try {
+    const machineId = typeof req.query?.machineId === 'string' ? req.query.machineId.trim() : '';
+    if (!machineId) {
+      return res.status(400).json({ error: 'machineId is required' });
+    }
+    const machine = await prisma.machine.findUnique({
+      where: { id: machineId },
+      select: { id: true, processType: true },
+    });
+    if (!machine || machine.processType !== 'boiler') {
+      return res.status(400).json({ error: 'Selected machine must be a Boiler machine' });
+    }
+    const next = await getBoilerNextNumber(machineId);
+    res.json({ next });
+  } catch (err) {
+    console.error('Failed to read boiler sequence', err);
+    res.status(500).json({ error: 'Failed to read boiler sequence' });
+  }
+});
+
+// Admin: list boiler machines with their sequence state
+router.get('/api/boiler/sequence', requireRole('admin'), async (req, res) => {
+  try {
+    const machines = await prisma.machine.findMany({
+      where: { processType: 'boiler' },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    const machineIds = machines.map(m => m.id);
+    const [seqRows, maxRows] = await Promise.all([
+      prisma.sequence.findMany({ where: { id: { in: machineIds.map(boilerSequenceId) } } }),
+      prisma.boilerSteamLog.groupBy({
+        by: ['boilerMachineId'],
+        where: { boilerMachineId: { in: machineIds } },
+        _max: { boilerNumber: true },
+      }),
+    ]);
+    const seqByMachine = new Map(seqRows.map(s => [s.id, s.nextValue]));
+    const maxByMachine = new Map(maxRows.map(r => [r.boilerMachineId, r._max.boilerNumber || 0]));
+    const rows = machines.map(m => {
+      const sequenceValue = seqByMachine.get(boilerSequenceId(m.id)) || 0;
+      const maxUsed = maxByMachine.get(m.id) || 0;
+      return {
+        machineId: m.id,
+        machineName: m.name,
+        sequenceValue,
+        maxUsed,
+        effectiveNext: Math.max(sequenceValue, maxUsed) + 1,
+      };
+    });
+    res.json({ rows });
+  } catch (err) {
+    console.error('Failed to list boiler sequences', err);
+    res.status(500).json({ error: 'Failed to list boiler sequences' });
+  }
+});
+
+// Admin: set the last used boiler number for a machine (next entry = value + 1)
+router.post('/api/boiler/sequence/set', requireRole('admin'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const machineId = typeof req.body?.machineId === 'string' ? req.body.machineId.trim() : '';
+    const lastUsed = Number(req.body?.lastUsed);
+    if (!machineId) {
+      return res.status(400).json({ error: 'machineId is required' });
+    }
+    if (!Number.isInteger(lastUsed) || lastUsed < 0) {
+      return res.status(400).json({ error: 'lastUsed must be a non-negative integer' });
+    }
+    const machine = await prisma.machine.findUnique({
+      where: { id: machineId },
+      select: { id: true, processType: true },
+    });
+    if (!machine || machine.processType !== 'boiler') {
+      return res.status(400).json({ error: 'Selected machine must be a Boiler machine' });
+    }
+    await prisma.sequence.upsert({
+      where: { id: boilerSequenceId(machineId) },
+      update: { nextValue: lastUsed, ...actorUpdateFields(actorUserId) },
+      create: { id: boilerSequenceId(machineId), nextValue: lastUsed, ...actorCreateFields(actorUserId) },
+    });
+    const effectiveNext = await getBoilerNextNumber(machineId);
+    res.json({ ok: true, sequenceValue: lastUsed, effectiveNext });
+  } catch (err) {
+    console.error('Failed to set boiler sequence', err);
+    res.status(500).json({ error: 'Failed to set boiler sequence' });
+  }
+});
+
 // Mark barcodes as steamed
 router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
     const barcodes = req.body?.barcodes;
     const boilerMachineId = typeof req.body?.boilerMachineId === 'string' ? req.body.boilerMachineId.trim() : '';
-    const boilerNumberRaw = req.body?.boilerNumber;
-    const boilerNumber = boilerNumberRaw === null || boilerNumberRaw === undefined || boilerNumberRaw === ''
-      ? null
-      : Number(boilerNumberRaw);
     if (!Array.isArray(barcodes) || barcodes.length === 0) {
       return res.status(400).json({ error: 'barcodes array is required' });
     }
     if (!boilerMachineId) {
       return res.status(400).json({ error: 'boilerMachineId is required' });
-    }
-    if (!Number.isInteger(boilerNumber) || boilerNumber < 1) {
-      return res.status(400).json({ error: 'boilerNumber must be a positive integer' });
     }
 
     const normalizedBarcodes = barcodes.map(b => normalizeBarcodeInput(b)).filter(Boolean);
@@ -19881,20 +19983,46 @@ router.post('/api/boiler/steam', requirePermission('boiler', PERM_WRITE), async 
       }
     }
 
-    // Build steam logs using the lookup map
-    const steamLogs = normalizedBarcodes.map(barcode => ({
-      barcode,
-      holoReceiveRowId: barcodeToHoloId.get(barcode.toUpperCase()) || null,
-      boilerMachineId,
-      boilerNumber,
-      steamedAt: new Date(),
-      ...actorCreateFields(actor?.userId),
-    }));
+    // Allocate the boiler number and create the steam logs atomically.
+    // The ON CONFLICT upsert row-locks the Sequence row, so concurrent steams
+    // on the same machine serialize and get distinct consecutive numbers.
+    const sequenceId = boilerSequenceId(boilerMachineId);
+    const { boilerNumber, created } = await prisma.$transaction(async (tx) => {
+      const allocated = await tx.$queryRaw`
+        INSERT INTO "Sequence" (id, "nextValue", "updatedAt", "createdByUserId", "updatedByUserId")
+        VALUES (
+          ${sequenceId},
+          (SELECT COALESCE(MAX("boilerNumber"), 0) + 1 FROM "BoilerSteamLog" WHERE "boilerMachineId" = ${boilerMachineId}),
+          NOW(),
+          ${actor?.userId || null},
+          ${actor?.userId || null}
+        )
+        ON CONFLICT (id) DO UPDATE
+        SET "nextValue" = GREATEST(
+              "Sequence"."nextValue",
+              (SELECT COALESCE(MAX("boilerNumber"), 0) FROM "BoilerSteamLog" WHERE "boilerMachineId" = ${boilerMachineId})
+            ) + 1,
+            "updatedAt" = NOW(),
+            "updatedByUserId" = ${actor?.userId || null}
+        RETURNING "nextValue"
+      `;
+      const assignedNumber = Number(allocated?.[0]?.nextValue);
 
-    // Create steam logs
-    const created = await prisma.boilerSteamLog.createMany({
-      data: steamLogs,
-      skipDuplicates: true,
+      // Build steam logs using the lookup map
+      const steamLogs = normalizedBarcodes.map(barcode => ({
+        barcode,
+        holoReceiveRowId: barcodeToHoloId.get(barcode.toUpperCase()) || null,
+        boilerMachineId,
+        boilerNumber: assignedNumber,
+        steamedAt: new Date(),
+        ...actorCreateFields(actor?.userId),
+      }));
+
+      const createdLogs = await tx.boilerSteamLog.createMany({
+        data: steamLogs,
+        skipDuplicates: true,
+      });
+      return { boilerNumber: assignedNumber, created: createdLogs };
     });
 
     res.json({

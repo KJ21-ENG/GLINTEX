@@ -9,6 +9,7 @@ import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
+import * as api from '../api/client';
 
 // Process type options for dropdowns
 const PROCESS_OPTIONS = [
@@ -88,6 +89,7 @@ export function Masters() {
             case 'boxes': return <BoxesMasterCrud data={db.boxes || []} onCreate={createBox} onUpdate={updateBox} onDelete={deleteBox} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'contractors': return <ContractorsMasterCrud data={db.contractors || []} onCreate={createContractor} onUpdate={updateContractor} onDelete={deleteContractor} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'contractorAssignments': return <ContractorAssignmentsMasterCrud data={db.contractor_assignments || []} contractors={db.contractors || []} onCreate={createContractorAssignment} onUpdate={updateContractorAssignment} onDelete={deleteContractorAssignment} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'boilerSequence': return isAdmin ? <BoilerSequenceMaster /> : null;
             case 'contractorRates': return <ContractorRatesMasterCrud data={db.contractor_rates || []} contractors={db.contractors || []} items={db.items || []} yarns={db.yarns || []} cuts={db.cuts || []} twists={db.twists || []} coneTypes={db.cone_types || []} onCreate={createContractorRate} onUpdate={updateContractorRate} onDelete={deleteContractorRate} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             default: return null;
         }
@@ -141,6 +143,13 @@ export function Masters() {
                         <SectionDivider label="Coning" />
                         <TabButton id="coneTypes" label="Cone Types" />
                         <TabButton id="wrappers" label="Wrappers" />
+
+                        {isAdmin && (
+                            <>
+                                <SectionDivider label="Boiler" />
+                                <TabButton id="boilerSequence" label="Boiler Numbers" />
+                            </>
+                        )}
 
                         <SectionDivider label="Shared" />
                         <TabButton id="machines" label="Machines" />
@@ -291,6 +300,121 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
             </CardContent>
         </Card>
     )
+}
+
+// Admin-only: manage the last used boiler number per boiler machine.
+// Next steam entry gets max(last used, max used in logs) + 1.
+function BoilerSequenceMaster() {
+    const [rows, setRows] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editValue, setEditValue] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    const load = async () => {
+        setLoading(true);
+        setLoadError('');
+        try {
+            const res = await api.boilerSequenceList();
+            setRows(res?.rows || []);
+        } catch (err) {
+            setLoadError(err.message || 'Failed to load boiler sequences');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { load(); }, []);
+
+    const handleSave = async (machineId) => {
+        const num = Number(editValue);
+        if (!Number.isInteger(num) || num < 0) {
+            alert('Last used number must be a non-negative integer');
+            return;
+        }
+        setSaving(true);
+        try {
+            await api.boilerSequenceSet(machineId, num);
+            setEditingId(null);
+            await load();
+        } catch (err) {
+            alert(err.message || 'Failed to set boiler sequence');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Boiler Numbers</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                    Set the last used boiler number per boiler. The next steam entry is auto-assigned that number + 1.
+                    If actual usage is ahead of the set value, the higher number wins.
+                </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                {loadError && (
+                    <div className="text-sm text-destructive">{loadError}</div>
+                )}
+                <div className="rounded-md border max-h-[60vh] overflow-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Boiler Machine</TableHead>
+                                <TableHead>Last Used (set)</TableHead>
+                                <TableHead>Max Used (entries)</TableHead>
+                                <TableHead>Next No</TableHead>
+                                <TableHead className="w-[100px]">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {loading || rows.length === 0 ? (
+                                <TableStateRow colSpan={5} isLoading={loading} emptyMessage="No boiler machines found. Add BOILER machines in Masters > Machines first." />
+                            ) : rows.map(row => (
+                                <TableRow key={row.machineId}>
+                                    <TableCell className="font-medium">{row.machineName}</TableCell>
+                                    <TableCell>
+                                        {editingId === row.machineId ? (
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                step="1"
+                                                value={editValue}
+                                                onChange={e => setEditValue(e.target.value)}
+                                                className="h-8 w-28"
+                                                disabled={saving}
+                                            />
+                                        ) : row.sequenceValue}
+                                    </TableCell>
+                                    <TableCell>{row.maxUsed}</TableCell>
+                                    <TableCell>
+                                        <span className="font-semibold">{row.effectiveNext}</span>
+                                        {row.maxUsed > row.sequenceValue && row.sequenceValue > 0 && (
+                                            <span className="ml-2 text-xs text-amber-600">usage is ahead; next is max used + 1</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        {editingId === row.machineId ? (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" disabled={saving} onClick={() => handleSave(row.machineId)}><Save className="w-4 h-4" /></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" disabled={saving} onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex justify-end gap-1">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(row.machineId); setEditValue(String(Math.max(row.sequenceValue, row.maxUsed))); }}><Edit2 className="w-4 h-4" /></Button>
+                                            </div>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            </CardContent>
+        </Card>
+    );
 }
 
 function TwistMappingsMasterCrud({ data, machines, twists, settings, onCreate, onUpdate, onDelete, updateSettings, loading, canCreate, canEdit, canDelete, isAdmin }) {

@@ -1090,8 +1090,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     // In v2 mode, row objects already include flattened names; avoid expensive tracing.
     const common = [
       { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
-      // Cutter issues have no shift data (no shift column), so no filter control — column still renders.
-      ...(process !== 'cutter' ? [{ id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' }] : []),
+      { id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' },
       { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || itemNameById.get(r.itemId) || '' },
       { id: 'lotOrPiece', label: 'Piece/Lot', kind: 'text', getValue: (r) => (process === 'cutter' ? (r.pieceIds || '') : (r.lotLabel || lotLabelFor(r) || '')) },
       { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveIssueTraceNames(r).cutName || '') },

@@ -215,6 +215,106 @@ async function buildItemWhereFromSheetFilters(filters = [], { mode } = {}) {
   return and;
 }
 
+// Cutter receive rows have no issue.itemId relation; their displayed item comes from the
+// inbound piece (pieceId -> InboundItem.itemId -> Item.name). Resolve the selected item
+// names to the matching piece ids so the filter targets the same value the column shows.
+async function buildCutterReceiveItemWhere(filters = []) {
+  const and = [];
+  for (const f of filters || []) {
+    if (!f || typeof f !== 'object') continue;
+    if (String(f.field || '').trim() !== 'item') continue;
+    const op = String(f.op || '').trim();
+    let itemIds = [];
+    if (op === 'in') itemIds = await itemIdsByExactNames(Array.isArray(f.values) ? f.values : []);
+    else if (op === 'contains') itemIds = await itemIdsByNameContains(f.value);
+    else continue;
+    if (!itemIds.length) { and.push({ pieceId: { in: ['__no_such_piece__'] } }); continue; }
+    const pieces = await prisma.inboundItem.findMany({ where: { itemId: { in: itemIds } }, select: { id: true } });
+    const pieceIds = pieces.map((p) => p.id);
+    and.push({ pieceId: { in: pieceIds.length ? pieceIds : ['__no_such_piece__'] } });
+  }
+  return and;
+}
+
+// `addedBy` options are usernames (there is no username facet, so options are derived from
+// page rows). Resolve them to user ids before matching createdByUserId.
+async function buildAddedByWhereFromSheetFilters(filters = []) {
+  const and = [];
+  for (const f of filters || []) {
+    if (!f || typeof f !== 'object') continue;
+    if (String(f.field || '').trim() !== 'addedBy') continue;
+    if (String(f.op || '').trim() !== 'in') continue;
+    const usernames = (Array.isArray(f.values) ? f.values : []).map((v) => String(v).trim()).filter(Boolean);
+    if (!usernames.length) continue;
+    const users = await prisma.user.findMany({ where: { username: { in: usernames } }, select: { id: true } });
+    const ids = users.map((u) => u.id);
+    and.push({ createdByUserId: { in: ids.length ? ids : ['__no_such_user__'] } });
+  }
+  return and;
+}
+
+// Coning cone type lives on the ISSUE as receivedRowRefs[0].coneTypeId (JSON), matching the
+// displayed value resolved by fetchConeTypeNameByIssueIdForConingReceiveRows. Resolve the
+// selected cone-type names -> coneTypeIds -> the set of matching coning issue ids.
+async function coningIssueIdsByConeTypeFilter(f) {
+  const op = String(f.op || '').trim();
+  let coneTypeIds = [];
+  if (op === 'in') {
+    const names = (Array.isArray(f.values) ? f.values : []).map((v) => String(v));
+    if (!names.length) return [];
+    const cts = await prisma.coneType.findMany({ where: { name: { in: names } }, select: { id: true } });
+    coneTypeIds = cts.map((c) => c.id);
+  } else if (op === 'contains') {
+    const val = normalizeText(f.value);
+    if (!val) return [];
+    const cts = await prisma.coneType.findMany({ where: { name: { contains: val, mode: 'insensitive' } }, select: { id: true } });
+    coneTypeIds = cts.map((c) => c.id);
+  } else {
+    return [];
+  }
+  if (!coneTypeIds.length) return ['__no_such_issue__'];
+  const rows = await prisma.$queryRaw`
+    SELECT id FROM "IssueToConingMachine"
+    WHERE "isDeleted" = false
+      AND ("receivedRowRefs"->0->>'coneTypeId') = ANY(${coneTypeIds}::text[])
+  `;
+  const ids = rows.map((r) => r.id);
+  return ids.length ? ids : ['__no_such_issue__'];
+}
+
+async function buildConeTypeWhereFromSheetFilters(filters = [], { mode } = {}) {
+  const and = [];
+  for (const f of filters || []) {
+    if (!f || typeof f !== 'object') continue;
+    if (String(f.field || '').trim() !== 'coneType') continue;
+    const issueIds = await coningIssueIdsByConeTypeFilter(f);
+    if (!issueIds.length) continue;
+    // Receive rows link to their issue via issueId; issue/on-machine rows ARE the issue.
+    if (mode === 'receive') and.push({ issueId: { in: issueIds } });
+    else and.push({ id: { in: issueIds } });
+  }
+  return and;
+}
+
+// Async side-path filters that can't be expressed via the sync *_FILTERS maps
+// (item name -> ids, cone type -> issue ids, username -> user id).
+async function buildReceiveExtraFilters(filters = [], process) {
+  const out = [];
+  if (process === 'cutter') out.push(...await buildCutterReceiveItemWhere(filters));
+  else out.push(...await buildItemWhereFromSheetFilters(filters, { mode: 'receive' }));
+  if (process === 'coning') out.push(...await buildConeTypeWhereFromSheetFilters(filters, { mode: 'receive' }));
+  out.push(...await buildAddedByWhereFromSheetFilters(filters));
+  return out;
+}
+
+async function buildIssueExtraFilters(filters = [], process) {
+  const out = [];
+  out.push(...await buildItemWhereFromSheetFilters(filters, { mode: 'issue' }));
+  if (process === 'coning') out.push(...await buildConeTypeWhereFromSheetFilters(filters, { mode: 'issue' }));
+  out.push(...await buildAddedByWhereFromSheetFilters(filters));
+  return out;
+}
+
 function buildFilterWhere(filters = [], mapping = {}, { excludeField, process } = {}) {
   const and = [];
   const ctx = { process };
@@ -244,6 +344,22 @@ function buildFilterWhere(filters = [], mapping = {}, { excludeField, process } 
   return and;
 }
 
+// Build a Prisma numeric-range filter for a scalar column, supporting a dotted
+// relation path (e.g. 'issue.requiredPerConeNetWeight'). Returns {} when the
+// range is empty so it AND-merges harmlessly.
+function numericBetween(path) {
+  return ({ min, max } = {}) => {
+    const range = {};
+    if (min != null && Number.isFinite(Number(min))) range.gte = Number(min);
+    if (max != null && Number.isFinite(Number(max))) range.lte = Number(max);
+    if (!Object.keys(range).length) return {};
+    const parts = String(path).split('.');
+    let node = range;
+    for (let i = parts.length - 1; i >= 0; i -= 1) node = { [parts[i]]: node };
+    return node;
+  };
+}
+
 function toIsoDateString(v) {
   const s = normalizeText(v);
   if (!s) return '';
@@ -270,33 +386,60 @@ function toTimeMs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
-const CUTTER_HISTORY_COMPUTED_FILTER_FIELDS = new Set([
-  'weight',
-  'takenBackWeight',
-  'netIssuedWeight',
-  'wastageWeight',
-]);
+// Fields that cannot be filtered via the Prisma *_FILTERS maps because their displayed value
+// is derived after the query (take-back aggregation, receivedRowRefs sums, multi-hop pieces).
+// They are filtered in memory over the fully-loaded, mapped result set. Keyed by (endpoint, process).
+const ISSUE_COMPUTED_FIELDS = {
+  cutter: new Set(['weight', 'takenBackWeight', 'netIssuedWeight', 'wastageWeight']),
+  holo: new Set(['takenBackWeight', 'netIssuedWeight']),
+  coning: new Set(['takenBackWeight', 'netIssuedWeight', 'rollsIssued']),
+};
+const ON_MACHINE_COMPUTED_FIELDS = {
+  // Cutter piece is the raw pieceIds column (Prisma-filterable via ISSUE_FILTERS.piece).
+  cutter: new Set(['issuedWeight', 'receivedWeight', 'pendingWeight']),
+  holo: new Set(['issuedWeight', 'receivedWeight', 'pendingWeight', 'piece']),
+  coning: new Set(['issuedWeight', 'receivedWeight', 'pendingWeight', 'rollsIssued', 'piece']),
+};
 
-function splitCutterHistoryFilters(filters = []) {
+function splitComputedFilters(filters = [], computedSet = new Set()) {
   const rawFilters = [];
   const computedFilters = [];
   for (const filter of filters || []) {
     const field = String(filter?.field || '').trim();
-    if (CUTTER_HISTORY_COMPUTED_FILTER_FIELDS.has(field)) {
-      computedFilters.push(filter);
-    } else {
-      rawFilters.push(filter);
-    }
+    if (computedSet.has(field)) computedFilters.push(filter);
+    else rawFilters.push(filter);
   }
   return { rawFilters, computedFilters };
 }
 
-function getCutterHistoryComputedValue(row, field) {
-  if (field === 'weight') return Number(row?.totalWeight ?? row?.originalIssuedWeight ?? 0);
-  if (field === 'takenBackWeight') return Number(row?.takenBackWeight || 0);
-  if (field === 'netIssuedWeight') return Number(row?.netIssuedWeight ?? 0);
-  if (field === 'wastageWeight') return Number(row?.wastageWeight || 0);
-  return null;
+// Numeric value for a computed field, read from the already-mapped row.
+function computedFieldValue(row, field) {
+  switch (field) {
+    case 'weight': return Number(row?.totalWeight ?? row?.originalIssuedWeight ?? 0);
+    case 'takenBackWeight': return Number(row?.takenBackWeight || 0);
+    case 'netIssuedWeight': return Number(row?.netIssuedWeight ?? 0);
+    case 'wastageWeight': return Number(row?.wastageWeight || 0);
+    case 'rollsIssued': return Number(row?.rollsIssued || 0);
+    case 'issuedWeight': return Number(row?.issuedWeight ?? 0);
+    case 'receivedWeight': return Number(row?.receivedWeight ?? 0);
+    case 'pendingWeight': return Number(row?.pendingWeight ?? 0);
+    case 'actualG': {
+      const cones = Number(row?.coneCount || 0);
+      if (!cones) return null;
+      return (Number(row?.netWeight || 0) * 1000) / cones;
+    }
+    default: return null;
+  }
+}
+
+// Text value for a computed text field (piece), read from the mapped row.
+function computedFieldText(row, field) {
+  if (field === 'piece') {
+    if (Array.isArray(row?.pieceIdsList)) return row.pieceIdsList.join(', ');
+    if (Array.isArray(row?.computedPieceIds)) return row.computedPieceIds.join(', ');
+    return String(row?.pieceIds || row?.pieceId || '');
+  }
+  return '';
 }
 
 function matchesComputedBetween(value, { min, max }) {
@@ -307,15 +450,31 @@ function matchesComputedBetween(value, { min, max }) {
   return true;
 }
 
-function matchesCutterHistoryComputedFilters(row, filters = []) {
+function matchesComputedFilters(row, filters = []) {
   return (filters || []).every((filter) => {
     if (!filter || typeof filter !== 'object') return true;
-    if (String(filter.op || '').trim() !== 'between') return true;
+    const op = String(filter.op || '').trim();
     const field = String(filter.field || '').trim();
-    const value = getCutterHistoryComputedValue(row, field);
-    const min = filter.min == null || filter.min === '' ? null : Number(filter.min);
-    const max = filter.max == null || filter.max === '' ? null : Number(filter.max);
-    return matchesComputedBetween(value, { min, max });
+    if (op === 'between') {
+      const value = computedFieldValue(row, field);
+      if (value == null) return true;
+      const min = filter.min == null || filter.min === '' ? null : Number(filter.min);
+      const max = filter.max == null || filter.max === '' ? null : Number(filter.max);
+      return matchesComputedBetween(value, { min, max });
+    }
+    const haystack = String(computedFieldText(row, field) || '');
+    if (op === 'contains') {
+      const needle = normalizeText(filter.value).toLowerCase();
+      if (!needle) return true;
+      return haystack.toLowerCase().includes(needle);
+    }
+    if (op === 'in') {
+      const values = (Array.isArray(filter.values) ? filter.values : []).map((v) => String(v).trim()).filter(Boolean);
+      if (!values.length) return true;
+      const tokens = haystack.split(',').map((s) => s.trim());
+      return values.some((v) => tokens.includes(v));
+    }
+    return true;
   });
 }
 
@@ -333,19 +492,43 @@ function applyCursorToSortedItems(items = [], cursor, order = 'desc') {
   });
 }
 
-function buildCutterHistorySummary(items = []) {
-  return (items || []).reduce((summary, item) => {
-    summary.qty += Number(item?.count || 0);
-    summary.weight += Number(item?.totalWeight ?? item?.originalIssuedWeight ?? 0);
-    summary.takenBackWeight += Number(item?.takenBackWeight || 0);
-    summary.netIssuedWeight += Number(item?.netIssuedWeight ?? 0);
-    return summary;
-  }, {
-    qty: 0,
-    weight: 0,
-    takenBackWeight: 0,
-    netIssuedWeight: 0,
-  });
+function sumItemsField(items, field) {
+  return (items || []).reduce((sum, item) => sum + Number(item?.[field] || 0), 0);
+}
+
+// Footer summary computed over the fully-filtered in-memory set (used by the computed-filter
+// branch). Mirrors the shape produced by the DB-aggregate path for each process.
+function buildIssueSummaryFromItems(process, items = []) {
+  const takenBackCount = sumItemsField(items, 'takenBackCount');
+  const takenBackWeight = sumItemsField(items, 'takenBackWeight');
+  const netIssuedWeight = sumItemsField(items, 'netIssuedWeight');
+  if (process === 'holo') {
+    return {
+      metallicBobbins: sumItemsField(items, 'metallicBobbins'),
+      metallicBobbinsWeight: sumItemsField(items, 'metallicBobbinsWeight'),
+      yarnKg: sumItemsField(items, 'yarnKg'),
+      rollsProducedEstimate: sumItemsField(items, 'rollsProducedEstimate'),
+      takenBackCount,
+      takenBackWeight,
+      netIssuedWeight,
+    };
+  }
+  if (process === 'coning') {
+    return {
+      rollsIssued: sumItemsField(items, 'rollsIssued'),
+      originalIssuedWeight: sumItemsField(items, 'originalIssuedWeight'),
+      takenBackCount,
+      takenBackWeight,
+      netIssuedWeight,
+    };
+  }
+  return {
+    qty: sumItemsField(items, 'count'),
+    weight: (items || []).reduce((sum, item) => sum + Number(item?.totalWeight ?? item?.originalIssuedWeight ?? 0), 0),
+    takenBackCount,
+    takenBackWeight,
+    netIssuedWeight,
+  };
 }
 
 async function buildCutterIssueWastageByIssueId(issueRows = []) {
@@ -556,7 +739,10 @@ const ISSUE_FILTERS = {
   },
   lotOrPiece: {
     in: () => ({}),
-    contains: (value) => ({ lotNo: { contains: value, mode: 'insensitive' } }),
+    // Cutter displays pieceIds in this column; other processes display lotNo.
+    contains: (value, ctx) => (ctx?.process === 'cutter'
+      ? { OR: [{ lotNo: { contains: value, mode: 'insensitive' } }, { pieceIds: { contains: value, mode: 'insensitive' } }] }
+      : { lotNo: { contains: value, mode: 'insensitive' } }),
     between: () => ({}),
   },
   cut: {
@@ -594,9 +780,46 @@ const ISSUE_FILTERS = {
     contains: (value) => ({ note: { contains: value, mode: 'insensitive' } }),
     between: () => ({}),
   },
-  addedBy: {
-    in: (values) => ({ createdByUserId: { in: values } }),
+  // NOTE: `addedBy` is intentionally NOT here. The UI sends usernames, not user ids,
+  // so it is resolved (username -> id) by buildAddedByWhereFromSheetFilters as a side path.
+  // `coneType` is likewise a side path (buildConeTypeWhereFromSheetFilters). Numeric columns:
+  qty: {
+    in: () => ({}),
     contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'cutter' ? numericBetween('count')(range) : {}),
+  },
+  metallicBobbins: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'holo' ? numericBetween('metallicBobbins')(range) : {}),
+  },
+  metallicBobbinsWeight: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'holo' ? numericBetween('metallicBobbinsWeight')(range) : {}),
+  },
+  yarnKg: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'holo' ? numericBetween('yarnKg')(range) : {}),
+  },
+  rollsProducedEstimate: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'holo' ? numericBetween('rollsProducedEstimate')(range) : {}),
+  },
+  perCone: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'coning' ? numericBetween('requiredPerConeNetWeight')(range) : {}),
+  },
+  // NOTE: `rollsIssued` is NOT here. In both Issue History and On-Machine the displayed rolls is
+  // derived from receivedRowRefs, not the stored column, so it is a computed (in-memory) filter.
+  // Cutter piece is the raw pieceIds column (used by On-Machine cutter). Holo/coning piece is
+  // derived and handled by the computed-filter path.
+  piece: {
+    in: (values, ctx) => (ctx?.process === 'cutter' ? { pieceIds: { in: values } } : {}),
+    contains: (value, ctx) => (ctx?.process === 'cutter' ? { pieceIds: { contains: value, mode: 'insensitive' } } : {}),
     between: () => ({}),
   },
 };
@@ -692,25 +915,23 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
 
   try {
     const model = issueModelForProcess(process);
-    const { rawFilters, computedFilters } = process === 'cutter'
-      ? splitCutterHistoryFilters(filters)
-      : { rawFilters: filters, computedFilters: [] };
+    const { rawFilters, computedFilters } = splitComputedFilters(filters, ISSUE_COMPUTED_FIELDS[process] || new Set());
     const cursorWhere = computedFilters.length > 0 || pageNum != null ? null : buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
-    const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
+    const extraWhere = await buildIssueExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
     if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
     const whereAll = {
       isDeleted: false,
       ...(dateWhere ? dateWhere : {}),
-      ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
+      ...(filterWhere.length || extraWhere.length ? { AND: [...filterWhere, ...extraWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const wherePage = applyCursorWhere(whereAll, cursorWhere);
 
-    if (process === 'cutter' && computedFilters.length > 0) {
+    if (computedFilters.length > 0) {
       const rowsRaw = await model.findMany({
         where: whereAll,
         include: issueIncludesForProcess(process),
@@ -720,10 +941,12 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
       const issueIds = rowsWithItems.map((row) => row.id);
       const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds(process, issueIds);
-      const wastageByIssueId = await buildCutterIssueWastageByIssueId(rowsWithItems);
+      const wastageByIssueId = process === 'cutter'
+        ? await buildCutterIssueWastageByIssueId(rowsWithItems)
+        : new Map();
       const allItems = rowsWithItems
         .map((row) => mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId }))
-        .filter((row) => matchesCutterHistoryComputedFilters(row, computedFilters));
+        .filter((row) => matchesComputedFilters(row, computedFilters));
       const pageCandidates = pageNum != null
         ? allItems.slice((pageNum - 1) * limit)
         : applyCursorToSortedItems(allItems, cursor, order);
@@ -734,7 +957,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
         ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
         : null;
       const summary = !cursor && (pageNum == null || pageNum === 1)
-        ? { ...buildCutterHistorySummary(allItems), totalCount: allItems.length }
+        ? { ...buildIssueSummaryFromItems(process, allItems), totalCount: allItems.length }
         : null;
       return res.json({ items, hasMore, nextCursor, summary });
     }
@@ -881,13 +1104,15 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
 
     // Facets are intentionally limited to keep the query fast.
     // UI only needs distinct values for dropdowns.
-    const [machines, operators, items, cuts, yarns, twists] = await Promise.all([
+    const [machines, operators, items, cuts, yarns, twists, coneTypes, users] = await Promise.all([
       prisma.machine.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.item.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.cut.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.yarn.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.coneType.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.user.findMany({ select: { username: true }, orderBy: { username: 'asc' } }),
     ]);
 
     let shifts = [];
@@ -918,6 +1143,8 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
         cut: cuts.map(r => r.name).filter(Boolean),
         yarn: yarns.map(r => r.name).filter(Boolean),
         twist: twists.map(r => r.name).filter(Boolean),
+        coneType: coneTypes.map(r => r.name).filter(Boolean),
+        addedBy: users.map(r => r.username).filter(Boolean),
         shift: shifts,
       },
       meta: { process, excludeField, whereApplied: Boolean(where) },
@@ -938,19 +1165,17 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
 
   try {
     const model = issueModelForProcess(process);
-    const { rawFilters, computedFilters } = process === 'cutter'
-      ? splitCutterHistoryFilters(filters)
-      : { rawFilters: filters, computedFilters: [] };
+    const { rawFilters, computedFilters } = splitComputedFilters(filters, ISSUE_COMPUTED_FIELDS[process] || new Set());
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
-    const itemFilterWhere = await buildItemWhereFromSheetFilters(rawFilters, { mode: 'issue' });
+    const extraWhere = await buildIssueExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const itemSearchIds = await itemIdsByNameContains(search);
     if (itemSearchIds.length) searchOr.push({ itemId: { in: itemSearchIds } });
     const where = {
       isDeleted: false,
       ...(dateWhere ? dateWhere : {}),
-      ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
+      ...(filterWhere.length || extraWhere.length ? { AND: [...filterWhere, ...extraWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const rowsRaw = await model.findMany({
@@ -966,7 +1191,7 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
       : new Map();
     const items = rowsWithItems
       .map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId, wastageByIssueId }))
-      .filter((row) => process !== 'cutter' || matchesCutterHistoryComputedFilters(row, computedFilters));
+      .filter((row) => matchesComputedFilters(row, computedFilters));
     res.json({ items });
   } catch (err) {
     console.error('v2 issue export error', err);
@@ -1064,8 +1289,14 @@ const RECEIVE_FILTERS = {
     between: () => ({}),
   },
   cut: {
-    in: (values) => ({ issue: { cut: { name: { in: values } } } }),
-    contains: (value) => ({ issue: { cut: { name: { contains: value, mode: 'insensitive' } } } }),
+    // Cutter receive rows carry their own cut (cutMaster relation or raw `cut` string),
+    // not an issue relation — mirror the displayed value. Other processes read issue.cut.
+    in: (values, ctx) => (ctx?.process === 'cutter'
+      ? { OR: [{ cutMaster: { name: { in: values } } }, { cut: { in: values } }] }
+      : { issue: { cut: { name: { in: values } } } }),
+    contains: (value, ctx) => (ctx?.process === 'cutter'
+      ? { OR: [{ cutMaster: { name: { contains: value, mode: 'insensitive' } } }, { cut: { contains: value, mode: 'insensitive' } }] }
+      : { issue: { cut: { name: { contains: value, mode: 'insensitive' } } } }),
     between: () => ({}),
   },
   yarn: {
@@ -1076,6 +1307,57 @@ const RECEIVE_FILTERS = {
   twist: {
     in: (values) => ({ issue: { twist: { name: { in: values } } } }),
     contains: (value) => ({ issue: { twist: { name: { contains: value, mode: 'insensitive' } } } }),
+    between: () => ({}),
+  },
+  notes: {
+    in: () => ({}),
+    contains: (value) => ({ notes: { contains: value, mode: 'insensitive' } }),
+    between: () => ({}),
+  },
+  // Weight column: coning shows netWeight, holo shows rollWeight (cutter uses `netWt`).
+  weight: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'holo'
+      ? numericBetween('rollWeight')(range)
+      : numericBetween('netWeight')(range)),
+  },
+  netWt: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: numericBetween('netWt'),
+  },
+  cones: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: numericBetween('coneCount'),
+  },
+  rolls: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: numericBetween('rollCount'),
+  },
+  bobbinQty: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: numericBetween('bobbinQuantity'),
+  },
+  bobbin: {
+    in: (values) => ({ bobbin: { name: { in: values } } }),
+    contains: (value) => ({ bobbin: { name: { contains: value, mode: 'insensitive' } } }),
+    between: () => ({}),
+  },
+  perCone: {
+    in: () => ({}),
+    contains: () => ({}),
+    between: (range, ctx) => (ctx?.process === 'coning'
+      ? numericBetween('issue.requiredPerConeNetWeight')(range)
+      : {}),
+  },
+  // Cutter piece is a raw column; holo/coning piece is derived (handled as a computed filter).
+  piece: {
+    in: (values, ctx) => (ctx?.process === 'cutter' ? { pieceId: { in: values } } : {}),
+    contains: (value, ctx) => (ctx?.process === 'cutter' ? { pieceId: { contains: value, mode: 'insensitive' } } : {}),
     between: () => ({}),
   },
 };
@@ -1133,6 +1415,42 @@ async function fetchConeTypeNameByIssueIdForConingReceiveRows(rows = []) {
   return out;
 }
 
+// Receive derived (computed) filters — not expressible in Prisma because the displayed value
+// is computed after the query (per-cone ratio, multi-hop piece ids).
+const RECEIVE_COMPUTED_FIELDS = {
+  cutter: new Set(),
+  holo: new Set(['piece']),
+  coning: new Set(['actualG', 'piece']),
+};
+
+// Map a batch of raw receive rows into the flattened display shape, attaching the same
+// computed extras (piece ids, cone type) the paged handler uses.
+async function mapReceiveRowsWithExtras(process, rows = []) {
+  if (process === 'holo') {
+    const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(rows.map(r => r.issueId));
+    return rows.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
+  }
+  if (process === 'coning') {
+    const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(rows.map(r => r.issueId));
+    const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(rows);
+    return rows.map((r) => mapReceiveRow(process, r, {
+      computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
+      coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
+    }));
+  }
+  return rows.map((r) => mapReceiveRow(process, r));
+}
+
+function buildReceiveSummaryFromItems(process, items = []) {
+  if (process === 'cutter') {
+    return { netWt: sumItemsField(items, 'netWt'), bobbinQty: sumItemsField(items, 'bobbinQuantity'), totalCount: items.length };
+  }
+  if (process === 'holo') {
+    return { rolls: sumItemsField(items, 'rollCount'), weight: sumItemsField(items, 'rollWeight'), totalCount: items.length };
+  }
+  return { cones: sumItemsField(items, 'coneCount'), weight: sumItemsField(items, 'netWeight'), totalCount: items.length };
+}
+
 router.get('/receive/:process/history', requireAuth, requireStageReadPermission(receiveStagePermissionKey), async (req, res) => {
   const process = String(req.params.process || '').trim().toLowerCase();
   const limit = clampLimit(req.query.limit);
@@ -1146,10 +1464,11 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
 
   try {
     const model = receiveModelForProcess(process);
-    const cursorWhere = pageNum != null ? null : buildCursorWhere(cursor, order);
+    const { rawFilters, computedFilters } = splitComputedFilters(filters, RECEIVE_COMPUTED_FIELDS[process] || new Set());
+    const cursorWhere = computedFilters.length > 0 || pageNum != null ? null : buildCursorWhere(cursor, order);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
-    const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
+    const filterWhere = buildFilterWhere(rawFilters, RECEIVE_FILTERS, { process });
+    const extraWhere = await buildReceiveExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     if (process !== 'cutter') {
       const itemSearchIds = await itemIdsByNameContains(search);
@@ -1158,10 +1477,35 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     const whereAll = {
       isDeleted: false,
       ...(dateWhere ? dateWhere : {}),
-      ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
+      ...(filterWhere.length || extraWhere.length ? { AND: [...filterWhere, ...extraWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const wherePage = applyCursorWhere(whereAll, cursorWhere);
+
+    if (computedFilters.length > 0) {
+      const rowsRaw = await model.findMany({
+        where: whereAll,
+        include: receiveIncludesForProcess(process),
+        orderBy: [{ createdAt: order }, { id: order }],
+      });
+      const rowsWithUsers = await resolveUserFields(rowsRaw);
+      const rowsWithItems = process === 'cutter' ? rowsWithUsers : await attachItemNamesToReceiveRows(rowsWithUsers);
+      const allItems = (await mapReceiveRowsWithExtras(process, rowsWithItems))
+        .filter((row) => matchesComputedFilters(row, computedFilters));
+      const pageCandidates = pageNum != null
+        ? allItems.slice((pageNum - 1) * limit)
+        : applyCursorToSortedItems(allItems, cursor, order);
+      const hasMore = pageCandidates.length > limit;
+      const items = pageCandidates.slice(0, limit);
+      const lastInPage = items[items.length - 1];
+      const nextCursor = pageNum == null && hasMore && lastInPage
+        ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
+        : null;
+      const summary = !cursor && (pageNum == null || pageNum === 1)
+        ? buildReceiveSummaryFromItems(process, allItems)
+        : null;
+      return res.json({ items, hasMore, nextCursor, summary });
+    }
 
     const rowsRaw = await model.findMany({
       where: wherePage,
@@ -1175,20 +1519,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     const pageWithUsers = await resolveUserFields(page);
     const pageWithItems = process === 'cutter' ? pageWithUsers : await attachItemNamesToReceiveRows(pageWithUsers);
 
-    let items = pageWithItems;
-    if (process === 'holo') {
-      const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
-    } else if (process === 'coning') {
-      const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(items);
-      items = items.map((r) => mapReceiveRow(process, r, {
-        computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
-        coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
-      }));
-    } else {
-      items = items.map((r) => mapReceiveRow(process, r));
-    }
+    const items = await mapReceiveRowsWithExtras(process, pageWithItems);
 
     const lastInPage = pageWithUsers[pageWithUsers.length - 1];
     const nextCursor = pageNum == null && hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
@@ -1256,7 +1587,7 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     // Global facets: from masters + operators; consistent with paging.
-    const [machines, operators, helpers, items, cuts, yarns, twists, boxes] = await Promise.all([
+    const [machines, operators, helpers, items, cuts, yarns, twists, boxes, bobbins, coneTypes, users] = await Promise.all([
       prisma.machine.findMany({
         where: { processType: { in: ['all', process] } },
         select: { name: true },
@@ -1269,6 +1600,9 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
       prisma.yarn.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
       prisma.box.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.bobbin.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.coneType.findMany({ select: { name: true }, orderBy: { name: 'asc' } }),
+      prisma.user.findMany({ select: { username: true }, orderBy: { username: 'asc' } }),
     ]);
 
     let shifts = [];
@@ -1310,6 +1644,9 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
         yarn: yarns.map(r => r.name).filter(Boolean),
         twist: twists.map(r => r.name).filter(Boolean),
         box: boxes.map(r => r.name).filter(Boolean),
+        bobbin: bobbins.map(r => r.name).filter(Boolean),
+        coneType: coneTypes.map(r => r.name).filter(Boolean),
+        addedBy: users.map(r => r.username).filter(Boolean),
         shift: shifts,
       },
       meta: { process, excludeField },
@@ -1330,9 +1667,10 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
 
   try {
     const model = receiveModelForProcess(process);
+    const { rawFilters, computedFilters } = splitComputedFilters(filters, RECEIVE_COMPUTED_FIELDS[process] || new Set());
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
-    const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { process });
-    const itemFilterWhere = process === 'cutter' ? [] : await buildItemWhereFromSheetFilters(filters, { mode: 'receive' });
+    const filterWhere = buildFilterWhere(rawFilters, RECEIVE_FILTERS, { process });
+    const extraWhere = await buildReceiveExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     if (process !== 'cutter') {
       const itemSearchIds = await itemIdsByNameContains(search);
@@ -1341,7 +1679,7 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
     const where = {
       isDeleted: false,
       ...(dateWhere ? dateWhere : {}),
-      ...(filterWhere.length || itemFilterWhere.length ? { AND: [...filterWhere, ...itemFilterWhere] } : {}),
+      ...(filterWhere.length || extraWhere.length ? { AND: [...filterWhere, ...extraWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const rowsRaw = await model.findMany({
@@ -1352,20 +1690,8 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
     const rowsWithUsers = await resolveUserFields(rowsRaw);
     const rowsWithItems = process === 'cutter' ? rowsWithUsers : await attachItemNamesToReceiveRows(rowsWithUsers);
 
-    let items = rowsWithItems;
-    if (process === 'holo') {
-      const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      items = items.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
-    } else if (process === 'coning') {
-      const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(items.map(r => r.issueId));
-      const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(items);
-      items = items.map((r) => mapReceiveRow(process, r, {
-        computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
-        coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
-      }));
-    } else {
-      items = items.map((r) => mapReceiveRow(process, r));
-    }
+    const items = (await mapReceiveRowsWithExtras(process, rowsWithItems))
+      .filter((row) => matchesComputedFilters(row, computedFilters));
 
     res.json({ items });
   } catch (err) {
@@ -1414,7 +1740,11 @@ router.get('/opening-stock/:stage/history', requireAuth, requirePermission('open
       const last = page[page.length - 1];
       const nextCursor = pageNum == null && hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null;
       const summary = (cursor || (pageNum != null && pageNum !== 1)) ? null : { totalCount: await prisma.inboundItem.count({ where: baseWhere }) };
-      res.json({ items: page, hasMore, nextCursor, summary });
+      // Flatten item name (keyed on the row's own itemId) and resolve createdByUser so the
+      // Item and Added By columns render on the first paint instead of after db.* loads.
+      const pageWithUsers = await resolveUserFields(page);
+      const pageWithItems = await attachItemNamesToIssueRows(pageWithUsers);
+      res.json({ items: pageWithItems, hasMore, nextCursor, summary });
       return;
     }
 
@@ -1564,7 +1894,9 @@ router.get('/opening-stock/:stage/history/export.json', requireAuth, requirePerm
           ],
         } : {}),
       };
-      const rows = await prisma.inboundItem.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
+      const rowsRaw = await prisma.inboundItem.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
+      const rowsWithUsers = await resolveUserFields(rowsRaw);
+      const rows = await attachItemNamesToIssueRows(rowsWithUsers);
       res.json({ items: rows });
       return;
     }
@@ -1684,9 +2016,9 @@ async function buildOnMachineWhere({ process, filters, dateFrom, dateTo, search 
 
   // Column filters are supported for the same ids used in OnMachineTable (subset).
   const onMachineFilterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { process });
-  const itemFilterWhere = await buildItemWhereFromSheetFilters(filters, { mode: 'issue' });
-  const filterAnd = onMachineFilterWhere.length || itemFilterWhere.length
-    ? { AND: [...onMachineFilterWhere, ...itemFilterWhere] }
+  const extraWhere = await buildIssueExtraFilters(filters, process);
+  const filterAnd = onMachineFilterWhere.length || extraWhere.length
+    ? { AND: [...onMachineFilterWhere, ...extraWhere] }
     : {};
 
   return { ...whereAll, ...filterAnd };
@@ -1883,6 +2215,42 @@ function buildOnMachineItems(process, rowsRaw) {
   return buildOnMachineCutterItems(rowsRaw);
 }
 
+// Footer summary over already-built on-machine items (used when a computed filter forces a
+// full in-memory pass). Items are already restricted to pending > 0.001 by the builders.
+function buildOnMachineSummaryFromItems(items = []) {
+  const s = { originalIssuedWeight: 0, takeBackWeight: 0, netIssuedWeight: 0, receivedWeight: 0, wastageWeight: 0, pendingWeight: 0, totalCount: 0 };
+  for (const it of items || []) {
+    s.originalIssuedWeight += Number(it?.originalIssuedWeight || 0);
+    s.takeBackWeight += Number(it?.takeBackWeight || 0);
+    s.netIssuedWeight += Number(it?.netIssuedWeight ?? it?.issuedWeight ?? 0);
+    s.receivedWeight += Number(it?.receivedWeight || 0);
+    s.wastageWeight += Number(it?.wastageWeight || 0);
+    s.pendingWeight += Number(it?.pendingWeight || 0);
+    s.totalCount += 1;
+  }
+  return s;
+}
+
+// Load the full filtered set, build items, apply in-memory computed filters, then paginate +
+// summarize. Used by the on-machine list/export when derived-field filters are active.
+async function buildOnMachineComputedResult({ process, whereAllFiltered, computedFilters, cursor, order, limit, isFirstPage }) {
+  const model = issueModelForProcess(process);
+  const allRaw = await model.findMany({
+    where: whereAllFiltered,
+    include: onMachineIncludesForProcess(process),
+    orderBy: [{ createdAt: order }, { id: order }],
+  });
+  const allItems = (await buildOnMachineItems(process, allRaw))
+    .filter((it) => matchesComputedFilters(it, computedFilters));
+  const pageCandidates = applyCursorToSortedItems(allItems, cursor, order);
+  const hasMore = pageCandidates.length > limit;
+  const items = pageCandidates.slice(0, limit);
+  const lastInPage = items[items.length - 1];
+  const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
+  const summary = isFirstPage ? buildOnMachineSummaryFromItems(allItems) : null;
+  return { items, hasMore, nextCursor, summary };
+}
+
 router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issueStagePermissionKey), async (req, res) => {
   const process = String(req.params.process || '').trim().toLowerCase();
   const limit = clampLimit(req.query.limit);
@@ -1903,6 +2271,15 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
 
     // isFirstPage — only compute summary on the first page to avoid repeating expensive work
     const isFirstPage = !cursor;
+
+    // Derived-field filters (issued/received/pending weights, coning rolls, holo/coning piece)
+    // cannot be expressed in Prisma; load the full filtered set and filter in memory.
+    const { computedFilters } = splitComputedFilters(filters, ON_MACHINE_COMPUTED_FIELDS[process] || new Set());
+    if (computedFilters.length > 0) {
+      const result = await buildOnMachineComputedResult({ process, whereAllFiltered, computedFilters, cursor, order, limit, isFirstPage });
+      res.json(result);
+      return;
+    }
 
     if (process === 'cutter') {
       const issuesRaw = await prisma.issueToCutterMachine.findMany({
@@ -2120,7 +2497,9 @@ router.get('/on-machine/:process/export.json', requireAuth, requireStageReadPerm
       include: onMachineIncludesForProcess(process),
       orderBy: [{ createdAt: order }, { id: order }],
     });
-    const items = await buildOnMachineItems(process, rowsRaw);
+    const { computedFilters } = splitComputedFilters(filters, ON_MACHINE_COMPUTED_FIELDS[process] || new Set());
+    const items = (await buildOnMachineItems(process, rowsRaw))
+      .filter((it) => matchesComputedFilters(it, computedFilters));
     res.json({ items });
   } catch (err) {
     console.error('v2 on-machine export error', err);

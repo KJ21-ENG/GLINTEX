@@ -478,6 +478,10 @@ export function Stock() {
         const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
+      if (filters.yarn) {
+        const yarnName = db?.yarns?.find(y => idEq(y.id, filters.yarn))?.name;
+        if (yarnName && !l.yarnNames?.has(yarnName)) return false;
+      }
       if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
       if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;

@@ -590,7 +590,8 @@ export function OnMachineTable({ db, process }) {
     const filterColumns = useMemo(() => {
         const common = [
             { id: 'date', label: 'Date', kind: 'date', getValue: (r) => r.date || r.createdAt || '' },
-            { id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' },
+            // Cutter issues have no shift data (no shift column), so no filter control — column still renders.
+            ...(process !== 'cutter' ? [{ id: 'shift', label: 'Shift', kind: 'values', getValue: (r) => r.shift || '' }] : []),
             { id: 'item', label: 'Item', kind: 'values', getValue: (r) => r.itemName || itemNameById.get(r.itemId) || '' },
             { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceIds || '')) },
             { id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (resolveEntryNames(r).cutName || '') },

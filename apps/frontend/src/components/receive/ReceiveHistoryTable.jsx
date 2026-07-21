@@ -527,7 +527,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     useEffect(() => {
         if (!showHistory) return;
         let cancelled = false;
-        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift'];
+        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift', ...(process === 'coning' ? ['coneType'] : [])];
         (async () => {
             try {
                 const res = await Promise.all(fields.map(async (field) => {

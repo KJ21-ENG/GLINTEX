@@ -1884,7 +1884,7 @@ export function OpeningStock() {
                           <div className="text-xs text-muted-foreground whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</div>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground truncate">
-                          {db.items?.find(i => i.id === row.itemId)?.name || '—'}
+                          {row.itemName || db.items?.find(i => i.id === row.itemId)?.name || '—'}
                         </div>
                         <div className="mt-2 grid grid-cols-1 gap-1 text-sm">
                           <div className="flex justify-between gap-2">
@@ -1952,7 +1952,7 @@ export function OpeningStock() {
                       <TableRow key={row.id}>
                         <TableCell className="whitespace-nowrap">{formatDateDDMMYYYY(row.createdAt)}</TableCell>
                         <TableCell>{row.lotNo}</TableCell>
-                        <TableCell><CellText text={db.items?.find(i => i.id === row.itemId)?.name || '—'} /></TableCell>
+                        <TableCell><CellText text={row.itemName || db.items?.find(i => i.id === row.itemId)?.name || '—'} /></TableCell>
                         <TableCell className="font-mono text-xs">{row.id}</TableCell>
                         <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(row.weight)}</TableCell>
                         <TableCell>

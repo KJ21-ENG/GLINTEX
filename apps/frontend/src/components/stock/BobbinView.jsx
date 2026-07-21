@@ -81,6 +81,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const availableBobbins = availableBobbinsCalc == null ? 0 : availableBobbinsCalc;
 
         const cutName = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
+        const yarnName = row.yarnName || db.yarns?.find(y => y.id === row.yarnId)?.name || '—';
 
         return {
           ...row,
@@ -93,6 +94,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           firmName: lotMeta?.firmName || '—',
           supplierName: lotMeta?.supplierName || '—',
           cutName,
+          yarnName,
           bobbinQty,
           issuedBobbins,
           dispatchedBobbins,
@@ -124,6 +126,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         supplierId: crate.supplierId,
         itemName: crate.itemName,
         cutNames: new Set(),
+        yarnNames: new Set(),
         firmName: crate.firmName,
         supplierName: crate.supplierName,
         totalBobbins: 0,
@@ -145,6 +148,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       existing.issuedWeight += crate.issuedWeight;
       existing.availableWeight += crate.availableWeight;
       if (crate.cutName && crate.cutName !== '—') existing.cutNames.add(crate.cutName);
+      if (crate.yarnName && crate.yarnName !== '—') existing.yarnNames.add(crate.yarnName);
       if (crate.barcode) existing.barcodes.push(crate.barcode);
       if (crate.notes) existing.notes.push(crate.notes);
 
@@ -199,7 +203,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
         const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
-      if (filters.yarn && l.yarnId && l.yarnId !== filters.yarn) return false;
+      if (filters.yarn) {
+        const yarnName = db?.yarns?.find(y => idEq(y.id, filters.yarn))?.name;
+        if (yarnName && !l.yarnNames?.has(yarnName)) return false;
+      }
       if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
       if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;

@@ -107,7 +107,12 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
         const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
         if (cutName && !l.cutNames?.has(cutName)) return false;
       }
-      if (filters.yarn && !idEq(l.yarnId, filters.yarn)) return false;
+      if (filters.yarn) {
+        // The Yarn column shows the upstream-holo trace name (yarnNames), not the coning issue's
+        // own yarnId — match what is displayed.
+        const yarnName = db?.yarns?.find(y => idEq(y.id, filters.yarn))?.name;
+        if (yarnName && !l.yarnNames?.has(yarnName)) return false;
+      }
       if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
       if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
       if (filters.from && l.date < filters.from) return false;

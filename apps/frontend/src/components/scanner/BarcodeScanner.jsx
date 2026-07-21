@@ -29,12 +29,12 @@ const VALID_BARCODE_PATTERNS = [
     /^INB-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Inbound
     /^ICU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}$/,          // Cutter Issue
     /^RCU-(?:\d{3,6}|OP-\d{1,6}|CP-\d{1,6})-\d{3}-C\d{3}$/,   // Cutter Receive
-    /^IHO-\d{1,4}$/,                   // Holo Issue (1-4 digits)
-    /^RHO-\d{1,4}-C\d{3}$/,            // Holo Receive
-    /^RHO-OP-\d{1,4}-C\d{3}$/,         // Legacy Holo Opening Stock
-    /^ICO-\d{1,4}$/,                   // Coning Issue
-    /^RCO-\d{1,4}-C\d{3}$/,            // Coning Receive
-    /^RCO-OP-\d{1,4}-C\d{3}$/,         // Legacy Coning Opening Stock
+    /^IHO-\d{1,6}$/,                   // Holo Issue (up to 6 digits)
+    /^RHO-\d{1,6}-C\d{3}$/,            // Holo Receive
+    /^RHO-OP-\d{1,6}-C\d{3}$/,         // Legacy Holo Opening Stock
+    /^ICO-\d{1,6}$/,                   // Coning Issue
+    /^RCO-\d{1,6}-C\d{3}$/,            // Coning Receive
+    /^RCO-OP-\d{1,6}-C\d{3}$/,         // Legacy Coning Opening Stock
 ];
 
 function isValidBarcodeFormat(barcode) {

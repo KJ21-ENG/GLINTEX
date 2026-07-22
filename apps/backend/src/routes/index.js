@@ -2555,10 +2555,20 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
     if (!rowId) return;
     const current = map.get(rowId) || { issuedRolls: 0, issuedWeight: 0 };
     const sign = line.takeBack?.isReverse ? 1 : -1;
-    current.issuedRolls = clampZero(Number(current.issuedRolls || 0) + (sign * Number(line.count || 0)));
-    current.issuedWeight = clampZero(Number(current.issuedWeight || 0) + (sign * Number(line.weight || 0)));
+    // Accumulate signed deltas WITHOUT clamping per line: a "return" (-) and its
+    // later "reverse" (+) must net to zero regardless of the order these rows are
+    // returned by the query. Clamping each line strands the negative when the
+    // return is seen before its reverse, leaving a phantom "still issued" balance
+    // that wrongly blocks re-issuing the crate. Clamp once, after all lines apply.
+    current.issuedRolls = Number(current.issuedRolls || 0) + (sign * Number(line.count || 0));
+    current.issuedWeight = Number(current.issuedWeight || 0) + (sign * Number(line.weight || 0));
     map.set(rowId, current);
   });
+
+  for (const value of map.values()) {
+    value.issuedRolls = clampZero(value.issuedRolls);
+    value.issuedWeight = clampZero(value.issuedWeight);
+  }
 
   return map;
 }
@@ -10123,8 +10133,11 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const sign = line.takeBack?.isReverse ? 1 : -1;
       const existingCount = previouslyIssuedByRowId.get(rid) || 0;
       const existingWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
-      previouslyIssuedByRowId.set(rid, Math.max(0, existingCount + (sign * Number(line.count || 0))));
-      previouslyIssuedWeightByRowId.set(rid, Math.max(0, existingWeight + (sign * Number(line.weight || 0))));
+      // Sum signed deltas here; clamp once where the value is read (below). A
+      // per-line Math.max() strands a "return" that precedes its "reverse" and
+      // fabricates a phantom issued balance, wrongly blocking the re-issue.
+      previouslyIssuedByRowId.set(rid, existingCount + (sign * Number(line.count || 0)));
+      previouslyIssuedWeightByRowId.set(rid, existingWeight + (sign * Number(line.weight || 0)));
     });
 
     const issueTracker = new Map();
@@ -10140,11 +10153,11 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const availableWeight = Math.max(0, baseWeight - dispatchedWeight);
       const baseAvailableRolls = Math.max(0, baseRolls - dispatchedCount);
 
-      const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
+      const existingIssued = Math.max(0, previouslyIssuedByRowId.get(rid) || 0);
       const alreadyPlanned = issueTracker.get(rid) || 0;
       const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
 
-      const existingIssuedWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
+      const existingIssuedWeight = Math.max(0, previouslyIssuedWeightByRowId.get(rid) || 0);
       const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
       const totalWeightAfter = existingIssuedWeight + alreadyPlannedWeight + (Number(crate.issueWeight) || 0);
 
@@ -13079,8 +13092,11 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
           const sign = line.takeBack?.isReverse ? 1 : -1;
           const existingCount = previouslyIssuedByRowId.get(rid) || 0;
           const existingWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
-          previouslyIssuedByRowId.set(rid, Math.max(0, existingCount + (sign * Number(line.count || 0))));
-          previouslyIssuedWeightByRowId.set(rid, Math.max(0, existingWeight + (sign * Number(line.weight || 0))));
+          // Sum signed deltas here; clamp once where the value is read (below). A
+          // per-line Math.max() strands a "return" that precedes its "reverse" and
+          // fabricates a phantom issued balance, wrongly blocking the re-issue.
+          previouslyIssuedByRowId.set(rid, existingCount + (sign * Number(line.count || 0)));
+          previouslyIssuedWeightByRowId.set(rid, existingWeight + (sign * Number(line.weight || 0)));
         });
 
         const issueTracker = new Map();
@@ -13091,8 +13107,8 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
           if (!rid) continue;
           const baseRolls = Number(crate.baseRolls) || 0;
           const baseWeight = Number(crate.baseWeight) || 0;
-          const existingIssued = previouslyIssuedByRowId.get(rid) || 0;
-          const existingIssuedWeight = previouslyIssuedWeightByRowId.get(rid) || 0;
+          const existingIssued = Math.max(0, previouslyIssuedByRowId.get(rid) || 0);
+          const existingIssuedWeight = Math.max(0, previouslyIssuedWeightByRowId.get(rid) || 0);
           const alreadyPlanned = issueTracker.get(rid) || 0;
           const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
           const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);

@@ -328,6 +328,8 @@ export function resolveRow(process, row, maps) {
     coneTypeId: null,
     coneTypeName: null,
     side: null,
+    cutterIssueId: null,
+    cutterIssuedRolls: null,
   };
 
   if (process === 'cutter') {
@@ -337,6 +339,12 @@ export function resolveRow(process, row, maps) {
     base.itemName = nameOf(maps.items, base.itemId) || row.itemName || null;
     base.cutId = row.cutId || issue?.cutId || null;
     base.cutName = nameOf(maps.cuts, base.cutId);
+    // Cutter's input count belongs to the issue, whereas the bobbin count
+    // belongs to each received production row. Keep both so quality totals can
+    // show issued rolls and received bobbins without double-counting an issue
+    // that was received in more than one row.
+    base.cutterIssueId = issue?.id || null;
+    base.cutterIssuedRolls = resolveIssueCount(issue?.count);
   } else if (process === 'holo') {
     base.yarnId = issue?.yarnId || null;
     base.yarnName = nameOf(maps.yarns, base.yarnId);
@@ -371,6 +379,12 @@ export function resolveRow(process, row, maps) {
     base.coneTypeName = nameOf(maps.coneTypes, base.coneTypeId);
   }
   return base;
+}
+
+function resolveIssueCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const count = Number(value);
+  return Number.isFinite(count) ? Math.trunc(count) : null;
 }
 
 // The row's quality keys required by matchRate for this process.
@@ -427,6 +441,8 @@ function buildLine(process, resolved, rate) {
     coneTypeId: resolved.coneTypeId,
     coneTypeName: resolved.coneTypeName,
     side: resolved.side,
+    cutterIssueId: resolved.cutterIssueId,
+    cutterIssuedRolls: resolved.cutterIssuedRolls,
     barcode: resolved.barcode,
     lotNo: resolved.lotNo,
   };
@@ -571,16 +587,40 @@ export async function computePayablePreview(prisma, {
       netKg: 0,
       amount: 0,
       rowCount: 0,
+      issuedRolls: 0,
+      issuedRollsKnown: true,
+      receivedBobbins: 0,
+      receivedBobbinsKnown: true,
+      cutterIssueIds: new Set(),
     };
     existing.netKg = roundKg(existing.netKg + line.netKg);
     existing.amount = roundCurrency(existing.amount + line.amount);
     existing.rowCount += 1;
+    if (process === 'cutter') {
+      const bobbins = resolveQuantity('cutter', { bobbinQuantity: line.quantity });
+      if (bobbins === null) existing.receivedBobbinsKnown = false;
+      else existing.receivedBobbins += bobbins;
+
+      // The same issue can create several receive rows. Its input roll count
+      // must be included once in this quality/rate group, not once per row.
+      if (!line.cutterIssueId || line.cutterIssuedRolls === null) {
+        existing.issuedRollsKnown = false;
+      } else if (!existing.cutterIssueIds.has(line.cutterIssueId)) {
+        existing.cutterIssueIds.add(line.cutterIssueId);
+        existing.issuedRolls += line.cutterIssuedRolls;
+      }
+    }
     qualityMap.set(key, existing);
   }
-  const qualityTotals = Array.from(qualityMap.values());
+  const qualityTotals = Array.from(qualityMap.values()).map(({ cutterIssueIds, ...total }) => total);
 
   const productionKg = roundKg(lines.reduce((acc, l) => acc + l.netKg, 0));
   const productionAmount = roundCurrency(lines.reduce((acc, l) => acc + l.amount, 0));
+  // These Cutter fields are only needed while aggregating the preview table.
+  // Never return them as payable lines: callers persist preview.lines directly
+  // into ContractorSettlementLine, whose schema intentionally has no such
+  // display-only columns.
+  const payableLines = lines.map(({ cutterIssueId, cutterIssuedRolls, ...line }) => line);
 
   return {
     contractorId,
@@ -590,7 +630,7 @@ export async function computePayablePreview(prisma, {
     to: periodTo,
     hasAssignment: assignments.length > 0,
     assignments,
-    lines,
+    lines: payableLines,
     blockers,
     qualityTotals,
     excluded,

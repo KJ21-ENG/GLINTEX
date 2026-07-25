@@ -135,6 +135,33 @@ test('a universal Cutter rate does not bypass missing Item or Cut data', async (
   assert.equal(res.blockers[0].reason, 'missing_quality');
 });
 
+test('cutter quality totals show issued rolls once per issue and all received bobbins', async () => {
+  const rate = { id: 'cutterRate', process: 'cutter', itemId: 'I1', cutId: 'C1', ratePerKg: 5 };
+  const cutterRows = [
+    {
+      id: 'CR1', date: '2026-03-05', bobbinQuantity: 3, netWt: 10, itemName: 'S/S 40', cutId: 'C1',
+      issue: { id: 'CI1', itemId: 'I1', cutId: 'C1', count: 2 },
+    },
+    {
+      id: 'CR2', date: '2026-03-05', bobbinQuantity: 5, netWt: 12, itemName: 'S/S 40', cutId: 'C1',
+      issue: { id: 'CI1', itemId: 'I1', cutId: 'C1', count: 2 },
+    },
+    {
+      id: 'CR3', date: '2026-03-05', bobbinQuantity: 2, netWt: 8, itemName: 'S/S 40', cutId: 'C1',
+      issue: { id: 'CI2', itemId: 'I1', cutId: 'C1', count: 4 },
+    },
+  ];
+  const res = await cutterPreview(makeStub({ ...MASTERS, assignments: CUTTER_ASSIGN, rates: [rate], cutterRows }));
+
+  assert.equal(res.qualityTotals.length, 1);
+  assert.equal(res.qualityTotals[0].issuedRolls, 6);
+  assert.equal(res.qualityTotals[0].issuedRollsKnown, true);
+  assert.equal(res.qualityTotals[0].receivedBobbins, 10);
+  assert.equal(res.qualityTotals[0].receivedBobbinsKnown, true);
+  assert.equal('cutterIssueId' in res.lines[0], false);
+  assert.equal('cutterIssuedRolls' in res.lines[0], false);
+});
+
 test('range preview includes payable rows from both boundary dates', async () => {
   const stub = makeStub({
     ...MASTERS,

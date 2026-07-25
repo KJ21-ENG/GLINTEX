@@ -671,27 +671,96 @@ const SETTLEMENT_INCLUDE = {
   revisions: { orderBy: { revisionNumber: 'desc' } },
 };
 
+// Cutter's received-bobbin quantity is already snapshotted on each settlement
+// line. Its issued-roll count belongs to the linked input issue, however, so
+// hydrate that display-only value when a saved settlement is opened. This lets
+// older drafts show the same Cutter breakdown as a fresh preview without
+// changing their payment snapshot or re-pricing them.
+async function hydrateCutterSettlementMetrics(settlement) {
+  if (!settlement || settlement.process !== 'cutter' || !settlement.lines?.length) return settlement;
+
+  const sourceRowIds = settlement.lines.map((line) => line.sourceRowId).filter(Boolean);
+  if (!sourceRowIds.length) return settlement;
+
+  const rows = await prisma.receiveFromCutterMachineRow.findMany({
+    where: { id: { in: sourceRowIds } },
+    select: {
+      id: true,
+      issueId: true,
+      issue: { select: { id: true, count: true } },
+    },
+  });
+  const bySourceRowId = new Map(rows.map((row) => [row.id, row]));
+  settlement.lines = settlement.lines.map((line) => {
+    const source = bySourceRowId.get(line.sourceRowId);
+    const count = source?.issue?.count;
+    return {
+      ...line,
+      cutterIssueId: source?.issueId || null,
+      cutterIssuedRolls: Number.isInteger(count) && count >= 0 ? count : null,
+    };
+  });
+  return settlement;
+}
+
 router.get('/settlements', requirePermission(PERM, PERM_READ), async (req, res) => {
   try {
     const where = {};
     const contractorId = cleanString(req.query.contractorId, 40);
+    const contractorIds = (cleanString(req.query.contractorIds, 500) || '')
+      .split(',').map((id) => id.trim()).filter(Boolean);
     const process = parseProcess(req.query.process);
+    const processesRaw = cleanString(req.query.processes, 100);
+    const processes = processesRaw ? processesRaw.split(',').map(parseProcess).filter(Boolean) : null;
     const status = cleanString(req.query.status, 20);
-    if (contractorId) where.contractorId = contractorId;
-    if (process) where.process = process;
+    const search = cleanString(req.query.search, 120);
+    const from = cleanString(req.query.from, 10);
+    const to = cleanString(req.query.to, 10);
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const requestedPageSize = Number.parseInt(req.query.pageSize, 10);
+    const paginated = Number.isInteger(requestedPage) && requestedPage > 0;
+    const page = paginated ? requestedPage : 1;
+    const pageSize = paginated
+      ? Math.min(Math.max(Number.isInteger(requestedPageSize) ? requestedPageSize : 25, 10), 100)
+      : null;
+    if (contractorIds.length) where.contractorId = { in: contractorIds };
+    else if (contractorId) where.contractorId = contractorId;
+    if (processes) where.process = { in: processes };
+    else if (process) where.process = process;
     if (status === 'draft' || status === 'paid') where.status = status;
-    const rows = await prisma.contractorSettlement.findMany({
+    if (search) where.contractor = { is: { name: { contains: search, mode: 'insensitive' } } };
+    if (isValidDateStr(from) || isValidDateStr(to)) {
+      // A multi-day settlement belongs in the result when its production
+      // period overlaps the chosen filter range, not only when it starts in it.
+      if (isValidDateStr(from)) where.periodTo = { gte: from };
+      if (isValidDateStr(to)) where.periodFrom = { lte: to };
+    }
+    const query = {
       where,
       include: { contractor: true, _count: { select: { lines: true, adjustments: true } } },
       orderBy: { createdAt: 'desc' },
-      take: 500,
-    });
+      ...(paginated ? { skip: (page - 1) * pageSize, take: pageSize } : { take: 500 }),
+    };
+    const [rows, total] = await Promise.all([
+      prisma.contractorSettlement.findMany(query),
+      paginated ? prisma.contractorSettlement.count({ where }) : Promise.resolve(null),
+    ]);
     const serialized = rows.map((r) => ({
       ...serializeSettlement(r),
       lineCount: r._count?.lines ?? 0,
       adjustmentCount: r._count?.adjustments ?? 0,
     }));
-    res.json(await resolveUserFields(serialized, ['createdByUserId', 'updatedByUserId', 'paidByUserId']));
+    const withUsers = await resolveUserFields(serialized, ['createdByUserId', 'updatedByUserId', 'paidByUserId']);
+    if (paginated) {
+      return res.json({
+        rows: withUsers,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      });
+    }
+    res.json(withUsers);
   } catch (err) {
     console.error('Failed to list settlements', err);
     res.status(500).json({ error: err.message || 'Failed to list settlements' });
@@ -700,7 +769,7 @@ router.get('/settlements', requirePermission(PERM, PERM_READ), async (req, res) 
 
 async function loadSettlementDetail(id) {
   const s = await prisma.contractorSettlement.findUnique({ where: { id }, include: SETTLEMENT_INCLUDE });
-  return s;
+  return hydrateCutterSettlementMetrics(s);
 }
 
 router.get('/settlements/:id', requirePermission(PERM, PERM_READ), async (req, res) => {

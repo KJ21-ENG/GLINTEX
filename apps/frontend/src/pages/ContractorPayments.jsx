@@ -6,9 +6,10 @@ import {
   Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody,
   TableCell, TableHead, TableHeader, TableRow, Select, Badge, Label,
 } from '../components/ui';
-import { TableStateRow } from '../components/data-table';
+import { TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import AccessDenied from '../components/common/AccessDenied';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
+import { applySheetFilters, SheetColumnFilter } from '../components/common/SheetColumnFilters';
 import { AlertTriangle, Plus, Trash2, FileText, IndianRupee, RefreshCw, Check, X, Pencil } from 'lucide-react';
 import * as api from '../api/client';
 
@@ -25,6 +26,8 @@ const ADJUSTMENT_OPTIONS = [
 ];
 const PAYMENT_MODES = ['Cash', 'Bank', 'UPI', 'Other'];
 const ADJ_LABEL = { bonus: 'Bonus', other: 'Other', advance_recovery: 'Advance Recovery', deduction: 'Deduction' };
+const TABLE_PAGE_SIZE = 50;
+const HISTORY_PAGE_SIZE = 25;
 
 const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const money = (v) => Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -38,8 +41,21 @@ const PROCESS_QUANTITY_META = {
   coning: { unit: 'Cones', header: 'Qty (Cones)' },
 };
 
+// Process-specific quality-total columns live in one configuration map so new
+// process metrics can be added without changing the shared table structure.
+const PROCESS_QUALITY_TOTAL_COLUMNS = {
+  cutter: [
+    { key: 'issuedRolls', label: 'Rolls issued', knownKey: 'issuedRollsKnown' },
+    { key: 'receivedBobbins', label: 'Bobbins received', knownKey: 'receivedBobbinsKnown' },
+  ],
+};
+
 function quantityMeta(process) {
   return PROCESS_QUANTITY_META[process] || { unit: 'Units', header: 'Qty' };
+}
+
+function qualityTotalColumns(process) {
+  return PROCESS_QUALITY_TOTAL_COLUMNS[process] || [];
 }
 
 function asQuantity(value) {
@@ -88,6 +104,11 @@ function groupSettlementLines(lines) {
       ratePerKg: line.ratePerKg,
       quantity: 0,
       quantityKnown: true,
+      issuedRolls: 0,
+      issuedRollsKnown: true,
+      receivedBobbins: 0,
+      receivedBobbinsKnown: true,
+      cutterIssueIds: new Set(),
       netKg: 0,
       amount: 0,
     };
@@ -96,9 +117,43 @@ function groupSettlementLines(lines) {
     const quantity = asQuantity(line.quantity);
     if (quantity === null) existing.quantityKnown = false;
     else existing.quantity += quantity;
+
+    if (line.process === 'cutter') {
+      if (quantity === null) existing.receivedBobbinsKnown = false;
+      else existing.receivedBobbins += quantity;
+
+      const issuedRolls = asQuantity(line.cutterIssuedRolls);
+      if (!line.cutterIssueId || issuedRolls === null) {
+        existing.issuedRollsKnown = false;
+      } else if (!existing.cutterIssueIds.has(line.cutterIssueId)) {
+        existing.cutterIssueIds.add(line.cutterIssueId);
+        existing.issuedRolls += issuedRolls;
+      }
+    }
     map.set(key, existing);
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).map(({ cutterIssueIds, ...group }) => group);
+}
+
+function summarizeQualityTotals(groups, process) {
+  const metricColumns = qualityTotalColumns(process);
+  const totals = { rowCount: 0, netKg: 0, amount: 0 };
+  for (const column of metricColumns) {
+    totals[column.key] = 0;
+    totals[column.knownKey] = true;
+  }
+  for (const group of groups) {
+    totals.rowCount += Number(group.rowCount || 0);
+    totals.netKg += Number(group.netKg || 0);
+    totals.amount += Number(group.amount || 0);
+    for (const column of metricColumns) {
+      if (group[column.knownKey] === false) totals[column.knownKey] = false;
+      else totals[column.key] += Number(group[column.key] || 0);
+    }
+  }
+  totals.netKg = Number(totals.netKg.toFixed(3));
+  totals.amount = round2(totals.amount);
+  return totals;
 }
 
 function compareSettlementText(left, right) {
@@ -162,6 +217,31 @@ function blockerReasonLabel(reason) {
   }
 }
 
+function matchesTextFilter(value, filter) {
+  const query = String(filter?.query || '').trim().toLowerCase();
+  return !query || String(value || '').toLowerCase().includes(query);
+}
+
+function selectedFilterValues(filters, id) {
+  const filter = filters?.[id];
+  return filter?.kind === 'values' && Array.isArray(filter.selected) ? filter.selected : null;
+}
+
+function historyListParams(filters, contractors) {
+  const contractorNames = selectedFilterValues(filters, 'contractor');
+  const processes = selectedFilterValues(filters, 'process');
+  const contractorIds = contractorNames === null ? null : contractorNames
+    .map((name) => contractors.find((contractor) => contractor.name === name)?.id)
+    .filter(Boolean);
+  const period = filters?.period?.kind === 'date' ? filters.period : {};
+  return {
+    ...(contractorIds === null ? {} : { contractorIds: contractorIds.join(',') || '__none__' }),
+    ...(processes === null ? {} : { processes: processes.join(',') || '__none__' }),
+    ...(period.from ? { from: period.from } : {}),
+    ...(period.to ? { to: period.to } : {}),
+  };
+}
+
 export function ContractorPayments() {
   const { db } = useInventory();
   const { user } = useAuth();
@@ -175,18 +255,26 @@ export function ContractorPayments() {
   const [previewErr, setPreviewErr] = useState('');
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
+  const [previewColumnFilters, setPreviewColumnFilters] = useState({});
+  const [previewOpenFilterId, setPreviewOpenFilterId] = useState(null);
+  const [previewPage, setPreviewPage] = useState(1);
   const [adjustments, setAdjustments] = useState([]);
   const [creating, setCreating] = useState(false);
   const [createMsg, setCreateMsg] = useState('');
 
   const [view, setView] = useState('preview');
   const [settlements, setSettlements] = useState([]);
+  const [settlementTotal, setSettlementTotal] = useState(0);
+  const [settlementPage, setSettlementPage] = useState(1);
+  const [settlementTotalPages, setSettlementTotalPages] = useState(1);
+  const [historyColumnFilters, setHistoryColumnFilters] = useState({});
+  const [historyOpenFilterId, setHistoryOpenFilterId] = useState(null);
   const [loadingList, setLoadingList] = useState(false);
   const [detail, setDetail] = useState(null);
 
   // Changing any filter invalidates the current preview (its process/period no
   // longer match), so clear it to avoid showing stale rows/headers.
-  const clearPreview = () => { setPreview(null); setSelected(new Set()); setCreateMsg(''); setPreviewErr(''); };
+  const clearPreview = () => { setPreview(null); setSelected(new Set()); setPreviewColumnFilters({}); setPreviewPage(1); setCreateMsg(''); setPreviewErr(''); };
   const setF = (k, v) => { setFilters((f) => ({ ...f, [k]: v })); clearPreview(); };
 
   const runPreview = useCallback(async () => {
@@ -204,6 +292,8 @@ export function ContractorPayments() {
       const res = await api.getContractorPayablePreview(filters);
       setPreview(res);
       setSelected(new Set((res.lines || []).map((l) => l.sourceRowId)));
+      setPreviewColumnFilters({});
+      setPreviewPage(1);
     } catch (err) {
       setPreview(null);
       setPreviewErr(err.message || 'Failed to load preview');
@@ -224,6 +314,17 @@ export function ContractorPayments() {
   };
 
   const selectedLines = useMemo(() => (preview?.lines || []).filter((l) => selected.has(l.sourceRowId)), [preview, selected]);
+  const previewFilteredLines = useMemo(() => {
+    return (preview?.lines || []).filter((line) => [
+      matchesTextFilter(line.barcode || line.lotNo, previewColumnFilters.barcode),
+      matchesTextFilter(qualityText(preview.process, line), previewColumnFilters.quality),
+    ].every(Boolean));
+  }, [preview, previewColumnFilters]);
+  const previewTotalPages = Math.max(1, Math.ceil(previewFilteredLines.length / TABLE_PAGE_SIZE));
+  const previewVisibleLines = useMemo(() => previewFilteredLines.slice(
+    (previewPage - 1) * TABLE_PAGE_SIZE,
+    previewPage * TABLE_PAGE_SIZE,
+  ), [previewFilteredLines, previewPage]);
   const selProductionKg = useMemo(() => selectedLines.reduce((a, l) => a + Number(l.netKg || 0), 0), [selectedLines]);
   const selProductionAmount = useMemo(() => round2(selectedLines.reduce((a, l) => a + Number(l.amount || 0), 0)), [selectedLines]);
   const adjustmentsTotal = useMemo(() => round2(adjustments.reduce((a, x) => a + signedAdj(x.type, x.amount), 0)), [adjustments]);
@@ -262,19 +363,41 @@ export function ContractorPayments() {
   const loadSettlements = useCallback(async (status) => {
     setLoadingList(true);
     try {
-      const rows = await api.listContractorSettlements({ status });
-      setSettlements(rows);
+      const result = await api.listContractorSettlements({
+        status,
+        page: settlementPage,
+        pageSize: HISTORY_PAGE_SIZE,
+        ...historyListParams(historyColumnFilters, contractors),
+      });
+      setSettlements(result.rows || []);
+      setSettlementTotal(Number(result.total || 0));
+      setSettlementTotalPages(Number(result.totalPages || 1));
     } catch (err) {
       setSettlements([]);
+      setSettlementTotal(0);
+      setSettlementTotalPages(1);
     } finally {
       setLoadingList(false);
     }
-  }, []);
+  }, [contractors, historyColumnFilters, settlementPage]);
 
   useEffect(() => {
     if (view === 'drafts') loadSettlements('draft');
     if (view === 'paid') loadSettlements('paid');
   }, [view, loadSettlements]);
+
+  useEffect(() => {
+    if (previewPage > previewTotalPages) setPreviewPage(previewTotalPages);
+  }, [previewPage, previewTotalPages]);
+
+  const updateHistoryFilters = (updater) => {
+    setHistoryColumnFilters(updater);
+    setSettlementPage(1);
+  };
+  const clearHistoryFilters = () => {
+    setHistoryColumnFilters({});
+    setSettlementPage(1);
+  };
 
   const openDetail = async (id) => {
     try { const s = await api.getContractorSettlement(id); setDetail(s); }
@@ -290,6 +413,8 @@ export function ContractorPayments() {
     || (db.contractors || []).find((c) => c.id === id)?.name || '—';
   const processOwner = (db.contractor_assignments || []).find((a) => a.process === filters.process);
   const showSide = filters.process === 'coning';
+  const processTotalColumns = qualityTotalColumns(filters.process);
+  const previewTotal = useMemo(() => summarizeQualityTotals(preview?.qualityTotals || [], filters.process), [preview?.qualityTotals, filters.process]);
 
   // Permission guard AFTER all hooks so hook order stays stable across renders.
   if (!canRead) {
@@ -307,7 +432,7 @@ export function ContractorPayments() {
         <h1 className="text-2xl font-bold tracking-tight">Contractor Payments</h1>
         <div className="flex gap-1 rounded-lg border p-1">
           {['preview', 'drafts', 'paid'].map((v) => (
-            <button key={v} onClick={() => setView(v)}
+            <button key={v} onClick={() => { setView(v); if (v !== view) setSettlementPage(1); }}
               className={`px-3 py-1.5 text-sm rounded-md capitalize ${view === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'}`}>
               {v === 'preview' ? 'Preview' : v === 'drafts' ? 'Draft History' : 'Paid History'}
             </button>
@@ -407,6 +532,7 @@ export function ContractorPayments() {
                       <Table>
                         <TableHeader><TableRow>
                           <TableHead>Quality</TableHead>{showSide && <TableHead>Side</TableHead>}
+                          {processTotalColumns.map((column) => <TableHead key={column.key} className="text-right">{column.label}</TableHead>)}
                           <TableHead className="text-right">Rows</TableHead><TableHead className="text-right">Net KG</TableHead>
                           <TableHead className="text-right">₹/KG</TableHead><TableHead className="text-right">Amount ₹</TableHead>
                         </TableRow></TableHeader>
@@ -415,12 +541,30 @@ export function ContractorPayments() {
                             <TableRow key={q.key}>
                               <TableCell>{qualityText(preview.process, q)}</TableCell>
                               {showSide && <TableCell>{sideText(q.side)}</TableCell>}
+                              {processTotalColumns.map((column) => (
+                                <TableCell key={column.key} className="text-right tabular-nums">
+                                  {formatQuantity(q[column.key], q[column.knownKey] !== false)}
+                                </TableCell>
+                              ))}
                               <TableCell className="text-right tabular-nums">{q.rowCount}</TableCell>
                               <TableCell className="text-right tabular-nums">{kg(q.netKg)}</TableCell>
                               <TableCell className="text-right tabular-nums">{money(q.ratePerKg)}</TableCell>
                               <TableCell className="text-right tabular-nums">{money(q.amount)}</TableCell>
                             </TableRow>
                           ))}
+                          <TableRow className="bg-muted/30 font-semibold">
+                            <TableCell>TOTAL</TableCell>
+                            {showSide && <TableCell />}
+                            {processTotalColumns.map((column) => (
+                              <TableCell key={column.key} className="text-right tabular-nums">
+                                {formatQuantity(previewTotal[column.key], previewTotal[column.knownKey] !== false)}
+                              </TableCell>
+                            ))}
+                            <TableCell className="text-right tabular-nums">{previewTotal.rowCount}</TableCell>
+                            <TableCell className="text-right tabular-nums">{kg(previewTotal.netKg)}</TableCell>
+                            <TableCell />
+                            <TableCell className="text-right tabular-nums">{money(previewTotal.amount)}</TableCell>
+                          </TableRow>
                         </TableBody>
                       </Table>
                     </div>
@@ -430,20 +574,26 @@ export function ContractorPayments() {
 
               {/* Row-level */}
               <Card>
-                <CardHeader><CardTitle className="text-base">Production rows ({preview.lines.length})</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base">Production rows ({previewFilteredLines.length} of {preview.lines.length})</CardTitle></CardHeader>
                 <CardContent>
                   <div className="rounded-md border max-h-[45vh] overflow-auto">
                     <Table>
                       <TableHeader><TableRow>
                         <TableHead className="w-10"><input type="checkbox" checked={!!allSelected} onChange={toggleAll} /></TableHead>
-                        <TableHead>Date</TableHead><TableHead>Barcode / Lot</TableHead>
-                        <TableHead>Quality</TableHead>{showSide && <TableHead>Side</TableHead>}
+                        <TableHead>Date</TableHead>
+                        <FilterTableHead label="Barcode / Lot" column={{ id: 'barcode', label: 'Barcode / Lot', kind: 'text' }} rows={preview.lines}
+                          filters={previewColumnFilters} setFilters={(updater) => { setPreviewColumnFilters(updater); setPreviewPage(1); }}
+                          openId={previewOpenFilterId} setOpenId={setPreviewOpenFilterId} />
+                        <FilterTableHead label="Quality" column={{ id: 'quality', label: 'Quality', kind: 'text' }} rows={preview.lines}
+                          filters={previewColumnFilters} setFilters={(updater) => { setPreviewColumnFilters(updater); setPreviewPage(1); }}
+                          openId={previewOpenFilterId} setOpenId={setPreviewOpenFilterId} />
+                        {showSide && <TableHead>Side</TableHead>}
                         <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">₹/KG</TableHead><TableHead className="text-right">Amount ₹</TableHead>
                       </TableRow></TableHeader>
                       <TableBody>
-                        {preview.lines.length === 0 ? (
+                        {previewVisibleLines.length === 0 ? (
                           <TableStateRow colSpan={showSide ? 8 : 7} emptyMessage="No payable rows for this selection." />
-                        ) : preview.lines.map((l) => (
+                        ) : previewVisibleLines.map((l) => (
                           <TableRow key={l.sourceRowId} className={selected.has(l.sourceRowId) ? '' : 'opacity-60'}>
                             <TableCell><input type="checkbox" checked={selected.has(l.sourceRowId)} onChange={() => toggleRow(l.sourceRowId)} /></TableCell>
                             <TableCell>{l.date || '—'}</TableCell>
@@ -457,6 +607,14 @@ export function ContractorPayments() {
                         ))}
                       </TableBody>
                     </Table>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                    <TableResultCount
+                      shown={previewVisibleLines.length}
+                      total={previewFilteredLines.length}
+                      rangeStart={previewFilteredLines.length ? ((previewPage - 1) * TABLE_PAGE_SIZE) + 1 : 0}
+                    />
+                    <TablePagination page={previewPage} totalPages={previewTotalPages} onPageChange={setPreviewPage} />
                   </div>
                 </CardContent>
               </Card>
@@ -505,6 +663,16 @@ export function ContractorPayments() {
           status={view === 'drafts' ? 'draft' : 'paid'}
           contractorName={contractorName}
           onOpen={openDetail}
+          contractors={contractors}
+          filters={historyColumnFilters}
+          setFilters={updateHistoryFilters}
+          openFilterId={historyOpenFilterId}
+          setOpenFilterId={setHistoryOpenFilterId}
+          onClearFilters={clearHistoryFilters}
+          page={settlementPage}
+          total={settlementTotal}
+          totalPages={settlementTotalPages}
+          onPageChange={setSettlementPage}
         />
       )}
 
@@ -534,15 +702,38 @@ function SummaryCard({ label, value, sub, warn }) {
   );
 }
 
-function SettlementList({ rows, loading, status, contractorName, onOpen }) {
+function FilterTableHead({ label, column, rows, filters, setFilters, openId, setOpenId, className = '', contentClassName = '' }) {
+  return (
+    <TableHead className={className}>
+      <div className={`flex items-center gap-1 ${contentClassName}`}>
+        <span>{label}</span>
+        <SheetColumnFilter column={column} rows={rows} filters={filters} setFilters={setFilters} openId={openId} setOpenId={setOpenId} />
+      </div>
+    </TableHead>
+  );
+}
+
+function SettlementList({
+  rows, loading, status, contractorName, onOpen, contractors, filters, setFilters,
+  openFilterId, setOpenFilterId, onClearFilters, page, total, totalPages, onPageChange,
+}) {
+  const contractorColumn = { id: 'contractor', label: 'Contractor', kind: 'values', facetOptions: contractors.map((contractor) => contractor.name) };
+  const processColumn = { id: 'process', label: 'Process', kind: 'values', facetOptions: PROCESS_OPTIONS.map((option) => option.value) };
+  const periodColumn = { id: 'period', label: 'Period', kind: 'date' };
   return (
     <Card>
       <CardHeader><CardTitle className="text-base capitalize">{status} settlements</CardTitle></CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <TableResultCount shown={rows.length} total={total} rangeStart={total ? ((page - 1) * HISTORY_PAGE_SIZE) + 1 : 0} isLoading={loading} />
+          <Button size="sm" variant="outline" onClick={onClearFilters}>Clear filters</Button>
+        </div>
         <div className="rounded-md border overflow-auto">
           <Table>
             <TableHeader><TableRow>
-              <TableHead>Contractor</TableHead><TableHead>Process</TableHead><TableHead>Period</TableHead>
+              <FilterTableHead label="Contractor" column={contractorColumn} rows={rows} filters={filters} setFilters={setFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+              <FilterTableHead label="Process" column={processColumn} rows={rows} filters={filters} setFilters={setFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
+              <FilterTableHead label="Period" column={periodColumn} rows={rows} filters={filters} setFilters={setFilters} openId={openFilterId} setOpenId={setOpenFilterId} />
               <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">Final ₹</TableHead>
               {status === 'paid' && <TableHead>Paid</TableHead>}
               <TableHead className="w-20"></TableHead>
@@ -566,6 +757,7 @@ function SettlementList({ rows, loading, status, contractorName, onOpen }) {
             </TableBody>
           </Table>
         </div>
+        <TablePagination page={page} totalPages={totalPages} onPageChange={onPageChange} isLoading={loading} />
       </CardContent>
     </Card>
   );
@@ -591,6 +783,8 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
   const [syncOpen, setSyncOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [summaryFilters, setSummaryFilters] = useState({});
+  const [summaryOpenFilterId, setSummaryOpenFilterId] = useState(null);
   const showSide = settlement.process === 'coning';
   const isDraft = settlement.status === 'draft';
   const lines = settlement.lines || [];
@@ -598,10 +792,36 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
   const quantitySummary = useMemo(() => summarizeQuantities(lines), [lines]);
   const quantityInfo = quantityMeta(settlement.process);
   const quantityHeader = quantityInfo.header;
-  const groupTotals = useMemo(() => groups.reduce((totals, group) => ({
+  const processTotalColumns = qualityTotalColumns(settlement.process);
+  const summaryColumns = useMemo(() => [
+    {
+      id: 'quality', label: 'Quality', kind: 'values',
+      getValue: (group) => settlementQualityText(settlement.process, group),
+    },
+    { id: 'cut', label: 'Cut', kind: 'values', getValue: (group) => group.cutName || '' },
+    ...(showSide ? [{ id: 'side', label: 'Side', kind: 'values', getValue: (group) => settlementSideText(group.side) }] : []),
+    ...(processTotalColumns.length > 0
+      ? processTotalColumns.map((column) => ({ id: column.key, label: column.label, kind: 'number', getValue: (group) => group[column.key] }))
+      : [{ id: 'quantity', label: quantityHeader, kind: 'number', getValue: (group) => group.quantity }]),
+    { id: 'netKg', label: 'Net KG', kind: 'number', getValue: (group) => group.netKg },
+    { id: 'rate', label: 'Rate', kind: 'number', getValue: (group) => group.ratePerKg },
+    { id: 'amount', label: 'Amount', kind: 'number', getValue: (group) => group.amount },
+  ], [settlement.process, showSide, processTotalColumns, quantityHeader]);
+  const summaryColumn = useCallback((id) => summaryColumns.find((column) => column.id === id), [summaryColumns]);
+  const filteredGroups = useMemo(
+    () => applySheetFilters(groups, summaryColumns, summaryFilters),
+    [groups, summaryColumns, summaryFilters]
+  );
+  const groupTotals = useMemo(() => filteredGroups.reduce((totals, group) => ({
     netKg: totals.netKg + group.netKg,
     amount: totals.amount + group.amount,
-  }), { netKg: 0, amount: 0 }), [groups]);
+  }), { netKg: 0, amount: 0 }), [filteredGroups]);
+  const groupMetricTotals = useMemo(() => summarizeQualityTotals(filteredGroups, settlement.process), [filteredGroups, settlement.process]);
+  const filteredQuantitySummary = useMemo(() => filteredGroups.reduce((summary, group) => {
+    if (group.quantityKnown === false) return { ...summary, known: false };
+    return { ...summary, total: summary.total + (asQuantity(group.quantity) || 0) };
+  }, { total: 0, known: true }), [filteredGroups]);
+  const summaryColSpan = 2 + (showSide ? 1 : 0) + (processTotalColumns.length || 1) + 3;
 
   const doDelete = async () => {
     if (!confirm('Delete this draft settlement? Its rows will be freed.')) return;
@@ -667,20 +887,31 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
         <div className="px-3 pt-3 text-sm font-medium">Quality &amp; Side Breakdown</div>
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Quality</TableHead><TableHead>Cut</TableHead>
-            {showSide && <TableHead>Side</TableHead>}
-            <TableHead className="text-right">{quantityHeader}</TableHead>
-            <TableHead className="text-right">Net KG</TableHead><TableHead className="text-right">Rate</TableHead><TableHead className="text-right">Amount</TableHead>
+            <FilterTableHead label="Quality" column={summaryColumn('quality')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} />
+            <FilterTableHead label="Cut" column={summaryColumn('cut')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} />
+            {showSide && <FilterTableHead label="Side" column={summaryColumn('side')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} />}
+            {processTotalColumns.length > 0
+              ? processTotalColumns.map((column) => <FilterTableHead key={column.key} label={column.label} column={summaryColumn(column.key)} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} className="text-right" contentClassName="justify-end" />)
+              : <FilterTableHead label={quantityHeader} column={summaryColumn('quantity')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} className="text-right" contentClassName="justify-end" />}
+            <FilterTableHead label="Net KG" column={summaryColumn('netKg')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} className="text-right" contentClassName="justify-end" />
+            <FilterTableHead label="Rate" column={summaryColumn('rate')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} className="text-right" contentClassName="justify-end" />
+            <FilterTableHead label="Amount" column={summaryColumn('amount')} rows={groups} filters={summaryFilters} setFilters={setSummaryFilters} openId={summaryOpenFilterId} setOpenId={setSummaryOpenFilterId} className="text-right" contentClassName="justify-end" />
           </TableRow></TableHeader>
           <TableBody>
-            {groups.length === 0 ? <TableStateRow colSpan={showSide ? 7 : 6} emptyMessage="No production lines." /> : (
+            {filteredGroups.length === 0 ? <TableStateRow colSpan={summaryColSpan} emptyMessage={groups.length ? 'No rows match the filters.' : 'No production lines.'} /> : (
               <>
-                {groups.map((group) => (
+                {filteredGroups.map((group) => (
                   <TableRow key={group.key}>
                     <TableCell>{settlementQualityText(settlement.process, group)}</TableCell>
                     <TableCell>{group.cutName || '—'}</TableCell>
                     {showSide && <TableCell>{settlementSideText(group.side)}</TableCell>}
-                    <TableCell className="text-right tabular-nums">{formatQuantity(group.quantity, group.quantityKnown)}</TableCell>
+                    {processTotalColumns.length > 0
+                      ? processTotalColumns.map((column) => (
+                        <TableCell key={column.key} className="text-right tabular-nums">
+                          {formatQuantity(group[column.key], group[column.knownKey] !== false)}
+                        </TableCell>
+                      ))
+                      : <TableCell className="text-right tabular-nums">{formatQuantity(group.quantity, group.quantityKnown)}</TableCell>}
                     <TableCell className="text-right tabular-nums">{kg(group.netKg)}</TableCell>
                     <TableCell className="text-right tabular-nums">{money(group.ratePerKg)}</TableCell>
                     <TableCell className="text-right tabular-nums">{money(group.amount)}</TableCell>
@@ -690,7 +921,13 @@ function SettlementDetailModal({ settlement, isAdmin, canWrite, canDelete, onClo
                   <TableCell>TOTAL</TableCell>
                   <TableCell />
                   {showSide && <TableCell />}
-                  <TableCell className="text-right tabular-nums">{formatQuantity(quantitySummary.total, quantitySummary.known)}</TableCell>
+                  {processTotalColumns.length > 0
+                    ? processTotalColumns.map((column) => (
+                      <TableCell key={column.key} className="text-right tabular-nums">
+                        {formatQuantity(groupMetricTotals[column.key], groupMetricTotals[column.knownKey] !== false)}
+                      </TableCell>
+                    ))
+                    : <TableCell className="text-right tabular-nums">{formatQuantity(filteredQuantitySummary.total, filteredQuantitySummary.known)}</TableCell>}
                   <TableCell className="text-right tabular-nums">{kg(groupTotals.netKg)}</TableCell>
                   <TableCell />
                   <TableCell className="text-right tabular-nums">{money(groupTotals.amount)}</TableCell>

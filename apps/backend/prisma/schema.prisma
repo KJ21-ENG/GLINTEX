@@ -1010,9 +1010,9 @@ model ContractorRate {
   contractorId    String
   process         String // 'cutter' | 'holo' | 'coning'
   // Quality keys (presence depends on process). Stored as master IDs by value.
-  itemId          String? // cutter (required)
+  itemId          String? // cutter optional override; null means any item
   yarnId          String? // holo, coning (required)
-  cutId           String? // all processes (required)
+  cutId           String? // optional override; null means any cut
   side            SideType? // coning (required)
   twistId         String? // optional override (holo, coning)
   coneTypeId      String? // optional override (coning)

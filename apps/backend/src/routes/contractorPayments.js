@@ -171,7 +171,6 @@ function normalizeRatePayload(process, body) {
   if (process === 'cutter') {
     data.itemId = cleanString(body.itemId, 40);
     data.cutId = cleanString(body.cutId, 40);
-    if (!data.itemId || !data.cutId) return { error: 'Cutter rate requires Item and Cut' };
   } else if (process === 'holo') {
     data.yarnId = cleanString(body.yarnId, 40);
     data.cutId = cleanString(body.cutId, 40); // optional override

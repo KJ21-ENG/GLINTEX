@@ -2294,7 +2294,10 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
 
     const describeKeys = (r) => {
         const parts = [];
-        if (r.process === 'cutter') { parts.push(itemName.get(r.itemId) || 'Item?'); parts.push(cutName.get(r.cutId) || 'Cut?'); }
+        if (r.process === 'cutter') {
+            parts.push(r.itemId ? `Item:${itemName.get(r.itemId) || '?'}` : 'Any item');
+            parts.push(r.cutId ? `Cut:${cutName.get(r.cutId) || '?'}` : 'Any cut');
+        }
         else { parts.push(yarnName.get(r.yarnId) || 'Yarn?'); if (r.cutId) parts.push(`Cut:${cutName.get(r.cutId) || '?'}`); }
         if (r.process === 'coning') parts.push(r.side === 'SINGLE' ? 'S/S' : r.side === 'BOTH' ? 'B/S' : 'Side?');
         if (r.twistId) parts.push(`Twist:${twistName.get(r.twistId) || '?'}`);
@@ -2306,7 +2309,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const process = form.process;
     const rateValue = Number(form.ratePerKg);
     const formReady = !!form.contractorId && !!process && rateValue > 0 && (
-        process === 'cutter' ? (!!form.itemId && !!form.cutId)
+        process === 'cutter' ? true
             : process === 'holo' ? form.yarnIds.length > 0
                 : process === 'coning' ? (form.yarnIds.length > 0 && form.sides.length > 0)
                     : false
@@ -2339,9 +2342,9 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                     {process && (
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {process === 'cutter' && (
-                                <div><Label className="text-xs">Item *</Label>
+                                <div><Label className="text-xs">Item (optional override)</Label>
                                     <Select value={form.itemId} onChange={(e) => set('itemId', e.target.value)}>
-                                        <option value="">Select…</option>
+                                        <option value="">Any item</option>
                                         {(items || []).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
                                     </Select>
                                 </div>
@@ -2363,11 +2366,12 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                                     </p>
                                 </div>
                             )}
-                            <div><Label className="text-xs">{process === 'cutter' ? 'Cut *' : 'Cut (optional override)'}</Label>
+                            <div><Label className="text-xs">Cut (optional override)</Label>
                                 <Select value={form.cutId} onChange={(e) => set('cutId', e.target.value)}>
-                                    <option value="">{process === 'cutter' ? 'Select…' : 'Any'}</option>
+                                    <option value="">{process === 'cutter' ? 'Any cut' : 'Any'}</option>
                                     {(cuts || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </Select>
+                                {process === 'cutter' && <p className="mt-1 text-[11px] text-muted-foreground">Leave either field empty to apply this rate to all matching items or cuts.</p>}
                             </div>
                             {process === 'coning' && (
                                 <div><Label className="text-xs">Side *</Label>

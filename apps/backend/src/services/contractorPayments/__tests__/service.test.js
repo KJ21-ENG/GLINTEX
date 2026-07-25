@@ -88,9 +88,14 @@ function holoRow(over = {}) {
 
 const CONING_ASSIGN = [{ id: 'a1', contractorId: 'K', process: 'coning' }];
 const CONING_RATE_BASE = { id: 'rateBase', process: 'coning', yarnId: 'Y1', cutId: 'C1', side: 'SINGLE', twistId: null, coneTypeId: null, ratePerKg: 8 };
+const CUTTER_ASSIGN = [{ id: 'a2', contractorId: 'K', process: 'cutter' }];
 
 async function preview(stub, extra = {}) {
   return computePayablePreview(stub, { contractorId: 'K', process: 'coning', date: '2026-03-05', ...extra });
+}
+
+async function cutterPreview(stub, extra = {}) {
+  return computePayablePreview(stub, { contractorId: 'K', process: 'cutter', date: '2026-03-05', ...extra });
 }
 
 test('resolveConeTypeId parses array and JSON-string refs', () => {
@@ -111,6 +116,23 @@ test('eligible coning row produces a payable line at the matched rate', async ()
   assert.equal(res.lines[0].quantity, 3);
   assert.equal(res.lines[0].side, 'SINGLE');
   assert.equal(res.productionAmount, 80);
+});
+
+test('a universal Cutter rate does not bypass missing Item or Cut data', async () => {
+  const universal = { id: 'cutterAny', process: 'cutter', itemId: null, cutId: null, ratePerKg: 5 };
+  const missingQualityRow = {
+    id: 'CR1', date: '2026-03-05', bobbinQuantity: 1, netWt: 10,
+    isDeleted: false, createdBy: 'manual', barcode: 'CB1', itemName: null, cutId: null,
+    issue: { id: 'CI1', itemId: null, cutId: null },
+  };
+  const stub = makeStub({
+    ...MASTERS, assignments: CUTTER_ASSIGN, rates: [universal], cutterRows: [missingQualityRow],
+  });
+
+  const res = await cutterPreview(stub);
+  assert.equal(res.lines.length, 0);
+  assert.equal(res.blockers.length, 1);
+  assert.equal(res.blockers[0].reason, 'missing_quality');
 });
 
 test('range preview includes payable rows from both boundary dates', async () => {

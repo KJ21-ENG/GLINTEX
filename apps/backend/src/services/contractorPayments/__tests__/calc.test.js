@@ -155,12 +155,29 @@ test('coning rate matching keys on side', () => {
   assert.equal(matchRate('coning', rates, { yarnId: 'Y1', cutId: 'C1', side: 'UNKNOWN' }).reason, 'no_rate');
 });
 
-test('cutter rate matching keys on item + cut', () => {
+test('cutter Item and Cut defaults use the most specific applicable rate', () => {
   const rates = [
-    { id: 'r', process: 'cutter', itemId: 'I1', cutId: 'C1', ratePerKg: 5 },
+    { id: 'any', process: 'cutter', itemId: null, cutId: null, ratePerKg: 3 },
+    { id: 'item', process: 'cutter', itemId: 'I1', cutId: null, ratePerKg: 4 },
+    { id: 'exact', process: 'cutter', itemId: 'I1', cutId: 'C1', ratePerKg: 5 },
   ];
-  assert.equal(matchRate('cutter', rates, { itemId: 'I1', cutId: 'C1' }).rate.id, 'r');
-  assert.equal(matchRate('cutter', rates, { itemId: 'I2', cutId: 'C1' }).reason, 'no_rate');
+  assert.equal(matchRate('cutter', rates, { itemId: 'I1', cutId: 'C1' }).rate.id, 'exact');
+  assert.equal(matchRate('cutter', rates, { itemId: 'I1', cutId: 'C2' }).rate.id, 'item');
+  assert.equal(matchRate('cutter', rates, { itemId: 'I2', cutId: 'C1' }).rate.id, 'any');
+});
+
+test('a universal cutter rate applies to every populated Item/Cut pair', () => {
+  const any = { id: 'any', process: 'cutter', itemId: null, cutId: null, ratePerKg: 3 };
+  assert.equal(rateApplies('cutter', any, { itemId: 'I1', cutId: 'C1' }), true);
+  assert.equal(rateApplies('cutter', any, { itemId: 'I2', cutId: 'C2' }), true);
+});
+
+test('cutter equal-specificity defaults that intersect conflict', () => {
+  const itemOnly = { itemId: 'I1', cutId: null };
+  const cutOnly = { itemId: null, cutId: 'C1' };
+  assert.equal(ratesConflict('cutter', itemOnly, cutOnly), true);
+  assert.equal(ratesConflict('cutter', { itemId: null, cutId: null }, { itemId: 'I1', cutId: null }), false);
+  assert.equal(ratesConflict('cutter', { itemId: 'I1', cutId: 'C1' }, { itemId: 'I1', cutId: null }), false);
 });
 
 // ---- Rate conflict detection ----------------------------------------------

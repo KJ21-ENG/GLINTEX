@@ -289,9 +289,6 @@ export function ConingReceiveForm() {
 
             const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
             const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;
-            const existingRows = (db.receive_from_coning_machine_rows || []).filter((r) => r.issueId === issue.id);
-            const baseCount = existingRows.length;
-            const baseCode = issue.barcode || issue.lotNo || issue.id;
             const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
@@ -312,9 +309,9 @@ export function ConingReceiveForm() {
                 if (res?.row) createdRows.push(res.row);
 
                 if (confirmPrint) {
-                    const index = receiveEntries.indexOf(row);
-                    const paddedIndex = String(baseCount + index + 1).padStart(3, '0');
-                    const barcode = `RCN-${baseCode}-${paddedIndex}`;
+                    // The backend allocates the authoritative sequence against the
+                    // complete table. Never reconstruct it from the client cache.
+                    const barcode = res?.row?.barcode || '';
                     const boxName = db.boxes.find((b) => b.id === row.boxId)?.name;
                     const operatorName = db.operators.find((o) => o.id === row.operatorId)?.name;
 

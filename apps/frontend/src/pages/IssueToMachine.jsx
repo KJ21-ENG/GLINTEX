@@ -47,7 +47,10 @@ export function IssueToMachine() {
 
   useEffect(() => {
     if (canRead) {
-      ensureModuleData('process', { process: stage });
+      // Issue actions (take-back, edit, labels and received-details popovers) resolve
+      // source rows by id. They need the complete process slice even though the main
+      // tracking tables themselves are paginated through v2.
+      ensureModuleData('process', { process: stage, full: true });
     }
   }, [canRead, ensureModuleData, stage]);
 

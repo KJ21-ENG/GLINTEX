@@ -18,6 +18,7 @@ import { useV2CursorList } from '../hooks/useV2CursorList';
 import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
+import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 
 const EMPTY_TOTALS = { qty: 0, weight: 0, metallicBobbins: 0, metallicBobbinsWeight: 0, yarnKg: 0, rollsProducedEstimate: 0, rollsIssued: 0, takenBackWeight: 0, netIssuedWeight: 0 };
 
@@ -40,6 +41,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [savingIssue, setSavingIssue] = useState(false);
   const [revertTarget, setRevertTarget] = useState(null);
   const [revertBusy, setRevertBusy] = useState(false);
+  const coningTraceContext = useMemo(() => buildConingTraceContext(db), [db]);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
   const formatInputDate = (value) => (value ? String(value).slice(0, 10) : '');
   const parseIssuePieceIds = (row) => (
@@ -861,7 +863,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             twistName = names.twistName === '—' ? '' : names.twistName;
             twist = twistName;
 
-            rollType = row.rollTypeName || row.rollType || '';
+            const trace = resolveConingTrace(row, coningTraceContext);
+            rollType = row.rollTypeName
+              || row.rollType
+              || (trace.rollTypeName === '—' ? '' : trace.rollTypeName);
           }
         } catch (e) { console.error('Error parsing receivedRowRefs', e); }
 

@@ -49,7 +49,10 @@ export function ReceiveFromMachine() {
 
   useEffect(() => {
     if (canRead) {
-      ensureModuleData('process', { process: stage });
+      // Receive forms and label/reprint actions still resolve source rows, challans
+      // and trace metadata by id. Keep that operational slice complete while the
+      // visible history table remains server-paginated through v2.
+      ensureModuleData('process', { process: stage, full: true });
     }
   }, [canRead, ensureModuleData, stage]);
 

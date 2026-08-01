@@ -7,12 +7,13 @@ import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
+import { CombinedStockView } from '../components/stock/CombinedStockView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
 import { exportStockXlsx, exportStockPdf, exportStockDetailedXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
-import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight } from 'lucide-react';
+import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight, Layers } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
 import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LotPopover } from '../components/stock/LotPopover';
@@ -81,6 +82,8 @@ export function Stock() {
   // Initialize view from URL or default based on process
   const getInitialView = () => {
     const urlView = searchParams.get('view');
+    // Combined Stock is process-independent, so it wins over the per-process default.
+    if (urlView === 'combined') return 'combined';
     if (isHolo) return 'holo';
     if (isCutter && urlView === 'bobbins') return 'bobbins';
     if (isCutter && urlView === 'jumbo') return 'jumbo';
@@ -92,6 +95,15 @@ export function Stock() {
   // Sync view state when URL searchParams changes (e.g., browser back/forward navigation)
   useEffect(() => {
     const urlView = searchParams.get('view');
+    if (urlView === 'combined') {
+      if (view !== 'combined') setViewState('combined');
+      return;
+    }
+    // Browser-back out of ?view=combined drops us onto the process default view.
+    if (view === 'combined') {
+      setViewState(isHolo ? 'holo' : 'jumbo');
+      return;
+    }
     if (isCutter) {
       if (urlView === 'bobbins' && view !== 'bobbins') {
         setViewState('bobbins');
@@ -102,11 +114,20 @@ export function Stock() {
         setViewState('jumbo');
       }
     }
-  }, [searchParams, isCutter, view]);
+  }, [searchParams, isCutter, isHolo, view]);
 
   // Wrapper to update both state and URL
   const setView = (newView) => {
     setViewState(newView);
+    // Combined Stock is available on every process, so it always owns the view param.
+    if (newView === 'combined') {
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.set('view', 'combined');
+        return newParams;
+      }, { replace: true });
+      return;
+    }
     // Only persist view param for cutter process with jumbo/bobbins views
     if (isCutter && (newView === 'jumbo' || newView === 'bobbins')) {
       setSearchParams(prev => {
@@ -114,8 +135,19 @@ export function Stock() {
         newParams.set('view', newView);
         return newParams;
       }, { replace: true });
+      return;
     }
+    // Leaving combined on a non-cutter process: drop the now-stale param.
+    setSearchParams(prev => {
+      const newParams = new URLSearchParams(prev);
+      newParams.delete('view');
+      return newParams;
+    }, { replace: true });
   };
+
+  const isCombined = view === 'combined';
+  // What toggling Combined Stock off falls back to (mirrors the realignment effect below).
+  const processDefaultView = isHolo ? 'holo' : 'jumbo';
 
   const [expandedLot, setExpandedLot] = useState(null);
   const [selectedByLot, setSelectedByLot] = useState({});
@@ -145,7 +177,7 @@ export function Stock() {
   useEffect(() => { setExportData(null); }, [view, processId]);
 
   // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
-  const v2StockEnabled = isHolo || isConing;
+  const v2StockEnabled = (isHolo || isConing) && view !== 'combined';
   const v2Api = useV2StockLots(processId, { enabled: v2StockEnabled, search });
 
   // Close export menu when clicking outside / pressing escape
@@ -494,6 +526,8 @@ export function Stock() {
 
   // Keep view aligned with process (match main-branch behaviour)
   useEffect(() => {
+    // Combined Stock is process-independent: never force it back to a process view.
+    if (view === 'combined') return;
     if (isHolo) {
       setViewState('holo');
       // Clear view param from URL for non-cutter processes
@@ -700,137 +734,153 @@ export function Stock() {
                 </button>
               </div>
             ) : null}
-            {/* Export Button */}
-            <div className="relative ml-auto md:ml-0" ref={exportMenuRef}>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setExportMenuOpen((v) => !v)}
-                disabled={exportingDetailed}
-                className="gap-2"
-              >
-                <Download className="w-4 h-4" />
-                <span>{exportingDetailed ? 'Exporting…' : 'Export'}</span>
-                <ChevronDown className={cn("w-4 h-4 opacity-70 transition-transform", exportMenuOpen ? "rotate-180" : "rotate-0")} />
-              </Button>
+            {/* Combined Stock Toggle (process-independent) */}
+            <Button
+              variant={isCombined ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setView(isCombined ? processDefaultView : 'combined')}
+              className="gap-2 ml-auto md:ml-0"
+            >
+              <Layers className="w-4 h-4" />
+              <span>Combined Stock</span>
+            </Button>
+            {/* Export Button (combined view owns no export in v1) */}
+            {!isCombined && (
+              <div className="relative" ref={exportMenuRef}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setExportMenuOpen((v) => !v)}
+                  disabled={exportingDetailed}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{exportingDetailed ? 'Exporting…' : 'Export'}</span>
+                  <ChevronDown className={cn("w-4 h-4 opacity-70 transition-transform", exportMenuOpen ? "rotate-180" : "rotate-0")} />
+                </Button>
 
-              {exportMenuOpen && (
-                <div className="absolute right-0 z-50 mt-1 min-w-[180px] rounded-md border bg-popover shadow-md animate-in fade-in-0 zoom-in-95">
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
-                    onClick={() => { setExportMenuOpen(false); handleExport('xlsx'); }}
-                  >
-                    Excel (.xlsx)
-                  </button>
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
-                    disabled={exportingDetailed}
-                    onClick={() => { setExportMenuOpen(false); handleExport('xlsx-detailed'); }}
-                  >
-                    Excel Detailed (.xlsx)
-                  </button>
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors border-t"
-                    onClick={() => { setExportMenuOpen(false); handleExport('pdf'); }}
-                  >
-                    PDF (.pdf)
-                  </button>
-                </div>
-              )}
-            </div>
+                {exportMenuOpen && (
+                  <div className="absolute right-0 z-50 mt-1 min-w-[180px] rounded-md border bg-popover shadow-md animate-in fade-in-0 zoom-in-95">
+                    <button
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                      onClick={() => { setExportMenuOpen(false); handleExport('xlsx'); }}
+                    >
+                      Excel (.xlsx)
+                    </button>
+                    <button
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+                      disabled={exportingDetailed}
+                      onClick={() => { setExportMenuOpen(false); handleExport('xlsx-detailed'); }}
+                    >
+                      Excel Detailed (.xlsx)
+                    </button>
+                    <button
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors border-t"
+                      onClick={() => { setExportMenuOpen(false); handleExport('pdf'); }}
+                    >
+                      PDF (.pdf)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Filter Bar */}
-        <Card className="bg-muted/40 border-none shadow-none">
-          <CardContent className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 items-end">
-            <div className="sm:col-span-2 lg:col-span-2 min-w-0">
-              <Label className="text-xs mb-1 block">Search</Label>
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Lot No, Item, Barcode..."
-                  className="pl-8 bg-background"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                />
+        {/* Filter Bar (hidden in combined view — it owns its own item picker) */}
+        {!isCombined && (
+          <Card className="bg-muted/40 border-none shadow-none">
+            <CardContent className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 items-end">
+              <div className="sm:col-span-2 lg:col-span-2 min-w-0">
+                <Label className="text-xs mb-1 block">Search</Label>
+                <div className="relative">
+                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Lot No, Item, Barcode..."
+                    className="pl-8 bg-background"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Item</Label>
-              <Select className="bg-background w-full" value={filters.item} onChange={e => setFilters(f => ({ ...f, item: e.target.value }))}>
-                <option value="">All Items</option>
-                {db?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Cut</Label>
-              <Select className="bg-background w-full" value={filters.cut} onChange={e => setFilters(f => ({ ...f, cut: e.target.value }))}>
-                <option value="">All Cuts</option>
-                {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Yarn</Label>
-              <Select className="bg-background w-full" value={filters.yarn} onChange={e => setFilters(f => ({ ...f, yarn: e.target.value }))}>
-                <option value="">All Yarns</option>
-                {db?.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Firm</Label>
-              <Select className="bg-background w-full" value={filters.firm} onChange={e => setFilters(f => ({ ...f, firm: e.target.value }))}>
-                <option value="">All Firms</option>
-                {db?.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Supplier</Label>
-              <Select className="bg-background w-full" value={filters.supplier} onChange={e => setFilters(f => ({ ...f, supplier: e.target.value }))}>
-                <option value="">All Suppliers</option>
-                {db?.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Status</Label>
-              <Select className="bg-background w-full" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
-                <option value="active">Active Only</option>
-                <option value="inactive">Inactive Only</option>
-                {isCutter && <option value="available_to_issue">Available to issue</option>}
-                <option value="all">All</option>
-              </Select>
-            </div>
-            {isHolo && (
               <div>
-                <Label className="text-xs mb-1 block">Steamed</Label>
-                <Select className="bg-background w-full" value={filters.steamed} onChange={e => setFilters(f => ({ ...f, steamed: e.target.value }))}>
-                  <option value="all">All</option>
-                  <option value="steamed">Steamed Only</option>
-                  <option value="not_steamed">Not Steamed</option>
-                  <option value="partial">Partially Steamed</option>
+                <Label className="text-xs mb-1 block">Item</Label>
+                <Select className="bg-background w-full" value={filters.item} onChange={e => setFilters(f => ({ ...f, item: e.target.value }))}>
+                  <option value="">All Items</option>
+                  {db?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                 </Select>
               </div>
-            )}
-            <div>
-              <Label className="text-xs mb-1 block">From</Label>
-              <Input type="date" className="bg-background w-full" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">To</Label>
-              <Input type="date" className="bg-background w-full" value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
-            </div>
-            <div className="flex items-center gap-2 pb-2 sm:col-span-2 lg:col-span-1 lg:ml-auto">
-              <Label className="text-xs cursor-pointer flex items-center gap-2">
-                <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
-                Group
-              </Label>
-            </div>
-          </CardContent>
-        </Card>
+              <div>
+                <Label className="text-xs mb-1 block">Cut</Label>
+                <Select className="bg-background w-full" value={filters.cut} onChange={e => setFilters(f => ({ ...f, cut: e.target.value }))}>
+                  <option value="">All Cuts</option>
+                  {db?.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">Yarn</Label>
+                <Select className="bg-background w-full" value={filters.yarn} onChange={e => setFilters(f => ({ ...f, yarn: e.target.value }))}>
+                  <option value="">All Yarns</option>
+                  {db?.yarns?.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">Firm</Label>
+                <Select className="bg-background w-full" value={filters.firm} onChange={e => setFilters(f => ({ ...f, firm: e.target.value }))}>
+                  <option value="">All Firms</option>
+                  {db?.firms?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">Supplier</Label>
+                <Select className="bg-background w-full" value={filters.supplier} onChange={e => setFilters(f => ({ ...f, supplier: e.target.value }))}>
+                  <option value="">All Suppliers</option>
+                  {db?.suppliers?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">Status</Label>
+                <Select className="bg-background w-full" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
+                  <option value="active">Active Only</option>
+                  <option value="inactive">Inactive Only</option>
+                  {isCutter && <option value="available_to_issue">Available to issue</option>}
+                  <option value="all">All</option>
+                </Select>
+              </div>
+              {isHolo && (
+                <div>
+                  <Label className="text-xs mb-1 block">Steamed</Label>
+                  <Select className="bg-background w-full" value={filters.steamed} onChange={e => setFilters(f => ({ ...f, steamed: e.target.value }))}>
+                    <option value="all">All</option>
+                    <option value="steamed">Steamed Only</option>
+                    <option value="not_steamed">Not Steamed</option>
+                    <option value="partial">Partially Steamed</option>
+                  </Select>
+                </div>
+              )}
+              <div>
+                <Label className="text-xs mb-1 block">From</Label>
+                <Input type="date" className="bg-background w-full" value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block">To</Label>
+                <Input type="date" className="bg-background w-full" value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
+              </div>
+              <div className="flex items-center gap-2 pb-2 sm:col-span-2 lg:col-span-1 lg:ml-auto">
+                <Label className="text-xs cursor-pointer flex items-center gap-2">
+                  <input type="checkbox" checked={groupByItem} onChange={e => setGroupByItem(e.target.checked)} className="rounded border-gray-300" />
+                  Group
+                </Label>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Main Content based on View */}
-      {processId === 'coning' ? (
+      {isCombined ? (
+        <CombinedStockView db={db} ensureModuleData={ensureModuleData} />
+      ) : processId === 'coning' ? (
         <ConingView
           db={db}
           filters={filters}

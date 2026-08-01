@@ -29,9 +29,11 @@ import {
  *
  * Hard constraint: no new stock math. Jumbo/Bobbins reuse the same `stockSelectors`
  * functions the Stock page and BobbinView run; Holo/Coning reuse the same v2 lot
- * payloads via `useV2StockLots`. Each section is then narrowed to the picked item and
- * to that view's DEFAULT status filter, so the headline totals equal the existing
- * view's grand-total row filtered to the same item.
+ * payloads via `useV2StockLots`. Each section is then narrowed to the picked item,
+ * the optionally picked yarn (empty = all yarns), and that view's DEFAULT status
+ * filter, so the headline totals equal the existing view's grand-total row filtered
+ * the same way. Yarn matching mirrors each view: name-set membership for
+ * jumbo/bobbins/coning, direct yarnId equality for holo.
  */
 
 const CUTTER_PROCESS = getProcessDefinition('cutter');
@@ -40,10 +42,10 @@ const CUTTER_PROCESS = getProcessDefinition('cutter');
 const CUTTER_DEFAULT_STATUS = 'available_to_issue';
 const V2_DEFAULT_STATUS = 'active';
 
-const buildPinnedFilters = (itemId, status) => ({
+const buildPinnedFilters = (itemId, yarnId, status) => ({
   item: itemId,
   cut: '',
-  yarn: '',
+  yarn: yarnId,
   firm: '',
   supplier: '',
   status,
@@ -58,6 +60,7 @@ const noopApplyFilter = () => { };
 
 export function CombinedStockView({ db, ensureModuleData }) {
   const [selectedItemId, setSelectedItemId] = useState('');
+  const [selectedYarnId, setSelectedYarnId] = useState('');
   const [expandedSections, setExpandedSections] = useState(() => new Set());
 
   const enabledViews = useMemo(() => (
@@ -76,7 +79,13 @@ export function CombinedStockView({ db, ensureModuleData }) {
   const coningEnabled = enabledKeys.has('coning');
   const hasItem = !!selectedItemId;
 
-  useEffect(() => { setExpandedSections(new Set()); }, [selectedItemId]);
+  useEffect(() => { setExpandedSections(new Set()); }, [selectedItemId, selectedYarnId]);
+
+  // Jumbo/bobbins/coning filter by the yarn's NAME against each lot's yarn-name set
+  // (Stock.jsx / BobbinView / ConingView do the same); an unresolvable id filters nothing.
+  const selectedYarnName = useMemo(() => (
+    selectedYarnId ? ((db?.yarns || []).find((y) => idEq(y.id, selectedYarnId))?.name || '') : ''
+  ), [db?.yarns, selectedYarnId]);
 
   const toggleSection = useCallback((key) => {
     setExpandedSections((prev) => {
@@ -148,9 +157,10 @@ export function CombinedStockView({ db, ensureModuleData }) {
     return Object.values(jumboLotsMap)
       .filter((l) => !isCutterPurchaseLotNo(l?.lotNo))
       .filter((l) => idEq(l.itemId, selectedItemId))
+      .filter((l) => !selectedYarnName || l.yarnNames?.has(selectedYarnName))
       .filter((l) => (l.availableCount || 0) > 0)
       .sort(byLotNo);
-  }, [jumboLotsMap, jumboEnabled, selectedItemId]);
+  }, [jumboLotsMap, jumboEnabled, selectedItemId, selectedYarnName]);
 
   // --- Bobbins (same selectors as BobbinView) ---
 
@@ -173,9 +183,10 @@ export function CombinedStockView({ db, ensureModuleData }) {
     // Mirrors the Bobbins view default status filter (available bobbins only).
     return allBobbinLots
       .filter((l) => idEq(l.itemId, selectedItemId))
+      .filter((l) => !selectedYarnName || l.yarnNames?.has(selectedYarnName))
       .filter((l) => (l.availableBobbins || 0) > 0)
       .sort(byLotNo);
-  }, [allBobbinLots, bobbinsEnabled, selectedItemId]);
+  }, [allBobbinLots, bobbinsEnabled, selectedItemId, selectedYarnName]);
 
   // --- Holo / Coning (same v2 lot payloads as HoloView / ConingView) ---
 
@@ -183,17 +194,28 @@ export function CombinedStockView({ db, ensureModuleData }) {
     if (!holoEnabled || !selectedItemId) return [];
     return (holoV2.lots || [])
       .filter((l) => String(l.itemId) === String(selectedItemId))
+      .filter((l) => !selectedYarnId || String(l.yarnId) === String(selectedYarnId))
       .filter((l) => l.statusType === V2_DEFAULT_STATUS)
       .sort(byLotNo);
-  }, [holoV2.lots, holoEnabled, selectedItemId]);
+  }, [holoV2.lots, holoEnabled, selectedItemId, selectedYarnId]);
 
   const coningLots = useMemo(() => {
     if (!coningEnabled || !selectedItemId) return [];
     return (coningV2.lots || [])
       .filter((l) => String(l.itemId) === String(selectedItemId))
+      .filter((l) => {
+        // The Yarn column shows the upstream-holo trace names — match what is
+        // displayed, exactly as ConingView builds its yarnNames set.
+        if (!selectedYarnName) return true;
+        const yarnNamesArr = Array.isArray(l.yarnNames) ? l.yarnNames : [];
+        const names = yarnNamesArr.length
+          ? yarnNamesArr
+          : String(l.yarnName || '').split(',').map((v) => v.trim()).filter(Boolean);
+        return names.includes(selectedYarnName);
+      })
       .filter((l) => l.statusType === V2_DEFAULT_STATUS)
       .sort(byLotNo);
-  }, [coningV2.lots, coningEnabled, selectedItemId]);
+  }, [coningV2.lots, coningEnabled, selectedItemId, selectedYarnName]);
 
   // --- Headline totals (the exact fields each view's grand-total row sums) ---
 
@@ -220,8 +242,8 @@ export function CombinedStockView({ db, ensureModuleData }) {
 
   // --- Pinned filters for full-tables mode ---
 
-  const cutterFilters = useMemo(() => buildPinnedFilters(selectedItemId, CUTTER_DEFAULT_STATUS), [selectedItemId]);
-  const v2Filters = useMemo(() => buildPinnedFilters(selectedItemId, V2_DEFAULT_STATUS), [selectedItemId]);
+  const cutterFilters = useMemo(() => buildPinnedFilters(selectedItemId, selectedYarnId, CUTTER_DEFAULT_STATUS), [selectedItemId, selectedYarnId]);
+  const v2Filters = useMemo(() => buildPinnedFilters(selectedItemId, selectedYarnId, V2_DEFAULT_STATUS), [selectedItemId, selectedYarnId]);
 
   // --- Section descriptors ---
 
@@ -494,6 +516,20 @@ export function CombinedStockView({ db, ensureModuleData }) {
               clearable
               placeholder="Select an item"
               cacheKey="combined-stock-item"
+            />
+          </div>
+          <div className="min-w-0">
+            <Label className="text-xs mb-1 block">Yarn</Label>
+            <Select
+              className="bg-background w-full"
+              value={selectedYarnId}
+              onChange={(e) => setSelectedYarnId(e.target.value)}
+              options={db?.yarns || []}
+              labelKey="name"
+              valueKey="id"
+              clearable
+              placeholder="All yarns"
+              cacheKey="combined-stock-yarn"
             />
           </div>
         </CardContent>

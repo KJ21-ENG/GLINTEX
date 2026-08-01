@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound' },
@@ -55,6 +56,8 @@ export function MobileDispatchView({
         mode: 'weight',
     });
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapCreate] = useSubmitLock();
+    const [, wrapCreateCustomer] = useSubmitLock();
 
     // New customer modal
     const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
@@ -175,7 +178,7 @@ export function MobileDispatchView({
     };
 
     // Create dispatch
-    const handleCreateDispatch = async () => {
+    const handleCreateDispatch = wrapCreate(async () => {
         if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
             return;
@@ -229,9 +232,9 @@ export function MobileDispatchView({
         } finally {
             setSubmitting(false);
         }
-    };
+    });
 
-    const handleCreateBulkDispatch = async () => {
+    const handleCreateBulkDispatch = wrapCreate(async () => {
         if (!bulkForm.customerId) {
             alert('Please select a customer');
             return;
@@ -293,10 +296,10 @@ export function MobileDispatchView({
         } finally {
             setSubmitting(false);
         }
-    };
+    });
 
     // Create new customer
-    const handleCreateCustomer = async () => {
+    const handleCreateCustomer = wrapCreateCustomer(async () => {
         if (!newCustomerForm.name.trim()) {
             alert('Customer name is required');
             return;
@@ -318,7 +321,7 @@ export function MobileDispatchView({
         } finally {
             setSavingCustomer(false);
         }
-    };
+    });
 
     // Clear stage and reset items when stage changes
     const handleStageChange = (stage) => {

@@ -6,6 +6,7 @@ import { QrCode } from 'lucide-react';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 const EPSILON = 1e-6;
 const clampWeight = (value, maxValue) => {
@@ -31,6 +32,8 @@ export function IssueToCutter() {
     const [barcodeScan, setBarcodeScan] = useState('');
     const [scanLoading, setScanLoading] = useState(false);
     const [issuing, setIssuing] = useState(false);
+    const [, wrapScan] = useSubmitLock();
+    const [, wrapIssue] = useSubmitLock();
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 
@@ -159,12 +162,12 @@ export function IssueToCutter() {
         }
     }
 
-    async function handleScan(e) {
+    const handleScan = wrapScan(async (e) => {
         e.preventDefault();
         return await addBarcode(barcodeScan);
-    }
+    });
 
-    async function handleIssue() {
+    const handleIssue = wrapIssue(async () => {
         if (!date || !itemId || !lotNo || !machineId || !operatorId || !cutId || selectedLines.length === 0) return;
         setIssuing(true);
         try {
@@ -221,7 +224,7 @@ export function IssueToCutter() {
         } finally {
             setIssuing(false);
         }
-    }
+    });
 
     function toggle(id) {
         const existing = selectedLineByPieceId.get(id);

@@ -10,6 +10,7 @@ import { exportHistoryToExcel } from '../services';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 
 const INBOUND_MODE_OPTIONS = [
     { value: 'raw', label: 'Raw Inbound (Rolls)' },
@@ -89,6 +90,9 @@ export function Inbound() {
     const [cutterCart, setCutterCart] = useState([]);
     const [reservedCutterLotNo, setReservedCutterLotNo] = useState(null); // Reserved lot number for sticker printing
     const [saving, setSaving] = useState(false);
+    const [, wrapSaveLot] = useSubmitLock();
+    const [addCutterLocked, wrapAddCutter] = useSubmitLock();
+    const [, wrapSaveCutter] = useSubmitLock();
 
     const weightRef = useRef(null);
 
@@ -185,7 +189,7 @@ export function Inbound() {
         setCart(cart.filter(c => c.tempId !== tempId).map((c, idx) => ({ ...c, seq: idx + 1 })));
     }
 
-    async function handleSaveLot() {
+    const handleSaveLot = wrapSaveLot(async () => {
         if (readOnly) return;
         if (!canSave) return;
         setSaving(true);
@@ -248,9 +252,9 @@ export function Inbound() {
         } finally {
             setSaving(false);
         }
-    }
+    });
 
-    const addCutterCrate = async () => {
+    const addCutterCrate = wrapAddCutter(async () => {
         if (purchaseReadOnly) return;
         if (!cutterEntry.cutId) {
             alert('Cut is required.');
@@ -351,13 +355,13 @@ export function Inbound() {
             bobbinQuantity: '',
             grossWeight: '',
         }));
-    };
+    });
 
     const removeCutterCrate = (crateId) => {
         setCutterCart(prev => prev.filter(row => row.id !== crateId));
     };
 
-    const handleSaveCutterPurchase = async () => {
+    const handleSaveCutterPurchase = wrapSaveCutter(async () => {
         if (purchaseReadOnly) return;
         if (!canSaveCutter) return;
         if (cutterCart.some(row => !row.cutId)) {
@@ -403,7 +407,7 @@ export function Inbound() {
         } finally {
             setSaving(false);
         }
-    };
+    });
 
 
     if (!canRead) {
@@ -701,7 +705,7 @@ export function Inbound() {
 
                         <div className="flex flex-col sm:flex-row justify-between items-end gap-4 sm:gap-0">
                             <div className="flex w-full sm:w-auto gap-2">
-                                <Button onClick={addCutterCrate} disabled={!canAddCutter || purchaseReadOnly} className="flex-1 sm:flex-none gap-2">
+                                <Button onClick={addCutterCrate} disabled={addCutterLocked || !canAddCutter || purchaseReadOnly} className="flex-1 sm:flex-none gap-2">
                                     <Plus className="w-4 h-4" /> Add Crate
                                 </Button>
                                 <Button variant="outline" onClick={() => { setCutterCart([]); setReservedCutterLotNo(null); }} disabled={cutterCart.length === 0 || purchaseReadOnly} className="flex-1 sm:flex-none text-destructive hover:text-destructive">

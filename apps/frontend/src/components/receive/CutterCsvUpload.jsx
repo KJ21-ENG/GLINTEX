@@ -17,6 +17,7 @@ import {
   Badge,
 } from '../ui';
 import { Upload, FileUp, RefreshCw, FileWarning } from 'lucide-react';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 const formatDateTime = (value) => formatDateTimeDDMMYYYY(value);
 
@@ -154,6 +155,7 @@ export function CutterCsvUpload() {
   const [importResult, setImportResult] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [, wrapConfirm] = useSubmitLock();
   const [actionError, setActionError] = useState('');
   const [actionIssues, setActionIssues] = useState([]);
   const [dragActive, setDragActive] = useState(false);
@@ -237,7 +239,7 @@ export function CutterCsvUpload() {
     }
   };
 
-  const handleConfirmImport = async () => {
+  const handleConfirmImport = wrapConfirm(async () => {
     if (!selectedFile) return;
     setConfirming(true);
     setActionError('');
@@ -265,7 +267,7 @@ export function CutterCsvUpload() {
     } finally {
       setConfirming(false);
     }
-  };
+  });
 
   return (
     <div className="space-y-4">

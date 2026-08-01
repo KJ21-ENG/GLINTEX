@@ -10,6 +10,7 @@ import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
 import { InfoPopover } from '../components/common/InfoPopover';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
 import { exportHistoryToExcel } from '../services';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 import { UserBadge } from '../components/common/UserBadge';
 import { SheetColumnFilter } from '../components/common/SheetColumnFilters';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
@@ -614,7 +615,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }));
   };
 
-  const handleSaveIssueEdits = async () => {
+  const [, wrapSaveIssue] = useSubmitLock();
+  const handleSaveIssueEdits = wrapSaveIssue(async () => {
     if (!editingIssue || !issueDraft) return;
     if (!issueDraft.date) {
       alert('Date is required');
@@ -708,7 +710,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     } finally {
       setSavingIssue(false);
     }
-  };
+  });
 
   const handleReprint = async (row) => {
     try {

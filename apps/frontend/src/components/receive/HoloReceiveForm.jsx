@@ -7,6 +7,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 export function HoloReceiveForm() {
     const { db, patchDb, emitInvalidation } = useInventory();
@@ -16,6 +17,7 @@ export function HoloReceiveForm() {
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapSubmit] = useSubmitLock();
     const [template, setTemplate] = useState(null);
 
     const [form, setForm] = useState({
@@ -163,7 +165,7 @@ export function HoloReceiveForm() {
         }
     }
 
-    async function handleSubmit() {
+    const handleSubmit = wrapSubmit(async () => {
         if (!issue) return;
         if (!form.pieceId) {
             alert('Select a piece for this receive');
@@ -321,7 +323,7 @@ export function HoloReceiveForm() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
     return (
         <div className="space-y-6">

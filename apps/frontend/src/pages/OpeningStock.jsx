@@ -29,6 +29,7 @@ import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import * as v2 from '../api/v2';
 
@@ -68,6 +69,10 @@ export function OpeningStock() {
   const [openingHoloSeries, setOpeningHoloSeries] = useState(null);
   const [openingConingSeries, setOpeningConingSeries] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [addCutterLocked, wrapAddCutter] = useSubmitLock();
+  const [addHoloLocked, wrapAddHolo] = useSubmitLock();
+  const [addConingLocked, wrapAddConing] = useSubmitLock();
+  const [, wrapSave] = useSubmitLock();
   const [deletingKey, setDeletingKey] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -418,7 +423,7 @@ export function OpeningStock() {
     }));
   };
 
-  const addCutterCrate = async () => {
+  const addCutterCrate = wrapAddCutter(async () => {
     if (isReadOnly) return;
     if (!cutterEntry.cutId) {
       alert('Cut is required.');
@@ -503,9 +508,9 @@ export function OpeningStock() {
       grossWeight: '',
       notes: '',
     }));
-  };
+  });
 
-  const addHoloCrate = async () => {
+  const addHoloCrate = wrapAddHolo(async () => {
     if (isReadOnly) return;
     if (!holoEntry.rollTypeId) return;
     const rollType = getRollType(holoEntry.rollTypeId);
@@ -595,9 +600,9 @@ export function OpeningStock() {
       grossWeight: '',
       notes: '',
     }));
-  };
+  });
 
-  const addConingCrate = async () => {
+  const addConingCrate = wrapAddConing(async () => {
     if (isReadOnly) return;
     if (!coningIssue.coneTypeId) {
       alert('Select cone type first.');
@@ -686,9 +691,9 @@ export function OpeningStock() {
       grossWeight: '',
       notes: '',
     }));
-  };
+  });
 
-  const handleSaveInbound = async () => {
+  const handleSaveInbound = wrapSave(async () => {
     if (isReadOnly) return;
     if (!canSaveCommon || inboundCart.length === 0) return;
     setSaving(true);
@@ -716,7 +721,7 @@ export function OpeningStock() {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   const handleRemove = (setter, id) => {
     if (isReadOnly) return;
@@ -803,7 +808,7 @@ export function OpeningStock() {
     }
   };
 
-  const handleSaveCutter = async () => {
+  const handleSaveCutter = wrapSave(async () => {
     if (isReadOnly) return;
     if (!canSaveCommon || cutterCart.length === 0) return;
     if (cutterCart.some(row => !row.cutId)) {
@@ -841,9 +846,9 @@ export function OpeningStock() {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
-  const handleSaveHolo = async () => {
+  const handleSaveHolo = wrapSave(async () => {
     if (isReadOnly) return;
     if (!canSaveCommon || !holoIssue.twistId || holoCart.length === 0) return;
     setSaving(true);
@@ -885,9 +890,9 @@ export function OpeningStock() {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
-  const handleSaveConing = async () => {
+  const handleSaveConing = wrapSave(async () => {
     if (isReadOnly) return;
     if (!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0) return;
     setSaving(true);
@@ -929,7 +934,7 @@ export function OpeningStock() {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   const currentStageName = STAGE_OPTIONS.find(s => s.id === stage)?.label || stage;
 
@@ -1352,7 +1357,7 @@ export function OpeningStock() {
                 </div>
               )}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
-                <Button onClick={addCutterCrate} className="gap-2 w-full sm:w-auto">
+                <Button onClick={addCutterCrate} disabled={addCutterLocked} className="gap-2 w-full sm:w-auto">
                   <Plus className="w-4 h-4" /> Add Crate
                 </Button>
                 <Button onClick={handleSaveCutter} disabled={!canSaveCommon || cutterCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
@@ -1536,7 +1541,7 @@ export function OpeningStock() {
                 </div>
               )}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
-                <Button onClick={addHoloCrate} className="gap-2 w-full sm:w-auto">
+                <Button onClick={addHoloCrate} disabled={addHoloLocked} className="gap-2 w-full sm:w-auto">
                   <Plus className="w-4 h-4" /> Add Crate
                 </Button>
                 <Button onClick={handleSaveHolo} disabled={!canSaveCommon || !holoIssue.twistId || holoCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">
@@ -1724,7 +1729,7 @@ export function OpeningStock() {
                 </div>
               )}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
-                <Button onClick={addConingCrate} className="gap-2 w-full sm:w-auto">
+                <Button onClick={addConingCrate} disabled={addConingLocked} className="gap-2 w-full sm:w-auto">
                   <Plus className="w-4 h-4" /> Add Crate
                 </Button>
                 <Button onClick={handleSaveConing} disabled={!canSaveCommon || !coningIssue.coneTypeId || coningCart.length === 0 || saving} className="gap-2 w-full sm:w-auto">

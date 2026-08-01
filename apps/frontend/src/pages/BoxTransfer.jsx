@@ -5,6 +5,7 @@ import { ArrowRightLeft, Search, RotateCcw, Package, ArrowDown, Loader2, CheckCi
 import { cn } from '../lib/utils';
 import { estimateWeightFromCount } from '../utils';
 import { usePermission } from '../hooks/usePermission';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
@@ -100,7 +101,8 @@ export function BoxTransfer() {
         }
     };
 
-    const handleTransfer = async () => {
+    const [, wrapTransfer] = useSubmitLock();
+    const handleTransfer = wrapTransfer(async () => {
         if (isReadOnly) return;
         setError('');
         setSuccess('');
@@ -162,7 +164,7 @@ export function BoxTransfer() {
         } finally {
             setLoading(false);
         }
-    };
+    });
 
     const handleReverse = async (transferId) => {
         if (!canDelete) return;

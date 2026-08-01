@@ -19,6 +19,7 @@ import { usePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { BoilerMachineDialog } from '../components/boiler/BoilerMachineDialog';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
 import {
     buildBoilerScanGroups,
@@ -149,6 +150,8 @@ export function Boiler() {
     const [scannedItems, setScannedItems] = useState([]);
     const [lookingUp, setLookingUp] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapAddBarcode] = useSubmitLock();
+    const [, wrapSteam] = useSubmitLock();
     const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
     const inputRef = useRef(null);
     const boilerMachines = useMemo(
@@ -362,7 +365,7 @@ export function Boiler() {
     }, []);
 
     // Add barcode to list
-    const handleAddBarcode = async () => {
+    const handleAddBarcode = wrapAddBarcode(async () => {
         if (readOnly) return;
         const normalized = barcodeInput.trim().toUpperCase();
         if (!normalized) return;
@@ -413,7 +416,7 @@ export function Boiler() {
             setLookingUp(false);
             inputRef.current?.focus();
         }
-    };
+    });
 
     const handleKeyDown = (e) => {
         if (e.key === 'Enter') {
@@ -442,7 +445,7 @@ export function Boiler() {
     };
 
     // Confirm steam with selected boiler machine
-    const confirmSteam = async (boilerMachineId) => {
+    const confirmSteam = wrapSteam(async (boilerMachineId) => {
         setSubmitting(true);
         try {
             const barcodes = steamableItems.map(item => item.barcode || item.scannedBarcode);
@@ -461,7 +464,7 @@ export function Boiler() {
         } finally {
             setSubmitting(false);
         }
-    };
+    });
 
     // Handle mobile steam complete
     const handleMobileSteamComplete = (count) => {

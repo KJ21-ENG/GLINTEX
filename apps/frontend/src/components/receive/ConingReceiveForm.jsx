@@ -9,6 +9,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 const RECEIVED_OVER_ISSUED_EPSILON_KG = 0.001;
 
@@ -20,6 +21,7 @@ export function ConingReceiveForm() {
     const [issue, setIssue] = useState(null);
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapSubmit] = useSubmitLock();
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [isWastage, setIsWastage] = useState(false);
     const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
@@ -266,7 +268,7 @@ export function ConingReceiveForm() {
         return (db.receive_from_coning_machine_rows || []).filter((row) => row.issueId === issue.id);
     }, [db.receive_from_coning_machine_rows, issue?.id]);
 
-    async function handleSubmit() {
+    const handleSubmit = wrapSubmit(async () => {
         if (!issue || cart.length === 0) return;
         setSubmitting(true);
         try {
@@ -475,7 +477,7 @@ export function ConingReceiveForm() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
     return (
         <div className="space-y-6">

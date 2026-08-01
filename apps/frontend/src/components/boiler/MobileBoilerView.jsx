@@ -11,6 +11,7 @@ import {
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
 import { BoilerMachineDialog } from './BoilerMachineDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 import {
     buildBoilerScanGroups,
     formatScanGroupValues,
@@ -57,6 +58,7 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     const [manualBarcode, setManualBarcode] = useState('');
     const [lookingUp, setLookingUp] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapSteam] = useSubmitLock();
     const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
     const [expandedScanGroups, setExpandedScanGroups] = useState(() => new Set());
 
@@ -147,7 +149,7 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     };
 
     // Confirm steam with selected boiler machine
-    const confirmSteam = async (boilerMachineId) => {
+    const confirmSteam = wrapSteam(async (boilerMachineId) => {
         setSubmitting(true);
         try {
             const barcodes = steamableItems.map(item => item.barcode || item.scannedBarcode);
@@ -169,7 +171,7 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
         } finally {
             setSubmitting(false);
         }
-    };
+    });
 
     const renderScannedItem = (item) => (
         <div

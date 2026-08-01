@@ -5,6 +5,7 @@ import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 export function IssueToHolo() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -23,6 +24,7 @@ export function IssueToHolo() {
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapSubmit] = useSubmitLock();
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 
@@ -181,7 +183,7 @@ export function IssueToHolo() {
         }));
     }
 
-    async function handleSubmit() {
+    const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (lotSummary.itemIds.length > 1) {
             alert('Mixed items not allowed');
@@ -267,7 +269,7 @@ export function IssueToHolo() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
     return (
         <div className="space-y-6">

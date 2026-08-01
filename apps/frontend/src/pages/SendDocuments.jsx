@@ -9,6 +9,7 @@ import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatDateDDMMYYYY, todayISO } from '../utils';
 import { FileText, Send, History, Camera, Upload, Image, X, Loader2, CheckCircle2, Plus, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { UserBadge } from '../components/common/UserBadge';
 
@@ -145,7 +146,8 @@ export function SendDocuments() {
         }
     }
 
-    async function handleSend() {
+    const [, wrapSend] = useSubmitLock();
+    const handleSend = wrapSend(async () => {
         const settings = db?.settings?.[0] || {};
         const whatsappEnabled = settings?.whatsappEnabled !== false;
         if (!selectedFile || (whatsappEnabled && recipientMode === 'contact' && !selectedCustomerId)) {
@@ -205,7 +207,7 @@ export function SendDocuments() {
         } finally {
             setSending(false);
         }
-    }
+    });
 
     async function handleCreateCustomer() {
         if (!newCustomerForm.name.trim()) {

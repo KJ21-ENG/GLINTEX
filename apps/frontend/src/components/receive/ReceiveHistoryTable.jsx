@@ -10,6 +10,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
@@ -919,7 +920,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         setReceiveDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
     };
 
-    const handleSaveReceiveEdits = async () => {
+    const [, wrapSaveReceive] = useSubmitLock();
+    const [, wrapSaveChallan] = useSubmitLock();
+    const handleSaveReceiveEdits = wrapSaveReceive(async () => {
         if (!editingReceiveRow || !receiveDraft) return;
         if (process !== 'holo' && process !== 'coning') return;
 
@@ -1102,7 +1105,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         } finally {
             setSavingReceive(false);
         }
-    };
+    });
 
     const handleDeleteReceiveRow = async (row) => {
         if (!canDelete) return;
@@ -1289,7 +1292,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         setRemovedRowIds(new Set());
     };
 
-    const handleSaveChallanEdits = async () => {
+    const handleSaveChallanEdits = wrapSaveChallan(async () => {
         if (!editingChallan) return;
         const removedIds = Array.from(removedRowIds);
         const updates = editRows
@@ -1389,7 +1392,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         } finally {
             setSavingEdit(false);
         }
-    };
+    });
 
     const handleDeleteChallan = async (challan) => {
         if (!canDelete) return;

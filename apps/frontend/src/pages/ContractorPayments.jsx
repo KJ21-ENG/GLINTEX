@@ -12,6 +12,7 @@ import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import { applySheetFilters, SheetColumnFilter } from '../components/common/SheetColumnFilters';
 import { AlertTriangle, Plus, Trash2, FileText, IndianRupee, RefreshCw, Check, X, Pencil } from 'lucide-react';
 import * as api from '../api/client';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 
 const PROCESS_OPTIONS = [
   { value: 'cutter', label: 'Cutter' },
@@ -338,7 +339,8 @@ export function ContractorPayments() {
     .filter((x) => Number(x.amount) > 0 && x.reason.trim())
     .map((x) => ({ type: x.type, amount: Number(x.amount), reason: x.reason.trim() }));
 
-  const createDraft = async () => {
+  const [, wrapCreateDraft] = useSubmitLock();
+  const createDraft = wrapCreateDraft(async () => {
     setCreateMsg(''); setCreating(true);
     try {
       const payload = {
@@ -358,7 +360,7 @@ export function ContractorPayments() {
     } finally {
       setCreating(false);
     }
-  };
+  });
 
   const loadSettlements = useCallback(async (status) => {
     setLoadingList(true);
@@ -1038,12 +1040,13 @@ function MarkPaidDialog({ settlement, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const submit = async () => {
+  const [, wrapSubmit] = useSubmitLock();
+  const submit = wrapSubmit(async () => {
     setBusy(true); setErr('');
     try { await api.markContractorSettlementPaid(settlement.id, form); await onDone(); }
     catch (e) { setErr(e.message + (e.details?.mismatches?.length ? ` (${e.details.mismatches.length} row(s) changed)` : '')); }
     finally { setBusy(false); }
-  };
+  });
   return (
     <Modal title="Mark Paid" onClose={onClose}>
       {err && <div className="rounded-md border border-destructive/40 bg-destructive/10 text-destructive text-sm px-3 py-2">{err}</div>}
@@ -1129,7 +1132,8 @@ function PaidEditDialog({ settlement, onClose, onDone }) {
   const addAdj = () => setAdjustments((a) => [...a, { type: 'bonus', amount: '', reason: '' }]);
   const removeAdj = (i) => setAdjustments((a) => a.filter((_, idx) => idx !== i));
 
-  const submit = async () => {
+  const [, wrapSubmit] = useSubmitLock();
+  const submit = wrapSubmit(async () => {
     if (!reason.trim()) { setErr('A reason is required.'); return; }
     setBusy(true); setErr('');
     try {
@@ -1157,7 +1161,7 @@ function PaidEditDialog({ settlement, onClose, onDone }) {
     } catch (e) {
       setErr(e.message + (e.details?.blockers?.length ? ` (${e.details.blockers.length} blocked)` : ''));
     } finally { setBusy(false); }
-  };
+  });
 
   if (result) {
     return (

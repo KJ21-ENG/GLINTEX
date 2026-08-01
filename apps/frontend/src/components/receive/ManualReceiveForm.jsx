@@ -3,6 +3,7 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/Invento
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 export function ManualReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -16,6 +17,7 @@ export function ManualReceiveForm() {
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [cart, setCart] = useState([]);
     const [saving, setSaving] = useState(false);
+    const [, wrapSave] = useSubmitLock();
 
     // Options
     const issuedPieceIds = useMemo(() => {
@@ -67,7 +69,7 @@ export function ManualReceiveForm() {
         setBobbinQty('');
     }
 
-    async function handleSave() {
+    const handleSave = wrapSave(async () => {
         if (cart.length === 0) return;
         setSaving(true);
         try {
@@ -96,7 +98,7 @@ export function ManualReceiveForm() {
         } finally {
             setSaving(false);
         }
-    }
+    });
 
     return (
         <Card>

@@ -9,6 +9,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode,
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 export function CutterReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -36,6 +37,9 @@ export function CutterReceiveForm() {
 
     const [cart, setCart] = useState([]);
     const [saving, setSaving] = useState(false);
+    const [, wrapScan] = useSubmitLock();
+    const [addLocked, wrapAdd] = useSubmitLock();
+    const [, wrapSave] = useSubmitLock();
 
     const barcodeInputRef = useRef(null);
     const enrichIssueWithBalance = (rawIssue) => {
@@ -128,7 +132,7 @@ export function CutterReceiveForm() {
     }, [searchParams, issueRecord, setSearchParams]);
 
 
-    const handleScan = async (e) => {
+    const handleScan = wrapScan(async (e) => {
         e.preventDefault();
         if (!barcode) return;
         setLoading(true);
@@ -155,7 +159,7 @@ export function CutterReceiveForm() {
         } finally {
             setLoading(false);
         }
-    };
+    });
 
     // Helpers
     const selectedBobbin = db.bobbins.find(b => b.id === bobbinId);
@@ -347,7 +351,7 @@ export function CutterReceiveForm() {
         return makeReceiveBarcode({ lotNo, seq, crateIndex: nextIndex });
     };
 
-    async function handleAdd() {
+    const handleAdd = wrapAdd(async () => {
         if (!issueRecord) return;
 
         if (!pieceIdToUse) {
@@ -498,9 +502,9 @@ export function CutterReceiveForm() {
         setGrossWeight('');
         setBobbinQty('');
         setIsWastage(false);
-    }
+    });
 
-    async function handleSave() {
+    const handleSave = wrapSave(async () => {
         if (cart.length === 0) return;
         setSaving(true);
         try {
@@ -538,7 +542,7 @@ export function CutterReceiveForm() {
         } finally {
             setSaving(false);
         }
-    }
+    });
 
     return (
         <div className="space-y-6">
@@ -757,7 +761,7 @@ export function CutterReceiveForm() {
                                     ? `Wastage Weight (Pending): ${formatKg(effectiveNetWeight)}`
                                     : `Calculated Net Weight: ${formatKg(effectiveNetWeight)}`}
                             </div>
-                            <Button onClick={handleAdd} disabled={receivingBlocked || !effectiveNetWeight} className="w-full sm:w-auto">
+                            <Button onClick={handleAdd} disabled={addLocked || receivingBlocked || !effectiveNetWeight} className="w-full sm:w-auto">
                                 <Plus className="w-4 h-4 mr-2" /> {isWastage ? 'Add Wastage to List' : 'Add to List'}
                             </Button>
                         </div>

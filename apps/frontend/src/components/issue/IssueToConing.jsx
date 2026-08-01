@@ -7,6 +7,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
+import { useSubmitLock } from '../../hooks/useSubmitLock';
 
 export function IssueToConing() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -48,6 +49,7 @@ export function IssueToConing() {
     const [scanInput, setScanInput] = useState('');
     const [scanLoading, setScanLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapSubmit] = useSubmitLock();
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 
@@ -290,7 +292,7 @@ export function IssueToConing() {
         }));
     }
 
-    async function handleSubmit() {
+    const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (!form.targetWeight) { alert('Enter target cone weight'); return; }
 
@@ -387,7 +389,7 @@ export function IssueToConing() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
     return (
         <div className="space-y-6">

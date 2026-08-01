@@ -18,6 +18,7 @@ import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
+import { useSubmitLock } from '../hooks/useSubmitLock';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -90,6 +91,7 @@ export function Dispatch() {
         mode: 'weight', // 'weight' | 'count'
     });
     const [submitting, setSubmitting] = useState(false);
+    const [, wrapCreate] = useSubmitLock();
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [editDispatchOpen, setEditDispatchOpen] = useState(false);
     const [editDispatchForm, setEditDispatchForm] = useState(null);
@@ -480,7 +482,7 @@ export function Dispatch() {
         }
     }
 
-    async function handleCreateDispatch() {
+    const handleCreateDispatch = wrapCreate(async () => {
         if (readOnly) return;
         if (!selectedItem || !dispatchForm.customerId) {
             alert('Please fill in all required fields');
@@ -554,9 +556,9 @@ export function Dispatch() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
-    async function handleCreateBulkDispatch() {
+    const handleCreateBulkDispatch = wrapCreate(async () => {
         if (readOnly) return;
         if (!bulkForm.customerId) {
             alert('Please select a customer');
@@ -625,7 +627,7 @@ export function Dispatch() {
         } finally {
             setSubmitting(false);
         }
-    }
+    });
 
     async function handleDeleteDispatch(challanNo) {
         if (!canDelete) return;

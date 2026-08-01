@@ -20,6 +20,7 @@ import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { BoilerMachineDialog } from '../components/boiler/BoilerMachineDialog';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 import { SheetColumnFilter, applySheetFilters } from '../components/common/SheetColumnFilters';
 import {
     buildBoilerScanGroups,
@@ -152,6 +153,7 @@ export function Boiler() {
     const [submitting, setSubmitting] = useState(false);
     const [, wrapAddBarcode] = useSubmitLock();
     const [, wrapSteam] = useSubmitLock();
+    useUnsavedGuard('boiler', scannedItems.length > 0 || !!barcodeInput);
     const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
     const inputRef = useRef(null);
     const boilerMachines = useMemo(

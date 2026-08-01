@@ -7,6 +7,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 const EPSILON = 1e-6;
 const clampWeight = (value, maxValue) => {
@@ -34,6 +35,9 @@ export function IssueToCutter() {
     const [issuing, setIssuing] = useState(false);
     const [, wrapScan] = useSubmitLock();
     const [, wrapIssue] = useSubmitLock();
+    // Item/lot/machine context is retained after a successful issue (next issue
+    // reuses it) — only the staged piece selection counts as unsaved.
+    useUnsavedGuard('issue-to-cutter', selectedLines.length > 0);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 

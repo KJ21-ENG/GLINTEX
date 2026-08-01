@@ -6,6 +6,7 @@ import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function IssueToHolo() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -25,6 +26,9 @@ export function IssueToHolo() {
     const [scanInput, setScanInput] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [, wrapSubmit] = useSubmitLock();
+    // Machine/operator/yarn/twist params are retained after a successful issue —
+    // only what the save clears (crates, yarnKg, note) counts as unsaved.
+    useUnsavedGuard('issue-to-holo', crates.length > 0 || !!form.yarnKg || !!form.note);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 

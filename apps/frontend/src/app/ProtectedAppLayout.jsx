@@ -2,6 +2,7 @@ import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import DashboardLayout from '../components/layouts/DashboardLayout';
 import { InventoryProvider } from '../context/InventoryContext';
+import { UnsavedChangesProvider } from '../context/UnsavedChangesContext';
 import { useAuth } from '../context/AuthContext';
 
 export default function ProtectedAppLayout() {
@@ -26,7 +27,9 @@ export default function ProtectedAppLayout() {
 
   return (
     <InventoryProvider>
-      <DashboardLayout />
+      <UnsavedChangesProvider>
+        <DashboardLayout />
+      </UnsavedChangesProvider>
     </InventoryProvider>
   );
 }

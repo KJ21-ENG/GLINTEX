@@ -10,6 +10,7 @@ import { formatDateDDMMYYYY, todayISO } from '../utils';
 import { FileText, Send, History, Camera, Upload, Image, X, Loader2, CheckCircle2, Plus, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { UserBadge } from '../components/common/UserBadge';
 
@@ -147,6 +148,7 @@ export function SendDocuments() {
     }
 
     const [, wrapSend] = useSubmitLock();
+    useUnsavedGuard('send-documents', !!selectedFile || !!caption || !!phone || !!selectedCustomerId);
     const handleSend = wrapSend(async () => {
         const settings = db?.settings?.[0] || {};
         const whatsappEnabled = settings?.whatsappEnabled !== false;

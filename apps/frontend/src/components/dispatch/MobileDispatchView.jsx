@@ -12,6 +12,7 @@ import {
 import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound' },
@@ -58,6 +59,9 @@ export function MobileDispatchView({
     const [submitting, setSubmitting] = useState(false);
     const [, wrapCreate] = useSubmitLock();
     const [, wrapCreateCustomer] = useSubmitLock();
+    // Modal forms are prefilled on open — the scanned staging list is the
+    // unsaved work worth guarding.
+    useUnsavedGuard('dispatch-mobile', scannedItems.length > 0);
 
     // New customer modal
     const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);

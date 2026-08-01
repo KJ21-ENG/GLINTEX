@@ -11,6 +11,7 @@ import { usePermission, useStagePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 
 const INBOUND_MODE_OPTIONS = [
     { value: 'raw', label: 'Raw Inbound (Rolls)' },
@@ -93,6 +94,8 @@ export function Inbound() {
     const [, wrapSaveLot] = useSubmitLock();
     const [addCutterLocked, wrapAddCutter] = useSubmitLock();
     const [, wrapSaveCutter] = useSubmitLock();
+    useUnsavedGuard('inbound', cart.length > 0 || cutterCart.length > 0
+        || Object.values(cutterEntry).some(Boolean) || !!itemId || !!weight);
 
     const weightRef = useRef(null);
 

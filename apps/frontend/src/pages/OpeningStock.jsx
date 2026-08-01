@@ -30,6 +30,7 @@ import { UserBadge } from '../components/common/UserBadge';
 import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import * as v2 from '../api/v2';
 
@@ -264,6 +265,18 @@ export function OpeningStock() {
     operatorId: '',
     shift: '',
   });
+
+  // Stage tabs share this one flag: switching stage keeps the other carts, so
+  // dirtiness ORs across all four. Context params (item/firm/machine/etc.) are
+  // retained after add/save by design — only staged carts, the volatile
+  // per-crate fields the add clears, and a staged CSV count as unsaved.
+  useUnsavedGuard('opening-stock',
+    inboundCart.length > 0 || cutterCart.length > 0 || holoCart.length > 0 || coningCart.length > 0
+    || !!inboundEntry.weight || !!inboundEntry.note
+    || !!cutterEntry.bobbinQuantity || !!cutterEntry.grossWeight
+    || !!holoEntry.rollCount || !!holoEntry.grossWeight
+    || !!coningEntry.coneCount || !!coningEntry.grossWeight
+    || !!selectedFile);
 
   const fetchOpeningPreview = async () => {
     try {

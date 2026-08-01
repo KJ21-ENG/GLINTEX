@@ -19,6 +19,7 @@ import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 
 const STAGES = [
     { id: 'inbound', label: 'Inbound', description: 'Raw jumbo rolls' },
@@ -92,6 +93,9 @@ export function Dispatch() {
     });
     const [submitting, setSubmitting] = useState(false);
     const [, wrapCreate] = useSubmitLock();
+    // Modal forms are prefilled on open and retained after a dispatch, so only
+    // the scan queue and row selection count as unsaved staged work.
+    useUnsavedGuard('dispatch', scanQueue.length > 0 || selectedIds.size > 0);
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [editDispatchOpen, setEditDispatchOpen] = useState(false);
     const [editDispatchForm, setEditDispatchForm] = useState(null);

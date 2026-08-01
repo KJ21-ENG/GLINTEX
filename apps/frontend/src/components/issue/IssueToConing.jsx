@@ -8,6 +8,7 @@ import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningT
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function IssueToConing() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -50,6 +51,9 @@ export function IssueToConing() {
     const [scanLoading, setScanLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [, wrapSubmit] = useSubmitLock();
+    // Issue parameters are retained after a successful issue — only the staged
+    // crates count as unsaved.
+    useUnsavedGuard('issue-to-coning', crates.length > 0);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { Outlet, NavLink, useLocation } from "react-router-dom";
+import { Outlet, NavLink, useLocation, useBlocker } from "react-router-dom";
 import {
   PackagePlus,
   Package,
@@ -26,6 +26,8 @@ import { Button, Select } from "../ui";
 import { cn } from "../../lib/utils";
 import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
 import { useAuth } from "../../context/AuthContext";
+import { useUnsavedChanges } from "../../context/UnsavedChangesContext";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import { ACCESS_LEVELS, getPermissionLevel } from "../../utils/permissions";
 
 const NAV_ITEMS = [
@@ -64,6 +66,44 @@ export default function DashboardLayout() {
 
   const processDef = getProcessDefinition(process);
   const processOptions = Object.values(PROCESS_DEFINITIONS);
+
+  // --- Unsaved-data guards ---
+  const { isAnyDirty } = useUnsavedChanges();
+
+  // Route changes (sidebar links, back/forward). Pathname-only comparison so
+  // searchParams-only changes (e.g. Stock view toggles) never block.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      currentLocation.pathname !== nextLocation.pathname && isAnyDirty()
+  );
+
+  // Process switches swap the per-process form components without a route
+  // change, so the blocker can't see them — gate setProcess the same way.
+  const [pendingProcess, setPendingProcess] = useState(null);
+  const requestProcessChange = (next) => {
+    if (!next || next === process) return;
+    if (isAnyDirty()) {
+      setPendingProcess(next);
+    } else {
+      setProcess(next);
+    }
+  };
+
+  const discardDialogOpen = blocker.state === 'blocked' || pendingProcess !== null;
+  const handleDiscardConfirm = () => {
+    if (blocker.state === 'blocked') {
+      blocker.proceed();
+      return;
+    }
+    if (pendingProcess !== null) {
+      setProcess(pendingProcess);
+      setPendingProcess(null);
+    }
+  };
+  const handleDiscardCancel = () => {
+    if (blocker.state === 'blocked') blocker.reset();
+    if (pendingProcess !== null) setPendingProcess(null);
+  };
 
   const toggleTheme = () => setTheme(prev => prev === "dark" ? "light" : "dark");
 
@@ -260,7 +300,7 @@ export default function DashboardLayout() {
             <label className="text-xs font-medium text-muted-foreground">Active Process</label>
             <Select
               value={process}
-              onChange={(e) => setProcess(e.target.value)}
+              onChange={(e) => requestProcessChange(e.target.value)}
               className="h-8 text-xs"
             >
               {processOptions.map(opt => (
@@ -320,7 +360,7 @@ export default function DashboardLayout() {
                     key={opt.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setProcess(opt.id);
+                      requestProcessChange(opt.id);
                       setProcessMenuPos(null);
                     }}
                     className={cn(
@@ -400,7 +440,7 @@ export default function DashboardLayout() {
           <label className="text-xs font-medium text-muted-foreground">Active Process</label>
           <Select
             value={process}
-            onChange={(e) => setProcess(e.target.value)}
+            onChange={(e) => requestProcessChange(e.target.value)}
             className="h-8 text-xs"
           >
             {processOptions.map(opt => (
@@ -478,6 +518,16 @@ export default function DashboardLayout() {
           <Outlet />
         </div>
       </main>
+
+      <ConfirmDialog
+        open={discardDialogOpen}
+        title="Discard entered data?"
+        message="You have unsaved entries on this page. Leaving now will discard them."
+        confirmLabel="Discard & continue"
+        cancelLabel="Stay"
+        onConfirm={handleDiscardConfirm}
+        onCancel={handleDiscardCancel}
+      />
     </div>
   );
 }

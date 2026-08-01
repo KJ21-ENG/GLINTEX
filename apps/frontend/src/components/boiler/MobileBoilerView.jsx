@@ -12,6 +12,7 @@ import { cn } from '../../lib/utils';
 import * as api from '../../api/client';
 import { BoilerMachineDialog } from './BoilerMachineDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 import {
     buildBoilerScanGroups,
     formatScanGroupValues,
@@ -59,6 +60,7 @@ export function MobileBoilerView({ onSteamComplete, boilerMachines = [] }) {
     const [lookingUp, setLookingUp] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [, wrapSteam] = useSubmitLock();
+    useUnsavedGuard('boiler-mobile', scannedItems.length > 0);
     const [showBoilerMachineDialog, setShowBoilerMachineDialog] = useState(false);
     const [expandedScanGroups, setExpandedScanGroups] = useState(() => new Set());
 

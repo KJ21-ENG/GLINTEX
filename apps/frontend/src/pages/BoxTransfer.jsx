@@ -6,6 +6,7 @@ import { cn } from '../lib/utils';
 import { estimateWeightFromCount } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { useSubmitLock } from '../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../context/UnsavedChangesContext';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
 import { UserBadge } from '../components/common/UserBadge';
@@ -102,6 +103,7 @@ export function BoxTransfer() {
     };
 
     const [, wrapTransfer] = useSubmitLock();
+    useUnsavedGuard('box-transfer', !!fromItem || !!toItem || !!fromBarcode || !!toBarcode || !!pieceCount || !!notes);
     const handleTransfer = wrapTransfer(async () => {
         if (isReadOnly) return;
         setError('');

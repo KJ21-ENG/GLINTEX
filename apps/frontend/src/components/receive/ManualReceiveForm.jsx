@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function ManualReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -18,6 +19,9 @@ export function ManualReceiveForm() {
     const [cart, setCart] = useState([]);
     const [saving, setSaving] = useState(false);
     const [, wrapSave] = useSubmitLock();
+    // Lot/piece context is retained across adds — the staged cart and the
+    // in-progress qty/weight are the unsaved work.
+    useUnsavedGuard('receive-manual', cart.length > 0 || !!bobbinQty || !!grossWeight);
 
     // Options
     const issuedPieceIds = useMemo(() => {

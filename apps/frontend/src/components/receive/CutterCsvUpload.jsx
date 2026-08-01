@@ -18,6 +18,7 @@ import {
 } from '../ui';
 import { Upload, FileUp, RefreshCw, FileWarning } from 'lucide-react';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 const formatDateTime = (value) => formatDateTimeDDMMYYYY(value);
 
@@ -156,6 +157,7 @@ export function CutterCsvUpload() {
   const [previewing, setPreviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [, wrapConfirm] = useSubmitLock();
+  useUnsavedGuard('receive-cutter-csv', !!selectedFile || !!previewData);
   const [actionError, setActionError] = useState('');
   const [actionIssues, setActionIssues] = useState([]);
   const [dragActive, setDragActive] = useState(false);

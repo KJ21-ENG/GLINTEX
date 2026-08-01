@@ -10,6 +10,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplates
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 const RECEIVED_OVER_ISSUED_EPSILON_KG = 0.001;
 
@@ -22,6 +23,9 @@ export function ConingReceiveForm() {
     const [cart, setCart] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [, wrapSubmit] = useSubmitLock();
+    // `issue` is retained after a successful save (next receive reuses the scan),
+    // so only the staged cart counts as unsaved.
+    useUnsavedGuard('receive-coning', cart.length > 0);
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [isWastage, setIsWastage] = useState(false);
     const [wastageDialogOpen, setWastageDialogOpen] = useState(false);

@@ -8,6 +8,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/
 import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function HoloReceiveForm() {
     const { db, patchDb, emitInvalidation } = useInventory();
@@ -32,6 +33,9 @@ export function HoloReceiveForm() {
         shift: '',
         pieceId: '',
     });
+    // `issue` and notes/box are deliberately retained after a successful save
+    // (next crate reuses them) — only the in-progress entry counts as unsaved.
+    useUnsavedGuard('receive-holo', !!form.rollCount || !!form.grossWeight);
 
     const enrichIssueWithBalance = (rawIssue) => {
         if (!rawIssue?.id) return rawIssue;

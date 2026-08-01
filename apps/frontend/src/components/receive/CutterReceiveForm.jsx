@@ -10,6 +10,7 @@ import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function CutterReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -40,6 +41,7 @@ export function CutterReceiveForm() {
     const [, wrapScan] = useSubmitLock();
     const [addLocked, wrapAdd] = useSubmitLock();
     const [, wrapSave] = useSubmitLock();
+    useUnsavedGuard('receive-cutter', cart.length > 0 || !!issueRecord || !!bobbinQty || !!grossWeight || !!barcode);
 
     const barcodeInputRef = useRef(null);
     const enrichIssueWithBalance = (rawIssue) => {

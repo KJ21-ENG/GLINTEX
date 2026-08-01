@@ -35,6 +35,8 @@ const BOOTSTRAP_KEYS = [
   'contractors',
   'contractor_assignments',
   'contractor_rates',
+  'combined_stock_views',
+  'combined_stock_config',
   'settings',
 ];
 
@@ -61,6 +63,8 @@ const buildRawFromDb = (db) => ({
   contractors: db?.contractors || [],
   contractor_assignments: db?.contractor_assignments || [],
   contractor_rates: db?.contractor_rates || [],
+  combined_stock_views: db?.combined_stock_views || [],
+  combined_stock_config: db?.combined_stock_config || [],
   issue_to_cutter_machine: db?.issue_to_cutter_machine || [],
   issue_to_cutter_machine_lines: db?.issue_to_cutter_machine_lines || [],
   issue_to_holo_machine: db?.issue_to_holo_machine || [],
@@ -561,6 +565,11 @@ export const InventoryProvider = ({ children }) => {
     createBox: async (name, weight, processType) => { await api.createBox(name, weight, processType); await refreshDb(); },
     updateBox: async (id, name, weight, processType) => { await api.updateBox(id, name, weight, processType); await refreshDb(); },
     deleteBox: async (id) => { await api.deleteBox(id); await refreshDb(); },
+
+    // Masters - Combined Stock
+    updateCombinedStockView: async (id, payload) => { await api.updateCombinedStockView(id, payload); await refreshDb(); },
+    reorderCombinedStockViews: async (orderedIds) => { await api.reorderCombinedStockViews(orderedIds); await refreshDb(); },
+    updateCombinedStockConfig: async (payload) => { await api.updateCombinedStockConfig(payload); await refreshDb(); },
 
     // Settings
     updateSettings: async (values) => {

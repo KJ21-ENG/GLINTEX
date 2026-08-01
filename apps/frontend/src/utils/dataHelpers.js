@@ -34,6 +34,8 @@ export function normalizeDb(raw) {
   const contractors = ensureArr(raw?.contractors);
   const contractorAssignments = ensureArr(raw?.contractor_assignments);
   const contractorRates = ensureArr(raw?.contractor_rates);
+  const combinedStockViews = ensureArr(raw?.combined_stock_views);
+  const combinedStockConfig = ensureArr(raw?.combined_stock_config);
   const issueBalances = raw?.issue_balances && typeof raw.issue_balances === 'object'
     ? raw.issue_balances
     : {};
@@ -92,6 +94,8 @@ export function normalizeDb(raw) {
     contractors,
     contractor_assignments: contractorAssignments,
     contractor_rates: contractorRates,
+    combined_stock_views: combinedStockViews,
+    combined_stock_config: combinedStockConfig,
     issue_to_cutter_machine: issueToCutterMachine,
     issue_to_holo_machine: issueToHoloMachine,
     issue_to_coning_machine: issueToConingMachine,

@@ -324,6 +324,11 @@ export async function listBoxes() { return await request('/api/boxes'); }
 export async function createBox(name, weight, processType = 'all') { return await request('/api/boxes', { method: 'POST', body: { name, weight, processType } }); }
 export async function deleteBox(id) { return await request(`/api/boxes/${id}`, { method: 'DELETE' }); }
 export async function updateBox(id, name, weight, processType) { return await request(`/api/boxes/${id}`, { method: 'PUT', body: { name, weight, processType } }); }
+export async function listCombinedStockViews() { return await request('/api/combined_stock_views'); }
+export async function updateCombinedStockView(id, payload) { return await request(`/api/combined_stock_views/${id}`, { method: 'PUT', body: payload }); }
+export async function reorderCombinedStockViews(orderedIds) { return await request('/api/combined_stock_views/reorder', { method: 'PUT', body: { orderedIds } }); }
+export async function getCombinedStockConfig() { return await request('/api/combined_stock_config'); }
+export async function updateCombinedStockConfig(payload) { return await request('/api/combined_stock_config', { method: 'PUT', body: payload }); }
 export async function updateSettings(payload) { return await request('/api/settings', { method: 'PUT', body: payload }); }
 export async function deleteLot(lotNo) { return await request(`/api/lots/${lotNo}`, { method: 'DELETE' }); }
 export async function deleteIssueToCutterMachine(id) { return await request(`/api/issue_to_cutter_machine/${id}`, { method: 'DELETE' }); }
@@ -728,6 +733,11 @@ export default {
   createWrapper,
   deleteWrapper,
   updateWrapper,
+  listCombinedStockViews,
+  updateCombinedStockView,
+  reorderCombinedStockViews,
+  getCombinedStockConfig,
+  updateCombinedStockConfig,
   updateSettings,
   getInboundByBarcode,
   getIssueByBarcode,

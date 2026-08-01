@@ -475,6 +475,10 @@ export const SearchableSelect = ({
                         {clearable && value && !disabled && (
                             <button
                                 type="button"
+                                // Without this, mousedown focuses the button, the bubbled focus
+                                // opens search mode and unmounts this button before its click
+                                // can fire — so the clear never happens.
+                                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                                 onClick={handleClear}
                                 className="p-0.5 rounded hover:bg-muted transition-colors"
                                 aria-label="Clear selection"

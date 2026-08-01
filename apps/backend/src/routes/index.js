@@ -2988,6 +2988,8 @@ router.get('/api/bootstrap', async (req, res) => {
       contractors: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
       contractor_assignments: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
       contractor_rates: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
+      combined_stock_views: hasAnyReadPermission(req, ['stock', 'masters']),
+      combined_stock_config: hasAnyReadPermission(req, ['stock', 'masters']),
       settings: hasReadPermission(req, 'settings'),
     };
 
@@ -3038,12 +3040,30 @@ router.get('/api/bootstrap', async (req, res) => {
       ? (await prisma.contractorRate.findMany({ orderBy: [{ process: 'asc' }, { createdAt: 'desc' }] }))
         .map((r) => ({ ...r, ratePerKg: r.ratePerKg == null ? null : Number(r.ratePerKg) }))
       : [];
+    slices.combined_stock_views = [];
+    if (allowed.combined_stock_views) {
+      try {
+        slices.combined_stock_views = await prisma.combinedStockProcessView.findMany({ orderBy: { sortOrder: 'asc' } });
+      } catch (err) {
+        // Table may not exist yet (migration pending). Degrade gracefully so the rest of the app loads.
+        console.warn('combined_stock_views query failed (migration pending?):', err?.message || err);
+      }
+    }
+    slices.combined_stock_config = [];
+    if (allowed.combined_stock_config) {
+      try {
+        slices.combined_stock_config = await prisma.combinedStockConfig.findMany();
+      } catch (err) {
+        // Table may not exist yet (migration pending). Degrade gracefully so the rest of the app loads.
+        console.warn('combined_stock_config query failed (migration pending?):', err?.message || err);
+      }
+    }
     slices.settings = allowed.settings
       ? (await prisma.settings.findMany()).map(sanitizeSettingsForResponse)
       : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
-    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers', 'contractors', 'contractor_assignments', 'contractor_rates'];
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers', 'contractors', 'contractor_assignments', 'contractor_rates', 'combined_stock_views'];
     for (const key of masterSliceKeys) {
       if (slices[key] && slices[key].length > 0) {
         slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
@@ -12231,6 +12251,139 @@ router.put('/api/boxes/:id', requireEditPermission('masters'), async (req, res) 
   } catch (err) {
     console.error('Failed to update box', err);
     res.status(500).json({ error: err.message || 'Failed to update box' });
+  }
+});
+
+const COMBINED_STOCK_DISPLAY_MODES = ['summary', 'full'];
+
+router.get('/api/combined_stock_views', requirePermission('masters', PERM_READ), async (req, res) => {
+  try {
+    const rows = await prisma.combinedStockProcessView.findMany({ orderBy: { sortOrder: 'asc' } });
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to list combined stock views', err);
+    res.status(500).json({ error: err.message || 'Failed to list combined stock views' });
+  }
+});
+
+// Must stay registered before '/api/combined_stock_views/:id' so 'reorder' is not
+// swallowed by the :id param route.
+router.put('/api/combined_stock_views/reorder', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { orderedIds } = req.body || {};
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({ error: 'orderedIds must be a non-empty array' });
+    }
+    const ids = orderedIds.map((value) => String(value ?? '').trim());
+    if (ids.some((value) => !value)) {
+      return res.status(400).json({ error: 'orderedIds contains an empty id' });
+    }
+    const uniqueIds = new Set(ids);
+    if (uniqueIds.size !== ids.length) {
+      return res.status(400).json({ error: 'orderedIds contains duplicate ids' });
+    }
+    const existing = await prisma.combinedStockProcessView.findMany({ orderBy: { sortOrder: 'asc' } });
+    if (existing.length !== ids.length || existing.some((row) => !uniqueIds.has(row.id))) {
+      return res.status(400).json({ error: 'orderedIds must list every combined stock view exactly once' });
+    }
+    const updated = await prisma.$transaction(ids.map((id, index) => prisma.combinedStockProcessView.update({
+      where: { id },
+      data: { sortOrder: (index + 1) * 10, ...actorUpdateFields(actorUserId) },
+    })));
+    await logCrudWithActor(req, {
+      entityType: 'combined_stock_process_view',
+      action: 'update',
+      payload: { oldOrder: existing.map((row) => row.id), newOrder: ids },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to reorder combined stock views', err);
+    res.status(500).json({ error: err.message || 'Failed to reorder combined stock views' });
+  }
+});
+
+router.put('/api/combined_stock_views/:id', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const body = req.body || {};
+    const hasIsEnabled = Object.prototype.hasOwnProperty.call(body, 'isEnabled');
+    const hasLabel = Object.prototype.hasOwnProperty.call(body, 'label');
+    if (!hasIsEnabled && !hasLabel) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+    if (hasIsEnabled && typeof body.isEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'isEnabled must be a boolean' });
+    }
+    const label = hasLabel ? String(body.label ?? '').trim() : '';
+    if (hasLabel && !label) {
+      return res.status(400).json({ error: 'label is required' });
+    }
+    const existing = await prisma.combinedStockProcessView.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Combined stock view not found' });
+    }
+    // processKey identifies which stock view the row drives; it is fixed by the seed.
+    if (Object.prototype.hasOwnProperty.call(body, 'processKey') && String(body.processKey ?? '') !== existing.processKey) {
+      return res.status(400).json({ error: 'processKey cannot be changed' });
+    }
+    const data = { ...actorUpdateFields(actorUserId) };
+    if (hasIsEnabled) data.isEnabled = body.isEnabled;
+    if (hasLabel) data.label = label;
+    const updated = await prisma.combinedStockProcessView.update({ where: { id }, data });
+    await logCrudWithActor(req, {
+      entityType: 'combined_stock_process_view',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { processKey: existing.processKey },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update combined stock view', err);
+    res.status(500).json({ error: err.message || 'Failed to update combined stock view' });
+  }
+});
+
+router.get('/api/combined_stock_config', requirePermission('masters', PERM_READ), async (req, res) => {
+  try {
+    const row = await prisma.combinedStockConfig.findUnique({ where: { id: 1 } });
+    // The singleton row is seeded by migration; fall back to the seeded default so
+    // callers never have to null-check.
+    res.json(row || { id: 1, displayMode: 'summary' });
+  } catch (err) {
+    console.error('Failed to load combined stock config', err);
+    res.status(500).json({ error: err.message || 'Failed to load combined stock config' });
+  }
+});
+
+router.put('/api/combined_stock_config', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const displayMode = String(req.body?.displayMode ?? '').trim();
+    if (!COMBINED_STOCK_DISPLAY_MODES.includes(displayMode)) {
+      return res.status(400).json({ error: `displayMode must be one of: ${COMBINED_STOCK_DISPLAY_MODES.join(', ')}` });
+    }
+    const existing = await prisma.combinedStockConfig.findUnique({ where: { id: 1 } });
+    const updated = await prisma.combinedStockConfig.upsert({
+      where: { id: 1 },
+      update: { displayMode, ...actorUpdateFields(actorUserId) },
+      create: { id: 1, displayMode, ...actorCreateFields(actorUserId) },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'combined_stock_config',
+      entityId: String(updated.id),
+      action: existing ? 'update' : 'create',
+      before: existing || undefined,
+      after: updated,
+      payload: { oldDisplayMode: existing?.displayMode ?? null, newDisplayMode: updated.displayMode },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update combined stock config', err);
+    res.status(500).json({ error: err.message || 'Failed to update combined stock config' });
   }
 });
 

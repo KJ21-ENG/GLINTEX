@@ -1127,3 +1127,27 @@ model ContractorSettlementRevision {
   @@unique([settlementId, revisionNumber])
   @@index([settlementId])
 }
+
+// Combined Stock master: which of the 4 stock views appear in the combined
+// item-wise view, and in what order. Rows are fixed/seeded (no create/delete).
+model CombinedStockProcessView {
+  id              String   @id @default(cuid())
+  processKey      String   @unique // 'jumbo' | 'bobbins' | 'holo' | 'coning'
+  label           String
+  isEnabled       Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+}
+
+// Singleton config for the Combined Stock view.
+model CombinedStockConfig {
+  id              Int      @id @default(1)
+  displayMode     String   @default("summary") // 'summary' | 'full'
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+}

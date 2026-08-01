@@ -8,7 +8,7 @@ import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
-import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY, extractUserWastageNote } from '../utils';
+import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
 import { exportStockXlsx, exportStockPdf, exportStockDetailedXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
@@ -19,26 +19,21 @@ import { LotPopover } from '../components/stock/LotPopover';
 import { cn } from '../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
-import * as v2 from '../api/v2';
+import { useV2StockLots } from '../hooks/useV2StockLots';
 import { useBarcodeAutoExpand } from '../utils/useBarcodeAutoExpand';
-
-const EPSILON = 1e-9;
-const idEq = (a, b) => String(a ?? '') === String(b ?? '');
-
-const getPieceIssueableWeight = (piece) => {
-  const gross = Number(piece?.weight || 0);
-  const dispatched = Number(piece?.dispatchedWeight || 0);
-  const issuedToCutterWeight = Number(piece?.issuedToCutterWeight || 0);
-  return Math.max(0, gross - dispatched - issuedToCutterWeight);
-};
-
-const isPieceAvailableForIssue = (piece) => (
-  getPieceIssueableWeight(piece) > EPSILON
-  && Number(piece?.dispatchedWeight || 0) <= EPSILON
-  && String(piece?.status || '').toLowerCase() !== 'consumed'
-);
-
-const countAvailablePieces = (pieces = []) => pieces.filter(isPieceAvailableForIssue).length;
+import {
+  EPSILON,
+  idEq,
+  isPieceAvailableForIssue,
+  countAvailablePieces,
+  lotStatus,
+  buildStockGroupKey,
+  isCutterPurchaseLotNo,
+  buildReceiveTotalsMap,
+  buildCutterWastageNoteByPieceId,
+  buildCutterIssueByPieceId,
+  buildJumboLotsMap,
+} from '../components/stock/stockSelectors';
 
 async function mapWithConcurrency(items, concurrency, mapper) {
   const results = new Array(items.length);
@@ -54,24 +49,6 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   }));
 
   return results;
-}
-
-function lotStatus(lot) {
-  const pending = Number(lot.pendingWeight || 0);
-  const initial = Number(lot.totalWeight || 0);
-  if (pending > EPSILON && pending <= initial + EPSILON) return 'active';
-  if (Math.abs(pending) <= EPSILON) return 'inactive';
-  return pending > 0 ? 'active' : 'inactive';
-}
-
-function buildStockGroupKey(lot) {
-  return [
-    lot.itemId || lot.itemName || '',
-    lot.supplierId || lot.supplierName || '',
-    lot.cutName || '',
-    lot.yarnName || '',
-    lot.twistName || ''
-  ].join('::');
 }
 
 export function Stock() {
@@ -169,82 +146,7 @@ export function Stock() {
 
   // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
   const v2StockEnabled = isHolo || isConing;
-  const [v2Lots, setV2Lots] = useState([]);
-  const [v2LotsLoading, setV2LotsLoading] = useState(false);
-  const [v2LotsError, setV2LotsError] = useState(null);
-  const [v2LotsNonce, setV2LotsNonce] = useState(0);
-  const [v2RowsByKey, setV2RowsByKey] = useState({});
-  const [v2BarcodeKeys, setV2BarcodeKeys] = useState(new Set());
-  const v2BarcodeReqId = useRef(0);
-
-  useEffect(() => {
-    if (!v2StockEnabled) return;
-    let cancelled = false;
-    setV2Lots([]);
-    setV2RowsByKey({});
-    setV2BarcodeKeys(new Set());
-    setV2LotsLoading(true);
-    setV2LotsError(null);
-    v2.getV2StockLots(processId)
-      .then((res) => {
-        if (cancelled) return;
-        setV2Lots(Array.isArray(res?.items) ? res.items : []);
-        setV2LotsLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error('Failed to load v2 stock lots', err);
-        setV2Lots([]);
-        setV2LotsError(err);
-        setV2LotsLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [v2StockEnabled, processId, v2LotsNonce]);
-
-  const loadV2LotRows = useCallback(async (lotKey) => {
-    if (!v2StockEnabled) return [];
-    if (v2RowsByKey[lotKey]) return v2RowsByKey[lotKey];
-    const res = await v2.getV2StockLotRows(processId, { key: lotKey });
-    const items = Array.isArray(res?.items) ? res.items : [];
-    setV2RowsByKey(prev => ({ ...prev, [lotKey]: items }));
-    return items;
-  }, [v2StockEnabled, processId, v2RowsByKey]);
-
-  useEffect(() => {
-    if (!v2StockEnabled) return;
-    const q = String(search || '').trim();
-    if (q.length < 6) {
-      setV2BarcodeKeys(new Set());
-      return;
-    }
-    const myId = ++v2BarcodeReqId.current;
-    const t = setTimeout(() => {
-      v2.getV2StockBarcodeLotKeys(processId, { q })
-        .then((res) => {
-          if (v2BarcodeReqId.current !== myId) return;
-          const keys = Array.isArray(res?.keys) ? res.keys : [];
-          setV2BarcodeKeys(new Set(keys));
-        })
-        .catch((err) => {
-          if (v2BarcodeReqId.current !== myId) return;
-          console.error('Failed to lookup v2 stock barcode keys', err);
-          setV2BarcodeKeys(new Set());
-        });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [v2StockEnabled, processId, search]);
-
-  const retryV2Lots = useCallback(() => setV2LotsNonce((n) => n + 1), []);
-
-  const v2Api = useMemo(() => ({
-    lots: v2Lots,
-    rowsByKey: v2RowsByKey,
-    loadLotRows: loadV2LotRows,
-    barcodeHitKeys: v2BarcodeKeys,
-    lotsLoading: v2LotsLoading,
-    lotsError: v2LotsError,
-    retryLots: retryV2Lots,
-  }), [v2Lots, v2RowsByKey, loadV2LotRows, v2BarcodeKeys, v2LotsLoading, v2LotsError, retryV2Lots]);
+  const v2Api = useV2StockLots(processId, { enabled: v2StockEnabled, search });
 
   // Close export menu when clicking outside / pressing escape
   useEffect(() => {
@@ -268,168 +170,22 @@ export function Stock() {
   // --- Data Prep (Memoized) ---
 
   const receiveTotalsMap = useMemo(() => {
-    const map = new Map();
-    const totalsList = Array.isArray(db?.[receiveTotalsKey]) ? db[receiveTotalsKey] : [];
-    totalsList.forEach((row) => {
-      map.set(row.pieceId, {
-        received: Number(row[receiveWeightField] || 0),
-        wastage: Number(row.wastageNetWeight || 0),
-        totalUnits: Number(row[receiveUnitField] || 0),
-      });
-    });
-    return map;
+    return buildReceiveTotalsMap(db, receiveTotalsKey, receiveWeightField, receiveUnitField);
   }, [db, receiveTotalsKey, receiveWeightField, receiveUnitField]);
 
-  // Latest active cutter wastage note per piece (from challans). Only entries with an
-  // actual user-supplied note (after the em-dash separator) are included; auto-only
-  // notes like "Wastage marked: 7.794 kg" are skipped so the (i) tooltip surfaces only
-  // when there is real operator-written context to read.
   const cutterWastageNoteByPieceId = useMemo(() => {
-    if (!isCutter) return new Map();
-    const challans = Array.isArray(db?.receive_from_cutter_machine_challans) ? db.receive_from_cutter_machine_challans : [];
-    const map = new Map();
-    const sorted = [...challans].sort((a, b) => (b?.createdAt || '').localeCompare(a?.createdAt || ''));
-    for (const ch of sorted) {
-      if (!ch || ch.isDeleted) continue;
-      if (!(Number(ch.wastageNetWeight || 0) > 0)) continue;
-      if (!ch.pieceId || map.has(ch.pieceId)) continue;
-      const userNote = extractUserWastageNote(ch.wastageNote);
-      if (userNote) map.set(ch.pieceId, userNote);
-    }
-    return map;
+    return buildCutterWastageNoteByPieceId(db, isCutter);
   }, [db?.receive_from_cutter_machine_challans, isCutter]);
 
   const cutterIssueByPieceId = useMemo(() => {
-    if (!isCutter) return new Map();
-    const issues = Array.isArray(db?.issue_to_cutter_machine) ? db.issue_to_cutter_machine : [];
-    const machineMap = new Map((db?.machines || []).map(m => [m.id, m.name]));
-    const sortedIssues = [...issues].sort((a, b) => {
-      const aTime = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const bTime = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
-      if (aTime !== bTime) return bTime - aTime;
-      return String(b?.date || '').localeCompare(String(a?.date || ''));
-    });
-    const map = new Map();
-    sortedIssues.forEach((issue) => {
-      const pieceIds = Array.isArray(issue.pieceIds)
-        ? issue.pieceIds
-        : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
-      const machineName = issue.machineName || machineMap.get(issue.machineId) || '';
-      const issueDate = issue.date || '';
-      pieceIds.forEach((id) => {
-        if (!map.has(id)) {
-          map.set(id, { machineName, issueDate });
-        }
-      });
-    });
-    return map;
+    return buildCutterIssueByPieceId(db, isCutter);
   }, [db, isCutter]);
 
   const lotsMap = useMemo(() => {
-    if (!db?.lots) return {};
-    const m = {};
-    for (const lot of db.lots) {
-      m[lot.lotNo] = {
-        ...lot,
-        itemName: db.items.find(i => i.id === lot.itemId)?.name || '—',
-        firmName: db.firms.find(f => f.id === lot.firmId)?.name || '—',
-        supplierName: db.suppliers.find(s => s.id === lot.supplierId)?.name || '—',
-        pieces: [],
-        availableCount: 0,
-        remainingWeight: 0,
-        pendingWeight: 0,
-        totalReceivedWeight: 0,
-        totalReceivedUnits: 0,
-        wastageTotal: 0,
-        wastageCount: 0,
-        wastageWeightBaseTotal: 0,
-        issuedWeightBaseTotal: 0,
-        avgWastage: 0,
-        wastagePercent: 0,
-        cutNames: new Set(),
-        yarnNames: new Set(),
-        barcodes: [],
-      };
-    }
-    const inbound = db.inbound_items || [];
-    for (const piece of inbound) {
-      if (!m[piece.lotNo]) continue;
-      const inboundWeight = Number(piece.weight || 0);
-      const dispatchedWeight = Number(piece.dispatchedWeight || 0);
-      const issuedToCutterWeight = Number(piece.issuedToCutterWeight || 0);
-      const issueableWeight = Math.max(0, inboundWeight - dispatchedWeight - issuedToCutterWeight);
-      const totals = receiveTotalsMap.get(piece.id) || { received: 0, wastage: 0, totalUnits: 0 };
-      const receivedWeight = totals.received || 0;
-      const wastageWeight = totals.wastage || 0;
-      const pieceTotalUnits = totals.totalUnits || 0;
-      const pendingRaw = inboundWeight - receivedWeight - wastageWeight - dispatchedWeight;
-      const pendingForPiece = pendingRaw > EPSILON ? pendingRaw : 0;
-
-      // Remaining weight for Jumbo Rolls view should reflect pieces that are still present (not issued/consumed).
-      // We treat any piece with status === 'consumed' as not remaining.
-      if (piece.status !== 'consumed') {
-        m[piece.lotNo].remainingWeight = (m[piece.lotNo].remainingWeight || 0) + inboundWeight;
-      }
-
-      // Cut & Yarn Resolution
-      const cutName = piece.cutName || piece.cut?.name || (typeof piece.cut === 'string' ? piece.cut : '') || db.cuts?.find(c => c.id === piece.cutId)?.name || '';
-      if (cutName) m[piece.lotNo].cutNames.add(cutName);
-
-      const yarnName = piece.yarnName || piece.yarn?.name || (typeof piece.yarn === 'string' ? piece.yarn : '') || db.yarns?.find(y => y.id === piece.yarnId)?.name || '';
-      if (yarnName) m[piece.lotNo].yarnNames.add(yarnName);
-
-      const issueMeta = cutterIssueByPieceId.get(piece.id);
-      const issuedLabel = issueMeta
-        ? `Issued${issueMeta.machineName ? `: ${issueMeta.machineName}` : ''}${issueMeta.issueDate ? ` • ${issueMeta.issueDate}` : ''}`
-        : '';
-      // Collect barcode for lot-level search
-      const pieceBarcode = piece.barcode || '';
-      if (pieceBarcode) m[piece.lotNo].barcodes.push(pieceBarcode);
-
-      const pieceEntry = {
-        ...piece,
-        pendingWeight: pendingForPiece,
-        receivedWeight,
-        wastageWeight,
-        wastageNote: cutterWastageNoteByPieceId.get(piece.id) || null,
-        totalUnits: pieceTotalUnits,
-        issueableWeight,
-        cutName,
-        yarnName,
-        issuedLabel
-      };
-
-      m[piece.lotNo].pieces.push(pieceEntry);
-
-      if (wastageWeight > 0) {
-        m[piece.lotNo].wastageTotal = (m[piece.lotNo].wastageTotal || 0) + wastageWeight;
-        m[piece.lotNo].wastageCount = (m[piece.lotNo].wastageCount || 0) + 1;
-        m[piece.lotNo].wastageWeightBaseTotal = (m[piece.lotNo].wastageWeightBaseTotal || 0) + Number(piece.weight || 0);
-      }
-      m[piece.lotNo].issuedWeightBaseTotal = (m[piece.lotNo].issuedWeightBaseTotal || 0) + issuedToCutterWeight;
-      const availableForIssue = isPieceAvailableForIssue(pieceEntry);
-      if (availableForIssue) {
-        m[piece.lotNo].availableCount = (m[piece.lotNo].availableCount || 0) + 1;
-      }
-      m[piece.lotNo].pendingWeight = (m[piece.lotNo].pendingWeight || 0) + pendingForPiece;
-      m[piece.lotNo].totalReceivedWeight = (m[piece.lotNo].totalReceivedWeight || 0) + receivedWeight;
-      m[piece.lotNo].totalReceivedUnits = (m[piece.lotNo].totalReceivedUnits || 0) + pieceTotalUnits;
-    }
-
-    Object.values(m).forEach(lot => {
-      lot.avgWastage = (lot.wastageCount && lot.wastageCount > 0) ? (lot.wastageTotal / lot.wastageCount) : 0;
-      lot.wastagePercent = Number(lot.issuedWeightBaseTotal || 0) > 0 ? ((lot.wastageTotal / lot.issuedWeightBaseTotal) * 100) : 0;
-      lot.statusType = lotStatus(lot);
-      lot.cutName = Array.from(lot.cutNames).join(', ') || '—';
-      lot.yarnName = Array.from(lot.yarnNames).join(', ') || '—';
-      lot.barcodeStr = (lot.barcodes || []).join(' ');
-    });
-    return m;
+    return buildJumboLotsMap(db, receiveTotalsMap, cutterIssueByPieceId, cutterWastageNoteByPieceId);
   }, [db, receiveTotalsMap, cutterIssueByPieceId]);
 
   const allLots = useMemo(() => {
-    const isCutterPurchaseLotNo = (lotNo) =>
-      typeof lotNo === 'string' && lotNo.trim().toUpperCase().startsWith('CP-');
     const values = Object.values(lotsMap);
     // Jumbo Rolls should show only original inbound/opening-stock lots, not cutter purchase (CP-*) lots.
     if (view !== 'jumbo') return values;
@@ -686,7 +442,7 @@ export function Stock() {
             4,
             async (lot) => {
               if (!lot.lotKey) return lot;
-              const rows = v2RowsByKey[lot.lotKey] || (await loadV2LotRows(lot.lotKey));
+              const rows = v2Api.rowsByKey[lot.lotKey] || (await v2Api.loadLotRows(lot.lotKey));
               return { ...lot, rows };
             }
           );

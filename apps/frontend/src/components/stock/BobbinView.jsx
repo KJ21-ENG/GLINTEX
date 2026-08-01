@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
-import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore, calcAvailableCountFromWeight } from '../../utils';
+import { formatKg, formatDateDDMMYYYY, fuzzyScore, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { TableStateRow } from '../data-table';
@@ -8,6 +8,7 @@ import { LotPopover } from './LotPopover';
 import { cn } from '../../lib/utils';
 import { useBarcodeAutoExpand } from '../../utils/useBarcodeAutoExpand';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { buildInboundPieceMap, buildBobbinLotMetaMap, buildBobbinCrates, buildBobbinLots } from './stockSelectors';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -29,137 +30,22 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
   // 1. Map Inbound Pieces
   const inboundPieceMap = useMemo(() => {
-    const map = new Map();
-    (db.inbound_items || []).forEach((p) => { if (p?.id) map.set(p.id, p); });
-    return map;
+    return buildInboundPieceMap(db);
   }, [db.inbound_items]);
 
   // 2. Map Lot Metadata
   const lotMetaMap = useMemo(() => {
-    const map = new Map();
-    (db.lots || []).forEach((lot) => {
-      const item = db.items.find(i => i.id === lot.itemId);
-      const firm = db.firms.find(f => f.id === lot.firmId);
-      const supplier = db.suppliers.find(s => s.id === lot.supplierId);
-      map.set(lot.lotNo, {
-        ...lot,
-        itemName: item?.name || lot.itemName || '—',
-        firmName: firm?.name || lot.firmName || '—',
-        supplierName: supplier?.name || lot.supplierName || '—',
-      });
-    });
-    return map;
+    return buildBobbinLotMetaMap(db);
   }, [db.lots, db.items, db.firms, db.suppliers]);
 
   // 3. Calculate Bobbin Crates (Rows)
   const bobbinCrates = useMemo(() => {
-    return (db.receive_from_cutter_machine_rows || [])
-      .filter(row => !row.isDeleted)
-      .map((row) => {
-        const piece = row?.pieceId ? inboundPieceMap.get(row.pieceId) : null;
-        const lotNo = row?.lotNo || piece?.lotNo || '';
-        const lotMeta = lotNo ? lotMetaMap.get(lotNo) : null;
-
-        const bobbinQty = Number(row?.bobbinQuantity || 0);
-        const issuedBobbins = Number(row?.issuedBobbins || 0);
-        const dispatchedBobbins = Number(row?.dispatchedCount || 0);
-
-        const netWeight = Number(row?.netWt ?? row?.totalKg ?? row?.yarnWt ?? 0);
-        const issuedWeight = Number(row?.issuedBobbinWeight || 0);
-        const dispatchedWeight = Number(row?.dispatchedWeight || 0);
-        const availableWeightRaw = Number.isFinite(netWeight)
-          ? (netWeight - issuedWeight - dispatchedWeight)
-          : 0;
-        const availableWeight = availableWeightRaw > EPSILON ? Math.max(0, availableWeightRaw) : 0;
-        const availableBobbinsCalc = calcAvailableCountFromWeight({
-          totalCount: bobbinQty,
-          issuedCount: issuedBobbins,
-          dispatchedCount: dispatchedBobbins,
-          totalWeight: netWeight,
-          availableWeight,
-        });
-        const availableBobbins = availableBobbinsCalc == null ? 0 : availableBobbinsCalc;
-
-        const cutName = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—';
-        const yarnName = row.yarnName || db.yarns?.find(y => y.id === row.yarnId)?.name || '—';
-
-        return {
-          ...row,
-          lotNo,
-          date: row.date || row.createdAt || '',
-          itemId: piece?.itemId || lotMeta?.itemId || '',
-          firmId: lotMeta?.firmId || '',
-          supplierId: lotMeta?.supplierId || '',
-          itemName: lotMeta?.itemName || '—',
-          firmName: lotMeta?.firmName || '—',
-          supplierName: lotMeta?.supplierName || '—',
-          cutName,
-          yarnName,
-          bobbinQty,
-          issuedBobbins,
-          dispatchedBobbins,
-          availableBobbins,
-          netWeight,
-          issuedWeight,
-          availableWeight,
-          bobbinName: row.bobbin?.name || row.pcsTypeName || '—',
-        };
-      });
+    return buildBobbinCrates(db, inboundPieceMap, lotMetaMap);
   }, [db.receive_from_cutter_machine_rows, inboundPieceMap, lotMetaMap, db.cuts]);
 
   // 4. Aggregate into Lots
   const bobbinLots = useMemo(() => {
-    const map = new Map();
-    bobbinCrates.forEach((crate) => {
-      const lotNo = crate.lotNo || '(No Lot)';
-      const existing = map.get(lotNo) || {
-        lotNo,
-        lotKey: [
-          lotNo,
-          crate.itemId || '',
-          crate.supplierId || '',
-          crate.firmId || '',
-        ].join('::'),
-        date: crate.date || '',
-        itemId: crate.itemId,
-        firmId: crate.firmId,
-        supplierId: crate.supplierId,
-        itemName: crate.itemName,
-        cutNames: new Set(),
-        yarnNames: new Set(),
-        firmName: crate.firmName,
-        supplierName: crate.supplierName,
-        totalBobbins: 0,
-        issuedBobbins: 0,
-        availableBobbins: 0,
-        totalWeight: 0,
-        issuedWeight: 0,
-        availableWeight: 0,
-        crates: [],
-        barcodes: [],
-        notes: [],
-      };
-
-      existing.crates.push(crate);
-      existing.totalBobbins += crate.bobbinQty;
-      existing.issuedBobbins += crate.issuedBobbins;
-      existing.availableBobbins += crate.availableBobbins;
-      existing.totalWeight += crate.netWeight;
-      existing.issuedWeight += crate.issuedWeight;
-      existing.availableWeight += crate.availableWeight;
-      if (crate.cutName && crate.cutName !== '—') existing.cutNames.add(crate.cutName);
-      if (crate.yarnName && crate.yarnName !== '—') existing.yarnNames.add(crate.yarnName);
-      if (crate.barcode) existing.barcodes.push(crate.barcode);
-      if (crate.notes) existing.notes.push(crate.notes);
-
-      map.set(lotNo, existing);
-    });
-    return Array.from(map.values()).map(l => ({
-      ...l,
-      cutName: l.cutNames.size > 1 ? 'Mixed' : Array.from(l.cutNames)[0] || '—',
-      barcodeStr: (l.barcodes || []).join(' '),
-      notesStr: (l.notes || []).join(' '),
-    }));
+    return buildBobbinLots(bobbinCrates);
   }, [bobbinCrates]);
 
   // 5. Filter & Sort

@@ -25,45 +25,76 @@ export function CombinedSummarySection({
   onToggle,
 }) {
   const rowKeyFor = (row, idx) => (getRowKey ? (getRowKey(row) || idx) : idx);
+  const loaded = !isLoading && !error;
+
+  const statusSlot = isLoading ? (
+    <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="w-4 h-4 animate-spin" />
+      Loading…
+    </span>
+  ) : error ? (
+    <span className="inline-flex items-center gap-2">
+      <span className="inline-flex items-center gap-1.5 text-sm text-destructive">
+        <AlertTriangle className="w-4 h-4" />
+        Failed to load
+      </span>
+      {onRetry && (
+        <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); onRetry(); }}>
+          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+          Retry
+        </Button>
+      )}
+    </span>
+  ) : null;
 
   return (
     <Card className="overflow-hidden">
       <div
-        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-4 cursor-pointer hover:bg-muted/40 transition-colors"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        className="p-4 cursor-pointer hover:bg-muted/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle?.(); }
+        }}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
-          <span className="font-semibold truncate">{label}</span>
-        </div>
-        <div className="flex items-center gap-4 shrink-0">
-          {isLoading ? (
-            <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Loading…
-            </span>
-          ) : error ? (
-            <span className="inline-flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 text-sm text-destructive">
-                <AlertTriangle className="w-4 h-4" />
-                Failed to load
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div className="flex items-baseline gap-2">
+            {expanded
+              ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 self-center" />
+              : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 self-center" />}
+            <span className="font-semibold whitespace-nowrap">{label}</span>
+            {loaded && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                {rows.length} {rows.length === 1 ? 'lot' : 'lots'}
               </span>
-              {onRetry && (
-                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); onRetry(); }}>
-                  <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                  Retry
-                </Button>
-              )}
-            </span>
+            )}
+          </div>
+          {statusSlot ? (
+            <div className="ml-auto">{statusSlot}</div>
           ) : (
-            totals.map((t) => (
-              <div key={t.label} className="text-right">
-                <div className="font-mono font-semibold tabular-nums whitespace-nowrap">{t.value}</div>
-                <div className="text-[10px] uppercase text-muted-foreground">{t.label}</div>
-              </div>
-            ))
+            <div className="hidden sm:flex items-stretch divide-x divide-border ml-auto">
+              {totals.map((t) => (
+                <div key={t.label} className="px-5 first:pl-0 last:pr-0 text-right">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground whitespace-nowrap">{t.label}</div>
+                  <div className="mt-0.5 text-sm font-semibold tabular-nums whitespace-nowrap">{t.value}</div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
+        {!statusSlot && (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:hidden">
+            {totals.map((t) => (
+              <div key={t.label} className="rounded-md bg-muted/40 px-2.5 py-1.5">
+                <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground truncate">{t.label}</div>
+                <div className="mt-0.5 text-sm font-semibold tabular-nums whitespace-nowrap">{t.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {expanded && (

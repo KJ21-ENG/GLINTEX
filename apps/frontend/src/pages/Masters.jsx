@@ -3,7 +3,7 @@ import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Select, Badge, Checkbox, Label } from '../components/ui';
 import { TableStateRow } from '../components/data-table';
-import { ChevronDown, Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
 import { formatKg } from '../utils';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
@@ -50,6 +50,7 @@ export function Masters() {
         createContractor, updateContractor, deleteContractor,
         createContractorAssignment, updateContractorAssignment, deleteContractorAssignment,
         createContractorRate, updateContractorRate, deleteContractorRate,
+        updateCombinedStockView, reorderCombinedStockViews, updateCombinedStockConfig,
         refreshing
     } = useInventory();
     const { canRead, canWrite, canEdit, canDelete } = usePermission('masters');
@@ -91,6 +92,7 @@ export function Masters() {
             case 'contractorAssignments': return <ContractorAssignmentsMasterCrud data={db.contractor_assignments || []} contractors={db.contractors || []} onCreate={createContractorAssignment} onUpdate={updateContractorAssignment} onDelete={deleteContractorAssignment} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'boilerSequence': return isAdmin ? <BoilerSequenceMaster /> : null;
             case 'contractorRates': return <ContractorRatesMasterCrud data={db.contractor_rates || []} contractors={db.contractors || []} items={db.items || []} yarns={db.yarns || []} cuts={db.cuts || []} twists={db.twists || []} coneTypes={db.cone_types || []} onCreate={createContractorRate} onUpdate={updateContractorRate} onDelete={deleteContractorRate} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'combinedStock': return <CombinedStockMasterCrud data={db.combined_stock_views || []} config={(db.combined_stock_config || [])[0]} onUpdateView={updateCombinedStockView} onReorderViews={reorderCombinedStockViews} onUpdateConfig={updateCombinedStockConfig} loading={refreshing} canEdit={canEdit} />;
             default: return null;
         }
     }
@@ -155,6 +157,9 @@ export function Masters() {
                         <TabButton id="machines" label="Machines" />
                         <TabButton id="workers" label="Workers" />
                         <TabButton id="boxes" label="Boxes" />
+
+                        <SectionDivider label="Stock" />
+                        <TabButton id="combinedStock" label="Combined Stock" />
 
                         <SectionDivider label="Contractors" />
                         <TabButton id="contractors" label="Contractors" />
@@ -2462,5 +2467,243 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                 </div>
             </CardContent>
         </Card>
+    );
+}
+
+// --- Combined stock master -------------------------------------------------
+// Rows are seeded by migration (one per stock view); this master only toggles,
+// relabels and reorders them, so there is no create/delete here.
+const COMBINED_STOCK_DISPLAY_MODE_OPTIONS = [
+    { value: 'summary', label: 'Summary + expandable lots', hint: 'One totals row per process; expand a row to see its lots.' },
+    { value: 'full', label: 'Full tables per process', hint: 'Each enabled process renders its full stock table.' },
+];
+
+function CombinedStockMasterCrud({ data, config, onUpdateView, onReorderViews, onUpdateConfig, loading, canEdit }) {
+    const [editingId, setEditingId] = useState(null);
+    const [editLabel, setEditLabel] = useState('');
+    const [error, setError] = useState('');
+    const [modeError, setModeError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [savingMode, setSavingMode] = useState(false);
+    const allowEdit = !!canEdit;
+
+    const rows = [...(data || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const displayMode = config?.displayMode === 'full' ? 'full' : 'summary';
+    const busy = loading || saving;
+
+    const startEdit = (row) => { setEditingId(row.id); setEditLabel(row.label || ''); setError(''); };
+
+    const saveLabel = async (row) => {
+        const label = editLabel.trim();
+        if (!allowEdit || !label) return;
+        setError('');
+        setSaving(true);
+        try {
+            await onUpdateView(row.id, { label });
+            setEditingId(null);
+        } catch (err) { setError(err.message || 'Failed to update process view'); }
+        finally { setSaving(false); }
+    };
+
+    const toggleEnabled = async (row, checked) => {
+        if (!allowEdit) return;
+        setError('');
+        setSaving(true);
+        try { await onUpdateView(row.id, { isEnabled: !!checked }); }
+        catch (err) { setError(err.message || 'Failed to update process view'); }
+        finally { setSaving(false); }
+    };
+
+    // Reorder posts the full id list in its new order; the API rejects partial lists.
+    const move = async (index, direction) => {
+        const target = index + direction;
+        if (!allowEdit || target < 0 || target >= rows.length) return;
+        const orderedIds = rows.map((r) => r.id);
+        [orderedIds[index], orderedIds[target]] = [orderedIds[target], orderedIds[index]];
+        setError('');
+        setSaving(true);
+        try { await onReorderViews(orderedIds); }
+        catch (err) { setError(err.message || 'Failed to reorder process views'); }
+        finally { setSaving(false); }
+    };
+
+    const changeMode = async (mode) => {
+        if (!allowEdit || mode === displayMode) return;
+        setModeError('');
+        setSavingMode(true);
+        try { await onUpdateConfig({ displayMode: mode }); }
+        catch (err) { setModeError(err.message || 'Failed to update display mode'); }
+        finally { setSavingMode(false); }
+    };
+
+    return (
+        <div className="space-y-6">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Process Views</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                        Choose which stock views appear in Combined Stock and in what order. The rows are fixed — each one maps to an existing stock view.
+                    </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <ErrorNote error={error} />
+
+                    <div className="hidden sm:block rounded-md border max-h-[60vh] overflow-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Label</TableHead>
+                                    <TableHead>Process Key</TableHead>
+                                    <TableHead>Enabled</TableHead>
+                                    <TableHead className="w-[110px]">Order</TableHead>
+                                    <TableHead>Updated By</TableHead>
+                                    <TableHead className="w-[100px]">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {rows.length === 0 ? (
+                                    <TableStateRow colSpan={6} isLoading={loading} emptyMessage="No process views configured." />
+                                ) : rows.map((row, index) => (
+                                    <TableRow key={row.id}>
+                                        <TableCell className="font-medium">
+                                            {editingId === row.id ? (
+                                                <Input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="h-8" disabled={!allowEdit} />
+                                            ) : row.label}
+                                        </TableCell>
+                                        <TableCell><Badge variant="secondary">{row.processKey}</Badge></TableCell>
+                                        <TableCell>
+                                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                <Checkbox
+                                                    checked={row.isEnabled !== false}
+                                                    onCheckedChange={(checked) => toggleEnabled(row, checked)}
+                                                    disabled={busy}
+                                                    aria-label={`Enable ${row.label}`}
+                                                />
+                                            </DisabledWithTooltip>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex gap-1">
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => move(index, -1)} disabled={busy || index === 0} aria-label={`Move ${row.label} up`}><ArrowUp className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => move(index, 1)} disabled={busy || index === rows.length - 1} aria-label={`Move ${row.label} down`}><ArrowDown className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <UserBadge user={row.updatedByUser} timestamp={row.updatedAt} />
+                                        </TableCell>
+                                        <TableCell>
+                                            {editingId === row.id ? (
+                                                <div className="flex justify-end gap-1">
+                                                    <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                        <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => saveLabel(row)} disabled={busy || !editLabel.trim()}><Save className="w-4 h-4" /></Button>
+                                                    </DisabledWithTooltip>
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex justify-end gap-1">
+                                                    <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(row)}><Edit2 className="w-4 h-4" /></Button>
+                                                    </DisabledWithTooltip>
+                                                </div>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </div>
+
+                    {/* Mobile Card View */}
+                    <div className="block sm:hidden space-y-2">
+                        {rows.length === 0 ? (
+                            <div className="text-center py-4 text-muted-foreground border rounded-lg bg-card">No process views configured</div>
+                        ) : rows.map((row, index) => (
+                            <div key={row.id} className="border rounded-lg bg-card p-3 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="flex-1 min-w-0">
+                                        {editingId === row.id ? (
+                                            <Input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} className="h-8" disabled={!allowEdit} />
+                                        ) : (
+                                            <span className="font-medium">{row.label}</span>
+                                        )}
+                                    </div>
+                                    <Badge variant="secondary">{row.processKey}</Badge>
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                    <label className="flex items-center gap-2 text-sm">
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Checkbox
+                                                checked={row.isEnabled !== false}
+                                                onCheckedChange={(checked) => toggleEnabled(row, checked)}
+                                                disabled={busy}
+                                                aria-label={`Enabled ${row.label}`}
+                                            />
+                                        </DisabledWithTooltip>
+                                        Enabled
+                                    </label>
+                                    <div className="flex gap-1">
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => move(index, -1)} disabled={busy || index === 0} aria-label={`Move ${row.label} up`}><ArrowUp className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => move(index, 1)} disabled={busy || index === rows.length - 1} aria-label={`Move ${row.label} down`}><ArrowDown className="w-4 h-4" /></Button>
+                                        </DisabledWithTooltip>
+                                        {editingId === row.id ? (
+                                            <>
+                                                <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-green-600" onClick={() => saveLabel(row)} disabled={busy || !editLabel.trim()}><Save className="w-4 h-4" /></Button>
+                                                </DisabledWithTooltip>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setEditingId(null)}><X className="w-4 h-4" /></Button>
+                                            </>
+                                        ) : (
+                                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(row)}><Edit2 className="w-4 h-4" /></Button>
+                                            </DisabledWithTooltip>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                    Updated by <UserBadge user={row.updatedByUser} timestamp={row.updatedAt} />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Display Mode</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                        Controls how Combined Stock renders each enabled process view.
+                    </p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                    <ErrorNote error={modeError} />
+                    {COMBINED_STOCK_DISPLAY_MODE_OPTIONS.map((option) => (
+                        <div key={option.value} className="flex items-start gap-2 rounded-md border p-3 bg-muted/30">
+                            <DisabledWithTooltip disabled={!allowEdit} tooltip="You do not have permission to edit master records.">
+                                <input
+                                    type="radio"
+                                    id={`combined-stock-mode-${option.value}`}
+                                    name="combinedStockDisplayMode"
+                                    className="w-4 h-4 mt-0.5"
+                                    checked={displayMode === option.value}
+                                    disabled={loading || savingMode}
+                                    onChange={() => changeMode(option.value)}
+                                />
+                            </DisabledWithTooltip>
+                            <label htmlFor={`combined-stock-mode-${option.value}`} className="text-sm font-medium cursor-pointer">
+                                {option.label}
+                                <span className="block text-xs font-normal text-muted-foreground">{option.hint}</span>
+                            </label>
+                        </div>
+                    ))}
+                </CardContent>
+            </Card>
+        </div>
     );
 }

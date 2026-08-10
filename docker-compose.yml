@@ -36,6 +36,8 @@ services:
       PERF_LOG_QUERIES: ${PERF_LOG_QUERIES:-0}
       PERF_SLOW_QUERY_MS: ${PERF_SLOW_QUERY_MS:-100}
       PERF_SLOW_REQUEST_MS: ${PERF_SLOW_REQUEST_MS:-0}
+      GLINTEX_AGENT_READ_TOKEN: ${GLINTEX_AGENT_READ_TOKEN:-}
+      GLINTEX_AGENT_READ_PERMISSIONS: ${GLINTEX_AGENT_READ_PERMISSIONS:-}
     volumes:
       - ./apps/backend/.wwebjs_auth:/app/.wwebjs_auth
       - ./apps/backend/.wwebjs_cache:/app/.wwebjs_cache

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GLINTEX Operations"
+  short_description: "Use live GLINTEX data and safe manufacturing workflows"
+  default_prompt: "Use $glintex-operations to answer this GLINTEX request from the live read contract."

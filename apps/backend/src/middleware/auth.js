@@ -1,7 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { hashSessionToken, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
-import { authenticateAgentReadRequest } from './agentReadAuth.js';
 
 function getTokenFromRequest(req) {
   const cookieToken = req.cookies ? req.cookies[SESSION_COOKIE_NAME] : null;
@@ -17,20 +16,6 @@ function getTokenFromRequest(req) {
 
 export async function requireAuth(req, res, next) {
   try {
-    const agentAuth = authenticateAgentReadRequest(req);
-    if (agentAuth.kind === 'denied') {
-      return res.status(agentAuth.status).json({ error: agentAuth.error });
-    }
-    if (agentAuth.kind === 'authorized') {
-      req.user = agentAuth.user;
-      req.session = null;
-      req.authContext = {
-        type: 'agent_read',
-        scopes: agentAuth.scopes,
-      };
-      return next();
-    }
-
     const token = getTokenFromRequest(req);
     if (!token) return res.status(401).json({ error: 'unauthorized' });
 

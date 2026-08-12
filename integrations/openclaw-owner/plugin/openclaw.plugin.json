@@ -2,7 +2,7 @@
   "id": "glintex-owner-operations",
   "name": "GLINTEX Owner Operations",
   "description": "Owner-only GLINTEX reads and confirmation-gated task and learning operations.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "configSchema": {
     "type": "object",
     "required": [

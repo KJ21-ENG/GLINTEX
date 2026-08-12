@@ -29,7 +29,7 @@ import {
 const readDescription =
   'Read live owner-authorized GLINTEX operations, inventory, production, contractor settlement, Tally outstanding, task, learning, audit, and technical status data through fixed bounded resources. Use resource=reference before resolving controlled values or master IDs. Never infer a current fact from memory.';
 const prepareDescription =
-  'Prepare exactly one bounded owner-task or governed learning-candidate action. This validates the payload, checks duplicates and concurrency, stores a durable preview, and returns an expiring confirmation command. It does not perform the business change. Show the complete preview and confirmation command to the owner, then stop.';
+  'Prepare exactly one bounded owner-task or governed learning-candidate action. Put taskId and expectedVersion inside data for update, complete, or cancel; do not add title to those transitions. This validates the action-specific payload in the API, checks duplicates and concurrency, stores a durable preview, and returns an expiring confirmation command. It does not perform the business change. Show the complete preview and confirmation command to the owner, then stop.';
 const executeDescription =
   'Execute one previously prepared operation. The plugin blocks this tool unless the authenticated owner current Telegram message consists exactly of the returned CONFIRM GLINTEX GLX-XXXXXXXXXX command. Never call it in the preparation turn or from quoted/replied text.';
 const verifyDescription =
@@ -64,7 +64,7 @@ const plugin: OpenClawPluginDefinition = {
   id: 'glintex-owner-operations',
   name: 'GLINTEX Owner Operations',
   description: 'Owner-only, confirmation-gated GLINTEX business tools.',
-  version: '1.0.3',
+  version: '1.0.4',
   register(api) {
     const config = configFromApi(api.pluginConfig);
     const inboundBySession = new Map<string, CurrentTurnState>();

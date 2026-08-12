@@ -78,57 +78,45 @@ const taskStatus = Type.Union([
   Type.Literal('CANCELLED'),
 ]);
 
-export const prepareActionParameters = Type.Union([
-  Type.Object({
-    action: Type.Literal('owner_task.create'),
-    ...commonAction,
-    data: Type.Object({
-      title: Type.String({ minLength: 1, maxLength: 160 }),
-      description: nullableText('Task description.'),
+// Keep one root object because the OpenClaw provider's strict tool-schema
+// conversion retains only the first branch of a root union. This remains a
+// bounded superset: unknown keys are rejected here, while the agent API applies
+// the action-specific required/forbidden-field contract before preparation.
+export const prepareActionParameters = Type.Object({
+  action: Type.Union([
+    Type.Literal('owner_task.create'),
+    Type.Literal('owner_task.update'),
+    Type.Literal('owner_task.complete'),
+    Type.Literal('owner_task.cancel'),
+    Type.Literal('learning_candidate.propose'),
+  ]),
+  ...commonAction,
+  data: Type.Object({
+    title: optionalText('Required only for owner_task.create.', 160),
+    description: nullableText('Task description; owner_task.create only.'),
+    area: Type.Optional(taskArea),
+    priority: Type.Optional(priority),
+    dueDate: Type.Optional(Type.Union([Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), Type.Null()])),
+    taskId: optionalText('Required for owner-task update, complete, or cancel.', 80),
+    expectedVersion: Type.Optional(Type.Integer({ minimum: 1 })),
+    patch: Type.Optional(Type.Object({
+      title: optionalText('Replacement title.', 160),
+      description: nullableText('Replacement description.'),
       area: Type.Optional(taskArea),
       priority: Type.Optional(priority),
+      status: Type.Optional(taskStatus),
       dueDate: Type.Optional(Type.Union([Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), Type.Null()])),
-    }, { additionalProperties: false }),
-  }, { additionalProperties: false }),
-  Type.Object({
-    action: Type.Literal('owner_task.update'),
-    ...commonAction,
-    data: Type.Object({
-      taskId: Type.String({ minLength: 1, maxLength: 80 }),
-      expectedVersion: Type.Integer({ minimum: 1 }),
-      patch: Type.Object({
-        title: optionalText('Replacement title.', 160),
-        description: nullableText('Replacement description.'),
-        area: Type.Optional(taskArea),
-        priority: Type.Optional(priority),
-        status: Type.Optional(taskStatus),
-        dueDate: Type.Optional(Type.Union([Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' }), Type.Null()])),
-      }, { additionalProperties: false, minProperties: 1 }),
-    }, { additionalProperties: false }),
-  }, { additionalProperties: false }),
-  Type.Object({
-    action: Type.Union([Type.Literal('owner_task.complete'), Type.Literal('owner_task.cancel')]),
-    ...commonAction,
-    data: Type.Object({
-      taskId: Type.String({ minLength: 1, maxLength: 80 }),
-      expectedVersion: Type.Integer({ minimum: 1 }),
-    }, { additionalProperties: false }),
-  }, { additionalProperties: false }),
-  Type.Object({
-    action: Type.Literal('learning_candidate.propose'),
-    ...commonAction,
-    data: Type.Object({
-      category: Type.Union([
-        Type.Literal('OWNER_PREFERENCE'),
-        Type.Literal('DOMAIN_RULE'),
-        Type.Literal('WORKFLOW_GAP'),
-        Type.Literal('PROCESS_IMPROVEMENT'),
-      ]),
-      statement: Type.String({ minLength: 1, maxLength: 1_000 }),
-      evidence: nullableText('Bounded evidence supporting the proposal.'),
-    }, { additionalProperties: false }),
-  }, { additionalProperties: false }),
-]);
+    }, { additionalProperties: false, minProperties: 1 })),
+    category: Type.Optional(Type.Union([
+      Type.Literal('OWNER_PREFERENCE'),
+      Type.Literal('DOMAIN_RULE'),
+      Type.Literal('WORKFLOW_GAP'),
+      Type.Literal('PROCESS_IMPROVEMENT'),
+    ])),
+    statement: optionalText('Required only for learning_candidate.propose.', 1_000),
+    evidence: nullableText('Bounded evidence; learning_candidate.propose only.'),
+  }, { additionalProperties: false, minProperties: 1 }),
+}, { additionalProperties: false });
 
 export const executeActionParameters = Type.Object({
   operationId: Type.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$' }),

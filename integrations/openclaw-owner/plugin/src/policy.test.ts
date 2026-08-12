@@ -1,11 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
-import { isExactOwnerConfirmation } from './policy.js';
+import { currentTurnStateFromAgentRun, isExactOwnerConfirmation } from './policy.js';
 
 const ownerId = '1234567890';
 const now = Date.now();
 
 describe('current-turn confirmation policy', () => {
+  it('uses the authoritative before-agent-run prompt instead of decorated inbound content', () => {
+    const state = currentTurnStateFromAgentRun({
+      prompt: 'CONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channelId: 'telegram',
+    }, {
+      content: 'K\nCONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channel: 'telegram',
+      isGroup: false,
+      capturedAt: now - 1_000,
+    }, 'telegram', now);
+
+    expect(isExactOwnerConfirmation(state, 'GLX-ABCDEF1234', ownerId, now)).toBe(true);
+  });
+
+  it('does not accept an inbound exact command when the current prompt contains extra text', () => {
+    const state = currentTurnStateFromAgentRun({
+      prompt: 'Prepare it, then CONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channelId: 'telegram',
+    }, {
+      content: 'CONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channel: 'telegram',
+      isGroup: false,
+      capturedAt: now,
+    }, 'telegram', now);
+
+    expect(isExactOwnerConfirmation(state, 'GLX-ABCDEF1234', ownerId, now)).toBe(false);
+  });
+
   it('accepts only the exact fresh owner direct-chat confirmation', () => {
     expect(isExactOwnerConfirmation({
       content: 'CONFIRM GLINTEX GLX-ABCDEF1234',

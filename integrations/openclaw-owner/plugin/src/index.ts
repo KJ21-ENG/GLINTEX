@@ -13,7 +13,11 @@ import {
   type TrustedToolContext,
   type VerifyActionParameters,
 } from './client.js';
-import { isExactOwnerConfirmation, type CurrentTurnState } from './policy.js';
+import {
+  currentTurnStateFromAgentRun,
+  isExactOwnerConfirmation,
+  type CurrentTurnState,
+} from './policy.js';
 import {
   executeActionParameters,
   prepareActionParameters,
@@ -59,7 +63,7 @@ const plugin: OpenClawPluginDefinition = {
   id: 'glintex-owner-operations',
   name: 'GLINTEX Owner Operations',
   description: 'Owner-only, confirmation-gated GLINTEX business tools.',
-  version: '1.0.0',
+  version: '1.0.1',
   register(api) {
     const config = configFromApi(api.pluginConfig);
     const inboundBySession = new Map<string, CurrentTurnState>();
@@ -87,10 +91,11 @@ const plugin: OpenClawPluginDefinition = {
       const sessionKey = ctx.sessionKey || '';
       const state = inboundBySession.get(sessionKey);
       if (sessionKey) inboundBySession.delete(sessionKey);
-      const senderId = state?.senderId || event.senderId;
-      const senderIsOwner = state?.senderIsOwner ?? event.senderIsOwner;
-      const channel = state?.channel || ctx.messageProvider;
-      if (senderIsOwner !== true || senderId !== config.ownerTelegramId || channel !== 'telegram' || state?.isGroup === true) {
+      const storedState = currentTurnStateFromAgentRun(event, state, ctx.messageProvider);
+      if (storedState.senderIsOwner !== true
+        || storedState.senderId !== config.ownerTelegramId
+        || storedState.channel !== 'telegram'
+        || storedState.isGroup === true) {
         return {
           outcome: 'block',
           reason: 'owner_direct_context_required',
@@ -99,18 +104,17 @@ const plugin: OpenClawPluginDefinition = {
         };
       }
       if (ctx.runId) {
-        const storedState = {
-          content: state?.content || '',
-          senderId: senderId || '',
-          senderIsOwner: senderIsOwner === true,
-          channel: channel || '',
-          isGroup: false,
-          capturedAt: state?.capturedAt || Date.now(),
-        };
         api.runContext.setRunContext({
           runId: ctx.runId,
           namespace: 'glintex-owner-current-turn',
-          value: storedState,
+          value: {
+            content: storedState.content,
+            senderId: storedState.senderId || '',
+            senderIsOwner: storedState.senderIsOwner === true,
+            channel: storedState.channel || '',
+            isGroup: false,
+            capturedAt: storedState.capturedAt,
+          },
         });
       }
       return { outcome: 'pass' };

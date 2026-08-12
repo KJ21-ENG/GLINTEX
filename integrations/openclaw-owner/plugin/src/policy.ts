@@ -7,6 +7,32 @@ export interface CurrentTurnState {
   capturedAt: number;
 }
 
+export interface AgentRunTurnEvent {
+  prompt: string;
+  senderId?: string;
+  senderIsOwner?: boolean;
+  channelId?: string;
+}
+
+export function currentTurnStateFromAgentRun(
+  event: AgentRunTurnEvent,
+  inboundState: CurrentTurnState | undefined,
+  messageProvider: string | undefined,
+  capturedAt = Date.now(),
+): CurrentTurnState {
+  return {
+    // before_agent_run.prompt is the exact user message submitted to the model.
+    // Inbound hook content can contain channel decorations, so it must never be
+    // used as the confirmation text when this authoritative value is present.
+    content: event.prompt,
+    senderId: event.senderId || inboundState?.senderId,
+    senderIsOwner: event.senderIsOwner ?? inboundState?.senderIsOwner,
+    channel: event.channelId || inboundState?.channel || messageProvider,
+    isGroup: inboundState?.isGroup === true,
+    capturedAt,
+  };
+}
+
 export function isExactOwnerConfirmation(
   state: CurrentTurnState | undefined,
   confirmationCode: string,

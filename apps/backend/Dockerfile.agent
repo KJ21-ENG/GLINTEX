@@ -1,4 +1,10 @@
-FROM node:20-bookworm-slim AS dependencies
+FROM node:20-bookworm-slim AS base
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS dependencies
 
 ENV NODE_ENV=development
 WORKDIR /app
@@ -13,7 +19,7 @@ RUN DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build \
     && npm prune --omit=dev \
     && npm cache clean --force
 
-FROM node:20-bookworm-slim AS runner
+FROM base AS runner
 
 ENV NODE_ENV=production
 ENV AGENT_API_PORT=4003

@@ -1,6 +1,6 @@
 {
   "name": "openclaw-plugin-glintex-owner",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Owner-only, capability-scoped GLINTEX tools for OpenClaw.",
   "type": "module",
   "private": true,

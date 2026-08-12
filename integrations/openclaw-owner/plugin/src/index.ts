@@ -14,6 +14,7 @@ import {
   type VerifyActionParameters,
 } from './client.js';
 import {
+  CurrentConfirmationTurns,
   currentTurnStateFromAgentRun,
   isExactOwnerConfirmation,
   type CurrentTurnState,
@@ -63,10 +64,11 @@ const plugin: OpenClawPluginDefinition = {
   id: 'glintex-owner-operations',
   name: 'GLINTEX Owner Operations',
   description: 'Owner-only, confirmation-gated GLINTEX business tools.',
-  version: '1.0.2',
+  version: '1.0.3',
   register(api) {
     const config = configFromApi(api.pluginConfig);
     const inboundBySession = new Map<string, CurrentTurnState>();
+    const confirmationTurns = new CurrentConfirmationTurns();
 
     api.on('inbound_claim', (event, ctx) => {
       const sessionKey = event.sessionKey || ctx.sessionKey;
@@ -89,6 +91,7 @@ const plugin: OpenClawPluginDefinition = {
     api.on('before_agent_run', (event, ctx) => {
       if (ctx.agentId !== config.allowedAgentId) return { outcome: 'pass' };
       const sessionKey = ctx.sessionKey || '';
+      confirmationTurns.clear(sessionKey);
       const state = inboundBySession.get(sessionKey);
       if (sessionKey) inboundBySession.delete(sessionKey);
       const storedState = currentTurnStateFromAgentRun(event, state, ctx.messageProvider);
@@ -117,6 +120,7 @@ const plugin: OpenClawPluginDefinition = {
           },
         });
       }
+      confirmationTurns.set(sessionKey, ctx.runId, storedState);
       return { outcome: 'pass' };
     });
 
@@ -126,9 +130,14 @@ const plugin: OpenClawPluginDefinition = {
         return { block: true, blockReason: 'GLINTEX execution is restricted to the owner agent.' };
       }
       const runId = event.runId || ctx.runId;
-      const state = runId
+      const runContextState = runId
         ? api.runContext.getRunContext({ runId, namespace: 'glintex-owner-current-turn' }) as unknown as CurrentTurnState | undefined
         : undefined;
+      // Some OpenClaw runtime paths do not retain plugin run-context values
+      // into tool hooks. The session fallback is one-shot, is overwritten by
+      // every new turn, and still uses the same exact/fresh owner gate.
+      const sessionState = confirmationTurns.consume(ctx.sessionKey, runId);
+      const state = runContextState || sessionState;
       const confirmationCode = String(event.params?.confirmationCode || '');
       if (!isExactOwnerConfirmation(state, confirmationCode, config.ownerTelegramId)) {
         return {

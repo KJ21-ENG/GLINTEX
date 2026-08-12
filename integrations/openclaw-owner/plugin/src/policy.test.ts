@@ -1,11 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { currentTurnStateFromAgentRun, isExactOwnerConfirmation } from './policy.js';
+import {
+  CurrentConfirmationTurns,
+  currentTurnStateFromAgentRun,
+  isExactOwnerConfirmation,
+} from './policy.js';
 
 const ownerId = '1234567890';
 const now = Date.now();
 
 describe('current-turn confirmation policy', () => {
+  it('consumes a session fallback exactly once', () => {
+    const turns = new CurrentConfirmationTurns();
+    const state = {
+      content: 'CONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channel: 'telegram',
+      isGroup: false,
+      capturedAt: now,
+    };
+    turns.set('owner-session', 'owner-run', state);
+
+    expect(turns.consume('owner-session', 'owner-run')).toEqual(state);
+    expect(turns.consume('owner-session', 'owner-run')).toBeUndefined();
+  });
+
+  it('rejects and consumes a fallback from a different run', () => {
+    const turns = new CurrentConfirmationTurns();
+    turns.set('owner-session', 'original-run', {
+      content: 'CONFIRM GLINTEX GLX-ABCDEF1234',
+      capturedAt: now,
+    });
+
+    expect(turns.consume('owner-session', 'different-run')).toBeUndefined();
+    expect(turns.consume('owner-session', 'original-run')).toBeUndefined();
+  });
+
   it('uses the authoritative before-agent-run prompt instead of decorated inbound content', () => {
     const state = currentTurnStateFromAgentRun({
       prompt: 'CONFIRM GLINTEX GLX-ABCDEF1234',

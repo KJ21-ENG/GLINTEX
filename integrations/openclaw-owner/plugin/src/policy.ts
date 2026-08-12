@@ -14,6 +14,33 @@ export interface AgentRunTurnEvent {
   channelId?: string;
 }
 
+interface StoredConfirmationTurn {
+  runId?: string;
+  state: CurrentTurnState;
+}
+
+export class CurrentConfirmationTurns {
+  private readonly bySession = new Map<string, StoredConfirmationTurn>();
+
+  set(sessionKey: string, runId: string | undefined, state: CurrentTurnState) {
+    if (!sessionKey) return;
+    this.bySession.set(sessionKey, { runId, state });
+  }
+
+  clear(sessionKey: string) {
+    if (sessionKey) this.bySession.delete(sessionKey);
+  }
+
+  consume(sessionKey: string | undefined, runId: string | undefined) {
+    if (!sessionKey) return undefined;
+    const stored = this.bySession.get(sessionKey);
+    this.bySession.delete(sessionKey);
+    if (!stored) return undefined;
+    if (stored.runId && runId && stored.runId !== runId) return undefined;
+    return stored.state;
+  }
+}
+
 export function currentTurnStateFromAgentRun(
   event: AgentRunTurnEvent,
   inboundState: CurrentTurnState | undefined,

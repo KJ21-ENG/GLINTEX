@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import XLSX from 'xlsx';
 
 import prisma from '../lib/prisma.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/auth.js';
+import { requireSessionOrAgentRead as requireAuth } from '../middleware/agentPrincipalAuth.js';
 import { resolveUserFields } from '../utils/userResolver.js';
 import { ACCESS_LEVELS } from '../utils/permissions.js';
 import {

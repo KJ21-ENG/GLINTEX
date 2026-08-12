@@ -1,0 +1,4 @@
+interface:
+  display_name: "GLINTEX Operations"
+  short_description: "Use live GLINTEX and Tally evidence with safe workflows"
+  default_prompt: "Use $glintex-operations to handle this GLINTEX request using the live application contract."

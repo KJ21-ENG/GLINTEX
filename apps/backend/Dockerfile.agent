@@ -1,0 +1,29 @@
+FROM node:20-bookworm-slim AS dependencies
+
+ENV NODE_ENV=development
+WORKDIR /app
+
+COPY integrations/openclaw-owner/agent-api-runtime/package*.json ./
+RUN npm ci
+
+COPY apps/backend/prisma ./prisma
+RUN DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build \
+    SHADOW_DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build_shadow \
+    npx prisma generate --schema ./prisma/schema.prisma \
+    && npm prune --omit=dev \
+    && npm cache clean --force
+
+FROM node:20-bookworm-slim AS runner
+
+ENV NODE_ENV=production
+ENV AGENT_API_PORT=4003
+WORKDIR /app
+
+COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node apps/backend/prisma ./prisma
+COPY --chown=node:node apps/backend/src ./src
+
+USER node
+EXPOSE 4003
+
+CMD ["node", "src/agentServer.js"]

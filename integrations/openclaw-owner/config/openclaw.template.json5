@@ -1,0 +1,251 @@
+{
+  meta: {
+    lastTouchedVersion: "2026.7.1-2",
+  },
+  logging: {
+    level: "info",
+    consoleLevel: "info",
+    consoleStyle: "compact",
+    redactSensitive: "tools",
+  },
+  audit: {
+    enabled: true,
+  },
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    port: 18789,
+    auth: {
+      mode: "token",
+      token: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      },
+    },
+    controlUi: {
+      enabled: false,
+    },
+    reload: {
+      mode: "hybrid",
+      debounceMs: 500,
+    },
+  },
+  browser: {
+    enabled: false,
+    evaluateEnabled: false,
+  },
+  nodeHost: {
+    browserProxy: {
+      enabled: false,
+      allowProfiles: [],
+    },
+  },
+  cron: {
+    enabled: false,
+  },
+  session: {
+    dmScope: "per-channel-peer",
+    reset: {
+      mode: "idle",
+      idleMinutes: 1440,
+    },
+  },
+  tools: {
+    profile: "minimal",
+    allow: [
+      "glintex_read",
+      "glintex_prepare_action",
+      "glintex_execute_action",
+      "glintex_verify_action",
+      "read",
+      "session_status",
+    ],
+    deny: [
+      "exec",
+      "process",
+      "write",
+      "edit",
+      "apply_patch",
+      "browser",
+      "web_search",
+      "web_fetch",
+      "message",
+      "cron",
+      "sessions_spawn",
+      "sessions_send",
+      "subagents",
+      "nodes",
+      "gateway",
+      "image_generate",
+    ],
+    codeMode: false,
+    exec: {
+      mode: "deny",
+    },
+    fs: {
+      workspaceOnly: true,
+    },
+    elevated: {
+      enabled: false,
+      allowFrom: {},
+    },
+    message: {
+      allowCrossContextSend: false,
+      crossContext: {
+        allowWithinProvider: false,
+        allowAcrossProviders: false,
+      },
+      broadcast: {
+        enabled: false,
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      userTimezone: "Asia/Kolkata",
+      contextInjection: "always",
+      bootstrapMaxChars: 20000,
+      bootstrapTotalMaxChars: 60000,
+      heartbeat: {
+        every: "0m",
+        includeSystemPromptSection: false,
+      },
+    },
+    list: [
+      {
+        id: "glintex-owner",
+        default: true,
+        name: "GLINTEX Executive",
+        description: "Owner-only GLINTEX operations and decision-support agent.",
+        workspace: "__RUNTIME_ROOT__/workspace",
+        model: {
+          primary: "openai/gpt-5.6-sol",
+          fallbacks: ["openai/gpt-5.6-terra"],
+        },
+        models: {
+          "openai/gpt-5.6-sol": {
+            agentRuntime: { id: "openclaw" },
+          },
+          "openai/gpt-5.6-terra": {
+            agentRuntime: { id: "openclaw" },
+          },
+        },
+        thinkingDefault: "high",
+        skills: ["glintex-operations"],
+        subagents: {
+          allowAgents: [],
+          requireAgentId: true,
+        },
+        tools: {
+          profile: "minimal",
+          allow: [
+            "glintex_read",
+            "glintex_prepare_action",
+            "glintex_execute_action",
+            "glintex_verify_action",
+            "read",
+            "session_status",
+          ],
+          deny: [
+            "exec",
+            "process",
+            "write",
+            "edit",
+            "apply_patch",
+            "browser",
+            "web_search",
+            "web_fetch",
+            "message",
+            "cron",
+            "sessions_spawn",
+            "sessions_send",
+            "subagents",
+            "nodes",
+            "gateway",
+            "image_generate",
+          ],
+          codeMode: false,
+          exec: {
+            mode: "deny",
+          },
+          fs: {
+            workspaceOnly: true,
+          },
+          elevated: {
+            enabled: false,
+            allowFrom: {},
+          },
+          message: {
+            allowCrossContextSend: false,
+            crossContext: {
+              allowWithinProvider: false,
+              allowAcrossProviders: false,
+            },
+            broadcast: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    ],
+  },
+  channels: {
+    telegram: {
+      enabled: true,
+      tokenFile: "__RUNTIME_ROOT__/.openclaw/credentials/telegram.token",
+      dmPolicy: "allowlist",
+      allowFrom: ["__OWNER_TELEGRAM_ID__"],
+      groupPolicy: "disabled",
+      groups: {},
+      configWrites: false,
+      commands: {
+        native: false,
+        nativeSkills: false,
+      },
+      replyToMode: "first",
+      streaming: {
+        mode: "off",
+      },
+    },
+  },
+  bindings: [
+    {
+      type: "route",
+      agentId: "glintex-owner",
+      match: {
+        channel: "telegram",
+        peer: {
+          kind: "direct",
+          id: "__OWNER_TELEGRAM_ID__",
+        },
+      },
+      session: {
+        dmScope: "per-channel-peer",
+      },
+    },
+  ],
+  plugins: {
+    enabled: true,
+    allow: ["glintex-owner-operations"],
+    entries: {
+      "glintex-owner-operations": {
+        enabled: true,
+        hooks: {
+          allowPromptInjection: false,
+          allowConversationAccess: true,
+          timeoutMs: 5000,
+        },
+        config: {
+          baseUrl: "http://127.0.0.1:4003",
+          tallyBaseUrl: "http://127.0.0.1:4500",
+          apiTokenFile: "__RUNTIME_ROOT__/.openclaw/credentials/glintex-agent.token",
+          allowedAgentId: "glintex-owner",
+          ownerTelegramId: "__OWNER_TELEGRAM_ID__",
+          requestTimeoutMs: 20000,
+          maxResponseBytes: 2097152,
+        },
+      },
+    },
+  },
+}

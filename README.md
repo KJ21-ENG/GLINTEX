@@ -8,6 +8,7 @@ Vite + React + Tailwind project of the GLINTEX Inventory app.
 - `apps/backend` – Express + Prisma API (with WhatsApp automation)
 - `docker/` – shared infra assets (Postgres init SQL)
 - `docs/` – architecture notes and plans
+- `integrations/openclaw-owner` – owner-only GLINTEX Executive integration
 
 ## Quick Start
 
@@ -18,6 +19,18 @@ npm run dev:frontend    # starts Vite on http://localhost:5173
 ```
 
 The frontend expects the backend on port `4000` by default. Override `VITE_API_BASE` if you bind the API elsewhere.
+
+## Owner Operations Agent
+
+The production design includes one owner-only OpenClaw agent reachable through
+a dedicated Telegram direct chat. Its application access is served by a
+separate loopback-only API and is limited to fixed reads plus confirmation-gated
+owner-task and learning-candidate actions. It is not an application admin or a
+host shell.
+
+See [`integrations/openclaw-owner/README.md`](integrations/openclaw-owner/README.md)
+for the architecture, capability boundary, acceptance contract, and deployment
+runbook.
 
 ## Docker
 

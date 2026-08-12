@@ -1,0 +1,62 @@
+{
+  "id": "glintex-owner-operations",
+  "name": "GLINTEX Owner Operations",
+  "description": "Owner-only GLINTEX reads and confirmation-gated task and learning operations.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "baseUrl",
+      "tallyBaseUrl",
+      "apiTokenFile",
+      "allowedAgentId",
+      "ownerTelegramId"
+    ],
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Loopback-only GLINTEX owner-agent API origin."
+      },
+      "tallyBaseUrl": {
+        "type": "string",
+        "description": "Loopback-only read-only Tally report API base URL."
+      },
+      "apiTokenFile": {
+        "type": "string",
+        "description": "Absolute mode-0600 GLINTEX agent credential file."
+      },
+      "allowedAgentId": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{2,63}$"
+      },
+      "ownerTelegramId": {
+        "type": "string",
+        "pattern": "^\\d{5,20}$"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "default": 20000
+      },
+      "maxResponseBytes": {
+        "type": "integer",
+        "minimum": 65536,
+        "maximum": 4194304,
+        "default": 2097152
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "glintex_read",
+      "glintex_prepare_action",
+      "glintex_execute_action",
+      "glintex_verify_action"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "glintex-owner-agent-api-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "4.16.2",
+    "dotenv": "16.6.1",
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "prisma": "4.16.2"
+  }
+}

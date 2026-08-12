@@ -1151,3 +1151,97 @@ model CombinedStockConfig {
   createdByUserId String?
   updatedByUserId String?
 }
+
+// Owner-agent records are intentionally separate from human sessions and
+// business mutation tables. The agent can only mutate OwnerTask and propose
+// AgentLearningCandidate rows through the two-step AgentOperation ledger.
+model OwnerTask {
+  id               String   @id @default(cuid())
+  title            String
+  description      String?
+  area             String   @default("GENERAL")
+  priority         String   @default("MEDIUM")
+  status           String   @default("OPEN")
+  dueDate          String?
+  version          Int      @default(1)
+  completedAt      DateTime?
+  createdByAgentId String?
+  updatedByAgentId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  @@index([status, priority])
+  @@index([area, status])
+  @@index([dueDate])
+}
+
+model AgentLearningCandidate {
+  id                String   @id @default(cuid())
+  category          String
+  statement         String
+  evidence          String?
+  status            String   @default("PROPOSED")
+  version           Int      @default(1)
+  proposedByAgentId String
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  appliedAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@index([status, createdAt])
+  @@index([category, status])
+}
+
+model AgentOperation {
+  id               String   @id @default(uuid())
+  agentId          String
+  requesterId      String
+  channel          String
+  sessionKey       String?
+  action           String
+  entityType       String
+  entityId         String?
+  status           String   @default("PREPARED")
+  idempotencyKey   String
+  requestHash      String
+  request          Json
+  preview          Json
+  result           Json?
+  verification     Json?
+  confirmationHash String
+  expiresAt        DateTime
+  expectedVersion  Int?
+  failureCode      String?
+  failureMessage   String?
+  executedAt       DateTime?
+  verifiedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  @@unique([agentId, action, idempotencyKey])
+  @@index([status, expiresAt])
+  @@index([entityType, entityId])
+  @@index([requesterId, createdAt])
+}
+
+model AgentAccessLog {
+  id           String   @id @default(cuid())
+  agentId      String
+  requesterId  String
+  channel      String
+  sessionKey   String?
+  resource     String
+  source       String
+  filtersHash  String
+  resultCount  Int?
+  outcome      String
+  durationMs   Int?
+  errorCode    String?
+  createdAt    DateTime @default(now())
+
+  @@index([agentId, createdAt])
+  @@index([resource, createdAt])
+  @@index([outcome, createdAt])
+}

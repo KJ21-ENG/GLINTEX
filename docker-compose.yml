@@ -49,6 +49,49 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  agent-api:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile.agent
+    command: ["node", "src/agentServer.js"]
+    environment:
+      DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex
+      AGENT_API_PORT: 4003
+      GLINTEX_APP_BASE_URL: http://backend:4000
+      GLINTEX_DEPLOY_SHA: ${GLINTEX_DEPLOY_SHA:-unknown}
+      GLINTEX_OWNER_AGENT_ID: ${GLINTEX_OWNER_AGENT_ID:-glintex-owner}
+      GLINTEX_OWNER_TELEGRAM_ID: ${GLINTEX_OWNER_TELEGRAM_ID}
+      GLINTEX_OWNER_AGENT_TOKEN_SHA256: ${GLINTEX_OWNER_AGENT_TOKEN_SHA256}
+      GLINTEX_OWNER_AGENT_CONFIRMATION_SECRET: ${GLINTEX_OWNER_AGENT_CONFIRMATION_SECRET}
+      GLINTEX_OWNER_AGENT_SCOPES: ${GLINTEX_OWNER_AGENT_SCOPES:-app.read,finance.read,system.read,tasks.read,tasks.write,learning.read,learning.propose,operations.read,operations.write,audit.write}
+      GLINTEX_AGENT_ACTION_TTL_SECONDS: ${GLINTEX_AGENT_ACTION_TTL_SECONDS:-600}
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - "${AGENT_API_PORT:-4003}:4003"
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4003/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    mem_limit: 512m
+    pids_limit: 128
+    stop_grace_period: 15s
+    init: true
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./apps/frontend

@@ -111,6 +111,10 @@
         every: "0m",
         includeSystemPromptSection: false,
       },
+      models: {
+        "openai/gpt-5.6-sol": {},
+        "openai/gpt-5.6-terra": {},
+      },
     },
     list: [
       {

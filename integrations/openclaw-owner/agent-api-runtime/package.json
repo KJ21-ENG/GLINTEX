@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@prisma/client": "4.16.2",
+    "bcryptjs": "2.4.3",
     "dotenv": "16.6.1",
     "express": "5.2.1"
   },

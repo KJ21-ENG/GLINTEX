@@ -63,7 +63,7 @@ const plugin: OpenClawPluginDefinition = {
   id: 'glintex-owner-operations',
   name: 'GLINTEX Owner Operations',
   description: 'Owner-only, confirmation-gated GLINTEX business tools.',
-  version: '1.0.1',
+  version: '1.0.2',
   register(api) {
     const config = configFromApi(api.pluginConfig);
     const inboundBySession = new Map<string, CurrentTurnState>();

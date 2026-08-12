@@ -11,7 +11,7 @@ describe('current-turn confirmation policy', () => {
       prompt: 'CONFIRM GLINTEX GLX-ABCDEF1234',
       senderId: ownerId,
       senderIsOwner: true,
-      channelId: 'telegram',
+      channelId: ownerId,
     }, {
       content: 'K\nCONFIRM GLINTEX GLX-ABCDEF1234',
       senderId: ownerId,
@@ -20,6 +20,17 @@ describe('current-turn confirmation policy', () => {
       isGroup: false,
       capturedAt: now - 1_000,
     }, 'telegram', now);
+
+    expect(isExactOwnerConfirmation(state, 'GLX-ABCDEF1234', ownerId, now)).toBe(true);
+  });
+
+  it('falls back to run identity and provider when inbound metadata is unavailable', () => {
+    const state = currentTurnStateFromAgentRun({
+      prompt: 'CONFIRM GLINTEX GLX-ABCDEF1234',
+      senderId: ownerId,
+      senderIsOwner: true,
+      channelId: ownerId,
+    }, undefined, 'telegram', now);
 
     expect(isExactOwnerConfirmation(state, 'GLX-ABCDEF1234', ownerId, now)).toBe(true);
   });

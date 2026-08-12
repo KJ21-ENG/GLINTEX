@@ -25,9 +25,12 @@ export function currentTurnStateFromAgentRun(
     // Inbound hook content can contain channel decorations, so it must never be
     // used as the confirmation text when this authoritative value is present.
     content: event.prompt,
-    senderId: event.senderId || inboundState?.senderId,
-    senderIsOwner: event.senderIsOwner ?? inboundState?.senderIsOwner,
-    channel: event.channelId || inboundState?.channel || messageProvider,
+    // Keep identity and provider metadata from the proven inbound path. In
+    // before_agent_run, channelId is the conversation target (for Telegram,
+    // the numeric chat ID), not the provider name.
+    senderId: inboundState?.senderId || event.senderId,
+    senderIsOwner: inboundState?.senderIsOwner ?? event.senderIsOwner,
+    channel: inboundState?.channel || messageProvider,
     isGroup: inboundState?.isGroup === true,
     capturedAt,
   };

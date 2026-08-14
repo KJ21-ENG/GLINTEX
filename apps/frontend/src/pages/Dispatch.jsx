@@ -41,6 +41,29 @@ const STAGE_RECEIVE_ROUTES = {
     coning: '/app/receive',
 };
 
+function getDispatchItemDetailFields(item) {
+    const sourceDetails = item?.sourceDetails || {};
+    const typeLabel = item?.stage === 'holo'
+        ? 'Roll Type'
+        : item?.stage === 'coning'
+            ? 'Cone Type'
+            : 'Type';
+    return [
+        { key: 'itemName', label: 'Item', value: sourceDetails.itemName },
+        { key: 'lotNo', label: 'Lot', value: sourceDetails.lotLabel || sourceDetails.lotNo },
+        { key: 'pieceId', label: 'Piece', value: sourceDetails.pieceId },
+        { key: 'cutName', label: 'Cut', value: sourceDetails.cutName },
+        { key: 'yarnName', label: 'Yarn', value: sourceDetails.yarnName },
+        { key: 'twistName', label: 'Twist', value: sourceDetails.twistName },
+        { key: 'typeName', label: typeLabel, value: sourceDetails.typeName },
+        { key: 'rollTypeName', label: 'Roll Type', value: sourceDetails.rollTypeName },
+        { key: 'machineName', label: 'Machine', value: sourceDetails.machineName },
+        { key: 'sourceReference', label: 'Source Ref', value: sourceDetails.sourceReference },
+        { key: 'notes', label: 'Notes', value: item?.notes },
+        { key: 'sourceNotes', label: 'Source Notes', value: sourceDetails.sourceNotes },
+    ].filter(({ value }) => value !== null && value !== undefined && String(value).trim() !== '');
+}
+
 export function Dispatch() {
     const { db, patchDb, refreshProcessData, refreshModuleData } = useInventory();
     const { canRead, canWrite, canEdit, canDelete } = usePermission('dispatch');
@@ -260,11 +283,16 @@ export function Dispatch() {
             const terms = historySearch.toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
             list = list.filter(d => {
                 const barcodes = d.items.map(i => i.stageBarcode).filter(Boolean).join(' ');
+                const itemDetails = d.items
+                    .flatMap(i => Object.values(i.sourceDetails || {}))
+                    .filter(Boolean)
+                    .join(' ');
                 const searchable = [
                     d.challanNo,
                     d.customer?.name,
                     d.stage,
                     barcodes,
+                    itemDetails,
                     String(d.totalWeight),
                     d.notes
                 ].filter(Boolean).join(' ').toLowerCase();
@@ -1562,38 +1590,67 @@ export function Dispatch() {
                                                                         <TableHeader>
                                                                             <TableRow>
                                                                                 <TableHead>Barcode</TableHead>
+                                                                                <TableHead>Item / Lot</TableHead>
+                                                                                <TableHead>Process Details</TableHead>
+                                                                                <TableHead>Notes</TableHead>
                                                                                 <TableHead className="text-right">Count</TableHead>
                                                                                 <TableHead className="text-right">Weight</TableHead>
                                                                                 <TableHead className="text-right">Actions</TableHead>
                                                                             </TableRow>
                                                                         </TableHeader>
                                                                         <TableBody>
-                                                                            {d.items.map(item => (
-                                                                                <TableRow key={item.id}>
-                                                                                    <TableCell className="font-mono text-xs">{item.stageBarcode || '—'}</TableCell>
-                                                                                    <TableCell className="text-right">{item.count || '—'}</TableCell>
-                                                                                    <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
-                                                                                    <TableCell className="text-right">
-                                                                                        <DisabledWithTooltip
-                                                                                            disabled={!canEdit}
-                                                                                            tooltip="You do not have permission to edit dispatches."
-                                                                                        >
-                                                                                            <Button
-                                                                                                size="sm"
-                                                                                                variant="ghost"
-                                                                                                className="h-7 w-7 p-0"
-                                                                                                onClick={(e) => {
-                                                                                                    e.stopPropagation();
-                                                                                                    openEditDispatch(item, d);
-                                                                                                }}
-                                                                                                title="Edit row"
+                                                                            {d.items.map(item => {
+                                                                                const sourceDetails = item.sourceDetails || {};
+                                                                                const detailFields = getDispatchItemDetailFields(item);
+                                                                                const processDetailFields = detailFields.filter(({ key }) => !['itemName', 'lotNo', 'notes'].includes(key));
+                                                                                const lotLabel = sourceDetails.lotLabel || sourceDetails.lotNo;
+                                                                                return (
+                                                                                    <TableRow key={item.id}>
+                                                                                        <TableCell className="font-mono text-xs whitespace-nowrap">{item.stageBarcode || '—'}</TableCell>
+                                                                                        <TableCell className="min-w-[160px]">
+                                                                                            {sourceDetails.itemName || lotLabel ? (
+                                                                                                <div className="space-y-0.5">
+                                                                                                    {sourceDetails.itemName && <div className="font-medium break-words">{sourceDetails.itemName}</div>}
+                                                                                                    {lotLabel && <div className="text-xs text-muted-foreground">Lot: {lotLabel}</div>}
+                                                                                                </div>
+                                                                                            ) : '—'}
+                                                                                        </TableCell>
+                                                                                        <TableCell className="min-w-[220px]">
+                                                                                            {processDetailFields.length > 0 ? (
+                                                                                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                                                                                                    {processDetailFields.map(({ key, label, value }) => (
+                                                                                                        <span key={key} className="whitespace-nowrap">
+                                                                                                            <span className="text-muted-foreground">{label}:</span> {value}
+                                                                                                        </span>
+                                                                                                    ))}
+                                                                                                </div>
+                                                                                            ) : '—'}
+                                                                                        </TableCell>
+                                                                                        <TableCell className="max-w-[220px] text-sm break-words">{item.notes || '—'}</TableCell>
+                                                                                        <TableCell className="text-right">{item.count || '—'}</TableCell>
+                                                                                        <TableCell className="text-right">{formatKg(item.weight)}</TableCell>
+                                                                                        <TableCell className="text-right">
+                                                                                            <DisabledWithTooltip
+                                                                                                disabled={!canEdit}
+                                                                                                tooltip="You do not have permission to edit dispatches."
                                                                                             >
-                                                                                                <Pencil className="w-3.5 h-3.5" />
-                                                                                            </Button>
-                                                                                        </DisabledWithTooltip>
-                                                                                    </TableCell>
-                                                                                </TableRow>
-                                                                            ))}
+                                                                                                <Button
+                                                                                                    size="sm"
+                                                                                                    variant="ghost"
+                                                                                                    className="h-7 w-7 p-0"
+                                                                                                    onClick={(e) => {
+                                                                                                        e.stopPropagation();
+                                                                                                        openEditDispatch(item, d);
+                                                                                                    }}
+                                                                                                    title="Edit row"
+                                                                                                >
+                                                                                                    <Pencil className="w-3.5 h-3.5" />
+                                                                                                </Button>
+                                                                                            </DisabledWithTooltip>
+                                                                                        </TableCell>
+                                                                                    </TableRow>
+                                                                                );
+                                                                            })}
                                                                         </TableBody>
                                                                     </Table>
                                                                 </div>
@@ -1664,12 +1721,26 @@ export function Dispatch() {
                                             </Button>
                                             {isExpanded && (
                                                 <div className="mt-2 space-y-1">
-                                                    {d.items.map(item => (
-                                                        <div key={item.id} className="flex items-center justify-between text-xs border rounded-md px-2 py-1">
-                                                            <span className="font-mono">{item.stageBarcode || '—'}</span>
-                                                            <span>{item.count || '—'} • {formatKg(item.weight)}</span>
-                                                        </div>
-                                                    ))}
+                                                    {d.items.map(item => {
+                                                        const detailFields = getDispatchItemDetailFields(item);
+                                                        return (
+                                                            <div key={item.id} className="border rounded-md px-2 py-2 text-xs space-y-1.5">
+                                                                <div className="flex items-center justify-between gap-2">
+                                                                    <span className="font-mono break-all">{item.stageBarcode || '—'}</span>
+                                                                    <span className="whitespace-nowrap">{item.count || '—'} • {formatKg(item.weight)}</span>
+                                                                </div>
+                                                                {detailFields.length > 0 && (
+                                                                    <div className="grid grid-cols-1 gap-1 text-muted-foreground">
+                                                                        {detailFields.map(({ key, label, value }) => (
+                                                                            <span key={key} className="break-words">
+                                                                                <span className="text-foreground font-medium">{label}:</span> {value}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             )}
                                         </div>

@@ -501,23 +501,23 @@ export function ConingReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="p-4 bg-muted rounded-md text-sm space-y-3">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                                <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                                <div><strong>Item:</strong> {issueDetails.itemName || '—'}</div>
-                                <div><strong>Cut:</strong> {issueDetails.cutName || '—'}</div>
-                                <div><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
+                        <div className="p-4 bg-muted rounded-md text-base sm:text-lg leading-6 space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-4">
+                                <div className="min-w-0 break-words"><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
+                                <div className="min-w-0 break-words"><strong>Item:</strong> {issueDetails.itemName || '—'}</div>
+                                <div className="min-w-0 break-words"><strong>Cut:</strong> {issueDetails.cutName || '—'}</div>
+                                <div className="min-w-0 break-words"><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
                             </div>
                             <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-                                <div><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
-                                <div><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
-                                <div><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
-                                <div><strong>Expected Cones:</strong> {totalExpected}</div>
-                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-x-5 gap-y-4">
+                                <div className="min-w-0 break-words"><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
+                                <div className="min-w-0 break-words"><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
+                                <div className="min-w-0 break-words"><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
+                                <div className="min-w-0 break-words"><strong>Expected Cones:</strong> {totalExpected}</div>
+                                <div className="min-w-0 break-words"><strong>Target:</strong> {perConeWeight} g/cone</div>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
-                                <div className="flex items-center gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-4 items-center">
+                                <div className="flex min-w-0 flex-wrap items-center gap-2">
                                     <strong>Received Wt:</strong>{' '}
                                     <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
                                         {formatKg(totalReceivedWeight)}
@@ -567,9 +567,9 @@ export function ConingReceiveForm() {
                                         )}
                                     />
                                 </div>
-                                <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
-                                <div><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
-                                <div className="flex items-center gap-1">
+                                <div className="min-w-0 break-words"><strong>Received Cones:</strong> {totalReceivedCones}</div>
+                                <div className="min-w-0 break-words"><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
+                                <div className="flex min-w-0 flex-wrap items-center gap-1 break-words">
                                     <strong>Pending:</strong>{' '}
                                     <span className={wastageStatus.pendingWeight > 0.001 ? "" : "text-muted-foreground"}>
                                         {formatKg(wastageStatus.pendingWeight)}

@@ -9,6 +9,13 @@ import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
+import {
+    ResizableIssueSummary,
+    ReceiveSummaryGroup,
+    ReceiveSummaryMetricCard,
+    receiveSummaryMetricGridStyle,
+    RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG,
+} from './ResizableIssueSummary';
 
 export function HoloReceiveForm() {
     const { db, patchDb, emitInvalidation } = useInventory();
@@ -146,6 +153,10 @@ export function HoloReceiveForm() {
             pending: Math.max(0, pending),
         };
     }, [issue, db?.issue_balances]);
+
+    const isReceivedOverIssued = issueMetrics.netIssued > 0
+        && issueMetrics.received > issueMetrics.netIssued + RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG;
+    const excessReceivedWeight = Math.max(0, issueMetrics.received - issueMetrics.netIssued);
 
     // --- Handlers ---
     async function handleScan() {
@@ -347,20 +358,41 @@ export function HoloReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted rounded-md text-sm">
-                            <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                            <div><strong>Item:</strong> {db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId}</div>
-                            <div><strong>Cut:</strong> {cutName || '—'}</div>
-                            <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'}</div>
-                            <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === issue.twistId)?.name || '—'}</div>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/50 rounded-md text-sm">
-                            <div><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
-                            <div><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
-                            <div><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
-                            <div><strong>Received:</strong> {formatKg(issueMetrics.received)}</div>
-                            <div><strong>Pending:</strong> {formatKg(issueMetrics.pending)}</div>
-                        </div>
+                        <ResizableIssueSummary
+                            idPrefix="receive-summary-holo"
+                            warning={isReceivedOverIssued ? { excessKg: excessReceivedWeight } : null}
+                        >
+                            <ReceiveSummaryGroup id="receive-summary-holo-material" title="Material">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Lot" value={issue.lotLabel || issue.lotNo || '—'} />
+                                    <ReceiveSummaryMetricCard label="Item" value={db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId || '—'} />
+                                    <ReceiveSummaryMetricCard label="Cut" value={cutName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Yarn" value={db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'} />
+                                    <ReceiveSummaryMetricCard label="Twist" value={db?.twists?.find(t => t.id === issue.twistId)?.name || '—'} />
+                                </div>
+                            </ReceiveSummaryGroup>
+
+                            <ReceiveSummaryGroup id="receive-summary-holo-issue-balance" title="Issue Balance">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Issued (Orig)" value={formatKg(issueMetrics.originalIssued)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Taken Back" value={formatKg(issueMetrics.takenBack)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Net Issued" value={formatKg(issueMetrics.netIssued)} unit="kg" />
+                                </div>
+                            </ReceiveSummaryGroup>
+
+                            <ReceiveSummaryGroup id="receive-summary-holo-production-outcome" title="Production Outcome">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard
+                                        label="Received"
+                                        value={formatKg(issueMetrics.received)}
+                                        unit="kg"
+                                        valueClassName={isReceivedOverIssued ? 'text-destructive' : ''}
+                                    />
+                                    <ReceiveSummaryMetricCard label="Wastage" value={formatKg(issueMetrics.wastage)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Pending" value={formatKg(issueMetrics.pending)} unit="kg" />
+                                </div>
+                            </ReceiveSummaryGroup>
+                        </ResizableIssueSummary>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div><Label>Date</Label><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>

@@ -11,6 +11,13 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
+import {
+    ResizableIssueSummary,
+    ReceiveSummaryGroup,
+    ReceiveSummaryMetricCard,
+    receiveSummaryMetricGridStyle,
+    RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG,
+} from './ResizableIssueSummary';
 
 export function CutterReceiveForm() {
     const { db, refreshProcessData, emitInvalidation } = useInventory();
@@ -340,6 +347,9 @@ export function CutterReceiveForm() {
     const isWastageClosed = pieceStatus.pendingWeight <= 0 && pieceStatus.hasWastageInDb;
     const receivingBlocked = pieceStatus.hasWastageInCart || isWastageClosed;
     const receiveFieldsDisabled = isWastage || receivingBlocked;
+    const isReceivedOverIssued = netIssuedWeight > 0
+        && totalReceived > netIssuedWeight + RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG;
+    const excessReceivedWeight = Math.max(0, totalReceived - netIssuedWeight);
 
     const computeNextBarcode = (pieceId, lotNo, seq) => {
         const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId && !row.isDeleted);
@@ -565,116 +575,136 @@ export function CutterReceiveForm() {
                     </form>
 
                     {issueRecord && (
-                        <div className="mt-4 p-4 bg-muted rounded-md grid grid-cols-1 sm:grid-cols-2 md:grid-cols-11 gap-4 text-sm">
-                            <div><span className="font-semibold">Lot:</span> {issueRecord.lotNo}</div>
-                            <div><span className="font-semibold">Item:</span> {db.items.find(i => i.id === issueRecord.itemId)?.name}</div>
-                            <div><span className="font-semibold">Machine:</span> {db.machines.find(m => m.id === issueRecord.machineId)?.name}</div>
-                            <div><span className="font-semibold">Operator:</span> {db.workers.find(o => o.id === issueRecord.operatorId)?.name}</div>
-                            <div><span className="font-semibold">Inbound:</span> {formatKg(inboundWeight)}</div>
-                            <div><span className="font-semibold">Issued (Orig):</span> {formatKg(originalIssuedWeight)}</div>
-                            <div><span className="font-semibold">Taken Back:</span> {formatKg(takenBackWeight)}</div>
-                            <div><span className="font-semibold">Net Issued:</span> {formatKg(netIssuedWeight)}</div>
-                            <div>
-                                <span className="font-semibold">Received:</span> {formatKg(totalReceived)}
-                                <InfoPopover
-                                    title="Received Crates"
-                                    items={issueReceiveRows}
-                                    renderContent={(items) => (
-                                        <table className="w-full text-xs">
-                                            <thead>
-                                                <tr className="border-b">
-                                                    <th className="text-left py-1 px-1 font-medium">Barcode</th>
-                                                    <th className="text-left py-1 px-1 font-medium">Date</th>
-                                                    <th className="text-right py-1 px-1 font-medium">Bobbins</th>
-                                                    <th className="text-right py-1 px-1 font-medium">Net Wt</th>
-                                                    <th className="text-left py-1 px-1 font-medium">Cut</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {items.map((row, idx) => (
-                                                    <tr key={row.id || idx} className="border-b last:border-0">
-                                                        <td className="py-1 px-1 font-mono">{row.barcode || '—'}</td>
-                                                        <td className="py-1 px-1">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
-                                                        <td className="py-1 px-1 text-right">{row.bobbinQuantity || 0}</td>
-                                                        <td className="py-1 px-1 text-right font-medium">{formatKg(row.netWt)}</td>
-                                                        <td className="py-1 px-1">{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—'}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                            <tfoot>
-                                                <tr className="border-t-2 bg-muted/50 font-semibold">
-                                                    <td className="py-1 px-1" colSpan={2}>Total</td>
-                                                    <td className="py-1 px-1 text-right">{items.reduce((sum, row) => sum + (row.bobbinQuantity || 0), 0)}</td>
-                                                    <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0))}</td>
-                                                    <td className="py-1 px-1"></td>
-                                                </tr>
-                                            </tfoot>
-                                        </table>
-                                    )}
-                                    emptyText="No crates received yet"
-                                    widthClassName="w-[420px]"
-                                    bodyClassName="max-h-[300px] overflow-y-auto"
-                                    buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
-                                    align="right"
-                                />
-                            </div>
-                            <div><span className="font-semibold">Wastage:</span> {formatKg(wastageWeight)}</div>
-                            <div>
-                                <span className="font-semibold">Pending:</span> {formatKg(pendingWeight)}
-                                {isWastageClosed ? (
-                                    <div className="text-xs text-destructive">
-                                        ({formatKg(pieceStatus.wastageWeight)}kg wastage)
-                                    </div>
-                                ) : (
-                                    <InfoPopover
-                                        title="Piece Close"
-                                        items={[pieceStatus]}
-                                        renderContent={() => {
-                                            if (!pieceIdToUse) {
-                                                return (
-                                                    <div className="text-muted-foreground">
-                                                        Scan an issue barcode to manage piece wastage.
-                                                    </div>
-                                                );
-                                            }
+                        <ResizableIssueSummary
+                            idPrefix="receive-summary-cutter"
+                            warning={isReceivedOverIssued ? { excessKg: excessReceivedWeight } : null}
+                        >
+                            <ReceiveSummaryGroup id="receive-summary-cutter-material" title="Material / Assignment">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Lot" value={issueRecord.lotNo || '—'} />
+                                    <ReceiveSummaryMetricCard label="Item" value={db.items.find(i => i.id === issueRecord.itemId)?.name || '—'} />
+                                    <ReceiveSummaryMetricCard label="Machine" value={db.machines.find(m => m.id === issueRecord.machineId)?.name || '—'} />
+                                    <ReceiveSummaryMetricCard label="Operator" value={db.workers.find(o => o.id === issueRecord.operatorId)?.name || '—'} />
+                                </div>
+                            </ReceiveSummaryGroup>
 
-                                            return (
-                                                <div className="space-y-2 text-xs">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">Piece</span>
-                                                        <span className="font-mono">{pieceIdToUse}</span>
-                                                    </div>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">Pending to close</span>
-                                                        <span className="font-medium">{formatKg(pieceStatus.pendingWeight)}</span>
-                                                    </div>
-                                                    {pieceStatus.hasWastageInCart && (
-                                                        <div className="text-muted-foreground">
-                                                            Wastage is queued in the list. Remove it to continue.
-                                                        </div>
-                                                    )}
-                                                    <label className="flex items-start gap-2 cursor-pointer">
-                                                        <Checkbox
-                                                            checked={isWastage}
-                                                            onCheckedChange={setIsWastage}
-                                                            disabled={!pieceIdToUse || pieceStatus.pendingWeight <= 0 || receivingBlocked}
-                                                        />
-                                                        <span className="leading-snug">Close piece (mark remaining as wastage)</span>
-                                                    </label>
-                                                </div>
-                                            );
-                                        }}
-                                        widthClassName="w-64"
-                                        bodyClassName="text-xs"
-                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
-                                        align="right"
+                            <ReceiveSummaryGroup id="receive-summary-cutter-issue-balance" title="Issue Balance">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Inbound" value={formatKg(inboundWeight)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Issued (Orig)" value={formatKg(originalIssuedWeight)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Taken Back" value={formatKg(takenBackWeight)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Net Issued" value={formatKg(netIssuedWeight)} unit="kg" />
+                                </div>
+                            </ReceiveSummaryGroup>
+
+                            <ReceiveSummaryGroup id="receive-summary-cutter-production-outcome" title="Production Outcome">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard
+                                        label="Received"
+                                        value={formatKg(totalReceived)}
+                                        unit="kg"
+                                        valueClassName={isReceivedOverIssued ? 'text-destructive' : ''}
+                                        action={(
+                                            <InfoPopover
+                                                title="Received Crates"
+                                                items={issueReceiveRows}
+                                                renderContent={(items) => (
+                                                    <table className="w-full text-xs">
+                                                        <thead>
+                                                            <tr className="border-b">
+                                                                <th className="text-left py-1 px-1 font-medium">Barcode</th>
+                                                                <th className="text-left py-1 px-1 font-medium">Date</th>
+                                                                <th className="text-right py-1 px-1 font-medium">Bobbins</th>
+                                                                <th className="text-right py-1 px-1 font-medium">Net Wt</th>
+                                                                <th className="text-left py-1 px-1 font-medium">Cut</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {items.map((row, idx) => (
+                                                                <tr key={row.id || idx} className="border-b last:border-0">
+                                                                    <td className="py-1 px-1 font-mono">{row.barcode || '—'}</td>
+                                                                    <td className="py-1 px-1">{formatDateDDMMYYYY(row.date || row.createdAt) || '—'}</td>
+                                                                    <td className="py-1 px-1 text-right">{row.bobbinQuantity || 0}</td>
+                                                                    <td className="py-1 px-1 text-right font-medium">{formatKg(row.netWt)}</td>
+                                                                    <td className="py-1 px-1">{row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || db.cuts?.find(c => c.id === row.cutId)?.name || '—'}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                        <tfoot>
+                                                            <tr className="border-t-2 bg-muted/50 font-semibold">
+                                                                <td className="py-1 px-1" colSpan={2}>Total</td>
+                                                                <td className="py-1 px-1 text-right">{items.reduce((sum, row) => sum + (row.bobbinQuantity || 0), 0)}</td>
+                                                                <td className="py-1 px-1 text-right">{formatKg(items.reduce((sum, row) => sum + Number(row.netWt || row.netWeight || 0), 0))}</td>
+                                                                <td className="py-1 px-1"></td>
+                                                            </tr>
+                                                        </tfoot>
+                                                    </table>
+                                                )}
+                                                emptyText="No crates received yet"
+                                                widthClassName="w-[420px]"
+                                                bodyClassName="max-h-[300px] overflow-y-auto"
+                                                buttonClassName="h-6 w-6 rounded-full hover:bg-muted inline-flex ml-1"
+                                                align="right"
+                                            />
+                                        )}
                                     />
-                                )}
-                            </div>
-                            <div>
-                                <span className="font-semibold">Bobbins:</span> {totalReceivedBobbins}
-                            </div>
-                        </div>
+                                    <ReceiveSummaryMetricCard label="Wastage" value={formatKg(wastageWeight)} unit="kg" />
+                                    <ReceiveSummaryMetricCard
+                                        label="Pending"
+                                        value={formatKg(pendingWeight)}
+                                        unit="kg"
+                                        valueClassName={pendingWeight > 0.001 ? '' : 'text-muted-foreground'}
+                                        detail={isWastageClosed ? `(${formatKg(pieceStatus.wastageWeight)} kg wastage)` : null}
+                                        action={!isWastageClosed ? (
+                                            <InfoPopover
+                                                title="Piece Close"
+                                                items={[pieceStatus]}
+                                                renderContent={() => {
+                                                    if (!pieceIdToUse) {
+                                                        return (
+                                                            <div className="text-muted-foreground">
+                                                                Scan an issue barcode to manage piece wastage.
+                                                            </div>
+                                                        );
+                                                    }
+
+                                                    return (
+                                                        <div className="space-y-2 text-xs">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">Piece</span>
+                                                                <span className="font-mono">{pieceIdToUse}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">Pending to close</span>
+                                                                <span className="font-medium">{formatKg(pieceStatus.pendingWeight)}</span>
+                                                            </div>
+                                                            {pieceStatus.hasWastageInCart && (
+                                                                <div className="text-muted-foreground">
+                                                                    Wastage is queued in the list. Remove it to continue.
+                                                                </div>
+                                                            )}
+                                                            <label className="flex items-start gap-2 cursor-pointer">
+                                                                <Checkbox
+                                                                    checked={isWastage}
+                                                                    onCheckedChange={setIsWastage}
+                                                                    disabled={!pieceIdToUse || pieceStatus.pendingWeight <= 0 || receivingBlocked}
+                                                                />
+                                                                <span className="leading-snug">Close piece (mark remaining as wastage)</span>
+                                                            </label>
+                                                        </div>
+                                                    );
+                                                }}
+                                                widthClassName="w-64"
+                                                bodyClassName="text-xs"
+                                                buttonClassName="h-6 w-6 rounded-full hover:bg-muted inline-flex ml-1"
+                                                align="right"
+                                            />
+                                        ) : null}
+                                    />
+                                    <ReceiveSummaryMetricCard label="Bobbins" value={totalReceivedBobbins} unit="bobbins" />
+                                </div>
+                            </ReceiveSummaryGroup>
+                        </ResizableIssueSummary>
                     )}
                 </CardContent>
             </Card>

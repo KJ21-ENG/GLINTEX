@@ -16,8 +16,18 @@ export const glintexOwnerDomainContract = {
   reads: {
     health: 'Dedicated agent API and database health.',
     reference: 'Live GLINTEX master identifiers and controlled names.',
-    issues: { process: ['cutter', 'holo', 'coning'], maximumRows: 100 },
-    receives: { process: ['cutter', 'holo', 'coning'], maximumRows: 100 },
+    issues: {
+      process: ['cutter', 'holo', 'coning'],
+      maximumRows: 100,
+      dateBasis: ['business', 'record'],
+      recordDateTimeZone: 'Asia/Kolkata',
+    },
+    receives: {
+      process: ['cutter', 'holo', 'coning'],
+      maximumRows: 100,
+      dateBasis: ['business', 'record'],
+      recordDateTimeZone: 'Asia/Kolkata',
+    },
     on_machine: { process: ['cutter', 'holo', 'coning'], maximumRows: 100 },
     stock: { process: ['holo', 'coning'], maximumRows: 100 },
     production: {
@@ -73,7 +83,7 @@ export const glintexOwnerDomainContract = {
     currentFacts: 'Fresh tool reads override memory and historical chat context.',
     identifiers: 'Use exact live IDs; never guess or select an ambiguous fuzzy match.',
     cutTracing: 'For downstream stages, prefer Coning Issue receivedRowRefs to Holo Receive rows to Holo Issue; use the coning issue cut only when trace data is unavailable.',
-    totals: 'Use application-computed or adapter-documented totals and disclose active filters and date ranges.',
+    totals: 'Use application-computed or adapter-documented totals and disclose active filters, date ranges, and date basis.',
     tally: 'Treat Tally snapshots as accounting evidence, disclose freshness, and do not infer a payment from amount similarity.',
   },
 } as const;

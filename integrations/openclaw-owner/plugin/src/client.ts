@@ -72,6 +72,12 @@ function validateDateRange(dateFrom?: string, dateTo?: string) {
   if ((to - from) / 86_400_000 > 93) throw new Error('Date ranges are limited to 93 days.');
 }
 
+function validatedDateBasis(value: ReadParameters['dateBasis']) {
+  if (value === undefined) return undefined;
+  if (value !== 'business' && value !== 'record') throw new Error('dateBasis must be business or record.');
+  return value;
+}
+
 function addQuery(url: URL, values: Record<string, string | number | undefined>) {
   Object.entries(values).forEach(([key, value]) => {
     if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
@@ -105,15 +111,19 @@ export function buildReadRequest(config: PluginConfig, params: ReadParameters): 
       url = new URL(`${base}/api/agent/v1/reference`);
       return { source: 'glintex', url };
     case 'issues': {
-      rejectIrrelevantReadFields(params, ['process', 'search', 'dateFrom', 'dateTo', 'order', 'cursor', 'page', 'limit']);
+      rejectIrrelevantReadFields(params, ['process', 'search', 'dateFrom', 'dateTo', 'dateBasis', 'order', 'cursor', 'page', 'limit']);
       const process = validatedProcess(params.process, ['cutter', 'holo', 'coning']);
+      const dateBasis = validatedDateBasis(params.dateBasis);
       url = new URL(`${base}/api/agent/v1/app/issue/${process}/tracking`);
+      addQuery(url, { dateBasis });
       break;
     }
     case 'receives': {
-      rejectIrrelevantReadFields(params, ['process', 'search', 'dateFrom', 'dateTo', 'order', 'cursor', 'page', 'limit']);
+      rejectIrrelevantReadFields(params, ['process', 'search', 'dateFrom', 'dateTo', 'dateBasis', 'order', 'cursor', 'page', 'limit']);
       const process = validatedProcess(params.process, ['cutter', 'holo', 'coning']);
+      const dateBasis = validatedDateBasis(params.dateBasis);
       url = new URL(`${base}/api/agent/v1/app/receive/${process}/history`);
+      addQuery(url, { dateBasis });
       break;
     }
     case 'on_machine': {

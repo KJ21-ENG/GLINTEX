@@ -4,15 +4,20 @@ import { formatKg } from '../../utils';
 
 export const RECEIVE_SUMMARY_SCALE_STORAGE_KEY = 'glintex.receiveIssueSummaryScale.v1';
 export const LEGACY_CONING_SUMMARY_SCALE_STORAGE_KEY = 'glintex.coningSummaryScale.v1';
-export const RECEIVE_SUMMARY_SCALE_MIN = 0.9;
-export const RECEIVE_SUMMARY_SCALE_MAX = 1.6;
 export const RECEIVE_SUMMARY_SCALE_DEFAULT = 1;
+export const RECEIVE_SUMMARY_SCALE_DECREASE_FACTOR = 1 / 1.1;
+export const RECEIVE_SUMMARY_SCALE_INCREASE_FACTOR = 1.1;
+export const RECEIVE_SUMMARY_SCALE_POINTER_PIXELS = 250;
 export const RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG = 0.001;
 
-function clampReceiveSummaryScale(value) {
+function normalizeReceiveSummaryScale(value, fallbackValue = RECEIVE_SUMMARY_SCALE_DEFAULT) {
     const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return RECEIVE_SUMMARY_SCALE_DEFAULT;
-    return Math.min(RECEIVE_SUMMARY_SCALE_MAX, Math.max(RECEIVE_SUMMARY_SCALE_MIN, numericValue));
+    const numericFallback = Number(fallbackValue);
+    const safeFallback = Number.isFinite(numericFallback) && numericFallback > 0
+        ? numericFallback
+        : RECEIVE_SUMMARY_SCALE_DEFAULT;
+    if (!Number.isFinite(numericValue) || numericValue <= 0) return safeFallback;
+    return numericValue;
 }
 
 function readReceiveSummaryScale() {
@@ -20,15 +25,37 @@ function readReceiveSummaryScale() {
     try {
         const storedValue = window.localStorage.getItem(RECEIVE_SUMMARY_SCALE_STORAGE_KEY);
         if (storedValue != null && storedValue.trim() !== '') {
-            return clampReceiveSummaryScale(storedValue);
+            return normalizeReceiveSummaryScale(storedValue);
         }
 
         const legacyValue = window.localStorage.getItem(LEGACY_CONING_SUMMARY_SCALE_STORAGE_KEY);
         if (legacyValue == null || legacyValue.trim() === '') return RECEIVE_SUMMARY_SCALE_DEFAULT;
-        return clampReceiveSummaryScale(legacyValue);
+        return normalizeReceiveSummaryScale(legacyValue);
     } catch {
         return RECEIVE_SUMMARY_SCALE_DEFAULT;
     }
+}
+
+function multiplyReceiveSummaryScale(value, multiplier) {
+    const currentScale = normalizeReceiveSummaryScale(value);
+    const safeMultiplier = normalizeReceiveSummaryScale(multiplier, 1);
+    return normalizeReceiveSummaryScale(currentScale * safeMultiplier, currentScale);
+}
+
+function getPointerSummaryScale(startScale, diagonalDelta) {
+    const currentScale = normalizeReceiveSummaryScale(startScale);
+    const numericDelta = Number(diagonalDelta);
+    if (!Number.isFinite(numericDelta)) return currentScale;
+
+    const nextScale = currentScale * Math.exp(numericDelta / RECEIVE_SUMMARY_SCALE_POINTER_PIXELS);
+    return normalizeReceiveSummaryScale(nextScale, currentScale);
+}
+
+function formatReceiveSummaryScalePercent(scale) {
+    const percent = scale * 100;
+    if (!Number.isFinite(percent)) return `${scale.toExponential(2)} × 100%`;
+    if (percent >= 1) return `${Math.round(percent)}%`;
+    return `${percent.toPrecision(2)}%`;
 }
 
 export function ReceiveSummaryMetricCard({ label, value, unit, action, detail, valueClassName = '' }) {
@@ -153,14 +180,14 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
     const updateSummaryScale = (nextValue) => {
         setSummaryScale((previousValue) => {
             const resolvedValue = typeof nextValue === 'function' ? nextValue(previousValue) : nextValue;
-            const nextScale = clampReceiveSummaryScale(resolvedValue);
+            const nextScale = normalizeReceiveSummaryScale(resolvedValue, previousValue);
             summaryScaleRef.current = nextScale;
             return nextScale;
         });
     };
 
-    const adjustSummaryScale = (delta) => {
-        updateSummaryScale((currentScale) => currentScale + delta);
+    const adjustSummaryScale = (multiplier) => {
+        updateSummaryScale((currentScale) => multiplyReceiveSummaryScale(currentScale, multiplier));
     };
 
     const handleSummaryResizePointerDown = (event) => {
@@ -182,7 +209,7 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
         if (!activeResize || activeResize.pointerId !== event.pointerId) return;
         event.preventDefault();
         const diagonalDelta = ((event.clientX - activeResize.startX) + (event.clientY - activeResize.startY)) / 2;
-        updateSummaryScale(activeResize.startScale + diagonalDelta / 250);
+        updateSummaryScale(getPointerSummaryScale(activeResize.startScale, diagonalDelta));
     };
 
     const finishSummaryResize = (event) => {
@@ -199,20 +226,12 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
             case 'ArrowLeft':
             case 'ArrowDown':
                 event.preventDefault();
-                adjustSummaryScale(-0.05);
+                adjustSummaryScale(RECEIVE_SUMMARY_SCALE_DECREASE_FACTOR);
                 break;
             case 'ArrowRight':
             case 'ArrowUp':
                 event.preventDefault();
-                adjustSummaryScale(0.05);
-                break;
-            case 'Home':
-                event.preventDefault();
-                updateSummaryScale(RECEIVE_SUMMARY_SCALE_MIN);
-                break;
-            case 'End':
-                event.preventDefault();
-                updateSummaryScale(RECEIVE_SUMMARY_SCALE_MAX);
+                adjustSummaryScale(RECEIVE_SUMMARY_SCALE_INCREASE_FACTOR);
                 break;
             case 'r':
             case 'R':
@@ -224,25 +243,26 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
         }
     };
 
-    const summaryScalePercent = Math.round(summaryScale * 100);
+    const summaryScalePercent = formatReceiveSummaryScalePercent(summaryScale);
     const summaryStyle = {
         '--receive-summary-font-size': `${summaryScale}rem`,
         '--receive-summary-line-height': `${1.5 * summaryScale}rem`,
-        '--receive-summary-gap': `${Math.max(0.75, Math.min(1.5, 0.9 * summaryScale))}rem`,
-        '--receive-summary-group-gap': `${Math.max(0.4, Math.min(0.9, 0.55 * summaryScale))}rem`,
-        '--receive-summary-inline-gap': `${Math.max(0.25, Math.min(0.7, 0.4 * summaryScale))}rem`,
-        '--receive-summary-padding': `${Math.max(0.8, Math.min(1.6, 1 * summaryScale))}rem`,
-        '--receive-summary-card-padding': `${Math.max(0.7, Math.min(1.3, 0.8 * summaryScale))}rem`,
-        '--receive-summary-card-value-offset': `${Math.max(0.2, Math.min(0.45, 0.3 * summaryScale))}rem`,
-        '--receive-summary-detail-offset': `${Math.max(0.25, Math.min(0.55, 0.35 * summaryScale))}rem`,
-        '--receive-summary-card-min': `${Math.max(8.5, Math.min(16, 10 * summaryScale))}rem`,
-        '--receive-summary-heading-size': `${Math.max(0.9, Math.min(1.45, 1 * summaryScale))}rem`,
-        '--receive-summary-label-size': `${Math.max(0.875, Math.min(1.5, 1 * summaryScale))}rem`,
-        '--receive-summary-value-size': `${Math.max(1.1, Math.min(2.25, 1.35 * summaryScale))}rem`,
-        '--receive-summary-unit-size': `${Math.max(0.85, Math.min(1.35, 0.95 * summaryScale))}rem`,
-        '--receive-summary-detail-size': `${Math.max(0.8, Math.min(1.25, 0.9 * summaryScale))}rem`,
+        '--receive-summary-gap': `${0.9 * summaryScale}rem`,
+        '--receive-summary-group-gap': `${0.55 * summaryScale}rem`,
+        '--receive-summary-inline-gap': `${0.4 * summaryScale}rem`,
+        '--receive-summary-padding': `${summaryScale}rem`,
+        '--receive-summary-card-padding': `${0.8 * summaryScale}rem`,
+        '--receive-summary-card-value-offset': `${0.3 * summaryScale}rem`,
+        '--receive-summary-detail-offset': `${0.35 * summaryScale}rem`,
+        '--receive-summary-card-min': `${10 * summaryScale}rem`,
+        '--receive-summary-heading-size': `${summaryScale}rem`,
+        '--receive-summary-label-size': `${summaryScale}rem`,
+        '--receive-summary-value-size': `${1.35 * summaryScale}rem`,
+        '--receive-summary-unit-size': `${0.95 * summaryScale}rem`,
+        '--receive-summary-detail-size': `${0.9 * summaryScale}rem`,
     };
     const summaryId = idPrefix || 'receive-summary';
+    const summaryScaleValueId = `${summaryId}-scale-value`;
     const excessReceivedWeight = Number(warning?.excessKg || 0);
 
     return (
@@ -300,7 +320,7 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
                 }}
             >
                 <div className="min-w-0 text-muted-foreground" style={{ fontSize: 'var(--receive-summary-detail-size)', lineHeight: '1.35' }}>
-                    Readability size: <span className="font-semibold text-foreground" aria-live="polite">{summaryScalePercent}%</span>
+                    Readability size: <span id={summaryScaleValueId} className="font-semibold text-foreground" aria-live="polite">{summaryScalePercent}</span>
                 </div>
                 <div className="ml-auto flex items-center gap-1" role="group" aria-label="Summary size controls">
                     <Button
@@ -310,7 +330,7 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
                         className="h-8 min-w-8 px-2"
                         aria-label="Decrease summary size"
                         title="Decrease summary size"
-                        onClick={() => adjustSummaryScale(-0.05)}
+                        onClick={() => adjustSummaryScale(RECEIVE_SUMMARY_SCALE_DECREASE_FACTOR)}
                     >
                         −
                     </Button>
@@ -332,20 +352,16 @@ export function ResizableIssueSummary({ idPrefix, groups = [], warning = null, c
                         className="h-8 min-w-8 px-2"
                         aria-label="Increase summary size"
                         title="Increase summary size"
-                        onClick={() => adjustSummaryScale(0.05)}
+                        onClick={() => adjustSummaryScale(RECEIVE_SUMMARY_SCALE_INCREASE_FACTOR)}
                     >
                         +
                     </Button>
                     <button
                         type="button"
-                        role="slider"
-                        aria-label="Drag to resize summary"
-                        aria-orientation="horizontal"
-                        aria-valuemin={RECEIVE_SUMMARY_SCALE_MIN * 100}
-                        aria-valuemax={RECEIVE_SUMMARY_SCALE_MAX * 100}
-                        aria-valuenow={summaryScalePercent}
-                        aria-valuetext={`${summaryScalePercent}% summary size`}
-                        title="Drag to resize summary"
+                        aria-label={`Resize summary, currently ${summaryScalePercent}`}
+                        aria-describedby={summaryScaleValueId}
+                        aria-keyshortcuts="ArrowDown ArrowUp ArrowLeft ArrowRight R"
+                        title="Drag to resize summary. Use arrow keys to adjust or R to reset."
                         className="ml-1 flex h-8 w-8 touch-none select-none items-center justify-center rounded-md border border-border/70 bg-background/60 text-base text-muted-foreground hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         onKeyDown={handleSummaryResizeKeyDown}
                         onPointerDown={handleSummaryResizePointerDown}

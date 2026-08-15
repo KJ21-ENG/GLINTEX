@@ -107,6 +107,9 @@
       contextInjection: "always",
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
+      compaction: {
+        reserveTokensFloor: 50000,
+      },
       heartbeat: {
         every: "0m",
         includeSystemPromptSection: false,

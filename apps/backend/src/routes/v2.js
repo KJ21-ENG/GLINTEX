@@ -10,6 +10,12 @@ import {
   buildReceiveMachineInFilter,
   resolveDisplayedReceiveMachineName,
 } from '../utils/receiveHistoryFilters.js';
+import {
+  buildAgentDateFilterMetadata,
+  buildRecordDateWhere,
+  formatAgentRecordDate,
+  normalizeAgentDateBasis,
+} from '../utils/agentDateFilters.js';
 
 const router = Router();
 const PERM_READ = ACCESS_LEVELS.READ;
@@ -374,6 +380,12 @@ function buildDateWhere({ dateFrom, dateTo, field = 'date' }) {
   if (from) w.gte = from;
   if (to) w.lte = to;
   return { [field]: w };
+}
+
+function buildDateWhereForAgent({ dateFrom, dateTo, dateBasis }) {
+  return dateBasis === 'record'
+    ? buildRecordDateWhere({ dateFrom, dateTo })
+    : buildDateWhere({ dateFrom, dateTo, field: 'date' });
 }
 
 function parsePieceIdsCsv(raw) {
@@ -867,6 +879,7 @@ function mapIssueRow(process, row, { takeBackTotalsByIssueId, wastageByIssueId }
   const wastageWeight = Number(process === 'cutter' ? (wastageByIssueId?.get(row.id) || 0) : 0);
   return {
     ...row,
+    recordDate: formatAgentRecordDate(row.createdAt),
     // Flatten common names to avoid frontend deep lookups (UI stays same).
     itemName: row.itemName || '',
     cutName: row.cut?.name || '',
@@ -909,15 +922,17 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
   const pageNum = parsePageParam(req.query.page);
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = issueModelForProcess(process);
     const { rawFilters, computedFilters } = splitComputedFilters(filters, ISSUE_COMPUTED_FIELDS[process] || new Set());
     const cursorWhere = computedFilters.length > 0 || pageNum != null ? null : buildCursorWhere(cursor, order);
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const extraWhere = await buildIssueExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
@@ -959,7 +974,14 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       const summary = !cursor && (pageNum == null || pageNum === 1)
         ? { ...buildIssueSummaryFromItems(process, allItems), totalCount: allItems.length }
         : null;
-      return res.json({ items, hasMore, nextCursor, summary });
+      return res.json({
+        items,
+        hasMore,
+        nextCursor,
+        summary,
+        dateBasis,
+        dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+      });
     }
 
     const rowsRaw = await model.findMany({
@@ -1075,6 +1097,8 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
       hasMore,
       nextCursor,
       summary,
+      dateBasis,
+      dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
     });
   } catch (err) {
     console.error('v2 issue tracking error', err);
@@ -1088,11 +1112,13 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
   const excludeField = String(req.query.excludeField || '').trim();
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = issueModelForProcess(process);
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(filters, ISSUE_FILTERS, { excludeField, process });
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
     const where = {
@@ -1147,7 +1173,13 @@ router.get('/issue/:process/tracking/facets', requireAuth, requireStageReadPermi
         addedBy: users.map(r => r.username).filter(Boolean),
         shift: shifts,
       },
-      meta: { process, excludeField, whereApplied: Boolean(where) },
+      meta: {
+        process,
+        excludeField,
+        whereApplied: Boolean(where),
+        dateBasis,
+        dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+      },
     });
   } catch (err) {
     console.error('v2 issue facets error', err);
@@ -1160,13 +1192,15 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = issueModelForProcess(process);
     const { rawFilters, computedFilters } = splitComputedFilters(filters, ISSUE_COMPUTED_FIELDS[process] || new Set());
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(rawFilters, ISSUE_FILTERS, { process });
     const extraWhere = await buildIssueExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickIssueSearchFields(process) });
@@ -1192,7 +1226,11 @@ router.get('/issue/:process/tracking/export.json', requireAuth, requireStageRead
     const items = rowsWithItems
       .map((r) => mapIssueRow(process, r, { takeBackTotalsByIssueId, wastageByIssueId }))
       .filter((row) => matchesComputedFilters(row, computedFilters));
-    res.json({ items });
+    res.json({
+      items,
+      dateBasis,
+      dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+    });
   } catch (err) {
     console.error('v2 issue export error', err);
     res.status(500).json({ error: err.message || 'Failed to export' });
@@ -1363,7 +1401,7 @@ const RECEIVE_FILTERS = {
 };
 
 function mapReceiveRow(process, row, extras = {}) {
-  const base = { ...row };
+  const base = { ...row, recordDate: formatAgentRecordDate(row.createdAt) };
   if (process === 'holo' || process === 'coning') {
     base.shift = row.shift || row.issue?.shift || '';
     base.itemName = row.issue?.itemName || '';
@@ -1458,15 +1496,17 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
   const pageNum = parsePageParam(req.query.page);
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = receiveModelForProcess(process);
     const { rawFilters, computedFilters } = splitComputedFilters(filters, RECEIVE_COMPUTED_FIELDS[process] || new Set());
     const cursorWhere = computedFilters.length > 0 || pageNum != null ? null : buildCursorWhere(cursor, order);
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(rawFilters, RECEIVE_FILTERS, { process });
     const extraWhere = await buildReceiveExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
@@ -1504,7 +1544,14 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       const summary = !cursor && (pageNum == null || pageNum === 1)
         ? buildReceiveSummaryFromItems(process, allItems)
         : null;
-      return res.json({ items, hasMore, nextCursor, summary });
+      return res.json({
+        items,
+        hasMore,
+        nextCursor,
+        summary,
+        dateBasis,
+        dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+      });
     }
 
     const rowsRaw = await model.findMany({
@@ -1560,7 +1607,14 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       }
     }
 
-    res.json({ items, hasMore, nextCursor, summary });
+    res.json({
+      items,
+      hasMore,
+      nextCursor,
+      summary,
+      dateBasis,
+      dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+    });
   } catch (err) {
     console.error('v2 receive history error', err);
     res.status(500).json({ error: err.message || 'Failed to load receive history' });
@@ -1573,11 +1627,13 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = receiveModelForProcess(process);
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { excludeField, process });
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
     const where = {
@@ -1649,7 +1705,12 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
         addedBy: users.map(r => r.username).filter(Boolean),
         shift: shifts,
       },
-      meta: { process, excludeField },
+      meta: {
+        process,
+        excludeField,
+        dateBasis,
+        dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+      },
     });
   } catch (err) {
     console.error('v2 receive facets error', err);
@@ -1662,13 +1723,15 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
   const dateTo = req.query.dateTo;
+  const dateBasis = normalizeAgentDateBasis(req.query.dateBasis);
   const search = req.query.search;
   const order = normalizeOrder(req.query.order);
+  if (!dateBasis) return res.status(400).json({ error: 'dateBasis must be business or record.' });
 
   try {
     const model = receiveModelForProcess(process);
     const { rawFilters, computedFilters } = splitComputedFilters(filters, RECEIVE_COMPUTED_FIELDS[process] || new Set());
-    const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
+    const dateWhere = buildDateWhereForAgent({ dateFrom, dateTo, dateBasis });
     const filterWhere = buildFilterWhere(rawFilters, RECEIVE_FILTERS, { process });
     const extraWhere = await buildReceiveExtraFilters(filters, process);
     const searchOr = buildSearchOr({ search, fields: pickReceiveSearchFields(process) });
@@ -1693,7 +1756,11 @@ router.get('/receive/:process/history/export.json', requireAuth, requireStageRea
     const items = (await mapReceiveRowsWithExtras(process, rowsWithItems))
       .filter((row) => matchesComputedFilters(row, computedFilters));
 
-    res.json({ items });
+    res.json({
+      items,
+      dateBasis,
+      dateFilter: buildAgentDateFilterMetadata({ dateFrom, dateTo, dateBasis }),
+    });
   } catch (err) {
     console.error('v2 receive export error', err);
     res.status(500).json({ error: err.message || 'Failed to export' });

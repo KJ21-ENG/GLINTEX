@@ -7,8 +7,8 @@ never substitutes a UI assumption for a tool result.
 | Business area | GLINTEX UI | `glintex_read` resource | Required selectors | Agent authority |
 | --- | --- | --- | --- | --- |
 | Master data | `/app/masters` | `reference` | none | Read current IDs and names |
-| Issue history | `/app/issue` | `issues` | exact `process` | Bounded read only |
-| Receive history | `/app/receive` | `receives` | exact `process` | Bounded read only |
+| Issue history | `/app/issue` | `issues` | exact `process`; optional `dateBasis` | Bounded read only |
+| Receive history | `/app/receive` | `receives` | exact `process`; optional `dateBasis` | Bounded read only |
 | Work on machine | `/app/stock` | `on_machine` | exact `process` | Bounded read only |
 | Finished-stage stock | `/app/stock` | `stock` | `holo` or `coning` | App-calculated read only |
 | Production summary | `/app/reports` | `production` | process and date range | Read, maximum 93 days |

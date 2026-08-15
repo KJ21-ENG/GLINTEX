@@ -72,6 +72,12 @@ mapping and workflow rules add knowledge only; they never expand tools or
 authority. Live `glintex_read` with `resource=reference` and fresh exact record
 reads are authoritative for current facts, accepted values, and IDs.
 
+For an operational "entered today" overview, query `issues` and `receives`
+with `dateBasis=record`. That basis means the row was created on that
+Asia/Kolkata calendar date. Keep the stored `date` visible as the business date
+and disclose both when they differ. Use the documented business-date basis for
+production totals.
+
 Never infer current accepted values from historical rows or memory. Never infer
 that a similar amount, date, name, barcode, or record is the intended one.
 

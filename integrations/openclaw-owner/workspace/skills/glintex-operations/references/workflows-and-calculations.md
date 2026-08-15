@@ -48,6 +48,20 @@ summary as the specialized reports UI's full issued, wastage, efficiency, or
 commercial calculation. Do not combine unlike process quantities without clear
 labels.
 
+## Operational entry-date overview
+
+Issue and receive history support two explicit date bases:
+
+- `business` (the default) uses the stored work date in `date`.
+- `record` uses the row's `createdAt` timestamp converted to the
+  `Asia/Kolkata` calendar date and exposes `recordDate` on each row.
+
+For questions such as "what was entered today?", use `dateBasis=record` and
+state that the filter is the record/entry date. Always show the stored business
+date separately when it differs. Keep the `production` resource on its
+documented business-date semantics unless the owner explicitly asks for a
+record-entry audit.
+
 ## Contractor settlements
 
 Raw production is not automatically equal to a contractor draft. A draft may

@@ -35,6 +35,11 @@ app capability.
 - Read [failure-recovery.md](references/failure-recovery.md) after validation,
   duplicate, stale-update, timeout, execution, or verification trouble.
 
+For an operational "entered today" overview, use `dateBasis=record` for
+`issues` and `receives`. This filters the Asia/Kolkata record/entry date while
+the response's stored `date` remains the business date. Use the documented
+business-date semantics for the `production` resource.
+
 ## Required loop
 
 1. Confirm the request is in the structured current message.

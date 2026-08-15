@@ -6,13 +6,17 @@
 glintex_read({
   resource,
   process?, id?, search?, status?, area?, category?, action?,
-  dateFrom?, dateTo?, order?, cursor?, page?, limit?,
+  dateFrom?, dateTo?, dateBasis?, order?, cursor?, page?, limit?,
   side?, party?, company?, offset?
 })
 ```
 
 Use only fields that apply to the selected resource. Limits are at most 100.
 Production ranges are inclusive, use `YYYY-MM-DD`, and cannot exceed 93 days.
+For `issues` and `receives`, `dateBasis=business` (the default) filters the
+stored work date. `dateBasis=record` filters the row's creation timestamp by
+the Asia/Kolkata calendar date. Record responses expose `recordDate` alongside
+the stored business `date`; disclose which basis was used.
 The adapter rejects unknown fields, unsupported processes, arbitrary URLs, and
 responses above its configured size cap.
 

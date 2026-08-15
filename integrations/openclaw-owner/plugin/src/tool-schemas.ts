@@ -41,6 +41,10 @@ export const readParameters = Type.Object({
   action: optionalText('Operation action filter.', 80),
   dateFrom: date('Inclusive YYYY-MM-DD start date.'),
   dateTo: date('Inclusive YYYY-MM-DD end date.'),
+  dateBasis: Type.Optional(Type.Union([
+    Type.Literal('business', { description: 'Filter by the stored work/business date.' }),
+    Type.Literal('record', { description: 'Filter by record creation date in Asia/Kolkata.' }),
+  ])),
   order: Type.Optional(Type.Union([Type.Literal('asc'), Type.Literal('desc')])),
   cursor: optionalText('Opaque cursor returned by a previous read.', 500),
   page: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000 })),

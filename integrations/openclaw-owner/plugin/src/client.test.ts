@@ -27,6 +27,19 @@ describe('fixed request registry', () => {
     expect(target.url.searchParams.get('search')).toBe('LOT-10');
   });
 
+  it('passes the explicit record-date basis for operational history reads', () => {
+    const target = buildReadRequest(config, {
+      resource: 'receives',
+      process: 'coning',
+      dateFrom: '2026-08-15',
+      dateTo: '2026-08-15',
+      dateBasis: 'record',
+    });
+    expect(target.url.pathname).toBe('/api/agent/v1/app/receive/coning/history');
+    expect(target.url.searchParams.get('dateBasis')).toBe('record');
+    expect(target.url.searchParams.get('dateFrom')).toBe('2026-08-15');
+  });
+
   it('maps finance resources only to the loopback Tally read API', () => {
     const target = buildReadRequest(config, {
       resource: 'finance_outstanding',
@@ -44,6 +57,7 @@ describe('fixed request registry', () => {
     expect(() => buildReadRequest({ ...config, baseUrl: 'http://127.0.0.1:4003/hidden' }, { resource: 'health' })).toThrow(/must not contain a path/i);
     expect(() => buildReadRequest(config, { resource: 'stock', process: 'cutter' })).toThrow(/process must/i);
     expect(() => buildReadRequest(config, { resource: 'health', search: 'ignored' })).toThrow(/not valid for resource=health/i);
+    expect(() => buildReadRequest(config, { resource: 'production', dateBasis: 'record' })).toThrow(/not valid for resource=production/i);
   });
 
   it('stops reading a streamed response at the configured byte cap', async () => {

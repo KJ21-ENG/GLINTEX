@@ -43,3 +43,13 @@
 ## Security & Configuration Tips
 - Keep secrets in `apps/backend/.env` (never commit). Update `DATABASE_URL`, WhatsApp credentials, and `BARCODE_MATERIAL_CODE`.
 - For a clean database, drop the `postgres-data` volume with `docker compose down -v` and let seeds reapply.
+
+<!-- project-workflow:start -->
+# Project workflow coordination
+
+Read `.agent/project.yaml` at session start. If it selects Advanced, also read `.agent/workflows.yaml`, the active task capsule, and recent `.agent/sessions/*.json` handoffs. Verify session claims against Git and current state before relying on them.
+
+If the mode is unselected, analyze read-only and ask the user to choose Advanced (recommended/default) or Normal before material mutations. Normal retains minimal logging and global safety but does not impose workflow phases or capsules. An Advanced project may use a Normal override for one session without changing the shared project choice.
+
+Use the global `project-workflow` skill and CLI for selection, checkpoints, gaps, and approved evolution. Never silently change authority, security, deployment, production, finance, or payment policy.
+<!-- project-workflow:end -->

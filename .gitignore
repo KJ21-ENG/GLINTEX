@@ -98,3 +98,10 @@ desktop.ini
 .gemini/
 .github/
 .opencode/
+
+# Project-local agent workflow state
+.agent/
+CLAUDE.md
+
+# Local OCR language data
+eng.traineddata

@@ -14308,6 +14308,382 @@ async function allocateDispatchChallanNumber(tx, dateInput) {
   return `DC/${fiscalYear}/${String(num).padStart(3, '0')}`;
 }
 
+function parseDispatchSourceRefs(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function addDispatchDetailName(set, value) {
+  const name = String(value || '').trim();
+  if (name && name !== '—') set.add(name);
+}
+
+function joinDispatchDetailNames(names) {
+  return names.size > 0 ? Array.from(names).join(', ') : null;
+}
+
+function resolveDispatchCutterCut(row) {
+  if (!row) return '';
+  return (typeof row.cut === 'string' ? row.cut : row.cut?.name)
+    || row.cutMaster?.name
+    || '';
+}
+
+function resolveDispatchHoloCut(issue, cutterRowsById) {
+  const directCut = issue?.cut?.name || '';
+  if (directCut) return directCut;
+
+  const cutterRow = parseDispatchSourceRefs(issue?.receivedRowRefs)
+    .map(ref => cutterRowsById.get(ref?.rowId))
+    .find(Boolean);
+  return resolveDispatchCutterCut(cutterRow);
+}
+
+function resolveDispatchHoloPiece(source, issue, cutterRowsById) {
+  const pieceIds = new Set();
+  addDispatchDetailName(pieceIds, source?.pieceId);
+  parseDispatchSourceRefs(issue?.receivedRowRefs).forEach(ref => {
+    addDispatchDetailName(pieceIds, cutterRowsById.get(ref?.rowId)?.pieceId);
+  });
+  return joinDispatchDetailNames(pieceIds);
+}
+
+function resolveDispatchConingTrace(issue, holoRowsById, cutterRowsById) {
+  const cutNames = new Set();
+  const yarnNames = new Set();
+  const twistNames = new Set();
+  const rollTypeNames = new Set();
+  const refs = parseDispatchSourceRefs(issue?.receivedRowRefs);
+
+  const visitedIssues = new Set();
+  const walkIssue = (issueToWalk) => {
+    if (!issueToWalk || (issueToWalk.id && visitedIssues.has(issueToWalk.id))) return;
+    if (issueToWalk.id) visitedIssues.add(issueToWalk.id);
+
+    const issueRefs = parseDispatchSourceRefs(issueToWalk.receivedRowRefs);
+    issueRefs.forEach(ref => {
+      const holoRow = holoRowsById.get(ref?.rowId);
+      if (!holoRow) return;
+
+      addDispatchDetailName(rollTypeNames, holoRow.rollType?.name);
+      const holoIssue = holoRow.issue;
+      if (!holoIssue) return;
+
+      addDispatchDetailName(cutNames, resolveDispatchHoloCut(holoIssue, cutterRowsById));
+      addDispatchDetailName(yarnNames, holoIssue.yarn?.name);
+      addDispatchDetailName(twistNames, holoIssue.twist?.name);
+    });
+  };
+
+  walkIssue(issue);
+  // A populated coning lineage is authoritative. Use the issue fields only for
+  // ref-less/opening-stock records, or the display could resurrect stale Cut,
+  // Yarn, or Twist values when a referenced source row is missing.
+  const canUseIssueFallback = refs.length === 0;
+
+  return {
+    cutName: joinDispatchDetailNames(cutNames) || (canUseIssueFallback ? issue?.cut?.name : null),
+    yarnName: joinDispatchDetailNames(yarnNames) || (canUseIssueFallback ? issue?.yarn?.name : null),
+    twistName: joinDispatchDetailNames(twistNames) || (canUseIssueFallback ? issue?.twist?.name : null),
+    rollTypeName: joinDispatchDetailNames(rollTypeNames),
+  };
+}
+
+function buildDispatchLotLabel(lotNos, fallbackLotNo) {
+  const uniqueLotNos = Array.from(new Set(lotNos.filter(Boolean)));
+  if (uniqueLotNos.length === 0 && fallbackLotNo) uniqueLotNos.push(fallbackLotNo);
+  if (uniqueLotNos.length <= 1) return uniqueLotNos[0] || null;
+  return uniqueLotNos.length <= 3
+    ? `Mixed (${uniqueLotNos.join(', ')})`
+    : `Mixed (${uniqueLotNos.length})`;
+}
+
+async function enrichDispatchesWithSourceDetails(dispatches = []) {
+  const idsByStage = {
+    inbound: new Set(),
+    cutter: new Set(),
+    holo: new Set(),
+    coning: new Set(),
+  };
+
+  for (const dispatch of dispatches) {
+    if (idsByStage[dispatch.stage] && dispatch.stageItemId) {
+      idsByStage[dispatch.stage].add(dispatch.stageItemId);
+    }
+  }
+
+  const [inboundRows, cutterRows, holoRows, coningRows] = await Promise.all([
+    idsByStage.inbound.size > 0
+      ? prisma.inboundItem.findMany({
+        where: { id: { in: Array.from(idsByStage.inbound) } },
+        select: { id: true, lotNo: true, itemId: true, barcode: true, note: true },
+      })
+      : [],
+    idsByStage.cutter.size > 0
+      ? prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: Array.from(idsByStage.cutter) } },
+        select: {
+          id: true,
+          vchNo: true,
+          pieceId: true,
+          barcode: true,
+          itemName: true,
+          yarnName: true,
+          cut: true,
+          machineNo: true,
+          pktTypeName: true,
+          pcsTypeName: true,
+          notes: true,
+          bobbin: { select: { name: true } },
+          cutMaster: { select: { name: true } },
+          issue: {
+            select: {
+              itemId: true,
+              lotNo: true,
+              cut: { select: { name: true } },
+              machine: { select: { name: true } },
+            },
+          },
+        },
+      })
+      : [],
+    idsByStage.holo.size > 0
+      ? prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: Array.from(idsByStage.holo) } },
+        select: {
+          id: true,
+          barcode: true,
+          date: true,
+          pieceId: true,
+          rollType: { select: { name: true } },
+          machineNo: true,
+          notes: true,
+          issue: {
+            select: {
+              id: true,
+              itemId: true,
+              lotNo: true,
+              receivedRowRefs: true,
+              cut: { select: { name: true } },
+              yarn: { select: { name: true } },
+              twist: { select: { name: true } },
+              machine: { select: { name: true } },
+            },
+          },
+        },
+      })
+      : [],
+    idsByStage.coning.size > 0
+      ? prisma.receiveFromConingMachineRow.findMany({
+        where: { id: { in: Array.from(idsByStage.coning) } },
+        select: {
+          id: true,
+          barcode: true,
+          date: true,
+          machineNo: true,
+          notes: true,
+          issue: {
+            select: {
+              itemId: true,
+              lotNo: true,
+              receivedRowRefs: true,
+              cut: { select: { name: true } },
+              yarn: { select: { name: true } },
+              twist: { select: { name: true } },
+              machine: { select: { name: true } },
+            },
+          },
+        },
+      })
+      : [],
+  ]);
+
+  const holoRowsById = new Map(holoRows.map(row => [row.id, row]));
+  const coningTraceHoloRowIds = new Set();
+  coningRows.forEach(row => {
+    parseDispatchSourceRefs(row.issue?.receivedRowRefs).forEach(ref => {
+      if (ref?.rowId) coningTraceHoloRowIds.add(ref.rowId);
+    });
+  });
+
+  const missingConingTraceHoloRowIds = Array.from(coningTraceHoloRowIds)
+    .filter(rowId => !holoRowsById.has(rowId));
+  const coningTraceHoloRows = missingConingTraceHoloRowIds.length > 0
+    ? await prisma.receiveFromHoloMachineRow.findMany({
+      where: { id: { in: missingConingTraceHoloRowIds } },
+      select: {
+        id: true,
+        pieceId: true,
+        rollType: { select: { name: true } },
+        issue: {
+          select: {
+            id: true,
+            itemId: true,
+            lotNo: true,
+            receivedRowRefs: true,
+            cut: { select: { name: true } },
+            yarn: { select: { name: true } },
+            twist: { select: { name: true } },
+          },
+        },
+      },
+    })
+    : [];
+  coningTraceHoloRows.forEach(row => holoRowsById.set(row.id, row));
+
+  const traceCutterRowIds = new Set();
+  holoRowsById.forEach(row => {
+    parseDispatchSourceRefs(row.issue?.receivedRowRefs).forEach(ref => {
+      if (ref?.rowId) traceCutterRowIds.add(ref.rowId);
+    });
+  });
+  const cutterRowsById = new Map(cutterRows.map(row => [row.id, row]));
+  const missingTraceCutterRowIds = Array.from(traceCutterRowIds)
+    .filter(rowId => !cutterRowsById.has(rowId));
+  const traceCutterRows = missingTraceCutterRowIds.length > 0
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: missingTraceCutterRowIds } },
+      select: {
+        id: true,
+        pieceId: true,
+        cut: true,
+        cutMaster: { select: { name: true } },
+      },
+    })
+    : [];
+  traceCutterRows.forEach(row => cutterRowsById.set(row.id, row));
+
+  const pieceIds = new Set();
+  holoRowsById.forEach(row => {
+    parseDispatchSourceRefs(row.issue?.receivedRowRefs).forEach(ref => {
+      const pieceId = cutterRowsById.get(ref?.rowId)?.pieceId;
+      if (pieceId) pieceIds.add(pieceId);
+    });
+  });
+  const pieceRows = pieceIds.size > 0
+    ? await prisma.inboundItem.findMany({
+      where: { id: { in: Array.from(pieceIds) } },
+      select: { id: true, lotNo: true, itemId: true },
+    })
+    : [];
+  const pieceById = new Map(pieceRows.map(row => [row.id, row]));
+
+  const itemIds = new Set();
+  inboundRows.forEach(row => row.itemId && itemIds.add(row.itemId));
+  cutterRows.forEach(row => row.issue?.itemId && itemIds.add(row.issue.itemId));
+  holoRows.forEach(row => row.issue?.itemId && itemIds.add(row.issue.itemId));
+  coningRows.forEach(row => row.issue?.itemId && itemIds.add(row.issue.itemId));
+  pieceRows.forEach(row => row.itemId && itemIds.add(row.itemId));
+
+  const coneTypeIds = new Set();
+  coningRows.forEach(row => {
+    parseDispatchSourceRefs(row.issue?.receivedRowRefs).forEach(ref => {
+      if (ref?.coneTypeId) coneTypeIds.add(ref.coneTypeId);
+    });
+  });
+
+  const [itemMasterRows, coneTypeRows] = await Promise.all([
+    itemIds.size > 0
+      ? prisma.item.findMany({
+        where: { id: { in: Array.from(itemIds) } },
+        select: { id: true, name: true },
+      })
+      : [],
+    coneTypeIds.size > 0
+      ? prisma.coneType.findMany({
+        where: { id: { in: Array.from(coneTypeIds) } },
+        select: { id: true, name: true },
+      })
+      : [],
+  ]);
+
+  const itemNameById = new Map(itemMasterRows.map(row => [row.id, row.name]));
+  const coneTypeNameById = new Map(coneTypeRows.map(row => [row.id, row.name]));
+  const sourceRowsByStage = {
+    inbound: new Map(inboundRows.map(row => [row.id, row])),
+    cutter: new Map(cutterRows.map(row => [row.id, row])),
+    holo: new Map(holoRows.map(row => [row.id, row])),
+    coning: new Map(coningRows.map(row => [row.id, row])),
+  };
+
+  const lotLabelByHoloIssueId = new Map();
+  holoRowsById.forEach(row => {
+    if (!row.issue?.id) return;
+    const lotNos = parseDispatchSourceRefs(row.issue.receivedRowRefs)
+      .map(ref => pieceById.get(cutterRowsById.get(ref?.rowId)?.pieceId)?.lotNo)
+      .filter(Boolean);
+    lotLabelByHoloIssueId.set(row.issue.id, buildDispatchLotLabel(lotNos, row.issue.lotNo));
+  });
+
+  const cleanDetails = (details) => Object.fromEntries(
+    Object.entries(details).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+  );
+
+  return dispatches.map(dispatch => {
+    const source = sourceRowsByStage[dispatch.stage]?.get(dispatch.stageItemId);
+    if (!source) return dispatch;
+
+    let details = {};
+    if (dispatch.stage === 'inbound') {
+      details = {
+        itemName: itemNameById.get(source.itemId),
+        lotNo: source.lotNo,
+        sourceNotes: source.note,
+      };
+    } else if (dispatch.stage === 'cutter') {
+      const issue = source.issue;
+      details = {
+        itemName: source.itemName || itemNameById.get(issue?.itemId),
+        lotNo: issue?.lotNo,
+        cutName: source.cut || source.cutMaster?.name || issue?.cut?.name,
+        yarnName: source.yarnName,
+        typeName: source.bobbin?.name || source.pktTypeName || source.pcsTypeName,
+        machineName: source.machineNo || issue?.machine?.name,
+        pieceId: source.pieceId,
+        sourceReference: source.vchNo,
+        sourceNotes: source.notes,
+      };
+    } else if (dispatch.stage === 'holo') {
+      const issue = source.issue;
+      details = {
+        itemName: itemNameById.get(issue?.itemId),
+        lotNo: issue?.lotNo,
+        lotLabel: lotLabelByHoloIssueId.get(issue?.id),
+        cutName: resolveDispatchHoloCut(issue, cutterRowsById),
+        yarnName: issue?.yarn?.name,
+        twistName: issue?.twist?.name,
+        typeName: source.rollType?.name,
+        machineName: source.machineNo || issue?.machine?.name,
+        pieceId: resolveDispatchHoloPiece(source, issue, cutterRowsById),
+        sourceNotes: source.notes,
+      };
+    } else if (dispatch.stage === 'coning') {
+      const issue = source.issue;
+      const coneTypeId = parseDispatchSourceRefs(issue?.receivedRowRefs).find(ref => ref?.coneTypeId)?.coneTypeId;
+      const trace = resolveDispatchConingTrace(issue, holoRowsById, cutterRowsById);
+      details = {
+        itemName: itemNameById.get(issue?.itemId),
+        lotNo: issue?.lotNo,
+        cutName: trace.cutName,
+        yarnName: trace.yarnName,
+        twistName: trace.twistName,
+        rollTypeName: trace.rollTypeName,
+        typeName: coneTypeNameById.get(coneTypeId),
+        machineName: source.machineNo || issue?.machine?.name,
+        sourceNotes: source.notes,
+      };
+    }
+
+    return { ...dispatch, sourceDetails: cleanDetails(details) };
+  });
+}
+
 // Get available items for dispatch at a specific stage
 router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_READ), async (req, res) => {
   try {
@@ -14557,8 +14933,9 @@ router.get('/api/dispatch', requirePermission('dispatch', PERM_READ), async (req
 
     // Resolve user fields for display
     const dispatches = await resolveUserFields(dispatchesRaw);
+    const dispatchesWithSourceDetails = await enrichDispatchesWithSourceDetails(dispatches);
 
-    res.json({ dispatches });
+    res.json({ dispatches: dispatchesWithSourceDetails });
   } catch (err) {
     console.error('Failed to fetch dispatches', err);
     res.status(500).json({ error: 'Failed to fetch dispatches' });

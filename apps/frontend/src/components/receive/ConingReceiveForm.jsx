@@ -11,8 +11,13 @@ import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningT
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
-
-const RECEIVED_OVER_ISSUED_EPSILON_KG = 0.001;
+import {
+    ResizableIssueSummary,
+    ReceiveSummaryGroup,
+    ReceiveSummaryMetricCard,
+    receiveSummaryMetricGridStyle,
+    RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG,
+} from './ResizableIssueSummary';
 
 export function ConingReceiveForm() {
     const { db, patchDb, emitInvalidation } = useInventory();
@@ -247,7 +252,8 @@ export function ConingReceiveForm() {
     const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
     const receivedPerConeWeightG = totalReceivedCones > 0 ? (totalReceivedWeight * 1000) / totalReceivedCones : 0;
     const isReceivedOverIssued = issueMetrics.netIssued > 0
-        && totalReceivedWeight > issueMetrics.netIssued + RECEIVED_OVER_ISSUED_EPSILON_KG;
+        && totalReceivedWeight > issueMetrics.netIssued + RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG;
+    const excessReceivedWeight = Math.max(0, totalReceivedWeight - issueMetrics.netIssued);
 
     const issueDetails = useMemo(() => {
         if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
@@ -277,7 +283,7 @@ export function ConingReceiveForm() {
         setSubmitting(true);
         try {
             const exceedsIssuedQty = issueMetrics.netIssued > 0
-                && totalReceivedWeight > issueMetrics.netIssued + RECEIVED_OVER_ISSUED_EPSILON_KG;
+                && totalReceivedWeight > issueMetrics.netIssued + RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG;
             if (exceedsIssuedQty) {
                 const excessWeight = Math.max(0, totalReceivedWeight - issueMetrics.netIssued);
                 const confirmed = window.confirm(
@@ -501,131 +507,144 @@ export function ConingReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
-                        <div className="p-4 bg-muted rounded-md text-sm space-y-3">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                                <div><strong>Lot:</strong> {issue.lotLabel || issue.lotNo}</div>
-                                <div><strong>Item:</strong> {issueDetails.itemName || '—'}</div>
-                                <div><strong>Cut:</strong> {issueDetails.cutName || '—'}</div>
-                                <div><strong>Cone Type:</strong> {issueDetails.coneTypeName || '—'}</div>
-                            </div>
-                            <div className="border-t border-border/60" />
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-                                <div><strong>Issued (Orig):</strong> {formatKg(issueMetrics.originalIssued)}</div>
-                                <div><strong>Taken Back:</strong> {formatKg(issueMetrics.takenBack)}</div>
-                                <div><strong>Net Issued:</strong> {formatKg(issueMetrics.netIssued)}</div>
-                                <div><strong>Expected Cones:</strong> {totalExpected}</div>
-                                <div><strong>Target:</strong> {perConeWeight} g/cone</div>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-center">
-                                <div className="flex items-center gap-2">
-                                    <strong>Received Wt:</strong>{' '}
-                                    <span className={isReceivedOverIssued ? "text-destructive font-semibold" : ""}>
-                                        {formatKg(totalReceivedWeight)}
-                                    </span>
-                                    <InfoPopover
-                                        title={`Coning Receives (${issue.lotLabel || issue.lotNo})`}
-                                        items={receiveRowsForIssue}
-                                        emptyText="No receives yet for this lot."
-                                        widthClassName="w-[560px]"
-                                        bodyClassName="max-h-[240px] overflow-auto"
-                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted"
-                                        renderContent={(rows) => (
-                                            <Table>
-                                                <TableHeader>
-                                                    <TableRow>
-                                                        <TableHead className="h-8 px-2 text-left text-xs">Date</TableHead>
-                                                        <TableHead className="h-8 px-2 text-left text-xs">Barcode</TableHead>
-                                                        <TableHead className="h-8 px-2 text-right text-xs">Cones</TableHead>
-                                                        <TableHead className="h-8 px-2 text-right text-xs">Gross (kg)</TableHead>
-                                                        <TableHead className="h-8 px-2 text-right text-xs">Net (kg)</TableHead>
-                                                        <TableHead className="h-8 px-2 text-left text-xs">Box</TableHead>
-                                                        <TableHead className="h-8 px-2 text-left text-xs">Operator</TableHead>
-                                                    </TableRow>
-                                                </TableHeader>
-                                                <TableBody>
-                                                    {rows.map((row) => {
-                                                        const dateLabel = formatDateDDMMYYYY(row.date || row.createdAt) || '—';
-                                                        const cones = Number(row.coneCount || 0);
-                                                        const gross = Number(row.grossWeight || 0);
-                                                        const net = Number(row.netWeight || 0);
-                                                        const boxName = row.box?.name || '—';
-                                                        const operatorName = row.operator?.name || '—';
-                                                        return (
-                                                            <TableRow key={row.id || row.barcode}>
-                                                                <TableCell className="p-2 text-left text-xs">{dateLabel}</TableCell>
-                                                                <TableCell className="p-2 text-left font-mono text-xs">{row.barcode || '—'}</TableCell>
-                                                                <TableCell className="p-2 text-right text-xs">{cones || 0}</TableCell>
-                                                                <TableCell className="p-2 text-right text-xs">{formatKg(gross)}</TableCell>
-                                                                <TableCell className="p-2 text-right text-xs">{formatKg(net)}</TableCell>
-                                                                <TableCell className="p-2 text-left text-xs">{boxName}</TableCell>
-                                                                <TableCell className="p-2 text-left text-xs">{operatorName}</TableCell>
+                        <ResizableIssueSummary
+                            idPrefix="receive-summary-coning"
+                            warning={isReceivedOverIssued ? { excessKg: excessReceivedWeight } : null}
+                        >
+                            <ReceiveSummaryGroup id="receive-summary-coning-material" title="Material">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Lot" value={issue.lotLabel || issue.lotNo || '—'} />
+                                    <ReceiveSummaryMetricCard label="Item" value={issueDetails.itemName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Cut" value={issueDetails.cutName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Cone Type" value={issueDetails.coneTypeName || '—'} />
+                                </div>
+                            </ReceiveSummaryGroup>
+
+                            <ReceiveSummaryGroup id="receive-summary-coning-issue-balance" title="Issue Balance">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard label="Issued (Orig)" value={formatKg(issueMetrics.originalIssued)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Taken Back" value={formatKg(issueMetrics.takenBack)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Net Issued" value={formatKg(issueMetrics.netIssued)} unit="kg" />
+                                    <ReceiveSummaryMetricCard label="Expected Cones" value={totalExpected} unit="cones" />
+                                    <ReceiveSummaryMetricCard label="Target" value={perConeWeight > 0 ? perConeWeight : '—'} unit="g/cone" />
+                                </div>
+                            </ReceiveSummaryGroup>
+
+                            <ReceiveSummaryGroup id="receive-summary-coning-production-outcome" title="Production Outcome">
+                                <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
+                                    <ReceiveSummaryMetricCard
+                                        label="Received Wt"
+                                        value={formatKg(totalReceivedWeight)}
+                                        unit="kg"
+                                        valueClassName={isReceivedOverIssued ? 'text-destructive' : ''}
+                                        action={(
+                                            <InfoPopover
+                                                title={`Coning Receives (${issue.lotLabel || issue.lotNo})`}
+                                                items={receiveRowsForIssue}
+                                                emptyText="No receives yet for this lot."
+                                                widthClassName="w-[560px]"
+                                                bodyClassName="max-h-[240px] overflow-auto"
+                                                buttonClassName="h-6 w-6 rounded-full hover:bg-muted"
+                                                renderContent={(rows) => (
+                                                    <Table>
+                                                        <TableHeader>
+                                                            <TableRow>
+                                                                <TableHead className="h-8 px-2 text-left text-xs">Date</TableHead>
+                                                                <TableHead className="h-8 px-2 text-left text-xs">Barcode</TableHead>
+                                                                <TableHead className="h-8 px-2 text-right text-xs">Cones</TableHead>
+                                                                <TableHead className="h-8 px-2 text-right text-xs">Gross (kg)</TableHead>
+                                                                <TableHead className="h-8 px-2 text-right text-xs">Net (kg)</TableHead>
+                                                                <TableHead className="h-8 px-2 text-left text-xs">Box</TableHead>
+                                                                <TableHead className="h-8 px-2 text-left text-xs">Operator</TableHead>
                                                             </TableRow>
-                                                        );
-                                                    })}
-                                                </TableBody>
-                                            </Table>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {rows.map((row) => {
+                                                                const dateLabel = formatDateDDMMYYYY(row.date || row.createdAt) || '—';
+                                                                const cones = Number(row.coneCount || 0);
+                                                                const gross = Number(row.grossWeight || 0);
+                                                                const net = Number(row.netWeight || 0);
+                                                                const boxName = row.box?.name || '—';
+                                                                const operatorName = row.operator?.name || '—';
+                                                                return (
+                                                                    <TableRow key={row.id || row.barcode}>
+                                                                        <TableCell className="p-2 text-left text-xs">{dateLabel}</TableCell>
+                                                                        <TableCell className="p-2 text-left font-mono text-xs">{row.barcode || '—'}</TableCell>
+                                                                        <TableCell className="p-2 text-right text-xs">{cones || 0}</TableCell>
+                                                                        <TableCell className="p-2 text-right text-xs">{formatKg(gross)}</TableCell>
+                                                                        <TableCell className="p-2 text-right text-xs">{formatKg(net)}</TableCell>
+                                                                        <TableCell className="p-2 text-left text-xs">{boxName}</TableCell>
+                                                                        <TableCell className="p-2 text-left text-xs">{operatorName}</TableCell>
+                                                                    </TableRow>
+                                                                );
+                                                            })}
+                                                        </TableBody>
+                                                    </Table>
+                                                )}
+                                            />
                                         )}
                                     />
-                                </div>
-                                <div><strong>Received Cones:</strong> {totalReceivedCones}</div>
-                                <div><strong>Actual Wt:</strong> {totalReceivedCones > 0 ? `${receivedPerConeWeightG.toFixed(1)} g/cone` : '—'}</div>
-                                <div className="flex items-center gap-1">
-                                    <strong>Pending:</strong>{' '}
-                                    <span className={wastageStatus.pendingWeight > 0.001 ? "" : "text-muted-foreground"}>
-                                        {formatKg(wastageStatus.pendingWeight)}
-                                    </span>
-                                    {wastageStatus.isWastageClosed ? (
-                                        <span className="text-xs text-destructive ml-1">
-                                            ({formatKg(wastageStatus.existingWastage)} wastage)
-                                        </span>
-                                    ) : (
-                                        <InfoPopover
-                                            title="Issue Close"
-                                            items={[wastageStatus]}
-                                            renderContent={() => {
-                                                if (!issue) {
+                                    <ReceiveSummaryMetricCard label="Received Cones" value={totalReceivedCones} unit="cones" />
+                                    <ReceiveSummaryMetricCard
+                                        label="Actual Wt"
+                                        value={totalReceivedCones > 0 ? receivedPerConeWeightG.toFixed(1) : '—'}
+                                        unit={totalReceivedCones > 0 ? 'g/cone' : undefined}
+                                    />
+                                    <ReceiveSummaryMetricCard
+                                        label="Pending"
+                                        value={formatKg(wastageStatus.pendingWeight)}
+                                        unit="kg"
+                                        valueClassName={wastageStatus.pendingWeight > 0.001 ? '' : 'text-muted-foreground'}
+                                        detail={wastageStatus.isWastageClosed ? `(${formatKg(wastageStatus.existingWastage)} kg wastage)` : null}
+                                        action={!wastageStatus.isWastageClosed ? (
+                                            <InfoPopover
+                                                title="Issue Close"
+                                                items={[wastageStatus]}
+                                                renderContent={() => {
+                                                    if (!issue) {
+                                                        return (
+                                                            <div className="text-muted-foreground">
+                                                                Scan an issue barcode to manage wastage.
+                                                            </div>
+                                                        );
+                                                    }
+
                                                     return (
-                                                        <div className="text-muted-foreground">
-                                                            Scan an issue barcode to manage wastage.
+                                                        <div className="space-y-2 text-xs">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">Issue</span>
+                                                                <span className="font-mono">{issue.barcode || issue.id}</span>
+                                                            </div>
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">Pending to close</span>
+                                                                <span className="font-medium">{formatKg(wastageStatus.pendingWeight)}</span>
+                                                            </div>
+                                                            {wastageStatus.hasWastageInCart && (
+                                                                <div className="text-muted-foreground">
+                                                                    Wastage is queued in the list. Remove it to continue.
+                                                                </div>
+                                                            )}
+                                                            <label className="flex items-start gap-2 cursor-pointer pt-2">
+                                                                <Checkbox
+                                                                    checked={isWastage}
+                                                                    onCheckedChange={setIsWastage}
+                                                                    disabled={!issue || wastageStatus.pendingWeight <= 0 || receivingBlocked}
+                                                                />
+                                                                <span className="leading-snug">Close issue (mark remaining as wastage)</span>
+                                                            </label>
                                                         </div>
                                                     );
-                                                }
-
-                                                return (
-                                                    <div className="space-y-2 text-xs">
-                                                        <div className="flex items-center justify-between">
-                                                            <span className="text-muted-foreground">Issue</span>
-                                                            <span className="font-mono">{issue.barcode || issue.id}</span>
-                                                        </div>
-                                                        <div className="flex items-center justify-between">
-                                                            <span className="text-muted-foreground">Pending to close</span>
-                                                            <span className="font-medium">{formatKg(wastageStatus.pendingWeight)}</span>
-                                                        </div>
-                                                        {wastageStatus.hasWastageInCart && (
-                                                            <div className="text-muted-foreground">
-                                                                Wastage is queued in the list. Remove it to continue.
-                                                            </div>
-                                                        )}
-                                                        <label className="flex items-start gap-2 cursor-pointer pt-2">
-                                                            <Checkbox
-                                                                checked={isWastage}
-                                                                onCheckedChange={setIsWastage}
-                                                                disabled={!issue || wastageStatus.pendingWeight <= 0 || receivingBlocked}
-                                                            />
-                                                            <span className="leading-snug">Close issue (mark remaining as wastage)</span>
-                                                        </label>
-                                                    </div>
-                                                );
-                                            }}
-                                            widthClassName="w-64"
-                                            bodyClassName="text-xs"
-                                            buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex ml-1"
-                                            align="right"
-                                        />
-                                    )}
+                                                }}
+                                                widthClassName="w-64"
+                                                bodyClassName="text-xs"
+                                                buttonClassName="h-6 w-6 rounded-full hover:bg-muted inline-flex ml-1"
+                                                align="right"
+                                            />
+                                        ) : null}
+                                    />
                                 </div>
-                            </div>
-                        </div>
+                            </ReceiveSummaryGroup>
+                        </ResizableIssueSummary>
 
                         {/* Wastage closed alert */}
                         {wastageStatus.isWastageClosed && (

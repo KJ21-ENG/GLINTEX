@@ -54,7 +54,14 @@ jobs:
           chmod 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/staging_deploy_key
           chmod 600 ~/.ssh/staging_deploy_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          for _ in {1..5}; do
+            if ssh-keyscan -T 10 -H "$SSH_HOST" > ~/.ssh/known_hosts; then
+              break
+            fi
+            : > ~/.ssh/known_hosts
+            sleep 2
+          done
+          test -s ~/.ssh/known_hosts
           REMOTE_APP_DIR="$(printf '%q' "$APP_DIR")"
           REMOTE_SHA="$(printf '%q' "$EXPECTED_SHA")"
           REMOTE_SCRIPT="/tmp/glintex-staging-deploy-${EXPECTED_SHA}.sh"

@@ -75,6 +75,9 @@ services:
 
   data-sanitizer:
     profiles: [tools]
+    # This one-off container reads root-owned 0600 secret mounts, performs the
+    # bounded DB transaction, and is removed immediately after completion.
+    user: "0:0"
     build:
       context: ./apps/backend
       dockerfile: Dockerfile

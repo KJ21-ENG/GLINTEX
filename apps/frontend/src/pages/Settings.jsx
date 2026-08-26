@@ -4,9 +4,10 @@ import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui';
 import { TableStateRow } from '../components/data-table';
-import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText, Search } from 'lucide-react';
+import { Smartphone, MessageSquare, Database, Palette, Wifi, Copy, Save, RefreshCw, LogOut, Upload, Printer, Users, Info, HardDrive, Download, Plus, AlertTriangle, Cloud, ExternalLink, FileText, Search, Package } from 'lucide-react';
 import * as api from '../api';
 import UserManagement from './Settings/UserManagement';
+import PackingSettings from '../components/settings/PackingSettings';
 import { usePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
 
@@ -373,6 +374,7 @@ export function Settings() {
     const [activeTab, setActiveTab] = useState('whatsapp');
     const isAdmin = user?.isAdmin || (user?.roleKeys || []).includes('admin');
     const { canRead, canEdit } = usePermission('settings');
+    const { canRead: canPackingRead } = usePermission('packing');
     const isReadOnly = canRead && !canEdit;
     const [groups, setGroups] = useState([]);
     const [whatsappStatus, setWhatsappStatus] = useState({ status: 'disconnected' });
@@ -466,6 +468,14 @@ export function Settings() {
                         >
                             <Printer className="w-4 h-4" /> Label Designer
                         </button>
+                        {canPackingRead && (
+                            <button
+                                onClick={() => navigate('/app/settings/packing')}
+                                className="px-4 py-3 text-sm font-medium text-left hover:bg-muted/50 transition-colors border-l-2 flex items-center gap-2 border-transparent text-muted-foreground"
+                            >
+                                <Package className="w-4 h-4" /> Packing
+                            </button>
+                        )}
                         {isAdmin && (
                             <button
                                 onClick={() => setActiveTab('users')}
@@ -500,6 +510,7 @@ export function Settings() {
                                     <option value="backup">Backup</option>
                                     <option value="challan">Challan Settings</option>
                                     <option value="telegram-cron">Telegram Cron</option>
+                                    {canPackingRead ? <option value="packing">Packing</option> : null}
                                     {isAdmin ? <option value="users">Users & Roles</option> : null}
                                 </select>
                             </div>
@@ -584,6 +595,7 @@ export function Settings() {
                         readOnly={isReadOnly}
                     />
                 )}
+                {activeTab === 'packing' && canPackingRead && <PackingSettings />}
                 {activeTab === 'users' && <UserManagement />}
             </div>
         </div>
@@ -2561,8 +2573,8 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
                                     })}
                                     {cronChatId && !configuredChatIds.includes(cronChatId) && (
                                         <option value={cronChatId}>
-                                            {telegramChatInfoMap[cronChatId]?.title 
-                                                ? `${telegramChatInfoMap[cronChatId].title} (${cronChatId}) (Custom)` 
+                                            {telegramChatInfoMap[cronChatId]?.title
+                                                ? `${telegramChatInfoMap[cronChatId].title} (${cronChatId}) (Custom)`
                                                 : `${cronChatId} (Custom)`}
                                         </option>
                                     )}
@@ -2756,4 +2768,3 @@ export function TelegramCronSettings({ db, updateSettings, refreshDb, readOnly }
         </div>
     );
 }
-

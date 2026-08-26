@@ -3,8 +3,10 @@ import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
 import { getTemplateByEvent, interpolateTemplate } from './whatsappTemplates.js';
 import { resolveRecordUserFields } from './userResolver.js';
+import { externalIntegrationBlock } from './runtimeSafety.js';
 
 const CREATOR_TEMPLATE_REGEX = /(\{\{\s*createdBy(?:Label|Name|Username|UserId)?\s*\}\})|(@createdBy(?:Label|Name|Username|UserId)?)/;
+const packingDeliverySourcesInFlight = new Set();
 
 function formatCreatorLabel(user, fallbackId) {
   if (user) {
@@ -224,7 +226,17 @@ export async function persistNotificationDeliveryLogs({
   channels = {},
   createdByUserId = null,
 } = {}) {
+  let claimedPackingSource = false;
   try {
+    const dedupeSource = String(source || '');
+    const isPackingDelivery = dedupeSource.startsWith('packing:');
+    if (isPackingDelivery) {
+      if (packingDeliverySourcesInFlight.has(dedupeSource)) return;
+      packingDeliverySourcesInFlight.add(dedupeSource);
+      claimedPackingSource = true;
+      const existing = await prisma.notificationDeliveryLog.findFirst({ where: { source: dedupeSource }, select: { id: true } });
+      if (existing) return;
+    }
     const data = [];
     if (Object.prototype.hasOwnProperty.call(channels || {}, 'whatsapp')) {
       data.push(...buildDeliveryRowsForChannel({
@@ -252,6 +264,9 @@ export async function persistNotificationDeliveryLogs({
     await prisma.notificationDeliveryLog.createMany({ data });
   } catch (err) {
     console.error('Failed to write notification delivery logs', err);
+  } finally {
+    const dedupeSource = String(source || '');
+    if (claimedPackingSource) packingDeliverySourcesInFlight.delete(dedupeSource);
   }
 }
 
@@ -285,6 +300,8 @@ async function sendTelegramRecipients(chatIds, message) {
 
 export async function sendNotification(event, payload, opts = {}) {
   try {
+    const runtimeBlock = externalIntegrationBlock('notifications');
+    if (runtimeBlock) return runtimeBlock;
     console.log('sendNotification called for', event, 'payload:', payload && JSON.stringify(payload));
     let template = await getTemplateByEvent(event);
 
@@ -312,14 +329,14 @@ export async function sendNotification(event, payload, opts = {}) {
 
     if (!whatsappEnabled && !telegramEnabled) {
       const channels = { whatsapp: { enabled: false }, telegram: { enabled: false } };
-      persistNotificationDeliveryLogs({
+      await persistNotificationDeliveryLogs({
         event,
         templateEvent: template?.event || event,
         templateId: Number.isInteger(template?.id) ? template.id : null,
         source: opts?.source || 'send_notification',
         channels,
         createdByUserId: payload?.createdByUserId || opts?.actorUserId || null,
-      }).catch(() => { });
+      });
       return { ok: false, reason: 'no_enabled_channels', channels };
     }
 
@@ -369,14 +386,14 @@ export async function sendNotification(event, payload, opts = {}) {
     }
 
     const overallOk = channelResults.whatsapp.ok || channelResults.telegram.ok;
-    persistNotificationDeliveryLogs({
+    await persistNotificationDeliveryLogs({
       event,
       templateEvent: template?.event || event,
       templateId: Number.isInteger(template?.id) ? template.id : null,
       source: opts?.source || 'send_notification',
       channels: channelResults,
       createdByUserId: payload?.createdByUserId || opts?.actorUserId || null,
-    }).catch(() => { });
+    });
     if (!overallOk) {
       return {
         ok: false,

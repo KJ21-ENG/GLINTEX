@@ -117,12 +117,15 @@ export function normalizeSide(value) {
 
 const OPENING_CREATED_BY = new Set(['opening', 'opening_bulk']);
 
-// A production row is opening stock when its createdBy marker is an opening
-// marker. The OP- lot prefix is only authoritative at the cutter stage: Holo
-// and Coning issues can legitimately carry OP-prefixed upstream references
-// while still representing contractor-produced output at their own stage.
+// New opening stock rows carry an explicit isOpeningStock marker. Keep the
+// legacy createdBy/OP- fallback only for row types that predate the explicit
+// marker, and never infer opening status for Holo or Coning output from an
+// upstream OP-prefixed lot.
 export function isOpeningStockRow(row) {
   if (!row || typeof row !== 'object') return false;
+  if (row.isOpeningStock !== undefined && row.isOpeningStock !== null) {
+    return row.isOpeningStock === true;
+  }
   const createdBy = typeof row.createdBy === 'string' ? row.createdBy.trim().toLowerCase() : '';
   if (OPENING_CREATED_BY.has(createdBy)) return true;
   const process = typeof row.process === 'string' ? row.process.trim().toLowerCase() : '';

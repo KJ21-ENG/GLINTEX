@@ -17,6 +17,7 @@ export const BASE_PERMISSION_KEYS = [
   'boiler',
   'dispatch',
   'stock',
+  'packing',
   'reports',
   'masters',
   'settings',
@@ -28,7 +29,9 @@ export const BASE_PERMISSION_KEYS = [
 
 export const PERMISSION_KEYS = [
   ...BASE_PERMISSION_KEYS,
-  ...BASE_PERMISSION_KEYS.flatMap(key => ACTION_SUFFIXES.map(action => `${key}.${action}`)),
+  ...BASE_PERMISSION_KEYS
+    .filter(key => key !== 'packing')
+    .flatMap(key => ACTION_SUFFIXES.map(action => `${key}.${action}`)),
 ];
 
 export const DEFAULT_ACCESS_LEVEL = ACCESS_LEVELS.WRITE;
@@ -44,16 +47,21 @@ const toLevel = (value, fallback = DEFAULT_ACCESS_LEVEL) => {
 export const normalizePermissions = (raw, options = {}) => {
   let baseDefault = DEFAULT_ACCESS_LEVEL;
   let actionDefault = ACCESS_LEVELS.NONE;
+  let adminDefaults = false;
   if (typeof options === 'number') {
     baseDefault = options;
   } else if (options && typeof options === 'object') {
     baseDefault = options.baseDefault ?? DEFAULT_ACCESS_LEVEL;
     actionDefault = options.actionDefault ?? ACCESS_LEVELS.NONE;
+    adminDefaults = actionDefault === ACCESS_LEVELS.WRITE;
   }
   const source = raw && typeof raw === 'object' ? raw : {};
   const normalized = {};
   BASE_PERMISSION_KEYS.forEach((key) => {
-    normalized[key] = toLevel(source[key], baseDefault);
+    const missingPackingDefault = key === 'packing' && !adminDefaults
+      ? ACCESS_LEVELS.NONE
+      : baseDefault;
+    normalized[key] = toLevel(source[key], missingPackingDefault);
   });
   PERMISSION_KEYS.forEach((key) => {
     if (Object.prototype.hasOwnProperty.call(normalized, key)) return;
@@ -76,6 +84,7 @@ export const canDelete = (permissions, key) => getPermissionLevel(permissions, `
 export const MODULE_PERMISSIONS = [
   { key: 'inbound', label: 'Inbound', supportsEdit: true, supportsDelete: true },
   { key: 'stock', label: 'Stock' },
+  { key: 'packing', label: 'Packing' },
   { key: 'boiler', label: 'Boiler' },
   { key: 'dispatch', label: 'Dispatch', supportsDelete: true },
   { key: 'reports', label: 'Reports' },
@@ -102,6 +111,7 @@ export const RECEIVE_STAGE_PERMISSIONS = [
 export const PROCESS_PERMISSION_KEYS = {
   inbound: 'inbound',
   stock: 'stock',
+  packing: 'packing',
   boiler: 'boiler',
   dispatch: 'dispatch',
   reports: 'reports',

@@ -13,6 +13,8 @@ export { AdminData } from './AdminData.jsx';
 export { Settings } from './Settings.jsx';
 export { ReceiveFromMachine } from './ReceiveFromMachine.jsx';
 export { Dispatch } from './Dispatch.jsx';
+export { DispatchV2 } from './DispatchV2.jsx';
+export { Packing } from './Packing.jsx';
 export { OpeningStock } from './OpeningStock.jsx';
 export { BoxTransfer } from './BoxTransfer.jsx';
 export { Boiler } from './Boiler.jsx';
@@ -20,4 +22,3 @@ export { Login } from './Login.jsx';
 export { Setup } from './Setup.jsx';
 export { ScaleTestPage } from './ScaleTestPage.jsx';
 export { SendDocuments } from './SendDocuments.jsx';
-

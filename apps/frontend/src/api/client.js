@@ -16,11 +16,36 @@ const getApiBase = () => {
 
 const BASE = getApiBase();
 
+function isLegacyAffectedMutation(path, method) {
+  const verb = String(method || 'GET').toUpperCase();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(verb)) return false;
+  const cleanPath = String(path || '').split('?')[0];
+  if (cleanPath === '/api/issue_to_coning_machine/source-row/lookup' || cleanPath === '/api/box-transfer/lookup') return false;
+  return [
+    '/api/issue_to_coning_machine',
+    '/api/receive_from_coning_machine',
+    '/api/issue_take_backs',
+    '/api/dispatch',
+    '/api/box-transfer',
+  ].some((prefix) => cleanPath === prefix || cleanPath.startsWith(`${prefix}/`));
+}
+
+function createIdempotencyKey() {
+  if (typeof globalThis !== 'undefined' && typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `glintex-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 async function request(path, { method = 'GET', body, headers } = {}) {
+  const requestHeaders = { 'Content-Type': 'application/json', ...(headers || {}) };
+  if (isLegacyAffectedMutation(path, method) && !requestHeaders['Idempotency-Key'] && !requestHeaders['idempotency-key']) {
+    requestHeaders['Idempotency-Key'] = createIdempotencyKey();
+  }
   const res = await fetch(BASE + path, {
     method,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(headers || {}) },
+    headers: requestHeaders,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -386,7 +411,10 @@ export async function googleDriveFiles() { return await request('/api/google-dri
 export async function getDiskUsage() { return await request('/api/disk-usage'); }
 
 // Customers
-export async function listCustomers() { return await request('/api/customers'); }
+export async function listCustomers({ includeInactive = false } = {}) {
+  const query = includeInactive ? '?includeInactive=true' : '';
+  return await request(`/api/customers${query}`);
+}
 export async function createCustomer(data) { return await request('/api/customers', { method: 'POST', body: data }); }
 export async function updateCustomer(id, data) { return await request(`/api/customers/${id}`, { method: 'PUT', body: data }); }
 export async function deleteCustomer(id) { return await request(`/api/customers/${id}`, { method: 'DELETE' }); }

@@ -1,4 +1,5 @@
 import prisma from '../src/lib/prisma.js';
+import { assertExternalIntegrationAllowed } from '../src/utils/runtimeSafety.js';
 
 const API_BASE = 'https://api.telegram.org';
 
@@ -21,6 +22,7 @@ class TelegramService {
   }
 
   async init() {
+    assertExternalIntegrationAllowed('telegram');
     try {
       await this.refreshStatus();
     } catch (err) {
@@ -47,6 +49,7 @@ class TelegramService {
   }
 
   async _postJson(token, method, body) {
+    assertExternalIntegrationAllowed('telegram');
     const response = await fetch(this._buildUrl(token, method), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -60,6 +63,7 @@ class TelegramService {
   }
 
   async refreshStatus() {
+    assertExternalIntegrationAllowed('telegram');
     this.lastCheckedAt = new Date().toISOString();
     try {
       const token = await this._resolveToken();

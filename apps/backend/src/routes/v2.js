@@ -16,6 +16,7 @@ import {
   formatAgentRecordDate,
   normalizeAgentDateBasis,
 } from '../utils/agentDateFilters.js';
+import { getConingAvailabilityBatch } from '../services/inventory/coningBalance.js';
 
 const router = Router();
 const PERM_READ = ACCESS_LEVELS.READ;
@@ -2688,14 +2689,14 @@ router.get('/issue/:process/take-back-history', requireAuth, requireStageReadPer
     // Resolve Issue Details
     const issueIds = Array.from(new Set(page.map(r => r.issueId)));
     let issueMap = new Map();
-    
+
     if (issueIds.length > 0) {
       const issueModel = issueModelForProcess(process);
       const issues = await issueModel.findMany({
         where: { id: { in: issueIds } },
         select: { id: true, barcode: true, lotNo: true, itemId: true }
       });
-      
+
       // Resolve Item Names
       const itemIds = Array.from(new Set(issues.map(i => i.itemId).filter(Boolean)));
       const itemsRef = await prisma.item.findMany({
@@ -2704,9 +2705,9 @@ router.get('/issue/:process/take-back-history', requireAuth, requireStageReadPer
       });
       const itemNameById = new Map(itemsRef.map(i => [i.id, i.name]));
 
-      issueMap = new Map(issues.map(i => [i.id, { 
-        ...i, 
-        itemName: itemNameById.get(i.itemId) || '' 
+      issueMap = new Map(issues.map(i => [i.id, {
+        ...i,
+        itemName: itemNameById.get(i.itemId) || ''
       }]));
     }
 
@@ -2962,6 +2963,7 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
         sp.name AS supplier_name,
         COALESCE(tr.cut_names, ARRAY[]::text[]) AS cut_names,
         COALESCE(tr.yarn_names, ARRAY[]::text[]) AS yarn_names,
+        array_agg(r.id) AS source_row_ids,
         MAX(COALESCE(r."date", to_char(r."createdAt", 'YYYY-MM-DD'))) AS max_date,
         SUM(GREATEST(0, COALESCE(r."coneCount", 0) - COALESCE(r."dispatchedCount", 0))) AS total_cones,
         SUM(GREATEST(0, COALESCE(r."netWeight", COALESCE(r."coneWeight", (COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)))) - COALESCE(r."dispatchedWeight", 0))) AS total_weight
@@ -2977,11 +2979,17 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
       ORDER BY i."lotNo" ASC
     `;
 
+    const sourceIdsForLots = [...new Set((rows || []).flatMap((row) => (Array.isArray(row.source_row_ids) ? row.source_row_ids.filter(Boolean) : [])))];
+    const availabilityBySourceId = await getConingAvailabilityBatch(prisma, sourceIdsForLots);
     const items = (rows || []).map((r) => {
       const cutNamesArr = Array.isArray(r.cut_names) ? r.cut_names.filter(Boolean) : [];
       const yarnNamesArr = Array.isArray(r.yarn_names) ? r.yarn_names.filter(Boolean) : [];
       const cutName = cutNamesArr.length ? cutNamesArr.join(', ') : '—';
       const yarnName = yarnNamesArr.length ? yarnNamesArr.join(', ') : '—';
+      const sourceIds = Array.isArray(r.source_row_ids) ? r.source_row_ids.filter(Boolean) : [];
+      const balances = sourceIds.map((sourceId) => availabilityBySourceId.get(sourceId)).filter(Boolean);
+      const authoritativeCones = balances.reduce((total, balance) => total + Number(balance.available?.count || 0), 0);
+      const authoritativeWeight = balances.reduce((total, balance) => total + Number(balance.available?.weight || 0), 0);
       return {
         lotKey: encodeStockLotKey({
           v: 1,
@@ -3004,9 +3012,9 @@ router.get('/stock/:process/lots', requireAuth, requirePermission('stock', PERM_
         cutName,
         cutNames: cutNamesArr,
         yarnNames: yarnNamesArr,
-        totalCones: Number(r.total_cones || 0),
-        totalWeight: Number(r.total_weight || 0),
-        statusType: Number(r.total_weight || 0) > 0.000000001 ? 'active' : 'inactive',
+        totalCones: balances.length ? authoritativeCones : Number(r.total_cones || 0),
+        totalWeight: balances.length ? authoritativeWeight : Number(r.total_weight || 0),
+        statusType: (balances.length ? authoritativeWeight : Number(r.total_weight || 0)) > 0.000000001 ? 'active' : 'inactive',
         date: r.max_date || '',
         rows: [],
       };
@@ -3204,20 +3212,24 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
       ORDER BY r."createdAt" DESC, r.id DESC
     `;
 
-    const items = (rows || []).map((r) => ({
-      id: r.id,
-      barcode: r.barcode || '',
-      date: r.date || '',
-      boxName: r.box_name || '—',
-      coneType: r.cone_type_name || '—',
-      availableCones: Number(r.available_cones || 0),
-      availableWeight: Number(r.available_weight || 0),
-      grossWeight: Number(r.gross_weight || 0),
-      netWeight: Number(r.net_weight || 0),
-      machineName: r.machine_name || '—',
-      operatorName: r.operator_name || '—',
-      notes: r.notes || '',
-    }));
+    const availabilityBySourceId = await getConingAvailabilityBatch(prisma, (rows || []).map((row) => row.id));
+    const items = (rows || []).map((r) => {
+      const balance = availabilityBySourceId.get(r.id);
+      return {
+        id: r.id,
+        barcode: r.barcode || '',
+        date: r.date || '',
+        boxName: r.box_name || '—',
+        coneType: r.cone_type_name || '—',
+        availableCones: Number(balance.available?.count || 0),
+        availableWeight: Number(balance.available?.weight || 0),
+        grossWeight: Number(r.gross_weight || 0),
+        netWeight: Number(r.net_weight || 0),
+        machineName: r.machine_name || '—',
+        operatorName: r.operator_name || '—',
+        notes: r.notes || '',
+      };
+    });
 
     return res.json({ items });
   } catch (err) {

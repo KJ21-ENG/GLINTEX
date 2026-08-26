@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "workflow_mode": "advanced",
+  "advanced_is_default": true,
+  "project_kind": "brownfield",
+  "archetype": "generic-software-project",
+  "workflow_maturity": "evidence-inferred",
+  "workflow_steward": "KJ21-ENG",
+  "selected_at": "2026-08-10T10:01:10Z",
+  "selection_history": [
+    {
+      "mode": "advanced",
+      "at": "2026-08-10T10:01:10Z",
+      "selected_by": "KJ21-ENG"
+    }
+  ],
+  "environment_contract": {
+    "production": {
+      "branch": "main",
+      "url": "https://app.glintex.in",
+      "vps_directory": "/var/www/glintex-app",
+      "compose_project": "glintex-app",
+      "mutation_authority": "explicit-production-authorization-only"
+    },
+    "staging": {
+      "branch": "release/dispatch-v2",
+      "url": "https://staging.glintex.in",
+      "vps_directory": "/var/www/glintex-staging",
+      "compose_project": "glintex-staging",
+      "database_retention": "retain-employee-test-state",
+      "external_integrations": "disabled"
+    },
+    "hotfix": {
+      "branch_pattern": "hotfix/<ticket>",
+      "base": "exact-deployed-production-tag-or-sha",
+      "forward_port_target": "release/dispatch-v2"
+    }
+  },
+  "session_logging": {
+    "enabled": true,
+    "tracked_in_git": false,
+    "full_transcripts": false
+  },
+  "normal_mode_contract": "Minimal session logging and global safety only; no Advanced phases, capsules, checkpoints, or evolution."
+}

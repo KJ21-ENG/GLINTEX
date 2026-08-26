@@ -6,6 +6,7 @@ import EventEmitter from 'events';
 import qrcode from 'qrcode';
 import os from 'os';
 import { execSync } from 'child_process';
+import { assertExternalIntegrationAllowed } from '../src/utils/runtimeSafety.js';
 
 const SESS_DIR = path.resolve(new URL('..', import.meta.url).pathname, 'whatsapp');
 const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth', 'session-glintex');
@@ -130,6 +131,7 @@ class WhatsappService {
   }
 
   async init(opts = {}) {
+    assertExternalIntegrationAllowed('whatsapp');
     const { force = false } = opts;
     if (this._shuttingDown) throw new Error('Whatsapp service shutting down');
     if (this._initializingPromise) {
@@ -306,6 +308,7 @@ class WhatsappService {
 
   // Safe send that doesn't throw if client not ready immediately; returns a promise
   async sendTextSafe(number, text) {
+    assertExternalIntegrationAllowed('whatsapp');
     // try a gentle wait first
     try {
       await this._waitUntilConnected(15000);
@@ -323,6 +326,7 @@ class WhatsappService {
 
   // Send to a raw chat id (e.g. group id like '12345-67890@g.us')
   async sendToChatIdSafe(chatId, text) {
+    assertExternalIntegrationAllowed('whatsapp');
     try {
       await this._waitUntilConnected(15000);
     } catch (err) {
@@ -340,6 +344,7 @@ class WhatsappService {
    * @param {string} [caption] - Optional caption/message
    */
   async sendMediaSafe(number, data, filename, mimetype, caption = '') {
+    assertExternalIntegrationAllowed('whatsapp');
     try {
       await this._waitUntilConnected(15000);
     } catch (err) {

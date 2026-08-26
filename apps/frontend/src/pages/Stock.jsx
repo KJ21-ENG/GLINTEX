@@ -8,12 +8,13 @@ import { BobbinView } from '../components/stock/BobbinView';
 import { HoloView } from '../components/stock/HoloView';
 import { ConingView } from '../components/stock/ConingView';
 import { CombinedStockView } from '../components/stock/CombinedStockView';
+import { PackedStockView } from '../components/stock/PackedStockView';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { formatKg, todayISO, aggregateLots, formatDateDDMMYYYY } from '../utils';
 import * as api from '../api';
 import { exportStockXlsx, exportStockPdf, exportStockDetailedXlsx } from '../services';
 import { getProcessDefinition } from '../constants/processes';
-import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight, Layers } from 'lucide-react';
+import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTriangle, Info, ArrowRight, Layers, Package } from 'lucide-react';
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
 import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LotPopover } from '../components/stock/LotPopover';
@@ -22,6 +23,7 @@ import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/lab
 import { usePermission, useStagePermission } from '../hooks/usePermission';
 import { useV2StockLots } from '../hooks/useV2StockLots';
 import { useBarcodeAutoExpand } from '../utils/useBarcodeAutoExpand';
+import { getProcessStockViewAlignment } from './stockViewRouting';
 import {
   EPSILON,
   idEq,
@@ -62,6 +64,8 @@ export function Stock() {
   const isCutter = processId === 'cutter';
   const isHolo = processId === 'holo';
   const isConing = processId === 'coning';
+  const { canRead: canStockRead } = usePermission('stock');
+  const { canRead: canPackingRead } = usePermission('packing');
   const { canEdit: canInboundEdit, canDelete: canInboundDelete } = usePermission('inbound');
   const issueStage = isHolo ? 'holo' : isConing ? 'coning' : 'cutter';
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
@@ -72,9 +76,9 @@ export function Stock() {
     // Legacy Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
     // can produce incorrect on-hand totals once the DB exceeds server-side fetch limits.
     // Holo/coning use dedicated v2 stock reads instead of the heavy legacy module payload.
-    if (processId === 'holo' || processId === 'coning') return;
+    if (!canStockRead || processId === 'holo' || processId === 'coning') return;
     ensureModuleData('process', { process: processId, full: true });
-  }, [ensureModuleData, processId]);
+  }, [canStockRead, ensureModuleData, processId]);
 
   // --- UI State ---
   const [searchParams, setSearchParams] = useSearchParams();
@@ -82,8 +86,10 @@ export function Stock() {
   // Initialize view from URL or default based on process
   const getInitialView = () => {
     const urlView = searchParams.get('view');
+    if (canPackingRead && !canStockRead) return 'packed';
     // Combined Stock is process-independent, so it wins over the per-process default.
-    if (urlView === 'combined') return 'combined';
+    if (urlView === 'combined' && canStockRead) return 'combined';
+    if (urlView === 'packed' && canPackingRead) return 'packed';
     if (isHolo) return 'holo';
     if (isCutter && urlView === 'bobbins') return 'bobbins';
     if (isCutter && urlView === 'jumbo') return 'jumbo';
@@ -95,12 +101,32 @@ export function Stock() {
   // Sync view state when URL searchParams changes (e.g., browser back/forward navigation)
   useEffect(() => {
     const urlView = searchParams.get('view');
-    if (urlView === 'combined') {
+    if (canPackingRead && !canStockRead) {
+      if (view !== 'packed') setViewState('packed');
+      return;
+    }
+    if (urlView === 'combined' && canStockRead) {
       if (view !== 'combined') setViewState('combined');
+      return;
+    }
+    if (urlView === 'packed' && canPackingRead) {
+      if (view !== 'packed') setViewState('packed');
+      return;
+    }
+    if (view === 'combined' && !canStockRead) {
+      setViewState(canPackingRead ? 'packed' : 'jumbo');
+      return;
+    }
+    if (view === 'packed' && !canPackingRead) {
+      setViewState(canStockRead ? (isHolo ? 'holo' : 'jumbo') : 'jumbo');
       return;
     }
     // Browser-back out of ?view=combined drops us onto the process default view.
     if (view === 'combined') {
+      setViewState(isHolo ? 'holo' : 'jumbo');
+      return;
+    }
+    if (view === 'packed') {
       setViewState(isHolo ? 'holo' : 'jumbo');
       return;
     }
@@ -114,13 +140,23 @@ export function Stock() {
         setViewState('jumbo');
       }
     }
-  }, [searchParams, isCutter, isHolo, view]);
+  }, [canPackingRead, canStockRead, searchParams, isCutter, isHolo, view]);
 
   // Wrapper to update both state and URL
   const setView = (newView) => {
-    setViewState(newView);
+    if (newView === 'packed' && !canPackingRead) return;
+    if (newView !== 'packed' && !canStockRead) {
+      setViewState('packed');
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.set('view', 'packed');
+        return newParams;
+      }, { replace: true });
+      return;
+    }
     // Combined Stock is available on every process, so it always owns the view param.
     if (newView === 'combined') {
+      setViewState(newView);
       setSearchParams(prev => {
         const newParams = new URLSearchParams(prev);
         newParams.set('view', 'combined');
@@ -128,6 +164,16 @@ export function Stock() {
       }, { replace: true });
       return;
     }
+    if (newView === 'packed') {
+      setViewState('packed');
+      setSearchParams(prev => {
+        const newParams = new URLSearchParams(prev);
+        newParams.set('view', 'packed');
+        return newParams;
+      }, { replace: true });
+      return;
+    }
+    setViewState(newView);
     // Only persist view param for cutter process with jumbo/bobbins views
     if (isCutter && (newView === 'jumbo' || newView === 'bobbins')) {
       setSearchParams(prev => {
@@ -146,6 +192,7 @@ export function Stock() {
   };
 
   const isCombined = view === 'combined';
+  const isPacked = view === 'packed';
   // What toggling Combined Stock off falls back to (mirrors the realignment effect below).
   const processDefaultView = isHolo ? 'holo' : 'jumbo';
 
@@ -177,7 +224,7 @@ export function Stock() {
   useEffect(() => { setExportData(null); }, [view, processId]);
 
   // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
-  const v2StockEnabled = (isHolo || isConing) && view !== 'combined';
+  const v2StockEnabled = canStockRead && (isHolo || isConing) && view !== 'combined' && !isPacked;
   const v2Api = useV2StockLots(processId, { enabled: v2StockEnabled, search });
 
   // Close export menu when clicking outside / pressing escape
@@ -526,33 +573,15 @@ export function Stock() {
 
   // Keep view aligned with process (match main-branch behaviour)
   useEffect(() => {
-    // Combined Stock is process-independent: never force it back to a process view.
-    if (view === 'combined') return;
-    if (isHolo) {
-      setViewState('holo');
-      // Clear view param from URL for non-cutter processes
-      setSearchParams(prev => {
-        const newParams = new URLSearchParams(prev);
-        newParams.delete('view');
-        return newParams;
-      }, { replace: true });
-      return;
-    }
-    // For coning/other processes, force jumbo like main-branch behaviour
-    if (!isCutter) {
-      if (view !== 'jumbo') setViewState('jumbo');
-      // Clear view param from URL for non-cutter processes
-      setSearchParams(prev => {
-        const newParams = new URLSearchParams(prev);
-        newParams.delete('view');
-        return newParams;
-      }, { replace: true });
-      return;
-    }
-    if (view === 'holo') {
-      setViewState('jumbo');
-    }
-  }, [isCutter, isHolo, view, setSearchParams]);
+    const alignment = getProcessStockViewAlignment(view, processId);
+    if (alignment.view !== view) setViewState(alignment.view);
+    if (!alignment.clearUrl || !searchParams.has('view')) return;
+    setSearchParams(prev => {
+      const newParams = new URLSearchParams(prev);
+      newParams.delete('view');
+      return newParams;
+    }, { replace: true });
+  }, [processId, searchParams, setSearchParams, view]);
 
   useEffect(() => { setExpandedLot(null); }, [groupByItem, view, processId]);
   useEffect(() => {
@@ -718,7 +747,7 @@ export function Stock() {
           <h1 className="text-2xl font-bold tracking-tight">Stock & Inventory</h1>
           <div className="flex flex-wrap gap-2 w-full md:w-auto">
             {/* View Toggles */}
-            {isCutter ? (
+            {canStockRead && isCutter ? (
               <div className="flex p-1 bg-muted rounded-lg flex-1 md:flex-none">
                 <button
                   onClick={() => setView('jumbo')}
@@ -735,7 +764,7 @@ export function Stock() {
               </div>
             ) : null}
             {/* Combined Stock Toggle (process-independent) */}
-            <Button
+            {canStockRead && <Button
               variant={isCombined ? 'default' : 'outline'}
               size="sm"
               onClick={() => setView(isCombined ? processDefaultView : 'combined')}
@@ -743,9 +772,18 @@ export function Stock() {
             >
               <Layers className="w-4 h-4" />
               <span>Combined Stock</span>
-            </Button>
+            </Button>}
+            {canPackingRead && <Button
+              variant={isPacked ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setView(isPacked && canStockRead ? processDefaultView : 'packed')}
+              className="gap-2 ml-auto md:ml-0"
+            >
+              <Package className="w-4 h-4" />
+              <span>Packed Stock</span>
+            </Button>}
             {/* Export Button (combined view owns no export in v1) */}
-            {!isCombined && (
+            {!isCombined && !isPacked && (
               <div className="relative" ref={exportMenuRef}>
                 <Button
                   variant="outline"
@@ -788,7 +826,7 @@ export function Stock() {
         </div>
 
         {/* Filter Bar (hidden in combined view — it owns its own item picker) */}
-        {!isCombined && (
+        {!isCombined && !isPacked && (
           <Card className="bg-muted/40 border-none shadow-none">
             <CardContent className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 items-end">
               <div className="sm:col-span-2 lg:col-span-2 min-w-0">
@@ -878,9 +916,11 @@ export function Stock() {
       </div>
 
       {/* Main Content based on View */}
-      {isCombined ? (
+      {isPacked && canPackingRead ? (
+        <PackedStockView />
+      ) : isCombined && canStockRead ? (
         <CombinedStockView db={db} ensureModuleData={ensureModuleData} />
-      ) : processId === 'coning' ? (
+      ) : canStockRead && processId === 'coning' ? (
         <ConingView
           db={db}
           filters={filters}
@@ -891,7 +931,7 @@ export function Stock() {
           ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2Api}
         />
-      ) : isHolo ? (
+      ) : canStockRead && isHolo ? (
         <HoloView
           db={db}
           filters={filters}
@@ -902,9 +942,9 @@ export function Stock() {
           ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2Api}
         />
-      ) : showBobbins ? (
+      ) : canStockRead && showBobbins ? (
         <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
-      ) : (
+      ) : canStockRead ? (
         <>
           <div className="hidden sm:block rounded-md border bg-card overflow-x-auto">
             <Table>
@@ -1228,8 +1268,7 @@ export function Stock() {
             )}
           </div>
         </>
-      )
-      }
+      ) : null}
 
       {/* Issue Modal */}
       <Dialog open={issueModalOpen} onOpenChange={setIssueModalOpen}>

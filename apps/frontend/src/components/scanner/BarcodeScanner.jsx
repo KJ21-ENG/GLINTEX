@@ -7,7 +7,7 @@ import { cn } from '../../lib/utils';
 /**
  * BarcodeScanner component using html5-qrcode library
  * Provides camera-based barcode scanning for mobile devices
- * 
+ *
  * Features:
  * - Restricted to Code 128/Code 39 formats (GLINTEX barcodes)
  * - Pattern validation for known barcode formats
@@ -35,6 +35,7 @@ const VALID_BARCODE_PATTERNS = [
     /^ICO-\d{1,6}$/,                   // Coning Issue
     /^RCO-\d{1,6}-C\d{3}$/,            // Coning Receive
     /^RCO-OP-\d{1,6}-C\d{3}$/,         // Legacy Coning Opening Stock
+    /^PKU-PB-\d{8}-\d{4}-L\d+-U\d+$/, // Packed Stock unit
 ];
 
 function isValidBarcodeFormat(barcode) {

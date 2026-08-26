@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "workflow_version": 1,
+  "status": "evidence-inferred",
+  "project_kind": "brownfield",
+  "archetype": "generic-software-project",
+  "generated_from": {
+    "observed_at": "2026-08-10T10:01:10Z",
+    "project_kind": "brownfield",
+    "commit_count": 561,
+    "detected_stacks": [
+      "javascript-or-typescript"
+    ],
+    "package_scripts": [
+      "build:backend",
+      "build:frontend",
+      "dev:backend",
+      "dev:frontend",
+      "preview:frontend",
+      "start:backend"
+    ],
+    "ci_files": [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/release.yml"
+    ],
+    "documentation": [
+      "README.md"
+    ],
+    "existing_agent_instructions": [
+      "AGENTS.md"
+    ]
+  },
+  "authority_classes": {
+    "observe": "Read-only inspection and analysis.",
+    "change-local": "Modify local project state within user-authorized scope.",
+    "validate": "Run safe checks proportional to risk.",
+    "change-external": "Requires explicit authorization for sends, posts, pushes, deploys, payments, or other external mutations.",
+    "monitor": "Observe over time without broadening mutation authority."
+  },
+  "phases": [
+    {
+      "id": "orient",
+      "goal": "Reconstruct current state from history, docs, scripts, CI, and recent sessions."
+    },
+    {
+      "id": "reproduce-or-scope",
+      "goal": "Establish the smallest evidence-backed change boundary."
+    },
+    {
+      "id": "implement",
+      "goal": "Change only the authorized scope and preserve unrelated work."
+    },
+    {
+      "id": "validate",
+      "goal": "Run project-native targeted checks proportional to risk."
+    },
+    {
+      "id": "handoff",
+      "goal": "Record verified outcome, residual risk, and next action."
+    }
+  ],
+  "commands": {
+    "discovered_package_scripts": [
+      "build:backend",
+      "build:frontend",
+      "dev:backend",
+      "dev:frontend",
+      "preview:frontend",
+      "start:backend"
+    ],
+    "ci_files": [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/release.yml"
+    ],
+    "validation_policy": "Prefer project-native targeted checks; add exact commands as evidence is established.",
+    "staging": [
+      "APP_DIR=/var/www/glintex-staging /var/www/glintex-staging/docker/staging/migrate.sh",
+      "APP_DIR=/var/www/glintex-staging /var/www/glintex-staging/docker/staging/deploy.sh <exact-release-sha>",
+      "docker compose --env-file .env.staging -p glintex-staging -f docker-compose.staging.yml ps"
+    ],
+    "staging_validation": [
+      "npm test --workspace apps/backend",
+      "npm run build:backend",
+      "npm run build:frontend",
+      "git diff --check",
+      "nginx -t",
+      "curl --user <secure-basic-auth> https://staging.glintex.in/api/readiness"
+    ]
+  },
+  "deployment_contract": {
+    "production": "main is production-only and read-only without explicit user production authorization",
+    "staging": "release/dispatch-v2 deploys only to the isolated staging directory, compose project, database, Nginx vhost, DNS name, and GitHub staging environment",
+    "database_identity_first": "prove current_database, role, host, and port before every mutation; use the staging migration wrapper instead of implicit dotenv Prisma commands",
+    "staging_data": "retain employee test state and a hashed pre-deploy backup; never mutate the retained green reference database",
+    "integration_safety": "staging runtime and sanitized data must disable WhatsApp, Telegram, Google Drive, notification delivery, schedulers, sessions, tokens, recipients, and agent actions",
+    "hotfix_forward_port": "branch hotfix/<ticket> from the exact deployed production tag/SHA, validate in isolation, deploy only after explicit authorization, then immediately forward-port and redeploy release/dispatch-v2",
+    "evidence": "record exact SHAs, DB identity, backup hash/size, migrations, compose/Nginx/TLS/readiness, authenticated browser smoke, integration-disable proof, and production preservation"
+  },
+  "evolution": {
+    "gap_log": ".agent/workflow-gaps.jsonl",
+    "repeat_threshold": 2,
+    "steward_approval_required": true,
+    "protected_policy_approval_required": true
+  }
+}

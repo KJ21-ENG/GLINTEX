@@ -26,9 +26,21 @@ import { buildHoloWeeklyExportData } from '../utils/holoWeeklyExport.js';
 import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
+import dispatchV2Router from './dispatchV2.js';
+import packedStockRouter from './packedStock.js';
+import packingRouter from './packing.js';
+import packingReportsRouter, { barcodeHistoryRouter } from './packingReports.js';
+import readinessRouter from './readiness.js';
+import reconciliationRouter from './reconciliation.js';
 import contractorPaymentsRouter from './contractorPayments.js';
 import { normalizeSide } from '../services/contractorPayments/calc.js';
 import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesExclusive, lockItemNamesExclusive } from '../services/contractorPayments/service.js';
+import { assertConingAvailability, getConingAvailability, lockConingSources } from '../services/inventory/coningBalance.js';
+import { getIdempotencyKeyFromRequest, runIdempotent } from '../services/inventory/idempotency.js';
+import { assertAffectedWriteAllowed, hasNewWritePermission, readLaunchState, requireAffectedWriteAccess, runDeterministicWritePreflight, writeGateErrorResponse } from '../services/cutover/writeGate.js';
+import { stableErrorResponse } from '../services/packing/errors.js';
+import { preflightDispatchV2Mutation } from '../services/dispatch/dispatchService.js';
+import { preflightPackingBatchSourceMutation } from '../services/packing/batchService.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
@@ -56,11 +68,216 @@ const PERM_READ = ACCESS_LEVELS.READ;
 const PERM_WRITE = ACCESS_LEVELS.WRITE;
 const TAKE_BACK_EPSILON = 1e-6;
 const TAKE_BACK_STAGES = ['cutter', 'holo', 'coning'];
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 let bootstrapToken = null;
 
 // v2 performance endpoints (cursor pagination, server-side filtering, facets, export)
 router.use('/api/v2', v2Router);
+
+function pathMatches(path, prefixes) {
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function requireMutationIdempotencyKey(req, res, next) {
+  if (getIdempotencyKeyFromRequest(req)) return next();
+  return res.status(400).json({
+    error: 'idempotency_key_required',
+    message: 'Idempotency-Key header is required for this mutation.',
+    details: null,
+  });
+}
+
+function pathAwareAffectedWriteGate(policyAlias, prefixes, { excludedPaths = [], preflight = null } = {}) {
+  const policyGate = requireAffectedWriteAccess(policyAlias);
+  return (req, res, next) => {
+    const path = String(req.path || req.originalUrl || '').split('?')[0];
+    if (!MUTATING_METHODS.has(req.method) || !pathMatches(path, prefixes) || pathMatches(path, excludedPaths)) return next();
+    // Feature routers enforce their own module permission, but this gate is
+    // registered before those routers. Authenticate the new-write paths here
+    // first so unauthenticated requests remain 401 and under-privileged users
+    // remain 403 instead of being misclassified as launch-gated 423 writes.
+    if (['packing', 'packed-stock', 'dispatch-v2'].includes(policyAlias)) {
+      return requireAuth(req, res, () => {
+        if (!hasNewWritePermission(req, policyAlias)) return next();
+        return requireMutationIdempotencyKey(req, res, () => runDeterministicWritePreflight({
+          preflight: preflight ? () => preflight(req) : null,
+          gate: () => policyGate(req, res, next),
+        }).catch((error) => {
+          const response = stableErrorResponse(error);
+          return res.status(response.statusCode).json(response.body);
+        }));
+      });
+    }
+    // Evaluate the authoritative policy once. The previous pre-read followed
+    // by policyGate read launch state twice, creating a TOCTOU window and
+    // mapping a transient read failure to a misleading writes_gated response.
+    // The policy middleware still fails closed for missing/non-ACTIVE state.
+    return policyGate(req, res, next);
+  };
+}
+
+function legacyIdempotencyGate(prefixes, excludedPaths = []) {
+  return (req, res, next) => {
+    const path = String(req.path || req.originalUrl || '').split('?')[0];
+    if (!MUTATING_METHODS.has(req.method) || !pathMatches(path, prefixes) || pathMatches(path, excludedPaths)) return next();
+    if (!getIdempotencyKeyFromRequest(req)) {
+      return res.status(400).json({
+        error: 'idempotency_key_required',
+        message: 'Idempotency-Key header is required for this mutation.',
+        details: null,
+      });
+    }
+    return next();
+  };
+}
+
+async function runLegacyIdempotent(req, operation, work) {
+  return runIdempotent({
+    operation,
+    idempotencyKey: getIdempotencyKeyFromRequest(req),
+    actorUserId: req.user?.id || null,
+    work,
+  });
+}
+
+async function readLegacyIdempotencyResult(req, operation) {
+  const key = getIdempotencyKeyFromRequest(req);
+  if (!key) return undefined;
+  const rows = await prisma.$queryRaw`
+    SELECT "payload"
+    FROM "AuditLog"
+    WHERE "entityType" = 'packing_idempotency'
+      AND "action" = ${operation}
+      AND "payload"->>'idempotencyKey' = ${key}
+    ORDER BY "createdAt" DESC
+    LIMIT 1
+  `;
+  const result = rows?.[0]?.payload?.result;
+  return result === undefined ? undefined : result;
+}
+
+const openReconciliationWriteGate = requireAffectedWriteAccess('packing');
+const CUTOVER_REVERSAL_LAUNCH_PHASES = new Set(['CUTOVER_APPLIED', 'FAILED', 'REVERSED']);
+
+function rejectReconciliationPhase(res, { operation, launchState, allowedStatuses, message }) {
+  return res.status(409).json({
+    error: 'writes_not_gated',
+    message,
+    details: {
+      operation,
+      status: launchState?.status || 'PREPARATION',
+      affectedWritesPaused: Boolean(launchState?.affectedWritesPaused),
+      allowedStatuses,
+    },
+  });
+}
+
+async function reconciliationMutationGate(req, res, next) {
+  const path = String(req.path || req.originalUrl || '').split('?')[0];
+  if (!MUTATING_METHODS.has(req.method) || !pathMatches(path, ['/api/reconciliation'])) return next();
+  // Preview is a read operation exposed as POST for large request bodies.
+  if (path.endsWith('/preview')) return next();
+  if (!getIdempotencyKeyFromRequest(req)) {
+    return res.status(400).json({
+      error: 'idempotency_key_required',
+      message: 'Idempotency-Key header is required for this mutation.',
+      details: null,
+    });
+  }
+
+  try {
+    const match = path.match(/^\/api\/reconciliation\/batches\/([^/]+)\/(apply|reverse|import-opening-balances)$/);
+    const operation = match?.[2] || 'create';
+    let kind = String(req.body?.kind || '').trim().toUpperCase();
+    let storedBatch = null;
+    if (match) {
+      storedBatch = await prisma.inventoryAdjustmentBatch.findUnique({
+        where: { id: decodeURIComponent(match[1]) },
+        select: { kind: true },
+      });
+      kind = String(storedBatch?.kind || kind).trim().toUpperCase();
+    }
+
+    const isLegacyCutoverApply = operation === 'apply' && kind === 'LEGACY_CUTOVER';
+    const isOpeningBalanceImport = operation === 'import-opening-balances';
+    const isCutoverReversal = operation === 'reverse' && ['LEGACY_CUTOVER', 'OPENING_BALANCE'].includes(kind);
+    if (!isLegacyCutoverApply && !isOpeningBalanceImport && !isCutoverReversal) {
+      return openReconciliationWriteGate(req, res, next);
+    }
+
+    const launchState = await readLaunchState();
+    const paused = launchState?.affectedWritesPaused === true;
+    if (isLegacyCutoverApply) {
+      if (launchState?.status !== 'WRITES_GATED' || !paused) {
+        return rejectReconciliationPhase(res, {
+          operation,
+          launchState,
+          allowedStatuses: ['WRITES_GATED'],
+          message: 'Applying a LEGACY_CUTOVER requires WRITES_GATED launch state with affected writes paused.',
+        });
+      }
+      return next();
+    }
+
+    if (isOpeningBalanceImport) {
+      if (launchState?.status !== 'CUTOVER_APPLIED' || !paused) {
+        return rejectReconciliationPhase(res, {
+          operation,
+          launchState,
+          allowedStatuses: ['CUTOVER_APPLIED'],
+          message: 'Opening-balance import requires the linked LEGACY_CUTOVER to be APPLIED while writes remain paused.',
+        });
+      }
+      // WP-02 validates the stored OPENING_BALANCE kind, its durable cutover
+      // link, the single-linked-batch rule, and the linked cutover APPLIED
+      // status transactionally. Keep those domain checks authoritative here.
+      return next();
+    }
+
+    if (!paused || !CUTOVER_REVERSAL_LAUNCH_PHASES.has(String(launchState?.status || '').toUpperCase())) {
+      return rejectReconciliationPhase(res, {
+        operation,
+        launchState,
+        allowedStatuses: Array.from(CUTOVER_REVERSAL_LAUNCH_PHASES),
+        message: 'Cutover and opening-balance reversal requires a paused CUTOVER_APPLIED, FAILED, or REVERSED launch phase.',
+      });
+    }
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function mountScopedRouter(routerInstance, prefixes) {
+  return (req, res, next) => {
+    const path = String(req.path || req.originalUrl || '').split('?')[0];
+    if (!pathMatches(path, prefixes)) return next();
+    return routerInstance(req, res, next);
+  };
+}
+
+// WP-07's gate is deliberately method- and path-scoped so historical reads,
+// health, and legacy compatibility remain available while affected writes are
+// paused during a future cutover.
+// New V2 mutations are release-gated: they become writable only after the
+// singleton launch state is explicitly ACTIVE. Legacy paths continue to use
+// WP-07's PREPARATION/ACTIVE policy, with REVERSED added as a blocked state.
+router.use(pathAwareAffectedWriteGate('dispatch-v2', ['/api/v2/dispatch'], { requireActive: true, preflight: preflightDispatchV2Mutation }));
+router.use(pathAwareAffectedWriteGate('packing', ['/api/packing'], { requireActive: true, preflight: preflightPackingBatchSourceMutation }));
+router.use(pathAwareAffectedWriteGate('packed-stock', ['/api/packed-stock'], { requireActive: true }));
+router.use(pathAwareAffectedWriteGate('legacy-dispatch', ['/api/dispatch']));
+router.use(pathAwareAffectedWriteGate('reconing', ['/api/issue_to_coning_machine', '/api/receive_from_coning_machine'], { excludedPaths: ['/api/issue_to_coning_machine/source-row/lookup'] }));
+router.use(pathAwareAffectedWriteGate('legacy-stock', ['/api/box-transfer'], { excludedPaths: ['/api/box-transfer/lookup'] }));
+
+// Shared integration bridge for WP-01 through WP-07. The feature routers own
+// their authentication and module permissions; this file owns registration.
+router.use(mountScopedRouter(dispatchV2Router, ['/api/v2/dispatch']));
+router.use(mountScopedRouter(packedStockRouter, ['/api/packed-stock']));
+router.use(mountScopedRouter(packingRouter, ['/api/packing']));
+router.use('/api/packing-reports', packingReportsRouter);
+router.use('/api/reports', barcodeHistoryRouter);
+router.use(readinessRouter);
 
 // Contractor KG payments (self-authenticating sub-router)
 router.use('/api/contractor-payments', contractorPaymentsRouter);
@@ -2057,6 +2274,12 @@ router.get('/api/google-drive/callback', async (req, res) => {
 
 // ===== Auth (required) =====
 router.use(requireAuth);
+router.use(legacyIdempotencyGate(
+  ['/api/issue_to_coning_machine', '/api/receive_from_coning_machine', '/api/issue_take_backs', '/api/dispatch', '/api/box-transfer'],
+  ['/api/issue_to_coning_machine/source-row/lookup', '/api/box-transfer/lookup'],
+));
+router.use(reconciliationMutationGate);
+router.use(mountScopedRouter(reconciliationRouter, ['/api/reconciliation', '/api/packing-launch-state']));
 
 router.get('/api/auth/me', async (req, res) => {
   res.json({ ok: true, user: req.user });
@@ -2975,7 +3198,7 @@ router.get('/api/bootstrap', async (req, res) => {
       twist_mappings: hasAnyReadPermission(req, ['issue.holo', 'issue.coning', 'receive.holo', 'receive.coning', 'stock', 'opening_stock', 'reports', 'masters']),
       firms: hasAnyReadPermission(req, ['inbound', 'dispatch', 'opening_stock', 'reports', 'masters']),
       suppliers: hasAnyReadPermission(req, ['inbound', 'stock', 'opening_stock', 'reports', 'masters']),
-      customers: hasAnyReadPermission(req, ['dispatch', 'reports', 'masters']),
+      customers: hasAnyReadPermission(req, ['dispatch', 'packing', 'stock', 'reports', 'masters']),
       machines: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'boiler', 'opening_stock', 'masters']),
       workers: hasAnyReadPermission(req, ['issue.cutter', 'issue.holo', 'issue.coning', 'receive.cutter', 'receive.holo', 'receive.coning', 'boiler', 'opening_stock', 'masters']),
       bobbins: hasAnyReadPermission(req, ['receive.cutter', 'stock', 'opening_stock', 'masters']),
@@ -3009,7 +3232,14 @@ router.get('/api/bootstrap', async (req, res) => {
     }
     slices.firms = allowed.firms ? await prisma.firm.findMany() : [];
     slices.suppliers = allowed.suppliers ? await prisma.supplier.findMany() : [];
-    slices.customers = allowed.customers ? await prisma.customer.findMany({ orderBy: { name: 'asc' } }) : [];
+    const includeInactiveCustomers = req.user?.isAdmin
+      && String(req.query?.includeInactiveCustomers || '').trim().toLowerCase() === 'true';
+    slices.customers = allowed.customers
+      ? await prisma.customer.findMany({
+        where: includeInactiveCustomers ? {} : { isActive: true },
+        orderBy: { name: 'asc' },
+      })
+      : [];
     slices.machines = allowed.machines ? await prisma.machine.findMany() : [];
     slices.workers = allowed.workers ? await prisma.operator.findMany() : [];
     slices.bobbins = allowed.bobbins ? await prisma.bobbin.findMany() : [];
@@ -3447,6 +3677,29 @@ async function createIssueTakeBackForStage(req, res, stage) {
     const normalizedLines = normalizeTakeBackLines(req.body?.lines || []);
 
     if (!issueId) return res.status(400).json({ error: 'Missing issue id' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.${stage}.takeback.create`);
+    if (replay !== undefined) {
+      const issuePending = await getIssuePending(prisma, stage, replay.issue);
+      return res.json({
+        ok: true,
+        issue_take_back: replay.created,
+        issue_balance: {
+          issueId: replay.issue.id,
+          stage,
+          originalCount: issuePending.original.totalCount,
+          originalWeight: issuePending.original.totalWeight,
+          takeBackCount: issuePending.takeBack.activeCount,
+          takeBackWeight: issuePending.takeBack.activeWeight,
+          netIssuedCount: issuePending.netIssuedCount,
+          netIssuedWeight: issuePending.netIssuedWeight,
+          receivedCount: issuePending.received.receivedCount,
+          receivedWeight: issuePending.received.receivedWeight,
+          wastageWeight: issuePending.received.wastageWeight,
+          pendingCount: issuePending.pendingCount,
+          pendingWeight: issuePending.pendingWeight,
+        },
+      });
+    }
     if (!date) return res.status(400).json({ error: 'date is required' });
     if (!reason) return res.status(400).json({ error: 'reason is required' });
     if (normalizedLines.length === 0) return res.status(400).json({ error: 'lines must be a non-empty array' });
@@ -3461,7 +3714,7 @@ async function createIssueTakeBackForStage(req, res, stage) {
       if (badWeight) return res.status(400).json({ error: `Invalid weight for source ${badWeight.sourceId}` });
     }
 
-    const txResult = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.${stage}.takeback.create`, async (tx) => {
       const issue = await loadIssueForTakeBack(tx, stage, issueId);
       if (!issue) {
         throw new Error('Issue not found');
@@ -3561,9 +3814,12 @@ async function createIssueTakeBackForStage(req, res, stage) {
 
       return { issue, created };
     });
+    const txResult = idempotentResult.result;
 
-    const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.created);
-    sendNotification(getTakeBackEventName(stage, 'created'), payload);
+    if (!idempotentResult.replay) {
+      const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.created);
+      sendNotification(getTakeBackEventName(stage, 'created'), payload);
+    }
 
     const issuePending = await getIssuePending(prisma, stage, txResult.issue);
     return res.json({
@@ -3600,7 +3856,6 @@ async function reverseIssueTakeBack(req, res) {
     const note = req.body?.note ? String(req.body.note).trim() : null;
 
     if (!takeBackId) return res.status(400).json({ error: 'Missing take-back id' });
-
     const baseRecord = await prisma.issueTakeBack.findUnique({
       where: { id: takeBackId },
       select: { stage: true },
@@ -3612,8 +3867,20 @@ async function reverseIssueTakeBack(req, res) {
     if (!hasPermissionLevel(req, permissionKey, PERM_READ) || !hasPermissionLevel(req, `${permissionKey}.delete`, PERM_READ)) {
       return res.status(403).json({ error: 'forbidden' });
     }
+    const replay = await readLegacyIdempotencyResult(req, `legacy.${stage}.takeback.reverse`);
+    if (replay !== undefined) return res.json({ ok: true, issue_take_back: replay.reversed });
 
-    const txResult = await prisma.$transaction(async (tx) => {
+    if (stage === 'coning') {
+      try {
+        await assertAffectedWriteAllowed('reconing');
+      } catch (error) {
+        const response = writeGateErrorResponse(error);
+        if (response) return res.status(response.statusCode).json(response.body);
+        throw error;
+      }
+    }
+
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.${stage}.takeback.reverse`, async (tx) => {
       const original = await tx.issueTakeBack.findUnique({
         where: { id: takeBackId },
         include: { lines: true },
@@ -3692,9 +3959,12 @@ async function reverseIssueTakeBack(req, res) {
 
       return { issue, reversed };
     });
+    const txResult = idempotentResult.result;
 
-    const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.reversed);
-    sendNotification(getTakeBackEventName(stage, 'reversed'), payload);
+    if (!idempotentResult.replay) {
+      const payload = await buildIssueTakeBackNotificationPayload(txResult.issue, txResult.reversed);
+      sendNotification(getTakeBackEventName(stage, 'reversed'), payload);
+    }
     return res.json({ ok: true, issue_take_back: txResult.reversed });
   } catch (err) {
     console.error('Failed to reverse take-back', err);
@@ -4092,6 +4362,7 @@ router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stoc
           status: 'consumed',
           seq: 1,
           barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+          isOpeningStock: true,
           ...actorCreateFields(actorUserId),
         },
       });
@@ -4640,6 +4911,7 @@ router.post('/api/opening_stock/coning_receive', requirePermission('opening_stoc
             notes: row.notes || null,
             date,
             createdBy: 'opening',
+            isOpeningStock: true,
             ...actorCreateFields(actorUserId),
           },
         });
@@ -5572,6 +5844,7 @@ async function processOpeningCutterUpload(rows, { date, itemId, firmId, supplier
       data: {
         id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
         status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        isOpeningStock: true,
         ...actorCreateFields(actorUserId),
       },
     });
@@ -5664,6 +5937,7 @@ async function processOpeningHoloUpload(rows, { date, itemId, firmId, supplierId
       data: {
         id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
         status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        isOpeningStock: true,
         ...actorCreateFields(actorUserId),
       },
     });
@@ -5786,6 +6060,7 @@ async function processOpeningConingUpload(rows, { date, itemId, firmId, supplier
       data: {
         id: pieceId, lotNo, itemId, weight: roundTo3Decimals(totalNetWeight),
         status: 'consumed', seq: 1, barcode: makeInboundBarcode({ lotNo, seq: 1 }),
+        isOpeningStock: true,
         ...actorCreateFields(actorUserId),
       },
     });
@@ -5820,7 +6095,7 @@ async function processOpeningConingUpload(rows, { date, itemId, firmId, supplier
           coneCount: crate.coneCount, coneWeight: crate.netWeight,
           grossWeight: crate.grossWeight, tareWeight: crate.tareWeight, netWeight: crate.netWeight,
           boxId: crate.boxId, barcode: makeConingReceiveBarcode({ series: seriesNumber, crateIndex }),
-          notes: crate.notes, ...actorCreateFields(actorUserId),
+          notes: crate.notes, isOpeningStock: true, ...actorCreateFields(actorUserId),
         }
       });
     }
@@ -6140,8 +6415,8 @@ router.get('/api/whatsapp/contacts', requirePermission('send_documents', PERM_RE
   try {
     const contacts = await whatsapp.getContacts();
     // Filter out groups if needed, but for now user said "all numbers"
-    // We typically want only individual contacts for "Send Documents", but maybe user wants groups too? 
-    // The previous implementation used "Customer" which implies individuals. 
+    // We typically want only individual contacts for "Send Documents", but maybe user wants groups too?
+    // The previous implementation used "Customer" which implies individuals.
     // Let's filter out groups by default to be safe, or include them if distinguishable.
     // Spec said "numbers of logged in whatsapp account", usually implies contacts.
     const individualContacts = contacts.filter(c => !c.isGroup && c.hasSavedName && /[A-Za-z]/.test(c.name || '') && !c.id.endsWith('@lid'));
@@ -9887,6 +10162,8 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
 router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.reconing.issue.create');
+    if (replay !== undefined) return res.json({ ok: true, issueToConingMachine: replay });
     const { date, machineId, operatorId, note, crates, requiredPerConeNetWeight: reqPerConeWt, shift } = req.body || {};
     if (!date) return res.status(400).json({ error: 'Missing date' });
     const crateRows = Array.isArray(crates) ? crates : [];
@@ -9921,6 +10198,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       : [];
 
     const matchedConingRowIds = new Set(coningRows.map((row) => row.id));
+    const coningRowsById = new Map(coningRows.map((row) => [row.id, row]));
     const pendingRowIds = rowIds.filter((id) => !matchedConingRowIds.has(id));
 
     const holoWhere = [];
@@ -10214,7 +10492,23 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
       : 0;
 
-    const created = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.reconing.issue.create', async (tx) => {
+      const coningSourceTotals = new Map();
+      for (const crate of preparedCrates) {
+        if (!coningRowsById.has(crate.rowId)) continue;
+        const current = coningSourceTotals.get(crate.rowId) || { count: 0, weight: 0 };
+        current.count += Number(crate.issueRolls || 0);
+        current.weight += Number(crate.issueWeight || 0);
+        coningSourceTotals.set(crate.rowId, current);
+      }
+      if (coningSourceTotals.size > 0) {
+        const coningSourceIds = Array.from(coningSourceTotals.keys()).sort();
+        await lockConingSources(tx, coningSourceIds);
+        for (const sourceId of coningSourceIds) {
+          const requested = coningSourceTotals.get(sourceId);
+          await assertConingAvailability(tx, sourceId, requested.count, requested.weight);
+        }
+      }
       await ensureConingIssueSequence(tx, actorUserId);
       // Get next Coning issue series number
       const coningSeq = await tx.coningIssueSequence.upsert({
@@ -10245,6 +10539,11 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         },
       });
     });
+    const created = idempotentResult.result;
+
+    if (idempotentResult.replay) {
+      return res.json({ ok: true, issueToConingMachine: created });
+    }
 
     await logCrudWithActor(req, {
       entityType: 'issue_to_coning_machine',
@@ -10294,6 +10593,8 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
 router.post('/api/receive_from_coning_machine/manual', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.reconing.receive.manual');
+    if (replay !== undefined) return res.json({ ok: true, row: replay.createdRow });
     const {
       issueId,
       pieceId: rawPieceId,
@@ -10336,51 +10637,77 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
 
-    const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
-    const crateIndex = existingCount + 1;
     const issueSeriesNumber = parseConingSeries(issue.barcode);
     if (!issueSeriesNumber) {
       return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Coning receive series.' });
     }
-    const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.reconing.receive.manual', async (tx) => {
+      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, issue, netWeight);
+      const sourceIds = Array.from(new Set(sourceRowRefs.map((ref) => ref?.rowId).filter(Boolean)));
+      const sourceRows = sourceIds.length
+        ? await tx.receiveFromConingMachineRow.findMany({ where: { id: { in: sourceIds }, isDeleted: false }, select: { id: true } })
+        : [];
+      const coningSourceIds = sourceRows.map((row) => row.id).sort();
+      if (coningSourceIds.length > 0) {
+        await lockConingSources(tx, coningSourceIds);
+        const requestedBySource = new Map();
+        sourceRowRefs.forEach((ref) => {
+          if (!coningSourceIds.includes(ref?.rowId)) return;
+          const current = requestedBySource.get(ref.rowId) || { count: 0, weight: 0 };
+          current.count += Number(ref.issueRolls ?? ref.rolls ?? 0);
+          current.weight += Number(ref.issueWeight ?? ref.weight ?? 0);
+          requestedBySource.set(ref.rowId, current);
+        });
+        for (const sourceId of coningSourceIds) {
+          const requested = requestedBySource.get(sourceId) || { count: 0, weight: 0 };
+          await assertConingAvailability(tx, sourceId, requested.count, requested.weight);
+        }
+      }
 
-    const sourceRowRefs = await computeConingReceiveSourceRowRefs(prisma, issue, netWeight);
-    const createdRow = await prisma.receiveFromConingMachineRow.create({
-      data: {
-        issueId,
-        coneCount,
-        barcode,
-        coneWeight: Number(netWeight),
-        netWeight: Number(netWeight),
-        tareWeight: Number(tareWeight),
-        grossWeight: Number(grossWeight),
-        sourceRowRefs,
-        boxId: boxId || null,
-        machineNo: machineNo || null,
-        operatorId: operatorId || issue.operatorId || null,
-        helperId: helperId || null,
-        notes: notes || null,
-        date: date || issue.date,
-        createdBy: createdBy || 'manual',
-        ...actorCreateFields(actorUserId),
-      },
+      const existingCount = await tx.receiveFromConingMachineRow.count({ where: { issueId } });
+      const crateIndex = existingCount + 1;
+      const nextBarcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
+      const nextRow = await tx.receiveFromConingMachineRow.create({
+        data: {
+          issueId,
+          coneCount,
+          barcode: nextBarcode,
+          coneWeight: Number(netWeight),
+          netWeight: Number(netWeight),
+          tareWeight: Number(tareWeight),
+          grossWeight: Number(grossWeight),
+          sourceRowRefs,
+          boxId: boxId || null,
+          machineNo: machineNo || null,
+          operatorId: operatorId || issue.operatorId || null,
+          helperId: helperId || null,
+          notes: notes || null,
+          date: date || issue.date,
+          createdBy: createdBy || 'manual',
+          ...actorCreateFields(actorUserId),
+        },
+      });
+      await tx.receiveFromConingMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalCones: { increment: coneCount },
+          totalNetWeight: { increment: netWeight || 0 },
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId,
+          totalCones: coneCount,
+          totalNetWeight: netWeight || 0,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+      return { createdRow: nextRow, barcode: nextBarcode };
     });
-    await prisma.receiveFromConingMachinePieceTotal.upsert({
-      where: { pieceId },
-      update: {
-        totalCones: { increment: coneCount },
-        totalNetWeight: { increment: netWeight || 0 },
-        ...actorUpdateFields(actorUserId),
-      },
-      create: {
-        pieceId,
-        totalCones: coneCount,
-        totalNetWeight: netWeight || 0,
-        wastageNetWeight: 0,
-        ...actorCreateFields(actorUserId),
-      },
-    });
+    const { createdRow, barcode } = idempotentResult.result;
     res.json({ ok: true, row: createdRow });
+
+    if (idempotentResult.replay) return;
 
     // Notify receive_from_coning_machine created
     try {
@@ -10428,6 +10755,8 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
     if (!issueId || typeof issueId !== 'string') {
       return res.status(400).json({ error: 'Missing issueId' });
     }
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.reconing.wastage.mark');
+    if (replay !== undefined) return res.json(replay);
 
     // 1. Fetch coning issue
     const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
@@ -10469,7 +10798,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
     }
 
     // 5. Upsert wastage + record event inside transaction
-    const { updated, event } = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.reconing.wastage.mark', async (tx) => {
       await tx.receiveFromConingMachinePieceTotal.upsert({
         where: { pieceId: issueId },
         update: {
@@ -10489,8 +10818,18 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
         where: { pieceId: issueId },
         data: { lastWastageEventId: eventRow.id },
       });
-      return { updated: after, event: eventRow };
+      return {
+        ok: true,
+        issueId,
+        marked: remaining,
+        note,
+        updated: after,
+        eventId: eventRow.id,
+      };
     });
+    const responseBody = idempotentResult.result;
+    const updated = responseBody.updated;
+    const event = { id: responseBody.eventId };
 
     // 6. Send WhatsApp notification
     try {
@@ -10521,7 +10860,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       payload: { action: 'mark_wastage', marked: remaining, note, eventId: event.id },
     });
 
-    res.json({ ok: true, issueId, marked: remaining, note, updated, eventId: event.id });
+    res.json(responseBody);
   } catch (err) {
     console.error('Failed to mark coning wastage', err);
     res.status(500).json({ error: err.message || 'Failed to mark coning wastage' });
@@ -10534,6 +10873,8 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
   try {
     const { issueId } = req.body || {};
     if (!issueId || typeof issueId !== 'string') return res.status(400).json({ error: 'Missing issueId' });
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.reconing.wastage.revert');
+    if (replay !== undefined) return res.json(replay);
     const reason = normalizeWastageReason(req.body?.reason);
     if (!reason || reason.length < WASTAGE_REASON_MIN) {
       return res.status(400).json({ error: `Reason is required (min ${WASTAGE_REASON_MIN} chars)` });
@@ -10562,8 +10903,9 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
 
     let updated;
     let revertEvent;
+    let responseBody;
     try {
-      ({ updated, revertEvent } = await prisma.$transaction(async (tx) => {
+      const idempotentResult = await runLegacyIdempotent(req, 'legacy.reconing.wastage.revert', async (tx) => {
         const guard = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
         if (!guard || guard.lastWastageEventId !== markEvent.id) {
           if (markEvent.synthetic && (!guard?.lastWastageEventId)) {
@@ -10589,8 +10931,19 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
           note,
           reversedEventId: markEvent.id,
         });
-        return { updated: after, revertEvent: ev };
-      }));
+        return {
+          ok: true,
+          issueId,
+          reverted: decrementBy,
+          reason,
+          note,
+          updated: after,
+          eventId: ev.id,
+        };
+      });
+      responseBody = idempotentResult.result;
+      updated = responseBody.updated;
+      revertEvent = { id: responseBody.eventId };
     } catch (err) {
       if (err && (err.code === 'P2002' || /reversedEventId/i.test(String(err.message)))) {
         return res.status(409).json({ error: 'This wastage has already been reverted' });
@@ -10622,7 +10975,7 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
       payload: { reverted: decrementBy, reason, note, markEventId: markEvent.id, revertEventId: revertEvent.id, legacyRevert: !!markEvent.synthetic },
     });
 
-    res.json({ ok: true, issueId, reverted: decrementBy, reason, note, updated, eventId: revertEvent.id });
+    res.json(responseBody);
   } catch (err) {
     console.error('Failed to revert coning wastage', err);
     res.status(500).json({ error: err.message || 'Failed to revert coning wastage' });
@@ -10634,6 +10987,8 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
     const actorUserId = req.user?.id;
     const { id } = req.params;
     if (!id) return res.status(400).json({ error: 'Missing receive row id' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.reconing.receive.update:${id}`);
+    if (replay !== undefined) return res.json({ ok: true, row: replay });
 
     const row = await prisma.receiveFromConingMachineRow.findUnique({
       where: { id },
@@ -10714,7 +11069,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
     const deltaCones = coneCount - prevConeCount;
 
     const pieceId = row.issueId;
-    const updated = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.reconing.receive.update:${id}`, async (tx) => {
       // Rows already paid in a contractor settlement cannot be edited here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
@@ -10761,6 +11116,9 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
 
       return updatedRow;
     });
+    const updated = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json({ ok: true, row: updated });
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_coning_machine_row',
@@ -10789,6 +11147,8 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
     const actorUserId = req.user?.id;
     const { id } = req.params;
     if (!id) return res.status(400).json({ error: 'Missing receive row id' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.reconing.receive.delete:${id}`);
+    if (replay !== undefined) return res.json({ ok: true });
 
     const row = await prisma.receiveFromConingMachineRow.findUnique({
       where: { id },
@@ -10821,7 +11181,7 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
     const deltaCones = -prevConeCount;
 
     const pieceId = row.issueId;
-    const deleted = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.reconing.receive.delete:${id}`, async (tx) => {
       // Rows already paid in a contractor settlement cannot be deleted here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
@@ -10857,6 +11217,9 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
 
       return updatedRow;
     });
+    const deleted = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json({ ok: true });
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_coning_machine_row',
@@ -12923,6 +13286,8 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
+    const replay = await readLegacyIdempotencyResult(req, `legacy.reconing.issue.update:${id}`);
+    if (replay !== undefined) return res.json({ ok: true, issueToConingMachine: replay });
     const {
       date,
       machineId,
@@ -12970,7 +13335,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
 
     let updatedIssue = issueRecord;
 
-    await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.reconing.issue.update:${id}`, async (tx) => {
       // Frozen once any dependent receive row is paid (incl. re-coning
       // children); corrections go through the paid-edit workflow.
       await assertIssueEditable(tx, 'coning', id);
@@ -13345,7 +13710,11 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
           data: { ...data, ...actorUpdateFields(actorUserId) },
         });
       }
+      return updatedIssue;
     });
+    updatedIssue = idempotentResult.result || updatedIssue;
+
+    if (idempotentResult.replay) return res.json({ ok: true, issueToConingMachine: updatedIssue });
 
     await logCrudWithActor(req, {
       entityType: 'issue_to_coning_machine',
@@ -13572,6 +13941,8 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
   try {
     const actorUserId = req.user?.id;
     const { id } = req.params;
+    const replay = await readLegacyIdempotencyResult(req, `legacy.reconing.issue.delete:${id}`);
+    if (replay !== undefined) return res.json({ ok: true });
 
     // Find the issue record
     const issueRecord = await prisma.issueToConingMachine.findFirst({
@@ -13595,7 +13966,7 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
     }
 
     // Use transaction to ensure atomicity
-    await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.reconing.issue.delete:${id}`, async (tx) => {
       // Frozen once any dependent receive row is paid (incl. re-coning
       // children); use paid-edit instead.
       await assertIssueEditable(tx, 'coning', id);
@@ -13619,7 +13990,9 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
         },
         client: tx,
       });
+      return { ok: true };
     });
+    if (idempotentResult.replay) return res.json({ ok: true });
 
     res.json({ ok: true });
     // Notify issue_to_coning_machine deleted
@@ -14174,9 +14547,14 @@ router.get('/api/disk-usage', requirePermission('settings', PERM_READ), async (r
 
 // ========== CUSTOMER ENDPOINTS ==========
 
-router.get('/api/customers', requirePermission('masters', PERM_READ), async (req, res) => {
+router.get('/api/customers', (req, res, next) => {
+  if (req.user?.isAdmin || hasAnyReadPermission(req, ['dispatch', 'packing', 'stock', 'reports', 'masters'])) return next();
+  return res.status(403).json({ error: 'forbidden' });
+}, async (req, res) => {
   try {
+    const includeInactive = String(req.query?.includeInactive || '').trim().toLowerCase() === 'true';
     const customers = await prisma.customer.findMany({
+      where: includeInactive && req.user?.isAdmin ? {} : { isActive: true },
       orderBy: { name: 'asc' },
     });
     res.json({ customers });
@@ -14236,6 +14614,10 @@ router.put('/api/customers/:id', requireEditPermission('masters'), async (req, r
     const name = req.body?.name != null ? String(req.body.name).trim() : undefined;
     const phone = req.body?.phone != null ? String(req.body.phone).trim() : undefined;
     const address = req.body?.address != null ? String(req.body.address).trim() : undefined;
+    const hasIsActive = Object.prototype.hasOwnProperty.call(req.body || {}, 'isActive');
+    const isActive = hasIsActive
+      ? (req.body.isActive === true || String(req.body.isActive).trim().toLowerCase() === 'true')
+      : undefined;
 
     const updated = await prisma.customer.update({
       where: { id },
@@ -14243,6 +14625,7 @@ router.put('/api/customers/:id', requireEditPermission('masters'), async (req, r
         ...(name !== undefined ? { name } : {}),
         ...(phone !== undefined ? { phone } : {}),
         ...(address !== undefined ? { address } : {}),
+        ...(isActive !== undefined ? { isActive } : {}),
         ...actorUpdateFields(actor?.userId),
       },
     });
@@ -14269,10 +14652,24 @@ router.delete('/api/customers/:id', requireDeletePermission('masters'), async (r
     const existing = await prisma.customer.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Customer not found' });
 
-    // Check if customer has dispatches
-    const dispatchCount = await prisma.dispatch.count({ where: { customerId: id } });
-    if (dispatchCount > 0) {
-      return res.status(409).json({ error: 'Cannot delete customer with existing dispatches' });
+    // Customer history is append-only across legacy Dispatch, Dispatch V2,
+    // Packing, Packed Stock, recipes, and document records. History-bearing
+    // customers may be deactivated, but never hard-deleted.
+    const [dispatchCount, dispatchChallanCount, packingBatchCount, packedUnitCount, packingRecipeCount, documentMessageCount] = await Promise.all([
+      prisma.dispatch.count({ where: { customerId: id } }),
+      prisma.dispatchChallan.count({ where: { customerId: id } }),
+      prisma.packingBatch.count({ where: { customerId: id } }),
+      prisma.packedUnit.count({ where: { customerId: id } }),
+      prisma.packingRecipe.count({ where: { customerId: id } }),
+      prisma.documentMessage.count({ where: { customerId: id } }),
+    ]);
+    const history = { dispatchCount, dispatchChallanCount, packingBatchCount, packedUnitCount, packingRecipeCount, documentMessageCount };
+    if (Object.values(history).some((count) => count > 0)) {
+      return res.status(409).json({
+        error: 'customer_has_history',
+        message: 'Customers with operational history cannot be deleted. Deactivate the customer instead.',
+        details: history,
+      });
     }
 
     await prisma.customer.delete({ where: { id } });
@@ -14691,6 +15088,10 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
     const EPSILON = 1e-9;
     let items = [];
 
+    // Coning remains readable through historical Dispatch records, but is no
+    // longer a selectable source for new legacy Dispatch operations.
+    if (stage === 'coning') return res.json({ items: [] });
+
     if (stage === 'inbound') {
       // Get inbound items with remaining weight (weight - dispatchedWeight > 0)
       const inboundItems = await prisma.inboundItem.findMany({
@@ -14863,21 +15264,15 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
         include: { issue: true },
         orderBy: { createdAt: 'desc' },
       });
-      items = coningRows
-        .map(row => {
+      items = (await Promise.all(coningRows.map(async (row) => {
           const crateIndex = parseReceiveCrateIndex(row.barcode);
           const legacyBarcode = buildLegacyReceiveBarcode('RCO', row.issue?.lotNo, crateIndex);
           const netWeight = row.netWeight || 0;
           const totalCount = row.coneCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
-          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
-          const availableCount = calcAvailableCountFromWeight({
-            totalCount,
-            issuedCount: 0,
-            dispatchedCount,
-            totalWeight: netWeight,
-            availableWeight,
-          }) || 0;
+          const balance = await getConingAvailability(prisma, row.id);
+          const availableWeight = Number(balance.available?.weight || 0);
+          const availableCount = Number(balance.available?.count || 0);
           const avgWeightPerPiece = availableCount > 0
             ? (availableWeight / availableCount)
             : 0;
@@ -14897,7 +15292,7 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
             availableCount: availableCount,
             avgWeightPerPiece: roundTo3Decimals(avgWeightPerPiece),
           };
-        })
+        })))
         .filter(item => item.availableWeight > EPSILON || item.availableCount > 0);
       items = dropDuplicateLegacyBarcodes(items);
     } else {
@@ -15011,18 +15406,12 @@ async function getDispatchSourceAvailability(tx, stage, stageItemId) {
   }
 
   if (stage === 'coning') {
-    const sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
-    if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
-    const totalWeight = Number(sourceItem.netWeight || 0);
-    const availableWeight = Math.max(0, totalWeight - Number(sourceItem.dispatchedWeight || 0));
-    const availableCount = calcAvailableCountFromWeight({
-      totalCount: Number(sourceItem.coneCount || 0),
-      issuedCount: 0,
-      dispatchedCount: Number(sourceItem.dispatchedCount || 0),
-      totalWeight,
-      availableWeight,
-    }) || 0;
-    return { availableWeight, availableCount };
+    await lockConingSources(tx, [stageItemId]);
+    const balance = await getConingAvailability(tx, stageItemId);
+    return {
+      availableWeight: Number(balance.available?.weight || 0),
+      availableCount: Number(balance.available?.count || 0),
+    };
   }
 
   throw new Error('Invalid stage');
@@ -15061,8 +15450,10 @@ router.put('/api/dispatch/:id', requireEditPermission('dispatch'), async (req, r
     const actor = getActor(req);
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Dispatch id is required' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.dispatch.update:${id}`);
+    if (replay !== undefined) return res.json({ dispatch: replay });
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.dispatch.update:${id}`, async (tx) => {
       const existing = await tx.dispatch.findUnique({ where: { id } });
       if (!existing) throw new Error('Dispatch not found');
 
@@ -15125,6 +15516,9 @@ router.put('/api/dispatch/:id', requireEditPermission('dispatch'), async (req, r
         include: { customer: true },
       });
     });
+    const updated = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json({ dispatch: updated });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15152,11 +15546,13 @@ router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch')
     const actor = getActor(req);
     const challanNo = String(req.params.challanNo || '').trim();
     if (!challanNo) return res.status(400).json({ error: 'Challan number is required' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.dispatch.update-challan:${challanNo}`);
+    if (replay !== undefined) return res.json(replay);
 
     const payloadRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (payloadRows.length === 0) return res.status(400).json({ error: 'rows must be a non-empty array' });
 
-    const result = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.dispatch.update-challan:${challanNo}`, async (tx) => {
       const existingRows = await tx.dispatch.findMany({
         where: { challanNo },
         include: { customer: true },
@@ -15233,6 +15629,11 @@ router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch')
         deltaBySource.set(key, current);
       });
 
+      const coningDeltaSourceIds = Array.from(deltaBySource.values())
+        .filter((entry) => entry.stage === 'coning')
+        .map((entry) => entry.stageItemId);
+      if (coningDeltaSourceIds.length > 0) await lockConingSources(tx, coningDeltaSourceIds);
+
       for (const entry of deltaBySource.values()) {
         const availability = await getDispatchSourceAvailability(tx, entry.stage, entry.stageItemId);
         if (entry.deltaWeight > Number(availability.availableWeight || 0) + 0.001) {
@@ -15271,6 +15672,9 @@ router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch')
       });
       return { dispatches };
     });
+    const result = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json(result);
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15293,6 +15697,8 @@ router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch')
 router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.dispatch.create');
+    if (replay !== undefined) return res.json({ dispatch: replay });
     const { customerId, stage, stageItemId, weight, count, date, notes } = req.body;
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required' });
@@ -15303,16 +15709,20 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
     if (!['inbound', 'cutter', 'holo', 'coning'].includes(stage)) {
       return res.status(400).json({ error: 'Invalid stage' });
     }
+    if (stage === 'coning') {
+      return res.status(410).json({ error: 'coning_dispatch_disabled', message: 'New Coning Dispatch is disabled. Historical Coning Dispatch remains readable.' });
+    }
 
     const dispatchDate = date || new Date().toISOString().split('T')[0];
 
     // Verify customer exists (can be outside transaction as it's read-only)
     const customer = await prisma.customer.findUnique({ where: { id: customerId } });
     if (!customer) return res.status(400).json({ error: 'Customer not found' });
+    if (customer.isActive === false) return res.status(400).json({ error: 'Inactive customers cannot receive new Dispatches' });
 
     // IMPORTANT: All source item validation and updates must be inside transaction
     // to prevent race conditions where two concurrent requests could over-dispatch
-    const dispatch = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.dispatch.create', async (tx) => {
       let sourceItem;
       let stageBarcode = '';
       let availableWeight = 0;
@@ -15460,6 +15870,9 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
 
       return created;
     });
+    const dispatch = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json({ dispatch });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15479,6 +15892,8 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
 router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.dispatch.create-bulk');
+    if (replay !== undefined) return res.json(replay);
     const { customerId, stage, date, notes, items } = req.body;
 
     if (!customerId) return res.status(400).json({ error: 'Customer is required' });
@@ -15489,16 +15904,23 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
     if (!['inbound', 'cutter', 'holo', 'coning'].includes(stage)) {
       return res.status(400).json({ error: 'Invalid stage' });
     }
+    if (stage === 'coning') {
+      return res.status(410).json({ error: 'coning_dispatch_disabled', message: 'New Coning Dispatch is disabled. Historical Coning Dispatch remains readable.' });
+    }
 
     const dispatchDate = date || new Date().toISOString().split('T')[0];
 
     const customer = await prisma.customer.findUnique({ where: { id: customerId } });
     if (!customer) return res.status(400).json({ error: 'Customer not found' });
+    if (customer.isActive === false) return res.status(400).json({ error: 'Inactive customers cannot receive new Dispatches' });
 
-    const result = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.dispatch.create-bulk', async (tx) => {
       const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
       const adjustments = new Map();
       const created = [];
+      if (stage === 'coning') {
+        await lockConingSources(tx, items.map((item) => item?.stageItemId).filter(Boolean));
+      }
 
       for (const item of items) {
         const stageItemId = item?.stageItemId;
@@ -15556,10 +15978,9 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
           sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
           if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
           stageBarcode = sourceItem.barcode || '';
-          availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
-          const totalCount = sourceItem.coneCount || 0;
-          const dispatchedCount = sourceItem.dispatchedCount || 0;
-          availableCount = Math.max(0, totalCount - dispatchedCount);
+          const balance = await getConingAvailability(tx, stageItemId);
+          availableWeight = Number(balance.available?.weight || 0);
+          availableCount = Number(balance.available?.count || 0);
           avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
         }
 
@@ -15644,6 +16065,9 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
 
       return { challanNo, dispatches: created };
     });
+    const result = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json(result);
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15664,12 +16088,17 @@ router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (r
   try {
     const actor = getActor(req);
     const { id } = req.params;
-
-    const existing = await prisma.dispatch.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.dispatch.delete:${id}`);
+    if (replay !== undefined) return res.json({ ok: true });
 
     // Delete dispatch and restore weight in transaction
-    await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.dispatch.delete:${id}`, async (tx) => {
+      const existing = await tx.dispatch.findUnique({ where: { id } });
+      if (!existing) {
+        const error = new Error('Dispatch not found');
+        error.statusCode = 404;
+        throw error;
+      }
       await tx.dispatch.delete({ where: { id } });
 
       // Restore dispatchedWeight on source item
@@ -15704,7 +16133,11 @@ router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (r
           data: updateData,
         });
       }
+      return existing;
     });
+    const existing = idempotentResult.result;
+
+    if (idempotentResult.replay) return res.json({ ok: true });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15716,6 +16149,7 @@ router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (r
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete dispatch', err);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     res.status(500).json({ error: err.message || 'Failed to delete dispatch' });
   }
 });
@@ -15726,11 +16160,16 @@ router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispa
     const actor = getActor(req);
     const { challanNo } = req.params;
     if (!challanNo) return res.status(400).json({ error: 'Challan number is required' });
+    const replay = await readLegacyIdempotencyResult(req, `legacy.dispatch.delete-challan:${challanNo}`);
+    if (replay !== undefined) return res.json({ ok: true });
 
-    const rows = await prisma.dispatch.findMany({ where: { challanNo } });
-    if (rows.length === 0) return res.status(404).json({ error: 'Challan not found' });
-
-    await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, `legacy.dispatch.delete-challan:${challanNo}`, async (tx) => {
+      const rows = await tx.dispatch.findMany({ where: { challanNo } });
+      if (rows.length === 0) {
+        const error = new Error('Challan not found');
+        error.statusCode = 404;
+        throw error;
+      }
       for (const row of rows) {
         const { stage, stageItemId, weight, count } = row;
         const updateData = {
@@ -15765,7 +16204,11 @@ router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispa
       }
 
       await tx.dispatch.deleteMany({ where: { challanNo } });
+      return { rows };
     });
+    const rows = idempotentResult.result.rows || [];
+
+    if (idempotentResult.replay) return res.json({ ok: true });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -15777,6 +16220,7 @@ router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispa
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to delete dispatch challan', err);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     res.status(500).json({ error: err.message || 'Failed to delete dispatch challan' });
   }
 });
@@ -17064,7 +17508,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
           await traceFromInbound(firstPiece, history);
         }
       } else {
-        // Just add cutter issue  
+        // Just add cutter issue
         history.lineage.push({
           stage: 'cutter_issue',
           date: issue.date,
@@ -17214,9 +17658,9 @@ router.get('/api/reports/production', requirePermission('reports', PERM_READ), a
         if (process === 'cutter') {
           report.data = Array.from(byMachine.values());
         } else if (!process || process === 'all') {
-          // For 'All Processes', we can't easily mix machine-wise data from different stages 
+          // For 'All Processes', we can't easily mix machine-wise data from different stages
           // because the fields differ. However, we can push normalized objects or simply allow the UI to handle it.
-          // A better approach for "All Processes" is to perhaps NOT show the detailed table, 
+          // A better approach for "All Processes" is to perhaps NOT show the detailed table,
           // OR show a combined list if the UI supports it.
           // Given the current UI structure, let's try to populate report.data with a generic structure
           // identifying the process.
@@ -17410,7 +17854,7 @@ router.get('/api/reports/production', requirePermission('reports', PERM_READ), a
         },
       });
 
-      // Calculate coning issued weight by summing up requiredPerConeNetWeight * expectedCones  
+      // Calculate coning issued weight by summing up requiredPerConeNetWeight * expectedCones
       // or we can use rollsIssued and lookup the actual roll weights
       // Simpler approach: use expectedCones * requiredPerConeNetWeight as the target input
       let totalConingIssued = 0;
@@ -18568,6 +19012,8 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
 router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), async (req, res) => {
   try {
     const actor = getActor(req);
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.stock.box-transfer.create');
+    if (replay !== undefined) return res.json({ ok: true, transfer: replay });
     const fromBarcode = normalizeBarcodeInput(req.body?.fromBarcode);
     const toBarcode = normalizeBarcodeInput(req.body?.toBarcode);
     const pieceCount = toInt(req.body?.pieceCount);
@@ -18602,7 +19048,7 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
 
     const today = new Date().toISOString().split('T')[0];
 
-    const result = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.stock.box-transfer.create', async (tx) => {
       const EPSILON = 1e-9;
 
       // A transfer rewrites net weight on both rows — refuse when either row
@@ -18691,16 +19137,10 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         if (!sourceRow || sourceRow.isDeleted) throw new Error('Source item not found');
 
         // Re-validate availability inside transaction to prevent race condition
-        const srcTotalNetWeight = Number(sourceRow.netWeight || 0);
-        const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
-        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
-        const srcAvailableCones = calcAvailableCountFromWeight({
-          totalCount: sourceRow.coneCount || 0,
-          issuedCount: 0,
-          dispatchedCount: sourceRow.dispatchedCount || 0,
-          totalWeight: srcTotalNetWeight,
-          availableWeight: srcAvailableWeight,
-        }) || 0;
+        await lockConingSources(tx, [lookupFrom.itemId, lookupTo.itemId]);
+        const sourceBalance = await getConingAvailability(tx, lookupFrom.itemId);
+        const srcAvailableWeight = Number(sourceBalance.available?.weight || 0);
+        const srcAvailableCones = Number(sourceBalance.available?.count || 0);
 
         if (pieceCount > srcAvailableCones) {
           throw new Error(`Insufficient cones available. Only ${srcAvailableCones} available (may have been dispatched).`);
@@ -18710,7 +19150,7 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         }
 
         const newConeCount = sourceRow.coneCount - pieceCount;
-        const newNetWeight = srcTotalNetWeight - weightTransferred;
+        const newNetWeight = Number(sourceRow.netWeight || 0) - weightTransferred;
         await tx.receiveFromConingMachineRow.update({
           where: { id: lookupFrom.itemId },
           data: { coneCount: newConeCount, netWeight: roundTo3Decimals(Math.max(0, newNetWeight)), ...actorUpdateFields(actor?.userId) },
@@ -18814,20 +19254,23 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
 
       return transfer;
     });
+    const result = idempotentResult.result;
 
-    await logCrudWithActor(req, {
-      entityType: 'boxTransfer',
-      entityId: result.id,
-      action: 'create',
-      payload: {
-        stage,
-        fromBarcode,
-        toBarcode,
-        pieceCount,
-        weightTransferred,
-        notes,
-      },
-    });
+    if (!idempotentResult.replay) {
+      await logCrudWithActor(req, {
+        entityType: 'boxTransfer',
+        entityId: result.id,
+        action: 'create',
+        payload: {
+          stage,
+          fromBarcode,
+          toBarcode,
+          pieceCount,
+          weightTransferred,
+          notes,
+        },
+      });
+    }
 
     res.json({ ok: true, transfer: result });
   } catch (err) {
@@ -18883,6 +19326,8 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
   try {
     const actor = getActor(req);
     const { id } = req.params;
+    const replay = await readLegacyIdempotencyResult(req, 'legacy.stock.box-transfer.reverse');
+    if (replay !== undefined) return res.json({ ok: true, reverseTransfer: replay });
 
     const original = await prisma.boxTransfer.findUnique({ where: { id } });
     if (!original) return res.status(404).json({ error: 'Transfer not found' });
@@ -18891,7 +19336,7 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
     const today = new Date().toISOString().split('T')[0];
     const { stage, pieceCount, weightTransferred } = original;
 
-    const result = await prisma.$transaction(async (tx) => {
+    const idempotentResult = await runLegacyIdempotent(req, 'legacy.stock.box-transfer.reverse', async (tx) => {
       // A reversal rewrites net weight on both rows — refuse when either row
       // is already paid in a contractor settlement, and serialize against an
       // in-flight Mark Paid via the same row locks.
@@ -18967,9 +19412,15 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
           throw new Error('Original items not found');
         }
 
+        await lockConingSources(tx, [original.fromItemId, original.toItemId]);
+        const destinationBalance = await getConingAvailability(tx, original.toItemId);
+
         // Validate destination has sufficient pieces to reverse
-        if (destRow.coneCount < pieceCount) {
-          throw new Error(`Cannot reverse: destination only has ${destRow.coneCount} cones, but ${pieceCount} are needed. The pieces may have been dispatched or transferred elsewhere.`);
+        if (pieceCount > Number(destinationBalance.available?.count || 0)) {
+          throw new Error(`Cannot reverse: destination only has ${Number(destinationBalance.available?.count || 0)} cones available, but ${pieceCount} are needed. The pieces may have been dispatched, packed, or transferred elsewhere.`);
+        }
+        if (Number(weightTransferred || 0) > Number(destinationBalance.available?.weight || 0) + 0.001) {
+          throw new Error(`Cannot reverse: destination only has ${Number(destinationBalance.available?.weight || 0).toFixed(3)} kg available, but ${Number(weightTransferred || 0).toFixed(3)} kg are needed.`);
         }
 
         await tx.receiveFromConingMachineRow.update({
@@ -19073,13 +19524,16 @@ router.post('/api/box-transfer/:id/reverse', requirePermission('box_transfer', P
 
       return reverseTransfer;
     });
+    const result = idempotentResult.result;
 
-    await logCrudWithActor(req, {
-      entityType: 'boxTransfer',
-      entityId: result.id,
-      action: 'reverse',
-      payload: { originalTransferId: id },
-    });
+    if (!idempotentResult.replay) {
+      await logCrudWithActor(req, {
+        entityType: 'boxTransfer',
+        entityId: result.id,
+        action: 'reverse',
+        payload: { originalTransferId: id },
+      });
+    }
 
     res.json({ ok: true, reverseTransfer: result });
   } catch (err) {
@@ -19116,17 +19570,14 @@ async function lookupBarcodeForTransfer(barcode) {
     }
     if (legacyResolved.stage === 'coning') {
       const coningRow = legacyResolved.row;
-      const totalNetWeight = Number(coningRow.netWeight || 0);
-      const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-      const availableCones = calcAvailableCountFromWeight({
-        totalCount: coningRow.coneCount || 0,
-        issuedCount: 0,
-        dispatchedCount: coningRow.dispatchedCount || 0,
-        totalWeight: totalNetWeight,
-        availableWeight,
-      }) || 0;
-      return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
+      const balance = await getConingAvailability(prisma, coningRow.id);
+      return {
+        found: true,
+        stage: 'coning',
+        itemId: coningRow.id,
+        currentCount: Number(balance.available?.count || 0),
+        currentWeight: roundTo3Decimals(Number(balance.available?.weight || 0)),
+      };
     }
   }
 
@@ -19162,17 +19613,14 @@ async function lookupBarcodeForTransfer(barcode) {
     return { found: false };
   }
   if (coningRow) {
-    const totalNetWeight = Number(coningRow.netWeight || 0);
-    const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
-    const availableCones = calcAvailableCountFromWeight({
-      totalCount: coningRow.coneCount || 0,
-      issuedCount: 0,
-      dispatchedCount: coningRow.dispatchedCount || 0,
-      totalWeight: totalNetWeight,
-      availableWeight,
-    }) || 0;
-    return { found: true, stage: 'coning', itemId: coningRow.id, currentCount: availableCones, currentWeight: roundTo3Decimals(availableWeight) };
+    const balance = await getConingAvailability(prisma, coningRow.id);
+    return {
+      found: true,
+      stage: 'coning',
+      itemId: coningRow.id,
+      currentCount: Number(balance.available?.count || 0),
+      currentWeight: roundTo3Decimals(Number(balance.available?.weight || 0)),
+    };
   }
 
   // Try Cutter
@@ -19906,7 +20354,7 @@ async function generateSummaryData(stage, type, dateFrom, dateTo, fromShifts = [
         const steamedDateStr = log.steamedAt.toISOString().split('T')[0];
         const holoRow = log.holoReceiveRowId ? holoRowMap.get(log.holoReceiveRowId) : null;
         const shift = holoRow?.issue?.shift || '';
-        
+
         if (steamedDateStr === finalDateFrom) {
           return fromShifts.includes(shift);
         } else if (steamedDateStr === finalDateTo) {
@@ -20001,7 +20449,7 @@ router.get('/api/summary/:stage/:type', async (req, res) => {
     const { stage, type } = req.params;
     const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
-    
+
     let fromShifts = [];
     const rawFromShifts = req.query.fromShifts || req.query.shifts;
     if (rawFromShifts) {
@@ -20053,7 +20501,7 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
     }
     const dateFrom = req.query.dateFrom || req.body.dateFrom || req.query.date || req.body.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.body.dateTo || req.query.date || req.body.date || getYesterdayDateString();
-    
+
     let fromShifts = [];
     const rawFromShifts = req.query.fromShifts || req.body.fromShifts || req.query.shifts || req.body.shifts;
     if (rawFromShifts) {
@@ -20173,7 +20621,7 @@ router.get('/api/summary/:stage/:type/download', async (req, res) => {
     const { stage, type } = req.params;
     const dateFrom = req.query.dateFrom || req.query.date || getYesterdayDateString();
     const dateTo = req.query.dateTo || req.query.date || getYesterdayDateString();
-    
+
     let fromShifts = [];
     const rawFromShifts = req.query.fromShifts || req.query.shifts;
     if (rawFromShifts) {

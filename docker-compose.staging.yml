@@ -1,0 +1,113 @@
+name: glintex-staging
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${STAGING_DB_NAME:?STAGING_DB_NAME is required}
+      POSTGRES_USER: ${STAGING_DB_USER:?STAGING_DB_USER is required}
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD:?STAGING_DB_PASSWORD is required}
+    volumes:
+      - staging-postgres-data:/var/lib/postgresql/data
+    networks: [staging-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    command: ["node", "src/server.js"]
+    environment:
+      DATABASE_URL: postgresql://${STAGING_DB_USER}:${STAGING_DB_PASSWORD}@db:5432/${STAGING_DB_NAME}
+      SHADOW_DATABASE_URL: postgresql://${STAGING_DB_USER}:${STAGING_DB_PASSWORD}@db:5432/${STAGING_DB_NAME}_shadow
+      PORT: 4000
+      GLINTEX_DEPLOY_SHA: ${GLINTEX_DEPLOY_SHA:?GLINTEX_DEPLOY_SHA is required}
+      GLINTEX_RUNTIME_MODE: staging
+      EXTERNAL_INTEGRATIONS_DISABLED: "true"
+      AUTO_CREATE_ADMIN: "false"
+      BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
+      GOOGLE_DRIVE_CLIENT_ID: ""
+      GOOGLE_DRIVE_CLIENT_SECRET: ""
+      GOOGLE_DRIVE_REDIRECT_URI: ""
+      PERF_LOG: "0"
+    volumes:
+      - ./staging-data/backups:/app/backups
+      - ./staging-data/logs:/app/logs
+    networks: [staging-internal]
+    ports:
+      - "127.0.0.1:${STAGING_BACKEND_PORT:-4102}:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ${STAGING_PUBLIC_URL:?STAGING_PUBLIC_URL is required}
+        VITE_APP_ENVIRONMENT: staging
+    networks: [staging-internal]
+    ports:
+      - "127.0.0.1:${STAGING_FRONTEND_PORT:-4273}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+    restart: unless-stopped
+
+  data-sanitizer:
+    profiles: [tools]
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    command: ["node", "src/scripts/prepareStagingData.mjs"]
+    environment:
+      DATABASE_URL: postgresql://${STAGING_DB_USER}:${STAGING_DB_PASSWORD}@db:5432/${STAGING_DB_NAME}
+      SHADOW_DATABASE_URL: postgresql://${STAGING_DB_USER}:${STAGING_DB_PASSWORD}@db:5432/${STAGING_DB_NAME}_shadow
+      GLINTEX_RUNTIME_MODE: staging
+      EXTERNAL_INTEGRATIONS_DISABLED: "true"
+      STAGING_EXPECTED_DATABASE: ${STAGING_DB_NAME}
+      STAGING_ADMIN_USERNAME: ${STAGING_ADMIN_USERNAME:?STAGING_ADMIN_USERNAME is required}
+      STAGING_EMPLOYEE_USERNAME: ${STAGING_EMPLOYEE_USERNAME:?STAGING_EMPLOYEE_USERNAME is required}
+      STAGING_ADMIN_PASSWORD_FILE: /run/secrets/staging_admin_password
+      STAGING_EMPLOYEE_PASSWORD_FILE: /run/secrets/staging_employee_password
+    secrets:
+      - staging_admin_password
+      - staging_employee_password
+    networks: [staging-internal]
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  staging-internal:
+    name: glintex-staging-internal
+    internal: true
+
+volumes:
+  staging-postgres-data:
+    name: glintex-staging-postgres-data
+
+secrets:
+  staging_admin_password:
+    file: ./staging-secrets/app-admin-password
+  staging_employee_password:
+    file: ./staging-secrets/app-employee-password

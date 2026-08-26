@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { google } from 'googleapis';
 import prisma from '../lib/prisma.js';
+import { assertExternalIntegrationAllowed, externalIntegrationBlock } from './runtimeSafety.js';
 
 const DRIVE_FOLDER_NAME = 'GLINTEX_Backups';
 const DRIVE_SCOPES = [
@@ -182,6 +183,7 @@ async function pruneOldDriveBackups(drive, folderId, keepCount = 3) {
 }
 
 export function createGoogleDriveAuthUrl() {
+  assertExternalIntegrationAllowed('google_drive');
   const oauth2Client = createOAuthClient();
   const state = randomUUID();
   pruneExpiredStates();
@@ -198,6 +200,7 @@ export function createGoogleDriveAuthUrl() {
 }
 
 export async function handleGoogleDriveCallback({ code, state }) {
+  assertExternalIntegrationAllowed('google_drive');
   if (!consumeState(state)) {
     throw new Error('Invalid or expired OAuth state. Please try connecting again.');
   }
@@ -276,6 +279,7 @@ export async function getGoogleDriveStatus() {
 }
 
 export async function listDriveBackups() {
+  assertExternalIntegrationAllowed('google_drive');
   const { configured, drive, credential } = await getDriveClient();
 
   if (!configured) {
@@ -318,6 +322,8 @@ export async function listDriveBackups() {
 }
 
 export async function uploadBackupToDrive({ filepath, filename }) {
+  const runtimeBlock = externalIntegrationBlock('google_drive');
+  if (runtimeBlock) return runtimeBlock;
   const { configured, drive, credential } = await getDriveClient();
 
   if (!configured) {

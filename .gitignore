@@ -99,6 +99,17 @@ desktop.ini
 .github/
 .opencode/
 
+# Dispatch V2 QA and staging-local artifacts must never be published.
+qa-evidence/
+screenshots/
+tmp/
+.playwright-mcp/
+*.dump
+*.dump.sha256
+*.htpasswd
+.env.staging
+.env.staging.*
+
 # Project-local agent workflow state
 .agent/
 CLAUDE.md

@@ -17,6 +17,7 @@ export const BASE_PERMISSION_KEYS = [
   'boiler',
   'dispatch',
   'stock',
+  'packing',
   'reports',
   'masters',
   'settings',
@@ -28,7 +29,9 @@ export const BASE_PERMISSION_KEYS = [
 
 export const PERMISSION_KEYS = [
   ...BASE_PERMISSION_KEYS,
-  ...BASE_PERMISSION_KEYS.flatMap(key => ACTION_SUFFIXES.map(action => `${key}.${action}`)),
+  ...BASE_PERMISSION_KEYS
+    .filter(key => key !== 'packing')
+    .flatMap(key => ACTION_SUFFIXES.map(action => `${key}.${action}`)),
 ];
 
 export const DEFAULT_ACCESS_LEVEL = ACCESS_LEVELS.WRITE;
@@ -44,16 +47,21 @@ function toLevel(value, fallback = DEFAULT_ACCESS_LEVEL) {
 export function normalizePermissions(raw, options = {}) {
   let baseDefault = DEFAULT_ACCESS_LEVEL;
   let actionDefault = ACCESS_LEVELS.NONE;
+  let adminDefaults = false;
   if (typeof options === 'number') {
     baseDefault = options;
   } else if (options && typeof options === 'object') {
     baseDefault = options.baseDefault ?? DEFAULT_ACCESS_LEVEL;
     actionDefault = options.actionDefault ?? ACCESS_LEVELS.NONE;
+    adminDefaults = actionDefault === ACCESS_LEVELS.WRITE;
   }
   const source = raw && typeof raw === 'object' ? raw : {};
   const normalized = {};
   for (const key of BASE_PERMISSION_KEYS) {
-    normalized[key] = toLevel(source[key], baseDefault);
+    const missingPackingDefault = key === 'packing' && !adminDefaults
+      ? ACCESS_LEVELS.NONE
+      : baseDefault;
+    normalized[key] = toLevel(source[key], missingPackingDefault);
   }
   for (const key of PERMISSION_KEYS) {
     if (Object.prototype.hasOwnProperty.call(normalized, key)) continue;

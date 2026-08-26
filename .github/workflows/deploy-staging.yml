@@ -1,0 +1,70 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - release/dispatch-v2
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact release/dispatch-v2 SHA to deploy
+        required: false
+        type: string
+
+concurrency:
+  group: glintex-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy isolated employee staging
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve exact release SHA
+        id: source
+        env:
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHA="${REQUESTED_SHA:-$EVENT_SHA}"
+          test "${#SHA}" -eq 40
+          printf 'sha=%s\n' "$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy over staging-only SSH
+        env:
+          EXPECTED_SHA: ${{ steps.source.outputs.sha }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/staging_deploy_key
+          chmod 600 ~/.ssh/staging_deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          REMOTE_APP_DIR="$(printf '%q' "$APP_DIR")"
+          REMOTE_SHA="$(printf '%q' "$EXPECTED_SHA")"
+          ssh -i ~/.ssh/staging_deploy_key "$SSH_USER@$SSH_HOST" \
+            "APP_DIR=$REMOTE_APP_DIR bash $REMOTE_APP_DIR/docker/staging/deploy.sh $REMOTE_SHA"
+
+      - name: Verify protected public staging endpoint
+        env:
+          BASIC_USERNAME: ${{ secrets.STAGING_BASIC_AUTH_USERNAME }}
+          BASIC_PASSWORD: ${{ secrets.STAGING_BASIC_AUTH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://staging.glintex.in/api/health)" = 401
+          HEALTH="$(curl --fail --silent --show-error --retry 20 --retry-delay 5 --user "$BASIC_USERNAME:$BASIC_PASSWORD" https://staging.glintex.in/api/health)"
+          grep -Fq '"ok":true' <<<"$HEALTH"
+          READINESS="$(curl --fail --silent --show-error --retry 20 --retry-delay 5 --user "$BASIC_USERNAME:$BASIC_PASSWORD" https://staging.glintex.in/api/readiness)"
+          grep -Fq '"ok":true' <<<"$READINESS"
+          grep -Fq '"runtimeMode":"staging"' <<<"$READINESS"
+          grep -Fq '"externalIntegrationsDisabled":true' <<<"$READINESS"
+          grep -Fq '"deploySha":"${{ steps.source.outputs.sha }}"' <<<"$READINESS"

@@ -25,6 +25,7 @@ services:
       DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex
       SHADOW_DATABASE_URL: postgresql://glintex:glintex@db:5432/glintex_shadow
       PORT: 4000
+      GLINTEX_DEPLOY_SHA: ${GLINTEX_DEPLOY_SHA:-unknown}
       BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
       GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID}
       GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}
@@ -47,6 +48,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/readiness').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
 
   agent-api:
@@ -72,7 +79,7 @@ services:
       db:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -102,7 +109,13 @@ services:
       - "4173:80"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

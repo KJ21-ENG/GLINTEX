@@ -4,6 +4,7 @@ import telegram from '../telegram/service.js';
 import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 import { initBackupScheduler } from './utils/backup.js';
 import { initTelegramCronScheduler } from './utils/telegramScheduler.js';
+import { assertRuntimeSafety } from './utils/runtimeSafety.js';
 
 const PORT = process.env.PORT || 4000;
 
@@ -28,6 +29,7 @@ async function startTelegram() {
 }
 
 async function start() {
+  const runtimeSafety = assertRuntimeSafety();
   try {
     const result = await ensureDefaultAdminUser();
     if (result?.created) {
@@ -49,10 +51,16 @@ async function start() {
     console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
   });
 
-  startWhatsapp();
-  startTelegram();
+  if (runtimeSafety.externalIntegrationsAllowed) {
+    startWhatsapp();
+    startTelegram();
+  } else {
+    console.log(`[RuntimeSafety] External services disabled for ${runtimeSafety.runtimeMode}`);
+  }
   await initBackupScheduler();
-  await initTelegramCronScheduler();
+  if (runtimeSafety.externalIntegrationsAllowed) {
+    await initTelegramCronScheduler();
+  }
 }
 
 start();

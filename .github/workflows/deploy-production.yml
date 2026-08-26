@@ -22,6 +22,7 @@ jobs:
           SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
           SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
           APP_DIR: ${{ secrets.PRODUCTION_APP_DIR }}
+          PUBLIC_BASE_URL: ${{ secrets.PRODUCTION_PUBLIC_URL || 'https://app.glintex.in' }}
         run: |
           set -euo pipefail
 
@@ -31,5 +32,52 @@ jobs:
           chmod 600 ~/.ssh/production_deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
+          REMOTE_APP_DIR="$(printf '%q' "$APP_DIR")"
+          REMOTE_PUBLIC_BASE_URL="$(printf '%q' "$PUBLIC_BASE_URL")"
           ssh -i ~/.ssh/production_deploy_key "$SSH_USER@$SSH_HOST" \
-            "cd \"$APP_DIR\" && git pull --ff-only && docker compose up -d --build"
+            "APP_DIR=$REMOTE_APP_DIR PUBLIC_BASE_URL=$REMOTE_PUBLIC_BASE_URL bash -s" <<'REMOTE_DEPLOY_SCRIPT'
+          set -euo pipefail
+
+          cd "$APP_DIR"
+          git pull --ff-only
+          DEPLOY_SHA="$(git rev-parse HEAD)"
+          test "$DEPLOY_SHA" = "$(git rev-parse HEAD)"
+          test "$DEPLOY_SHA" = "$(git rev-parse origin/main)"
+          export GLINTEX_DEPLOY_SHA="$DEPLOY_SHA"
+
+          COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
+          mkdir -p apps/backend/backups
+          "${COMPOSE[@]}" up -d db
+
+          BACKUP_PATH="apps/backend/backups/pre-deploy-${DEPLOY_SHA}.dump"
+          "${COMPOSE[@]}" exec -T db sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$BACKUP_PATH"
+          test -s "$BACKUP_PATH"
+
+          # Schema migration is additive and explicit. Long backfills and cutover
+          # commands are separate operator actions and are never run here.
+          "${COMPOSE[@]}" build backend frontend agent-api
+          "${COMPOSE[@]}" run --rm --no-deps backend npm run migrate:deploy
+          "${COMPOSE[@]}" up -d
+          "${COMPOSE[@]}" run --rm --no-deps backend npm run migrate:status
+
+          EXPECTED_SERVICES=(db backend agent-api frontend)
+          RUNNING_SERVICES="$("${COMPOSE[@]}" ps --status running --services)"
+          for service in "${EXPECTED_SERVICES[@]}"; do
+            grep -Fxq "$service" <<<"$RUNNING_SERVICES"
+            container_id="$("${COMPOSE[@]}" ps -q "$service")"
+            test -n "$container_id"
+            test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
+          done
+
+          LOCAL_READINESS="$(curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-connrefused --max-time 15 http://127.0.0.1:4002/api/readiness)"
+          PUBLIC_ENDPOINT="${PUBLIC_BASE_URL%/}/api/readiness"
+          PUBLIC_READINESS="$(curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-connrefused --max-time 15 "$PUBLIC_ENDPOINT")"
+
+          grep -Fq '"ok":true' <<<"$LOCAL_READINESS"
+          grep -Fq '"ok":true' <<<"$PUBLIC_READINESS"
+          grep -Fq "$DEPLOY_SHA" <<<"$LOCAL_READINESS"
+          grep -Fq "$DEPLOY_SHA" <<<"$PUBLIC_READINESS"
+          test "$DEPLOY_SHA" = "$(git rev-parse HEAD)"
+
+          printf 'deployed_sha=%s\nbackup=%s\n' "$DEPLOY_SHA" "$BACKUP_PATH"
+          REMOTE_DEPLOY_SCRIPT

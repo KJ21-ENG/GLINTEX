@@ -9,10 +9,12 @@ services:
   backend:
     ports:
       - "4002:4000"
+    command: ["node", "src/server.js"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
       SHADOW_DATABASE_URL: ${SHADOW_DATABASE_URL}
       PORT: 4000
+      GLINTEX_DEPLOY_SHA: ${GLINTEX_DEPLOY_SHA:-unknown}
       BARCODE_MATERIAL_CODE: ${BARCODE_MATERIAL_CODE:-MET}
       GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID}
       GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}

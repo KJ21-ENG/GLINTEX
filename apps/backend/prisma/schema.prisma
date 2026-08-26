@@ -16,6 +16,140 @@ enum SideType {
   UNKNOWN
 }
 
+enum PackingPackageKind {
+  PACKET
+  BOX
+  BORI
+  PARCEL
+}
+
+enum PackingLaunchStatus {
+  PREPARATION
+  WRITES_GATED
+  CUTOVER_APPLIED
+  ACTIVE
+  FAILED
+  REVERSED
+}
+
+enum PackingRecipeStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum PackingDeliveryMode {
+  UNSPECIFIED
+  LOCAL
+  PARCEL
+}
+
+enum PackingBatchKind {
+  INITIAL
+  REPACKING
+  OPENING
+}
+
+enum PackingBatchStatus {
+  DRAFT
+  CONFIRMED
+  IN_PROGRESS
+  PARTIALLY_COMPLETED
+  COMPLETED
+  SHORT_CLOSED
+  VOIDED
+}
+
+enum PackingBatchSourceType {
+  CONING_RECEIVE
+  PACKED_UNIT
+}
+
+enum PackedUnitStatus {
+  IN_PROGRESS
+  LABEL_PENDING
+  QUALITY_HOLD
+  AVAILABLE
+  RESERVED
+  DISPATCHED
+  RETURNED_PENDING_INSPECTION
+  DAMAGED
+  REPACKED
+  SPLIT_CONSUMED
+  OPENED
+  VOIDED
+}
+
+enum PackedUnitEventType {
+  BATCH_CONFIRMED
+  BATCH_STARTED
+  BATCH_TARGET_AMENDED
+  BATCH_COMPLETED
+  BATCH_SHORT_CLOSED
+  BATCH_VOIDED
+  SOURCE_RESERVED
+  SOURCE_CONSUMED
+  SOURCE_RELEASED
+  UNIT_SEALED
+  UNIT_LABEL_PENDING
+  UNIT_LABEL_REPRINTED
+  UNIT_BARCODE_REPLACED
+  UNIT_QUALITY_RELEASED
+  UNIT_RESERVED
+  UNIT_RESERVATION_RELEASED
+  UNIT_RESERVATION_REASSIGNED
+  UNIT_SPLIT
+  UNIT_RETURNED
+  UNIT_RETURN_INSPECTED
+  UNIT_DAMAGED
+  UNIT_WRITTEN_OFF
+  UNIT_REPACKED
+  ADMINISTRATIVE_AMENDMENT
+  EVENT_REVERSED
+}
+
+enum DispatchChallanStatus {
+  ACTIVE
+  VOIDED
+  PARTIALLY_RETURNED
+  RETURNED
+}
+
+enum DispatchSourceType {
+  INBOUND
+  CUTTER
+  HOLO
+  PACKED
+}
+
+enum DispatchEventType {
+  CHALLAN_CREATED
+  CHALLAN_VOIDED
+  LINE_CORRECTED
+  LINE_RETURNED
+  RETURN_REVERSED
+  DISPATCH_EVENT_REVERSED
+}
+
+enum DispatchDocumentKind {
+  ORIGINAL
+  LEGACY_RECONSTRUCTION
+}
+
+enum InventoryAdjustmentKind {
+  LEGACY_CUTOVER
+  MANUAL_CORRECTION
+  DAMAGE_WRITE_OFF
+  OPENING_BALANCE
+}
+
+enum InventoryAdjustmentStatus {
+  DRAFT
+  APPLIED
+  REVERSED
+  FAILED
+}
+
 model Item {
   id              String   @id @default(cuid())
   name            String
@@ -25,6 +159,8 @@ model Item {
   createdByUserId String?
   updatedByUserId String?
   lots            Lot[]
+  packingRecipes  PackingRecipe[]
+  packedUnits     PackedUnit[]
 }
 
 model Yarn {
@@ -341,6 +477,8 @@ model ConeType {
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
+  packingRecipes  PackingRecipe[]
+  packedUnits     PackedUnit[]
 }
 
 model Wrapper {
@@ -350,6 +488,8 @@ model Wrapper {
   updatedAt       DateTime @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
+  packingRecipes  PackingRecipe[]
+  packedUnits     PackedUnit[]
 }
 
 model StickerTemplate {
@@ -416,6 +556,7 @@ model ReceiveFromConingMachineRow {
   notes            String?
   createdBy        String?
   isDeleted        Boolean              @default(false)
+  isOpeningStock   Boolean              @default(false)
   deletedAt        DateTime?
   deletedByUserId  String?
   createdAt        DateTime             @default(now())
@@ -622,7 +763,7 @@ model Settings {
   challanFromMobile   String?
   challanFieldsConfig Json     @default("{}")
   autoSelectTwistForMachine Boolean @default(false)
-  
+
   // Telegram Cron Configuration
   telegramCronEnabled         Boolean  @default(false)
   telegramCronSchedule        String   @default("30 10 * * 4,6")
@@ -808,12 +949,272 @@ model Customer {
   name             String
   phone            String?
   address          String?
+  isActive         Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @default(now()) @updatedAt
   createdByUserId  String?
   updatedByUserId  String?
   dispatches       Dispatch[]
   documentMessages DocumentMessage[]
+  packingRecipes   PackingRecipe[]
+  packingBatches   PackingBatch[]
+  packedUnits      PackedUnit[]
+  dispatchChallans DispatchChallan[]
+
+  @@index([isActive])
+}
+
+model OperationalSequence {
+  key       String   @id
+  nextValue Int      @default(1)
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+model PackingColor {
+  id              String        @id @default(cuid())
+  name            String
+  normalizedName  String        @unique
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  recipes         PackingRecipe[]
+  packedUnits     PackedUnit[]
+
+  @@index([isActive, name])
+}
+
+model PackingPackageType {
+  id              String                @id @default(cuid())
+  name            String
+  normalizedName  String                @unique
+  kind            PackingPackageKind
+  defaultTareKg   Decimal               @db.Decimal(12, 3)
+  isActive        Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  recipeLevels    PackingRecipeLevel[]
+  packedUnits     PackedUnit[]
+
+  @@index([kind, isActive])
+  @@index([isActive, name])
+}
+
+model PackingLaunchState {
+  id                   String                    @id @default("packing_dispatch_v2")
+  status               PackingLaunchStatus       @default(PREPARATION)
+  affectedWritesPaused Boolean                   @default(false)
+  cutoffAt             DateTime?
+  adjustmentBatchId    String?                   @unique
+  lastError            String?
+  updatedAt            DateTime                  @default(now()) @updatedAt
+  updatedByUserId      String?
+  adjustmentBatch      InventoryAdjustmentBatch? @relation(fields: [adjustmentBatchId], references: [id], onDelete: SetNull)
+}
+
+model PackingRecipe {
+  id                      String               @id @default(cuid())
+  familyKey               String
+  version                 Int
+  status                  PackingRecipeStatus  @default(DRAFT)
+  supersedesRecipeId      String?
+  itemId                  String?
+  wrapperId               String?
+  colorId                 String?
+  coneTypeId              String?
+  customerId              String?
+  nominalGram             Decimal?             @db.Decimal(12, 3)
+  deliveryMode            PackingDeliveryMode  @default(UNSPECIFIED)
+  allowPartialDispatch    Boolean              @default(false)
+  requiresQualityHold     Boolean              @default(false)
+  warningVariancePercent  Decimal              @default(2.000) @db.Decimal(12, 3)
+  approvalVariancePercent Decimal              @default(5.000) @db.Decimal(12, 3)
+  stockUnitLevelIndex     Int
+  notes                   String?
+  sourceMetadata          Json?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @default(now()) @updatedAt
+  createdByUserId         String?
+  updatedByUserId         String?
+  supersedesRecipe        PackingRecipe?      @relation("PackingRecipeSupersedes", fields: [supersedesRecipeId], references: [id], onDelete: SetNull)
+  supersededBy            PackingRecipe[]     @relation("PackingRecipeSupersedes")
+  item                    Item?               @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  wrapper                 Wrapper?            @relation(fields: [wrapperId], references: [id], onDelete: Restrict)
+  color                   PackingColor?       @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  coneType                ConeType?           @relation(fields: [coneTypeId], references: [id], onDelete: Restrict)
+  customer                Customer?           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  levels                  PackingRecipeLevel[]
+  batches                 PackingBatch[]
+  packedUnits             PackedUnit[]
+
+  @@unique([familyKey, version])
+  @@index([familyKey, status])
+  @@index([status, updatedAt])
+  @@index([itemId, wrapperId, colorId, coneTypeId])
+  @@index([customerId, status])
+  @@index([supersedesRecipeId])
+}
+
+model PackingRecipeLevel {
+  id                     String             @id @default(cuid())
+  recipeId               String
+  levelIndex             Int
+  packageTypeId          String
+  childUnitsPerContainer Int
+  barcodeEnabled         Boolean            @default(false)
+  recipe                 PackingRecipe      @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+  packageType            PackingPackageType @relation(fields: [packageTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeId, levelIndex])
+  @@index([packageTypeId])
+}
+
+model PackingBatch {
+  id                    String              @id @default(cuid())
+  batchNo               String              @unique
+  kind                  PackingBatchKind
+  status                PackingBatchStatus  @default(DRAFT)
+  recipeId              String
+  recipeSnapshot        Json
+  customerId            String?
+  deliveryMode          PackingDeliveryMode @default(UNSPECIFIED)
+  plannedBaseCount      Int
+  plannedNetWeightKg    Decimal             @db.Decimal(16, 3)
+  targetAmendmentReason String?
+  shortCloseReason      String?
+  voidReason            String?
+  notes                 String?
+  confirmedAt           DateTime?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  shortClosedAt         DateTime?
+  voidedAt              DateTime?
+  version               Int                 @default(1)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @default(now()) @updatedAt
+  createdByUserId       String?
+  updatedByUserId       String?
+  recipe                PackingRecipe       @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+  customer              Customer?           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  sources               PackingBatchSource[]
+  units                 PackedUnit[]
+  events                PackedUnitEvent[]
+
+  @@index([status, createdAt])
+  @@index([recipeId, status])
+  @@index([customerId, status])
+  @@index([kind, status])
+}
+
+model PackingBatchSource {
+  id                     String                 @id @default(cuid())
+  batchId                String
+  sourceType             PackingBatchSourceType
+  sourceId               String
+  sourceBarcode          String?
+  sourceItemSnapshot     Json                   @default("{}")
+  sourceLotSnapshot      Json                   @default("{}")
+  sourceRecipeSnapshot   Json                   @default("{}")
+  sourceCustomerSnapshot Json                   @default("{}")
+  reservedBaseCount      Int
+  reservedNetWeightKg    Decimal                @db.Decimal(16, 3)
+  consumedBaseCount      Int                    @default(0)
+  consumedNetWeightKg    Decimal                @default(0) @db.Decimal(16, 3)
+  releasedBaseCount      Int                    @default(0)
+  releasedNetWeightKg    Decimal                @default(0) @db.Decimal(16, 3)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @default(now()) @updatedAt
+  createdByUserId        String?
+  updatedByUserId        String?
+  batch                  PackingBatch           @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@index([batchId])
+  @@index([sourceType, sourceId])
+  @@index([sourceBarcode])
+}
+
+model PackedUnit {
+  id                String            @id @default(cuid())
+  batchId           String
+  recipeId          String
+  packageTypeId     String
+  parentUnitId      String?
+  levelIndex        Int
+  unitSequence      Int
+  barcode           String?           @unique
+  isStockUnit       Boolean
+  status            PackedUnitStatus  @default(IN_PROGRESS)
+  itemId            String
+  wrapperId         String
+  colorId           String
+  coneTypeId        String
+  customerId        String?
+  nominalGram       Decimal           @db.Decimal(12, 3)
+  baseCount         Int
+  grossWeightKg     Decimal           @db.Decimal(16, 3)
+  tareWeightKg      Decimal           @db.Decimal(16, 3)
+  netWeightKg       Decimal           @db.Decimal(16, 3)
+  labelPrintCount   Int               @default(0)
+  sealedAt          DateTime?
+  qualityReleasedAt DateTime?
+  splitFromUnitId   String?
+  replacedByUnitId  String?
+  version           Int               @default(1)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @default(now()) @updatedAt
+  createdByUserId   String?
+  updatedByUserId   String?
+  batch             PackingBatch      @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  recipe            PackingRecipe     @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+  packageType       PackingPackageType @relation(fields: [packageTypeId], references: [id], onDelete: Restrict)
+  parentUnit        PackedUnit?       @relation("PackedUnitHierarchy", fields: [parentUnitId], references: [id], onDelete: Restrict)
+  childUnits        PackedUnit[]      @relation("PackedUnitHierarchy")
+  item              Item              @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  wrapper           Wrapper           @relation(fields: [wrapperId], references: [id], onDelete: Restrict)
+  color             PackingColor      @relation(fields: [colorId], references: [id], onDelete: Restrict)
+  coneType          ConeType          @relation(fields: [coneTypeId], references: [id], onDelete: Restrict)
+  customer          Customer?         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  splitFromUnit     PackedUnit?       @relation("PackedUnitSplit", fields: [splitFromUnitId], references: [id], onDelete: Restrict)
+  splitChildren     PackedUnit[]      @relation("PackedUnitSplit")
+  replacedByUnit    PackedUnit?       @relation("PackedUnitReplacement", fields: [replacedByUnitId], references: [id], onDelete: Restrict)
+  replacementUnits  PackedUnit[]      @relation("PackedUnitReplacement")
+  events            PackedUnitEvent[]
+  dispatchLines     DispatchLine[]
+
+  @@unique([batchId, levelIndex, unitSequence])
+  @@index([batchId, levelIndex])
+  @@index([parentUnitId])
+  @@index([status, isStockUnit])
+  @@index([customerId, status])
+  @@index([itemId, status])
+  @@index([recipeId, status])
+  @@index([splitFromUnitId])
+  @@index([replacedByUnitId])
+  @@index([createdAt])
+}
+
+model PackedUnitEvent {
+  id                String              @id @default(cuid())
+  batchId           String?
+  unitId            String?
+  type              PackedUnitEventType
+  reason            String?
+  payload           Json                @default("{}")
+  reversalOfEventId String?             @unique
+  idempotencyKey    String              @unique
+  actorUserId       String?
+  createdAt         DateTime            @default(now())
+  batch             PackingBatch?       @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  unit              PackedUnit?         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  reversalOfEvent   PackedUnitEvent?    @relation("PackedUnitEventReversal", fields: [reversalOfEventId], references: [id], onDelete: Restrict)
+  reversalEvents    PackedUnitEvent[]   @relation("PackedUnitEventReversal")
+
+  @@index([batchId, createdAt])
+  @@index([unitId, createdAt])
+  @@index([type, createdAt])
 }
 
 // Document messages sent via WhatsApp - stores only metadata, no file content
@@ -853,6 +1254,148 @@ model Dispatch {
   createdByUserId String?
   updatedByUserId String?
   customer        Customer @relation(fields: [customerId], references: [id])
+  v2Line          DispatchLine?
+}
+
+model DispatchChallan {
+  id                     String                @id @default(cuid())
+  challanNo              String                @unique
+  businessDate           DateTime              @db.Date
+  customerId             String
+  status                 DispatchChallanStatus @default(ACTIVE)
+  notes                  String?
+  companySnapshot        Json
+  customerSnapshot       Json
+  idempotencyKey         String                @unique
+  isLegacyReconstruction Boolean               @default(false)
+  version                Int                   @default(1)
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @default(now()) @updatedAt
+  createdByUserId        String?
+  updatedByUserId        String?
+  customer               Customer              @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  lines                  DispatchLine[]
+  events                 DispatchEvent[]
+  document               DispatchDocument?
+
+  @@index([businessDate])
+  @@index([customerId, status, businessDate])
+  @@index([status, createdAt])
+}
+
+model DispatchLine {
+  id                    String            @id @default(cuid())
+  challanId             String
+  sourceType            DispatchSourceType
+  sourceId              String
+  sourceBarcode         String?
+  sourceDisplaySnapshot Json              @default("{}")
+  baseCount             Int?
+  netWeightKg           Decimal           @db.Decimal(16, 3)
+  parentPackedUnitId    String?
+  legacyDispatchId      String?           @unique
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @default(now()) @updatedAt
+  createdByUserId       String?
+  updatedByUserId       String?
+  challan               DispatchChallan   @relation(fields: [challanId], references: [id], onDelete: Restrict)
+  parentPackedUnit      PackedUnit?       @relation(fields: [parentPackedUnitId], references: [id], onDelete: Restrict)
+  legacyDispatch        Dispatch?         @relation(fields: [legacyDispatchId], references: [id], onDelete: Restrict)
+  events                DispatchEvent[]
+
+  @@index([challanId])
+  @@index([sourceType, sourceId])
+  @@index([sourceBarcode])
+  @@index([parentPackedUnitId])
+  @@index([createdAt])
+}
+
+model DispatchEvent {
+  id                String           @id @default(cuid())
+  challanId         String?
+  lineId            String?
+  type              DispatchEventType
+  reason            String?
+  payload           Json             @default("{}")
+  reversalOfEventId String?          @unique
+  idempotencyKey    String           @unique
+  actorUserId       String?
+  createdAt         DateTime         @default(now())
+  challan           DispatchChallan? @relation(fields: [challanId], references: [id], onDelete: Restrict)
+  line              DispatchLine?    @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  reversalOfEvent   DispatchEvent?   @relation("DispatchEventReversal", fields: [reversalOfEventId], references: [id], onDelete: Restrict)
+  reversalEvents    DispatchEvent[]  @relation("DispatchEventReversal")
+
+  @@index([challanId, createdAt])
+  @@index([lineId, createdAt])
+  @@index([type, createdAt])
+}
+
+model DispatchDocument {
+  id                String              @id @default(cuid())
+  challanId         String              @unique
+  kind              DispatchDocumentKind
+  renderingSnapshot Json
+  pdfBytes          Bytes?
+  sha256Hash        String?
+  generatedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @default(now()) @updatedAt
+  challan           DispatchChallan     @relation(fields: [challanId], references: [id], onDelete: Restrict)
+}
+
+model InventoryAdjustmentBatch {
+  id               String                    @id @default(cuid())
+  batchNo          String                    @unique
+  kind             InventoryAdjustmentKind
+  status           InventoryAdjustmentStatus @default(DRAFT)
+  effectiveAt      DateTime
+  reason           String
+  evidenceSnapshot Json
+  idempotencyKey   String                    @unique
+  appliedAt        DateTime?
+  reversedAt       DateTime?
+  appliedByUserId  String?
+  reversedByUserId String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @default(now()) @updatedAt
+  createdByUserId  String?
+  updatedByUserId  String?
+  lines            InventoryAdjustmentLine[]
+  launchState      PackingLaunchState?
+
+  @@index([status, effectiveAt])
+  @@index([kind, status])
+  @@index([createdAt])
+}
+
+model InventoryAdjustmentLine {
+  id                  String                    @id @default(cuid())
+  batchId             String
+  sourceType          String
+  sourceId            String
+  countDelta          Int
+  weightDeltaKg       Decimal                   @db.Decimal(16, 3)
+  sourceBarcode       String?
+  sourceItemSnapshot  Json                      @default("{}")
+  sourceLotSnapshot   Json                      @default("{}")
+  sourceConeSnapshot  Json                      @default("{}")
+  replacementSourceId String?
+  replacementUnitId   String?
+  reversalOfLineId    String?                   @unique
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @default(now()) @updatedAt
+  createdByUserId     String?
+  updatedByUserId     String?
+  batch               InventoryAdjustmentBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  reversalOfLine      InventoryAdjustmentLine?  @relation("InventoryAdjustmentLineReversal", fields: [reversalOfLineId], references: [id], onDelete: Restrict)
+  reversalLines       InventoryAdjustmentLine[] @relation("InventoryAdjustmentLineReversal")
+
+  @@index([batchId])
+  @@index([sourceType, sourceId])
+  @@index([sourceBarcode])
+  @@index([replacementSourceId])
+  @@index([replacementUnitId])
 }
 
 // ========== BOX TRANSFER FEATURE ==========

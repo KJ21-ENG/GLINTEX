@@ -315,6 +315,7 @@ export function resolveRow(process, row, maps) {
     netKg,
     quantity: resolveQuantity(process, row),
     createdBy: row.createdBy || null,
+    isOpeningStock: row.isOpeningStock,
     lotNo: issue?.lotNo || row.lotNo || row.challan?.lotNo || null,
     barcode: row.barcode || row.vchNo || null,
     itemId: null,
@@ -505,7 +506,12 @@ export async function computePayablePreview(prisma, {
 
   for (const row of rows) {
     const resolved = resolveRow(process, row, maps);
-    const marker = { createdBy: resolved.createdBy, lotNo: resolved.lotNo, process };
+    const marker = {
+      createdBy: resolved.createdBy,
+      isOpeningStock: resolved.isOpeningStock,
+      lotNo: resolved.lotNo,
+      process,
+    };
 
     // Silent exclusions (non-production income never creates earnings) -------
     if (resolved.netKg === null || resolved.netKg <= 0) { excluded.nonPositiveKg += 1; continue; }

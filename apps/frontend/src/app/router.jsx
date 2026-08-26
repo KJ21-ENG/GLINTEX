@@ -1,16 +1,17 @@
 import React from "react";
-import { createBrowserRouter, redirect } from "react-router-dom";
+import { createBrowserRouter, redirect, useNavigate } from "react-router-dom";
 import ProtectedAppLayout from "./ProtectedAppLayout.jsx";
 
-// We will import the pages directly. 
-// Note: They will be broken until refactored in the next steps, 
+// We will import the pages directly.
+// Note: They will be broken until refactored in the next steps,
 // but we are following the plan to refactor them immediately after.
 import {
   Inbound,
   Stock,
   IssueToMachine,
   ReceiveFromMachine,
-  Dispatch,
+  DispatchV2,
+  Packing,
   OpeningStock,
   BoxTransfer,
   Boiler,
@@ -26,6 +27,12 @@ import {
 import LabelDesigner from "../pages/Settings/LabelDesigner";
 import PermissionGate from "../components/common/PermissionGate";
 import { ACCESS_LEVELS } from "../utils/permissions";
+import PackingSettings from "../components/settings/PackingSettings.jsx";
+
+function PackingRoute() {
+  const navigate = useNavigate();
+  return <Packing onOpenSettings={() => navigate('/app/settings/packing')} />;
+}
 
 export const router = createBrowserRouter([
   {
@@ -51,7 +58,7 @@ export const router = createBrowserRouter([
       {
         path: "stock",
         element: (
-          <PermissionGate permission="stock">
+          <PermissionGate permissions={['stock', 'packing']}>
             <Stock />
           </PermissionGate>
         ),
@@ -76,7 +83,15 @@ export const router = createBrowserRouter([
         path: "dispatch",
         element: (
           <PermissionGate permission="dispatch">
-            <Dispatch />
+            <DispatchV2 />
+          </PermissionGate>
+        ),
+      },
+      {
+        path: "packing",
+        element: (
+          <PermissionGate permission="packing">
+            <PackingRoute />
           </PermissionGate>
         ),
       },
@@ -149,6 +164,14 @@ export const router = createBrowserRouter([
         element: (
           <PermissionGate permission="settings.edit" minLevel={ACCESS_LEVELS.READ}>
             <LabelDesigner />
+          </PermissionGate>
+        ),
+      },
+      {
+        path: "settings/packing",
+        element: (
+          <PermissionGate permission="packing">
+            <PackingSettings />
           </PermissionGate>
         ),
       },

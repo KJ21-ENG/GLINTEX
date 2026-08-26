@@ -53,3 +53,17 @@ If the mode is unselected, analyze read-only and ask the user to choose Advanced
 
 Use the global `project-workflow` skill and CLI for selection, checkpoints, gaps, and approved evolution. Never silently change authority, security, deployment, production, finance, or payment policy.
 <!-- project-workflow:end -->
+
+## Environment and Release Protection
+
+- Production is `main` at `https://app.glintex.in`, deployed from `/var/www/glintex-app` with compose project `glintex-app`. Treat production Git, containers, volumes, database, Nginx, DNS, integrations, and GitHub environment as read-only unless the user explicitly authorizes a production action.
+- Employee staging is `release/dispatch-v2` at `https://staging.glintex.in`, deployed from `/var/www/glintex-staging` with compose project `glintex-staging`. It uses loopback frontend/backend ports `4273`/`4102`, its own internal network and PostgreSQL volume, HTTPS, HTTP Basic Auth, and application auth. Do not deploy `agent-api` in staging.
+- Never push a feature release directly to `main`. Routine flow is feature branch to `release/dispatch-v2`, staging automation and employee feedback, a recorded release candidate, then a separate explicitly authorized production promotion.
+- Before every database or business mutation, prove `current_database()`, role, host, and port against the expected environment. For staging migrations use `APP_DIR=/var/www/glintex-staging docker/staging/migrate.sh`; do not run Prisma commands that may implicitly load `apps/backend/.env`.
+- Retain the staging database after employee testing. Do not reset it to the green fixture state. Take a verified pre-deploy backup and record its SHA-256 before each staging deployment. The retained local green database remains reference-only and must never be mutated.
+- Staging must set `GLINTEX_RUNTIME_MODE=staging` and `EXTERNAL_INTEGRATIONS_DISABLED=true`. WhatsApp, Telegram, Google Drive, email/notification delivery, schedulers, stored recipients/tokens/sessions, and owner-agent actions must remain disabled and sanitized. Never copy production credentials or WhatsApp auth into staging.
+- Secrets live only in restrictive VPS files, GitHub's `staging` environment, and the operator's secure credential store. Never commit `.env.staging`, password files, `.htpasswd`, dumps, backups, auth state, QA evidence, recordings, screenshots, or build output.
+- An urgent production hotfix starts from the exact deployed `production-*` baseline tag/SHA on `hotfix/<ticket>`, uses an isolated temporary production-like database/runtime, and receives targeted regression evidence. Only explicit user production authorization permits backup, promotion to `main`, and deployment. Immediately forward-port the same fix to `release/dispatch-v2`, redeploy staging, record both SHAs, and remove temporary resources.
+- Required rollout evidence includes exact Git/deploy SHA, DB identity and migration status, backup hash/size, compose health, Nginx/TLS checks, protected public readiness, authenticated browser smoke, external-integration proof, and before/after production preservation.
+
+See `docs/dispatch-v2-staging-and-release-runbook.md` for exact deployment, rollback, employee-access, and hotfix procedures.

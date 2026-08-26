@@ -32,7 +32,8 @@ import { ACCESS_LEVELS, getPermissionLevel } from "../../utils/permissions";
 
 const NAV_ITEMS = [
   { key: "inbound", label: "Inbound", icon: PackagePlus, permissions: ["inbound"] },
-  { key: "stock", label: "Stock", icon: Package, permissions: ["stock"] },
+  { key: "stock", label: "Stock", icon: Package, permissions: ["stock", "packing"] },
+  { key: "packing", label: "Packing", icon: Package, permissions: ["packing"] },
   { key: "issue", label: "Issue to Machine", icon: ArrowRightFromLine, permissions: ["issue.cutter", "issue.holo", "issue.coning"] },
   { key: "receive", label: "Receive from Machine", icon: ArrowLeftToLine, permissions: ["receive.cutter", "receive.holo", "receive.coning"] },
   { key: "dispatch", label: "Dispatch", icon: Truck, permissions: ["dispatch"] },
@@ -51,6 +52,7 @@ const SIDEBAR_MAX_WIDTH = 256;
 const SIDEBAR_EXPAND_THRESHOLD = 120; // Width threshold to show/hide text labels
 
 export default function DashboardLayout() {
+  const isStaging = String(import.meta.env.VITE_APP_ENVIRONMENT || '').toLowerCase() === 'staging';
   const { brand, theme, setTheme, process, setProcess } = useInventory();
   const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -460,6 +462,11 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen bg-background flex">
+      {isStaging && (
+        <div className="fixed inset-x-0 top-0 z-[10000] bg-amber-400 px-3 py-1 text-center text-xs font-bold tracking-[0.18em] text-slate-950">
+          GLINTEX STAGING · EMPLOYEE TEST ENVIRONMENT · NO EXTERNAL DELIVERY
+        </div>
+      )}
       {/* Desktop Sidebar */}
       <aside
         ref={sidebarRef}

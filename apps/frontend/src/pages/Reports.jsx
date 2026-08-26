@@ -14,6 +14,7 @@ import {
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
+import { PackingReports } from '../components/reports/PackingReports';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 
 const STAGE_ICONS = {
@@ -1538,12 +1539,24 @@ export function Reports() {
                             <Factory className="w-4 h-4" />
                             Production Report
                         </button>
+                        <button
+                            onClick={() => setActiveTab('packing')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2",
+                                activeTab === 'packing'
+                                    ? "bg-background shadow text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Package className="w-4 h-4" />
+                            Packing Reports
+                        </button>
                     </div>
                 </div>
             </div>
 
             {/* Tab Content */}
-            {activeTab === 'barcode' ? <BarcodeHistory /> : <ProductionReport />}
+            {activeTab === 'barcode' ? <BarcodeHistory /> : activeTab === 'production' ? <ProductionReport /> : <PackingReports />}
         </div>
     );
 }

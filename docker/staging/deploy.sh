@@ -48,7 +48,18 @@ ${COMPOSE[@]} up -d db backend frontend
 for service in db backend frontend; do
   container_id="$(${COMPOSE[@]} ps -q "$service")"
   test -n "$container_id"
-  test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
+  health_status=""
+  for _ in $(seq 1 30); do
+    health_status="$(docker inspect --format '{{.State.Health.Status}}' "$container_id")"
+    if test "$health_status" = healthy; then
+      break
+    fi
+    if test "$health_status" = unhealthy; then
+      break
+    fi
+    sleep 2
+  done
+  test "$health_status" = healthy
 done
 
 HEALTH="$(curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused http://127.0.0.1:4102/api/health)"

@@ -109,6 +109,8 @@ tmp/
 *.htpasswd
 .env.staging
 .env.staging.*
+staging-data/
+staging-secrets/
 
 # Project-local agent workflow state
 .agent/

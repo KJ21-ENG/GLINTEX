@@ -12,7 +12,7 @@ on:
         type: string
 
 concurrency:
-  group: glintex-staging-deploy
+  group: glintex-staging-deploy-v2
   cancel-in-progress: false
 
 jobs:

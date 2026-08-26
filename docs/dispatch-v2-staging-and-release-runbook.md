@@ -42,7 +42,7 @@ Staging binds only to VPS loopback ports `4273` (frontend) and `4102` (backend),
 ## Routine feature deployment
 
 1. Merge or cherry-pick reviewed feature work into `release/dispatch-v2` and validate it without touching `main`.
-2. Push the exact release commit. `.github/workflows/deploy-staging.yml` uses only the GitHub `staging` environment and its staging-only SSH/Basic Auth secrets.
+2. Push the exact release commit. `.github/workflows/deploy-staging.yml` serializes releases on its staging-only concurrency key and uses only the GitHub `staging` environment and its staging-only SSH/Basic Auth secrets.
 3. The VPS deploy wrapper verifies the requested SHA against `origin/release/dispatch-v2`, proves the staging DB identity, creates a hashed pre-deploy dump, builds images, runs explicit migrations, starts the three expected services, and checks health.
 4. On failure, it restores the previous source/container revision and retains the pre-deploy DB dump for deliberate recovery. Database restore is never automatic because it is destructive.
 5. Record release SHA, backup hash, migration state, readiness output, and employee smoke result. Retain the changed staging database for further employee use.

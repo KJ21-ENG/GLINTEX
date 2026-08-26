@@ -30,6 +30,7 @@ test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 export GLINTEX_DEPLOY_SHA="$EXPECTED_SHA"
 
 mkdir -p staging-data/backups staging-data/logs
+umask 077
 ${COMPOSE[@]} up -d db
 
 EXPECTED_DB="$(sed -n 's/^STAGING_DB_NAME=//p' .env.staging | tail -1)"

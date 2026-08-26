@@ -35,6 +35,12 @@ jobs:
           test "${#SHA}" -eq 40
           printf 'sha=%s\n' "$SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Check out exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+
       - name: Deploy over staging-only SSH
         env:
           EXPECTED_SHA: ${{ steps.source.outputs.sha }}
@@ -51,8 +57,12 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
           REMOTE_APP_DIR="$(printf '%q' "$APP_DIR")"
           REMOTE_SHA="$(printf '%q' "$EXPECTED_SHA")"
+          REMOTE_SCRIPT="/tmp/glintex-staging-deploy-${EXPECTED_SHA}.sh"
+          scp -i ~/.ssh/staging_deploy_key docker/staging/deploy.sh \
+            "$SSH_USER@$SSH_HOST:$REMOTE_SCRIPT"
+          REMOTE_SCRIPT_QUOTED="$(printf '%q' "$REMOTE_SCRIPT")"
           ssh -i ~/.ssh/staging_deploy_key "$SSH_USER@$SSH_HOST" \
-            "APP_DIR=$REMOTE_APP_DIR bash $REMOTE_APP_DIR/docker/staging/deploy.sh $REMOTE_SHA"
+            "trap 'rm -f $REMOTE_SCRIPT_QUOTED' EXIT; APP_DIR=$REMOTE_APP_DIR bash $REMOTE_SCRIPT_QUOTED $REMOTE_SHA"
 
       - name: Verify protected public staging endpoint
         env:

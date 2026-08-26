@@ -67,6 +67,7 @@ Numbered smoke journey:
 - Application rollback: select the last verified release SHA, retain a new staging DB backup, run `docker/staging/deploy.sh <sha>`, and repeat the smoke. Do not point staging at production data.
 - Database recovery: stop application writes, prove the staging DB identity, take a failure-state dump, obtain explicit recovery authorization, restore the selected staging backup only, migrate, and verify key counts. Never automate production-like destructive restore.
 - `502`: check loopback listeners, `docker compose ... ps`, backend logs, and Nginx upstream ports.
+- SSH bootstrap failure before deployment: the workflow retries bounded host-key discovery. If all attempts fail, verify the run never authenticated to the VPS, preserve the current staging SHA, and rerun only after connectivity returns.
 - Browser login remains on `Signing in`: verify the first Basic Auth response sets the staging-gateway cookie, subsequent same-origin API calls use it, invalid cookies still return `401`, and the application login request reaches the backend. Rotate only the staging gateway token if recovery requires invalidating browser gateway sessions.
 - Readiness failure: compare deploy SHA, migration record, required tables, and launch state. Do not bypass readiness.
 - External-integration guard failure: stop the backend and correct staging env/sanitization. Never enable the integration to make the check green.

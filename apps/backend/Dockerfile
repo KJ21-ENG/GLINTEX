@@ -52,9 +52,8 @@ COPY src ./src
 COPY whatsapp ./whatsapp
 COPY telegram ./telegram
 COPY scripts ./scripts
-COPY backups ./backups
 
-RUN mkdir -p /app/.wwebjs_auth && chown -R node:node /app
+RUN mkdir -p /app/.wwebjs_auth /app/backups /app/logs && chown -R node:node /app
 USER node
 
 ENV PORT=4000

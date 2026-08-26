@@ -104,6 +104,8 @@ qa-evidence/
 screenshots/
 tmp/
 .playwright-mcp/
+docs/prompts/
+tools/
 *.dump
 *.dump.sha256
 *.htpasswd

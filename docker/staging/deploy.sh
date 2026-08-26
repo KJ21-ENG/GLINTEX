@@ -33,7 +33,7 @@ mkdir -p staging-data/backups staging-data/logs
 ${COMPOSE[@]} up -d db
 
 EXPECTED_DB="$(sed -n 's/^STAGING_DB_NAME=//p' .env.staging | tail -1)"
-IDENTITY="$(${COMPOSE[@]} exec -T db sh -c 'psql -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select current_database(),current_user,inet_server_addr(),inet_server_port();"')"
+IDENTITY="$(${COMPOSE[@]} exec -T db sh -c 'psql -At -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select current_database(),current_user,inet_server_addr(),inet_server_port();"')"
 test "${IDENTITY%%|*}" = "$EXPECTED_DB"
 
 BACKUP_PATH="staging-data/backups/pre-deploy-${EXPECTED_SHA}.dump"

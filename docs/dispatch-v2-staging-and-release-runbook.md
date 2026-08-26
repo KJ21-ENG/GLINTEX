@@ -37,7 +37,7 @@ Staging binds only to VPS loopback ports `4273` (frontend) and `4102` (backend),
 
    The sanitizer revokes all human sessions, removes Drive credentials and agent operation/session material, disables notification templates and channels, clears recipients, sanitizes customer/document contact fields, deactivates copied users, and creates/rotates the two staging-only accounts from mounted secret files. It prints identities and counts, never passwords.
 6. Build and start `db`, `backend`, and `frontend`; verify all container health, exact deploy SHA in `/api/readiness`, staging runtime mode, disabled external integrations, migration state, fixture counts, and the absence of `agent-api`.
-7. Install `docker/staging/nginx-staging.conf`, create the restrictive htpasswd file, run `nginx -t`, reload Nginx, obtain the certificate with Certbot, and re-run `nginx -t`. Unauthenticated public requests must return `401` while authenticated HTTPS health/readiness requests pass.
+7. Install `docker/staging/nginx-staging.conf`, replace `__STAGING_GATE_TOKEN__` only in the VPS copy with a freshly generated random token, create the restrictive htpasswd file, run `nginx -t`, reload Nginx, obtain the certificate with Certbot, and re-run `nginx -t`. A successful Basic Auth response sets an eight-hour `Secure`, `HttpOnly`, `SameSite=Strict` staging-gateway cookie so browser API calls remain inside the same gateway session. The token stays only in the mode-`600` staging vhost and must never enter Git or evidence. Unauthenticated public requests and invalid cookies must return `401`, while Basic Auth and gateway-cookie HTTPS health/readiness requests pass.
 
 ## Routine feature deployment
 
@@ -67,6 +67,7 @@ Numbered smoke journey:
 - Application rollback: select the last verified release SHA, retain a new staging DB backup, run `docker/staging/deploy.sh <sha>`, and repeat the smoke. Do not point staging at production data.
 - Database recovery: stop application writes, prove the staging DB identity, take a failure-state dump, obtain explicit recovery authorization, restore the selected staging backup only, migrate, and verify key counts. Never automate production-like destructive restore.
 - `502`: check loopback listeners, `docker compose ... ps`, backend logs, and Nginx upstream ports.
+- Browser login remains on `Signing in`: verify the first Basic Auth response sets the staging-gateway cookie, subsequent same-origin API calls use it, invalid cookies still return `401`, and the application login request reaches the backend. Rotate only the staging gateway token if recovery requires invalidating browser gateway sessions.
 - Readiness failure: compare deploy SHA, migration record, required tables, and launch state. Do not bypass readiness.
 - External-integration guard failure: stop the backend and correct staging env/sanitization. Never enable the integration to make the check green.
 - TLS/DNS: verify only the `staging` A record, authoritative DNS, certificate names, and `nginx -t`. Do not modify apex or `app.glintex.in`.

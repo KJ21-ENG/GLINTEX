@@ -38,7 +38,7 @@ services:
     volumes:
       - ./staging-data/backups:/app/backups
       - ./staging-data/logs:/app/logs
-    networks: [staging-internal]
+    networks: [staging-internal, staging-edge]
     ports:
       - "127.0.0.1:${STAGING_BACKEND_PORT:-4102}:4000"
     depends_on:
@@ -59,7 +59,7 @@ services:
       args:
         VITE_API_BASE: ${STAGING_PUBLIC_URL:?STAGING_PUBLIC_URL is required}
         VITE_APP_ENVIRONMENT: staging
-    networks: [staging-internal]
+    networks: [staging-edge]
     ports:
       - "127.0.0.1:${STAGING_FRONTEND_PORT:-4273}:80"
     depends_on:
@@ -104,6 +104,8 @@ networks:
   staging-internal:
     name: glintex-staging-internal
     internal: true
+  staging-edge:
+    name: glintex-staging-edge
 
 volumes:
   staging-postgres-data:

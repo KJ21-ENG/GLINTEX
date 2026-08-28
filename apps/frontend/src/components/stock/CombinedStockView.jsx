@@ -58,7 +58,7 @@ const byLotNo = (a, b) => (a.lotNo || '').localeCompare(b.lotNo || '', undefined
 
 const noopApplyFilter = () => { };
 
-export function CombinedStockView({ db, ensureModuleData }) {
+export function CombinedStockView({ db }) {
   const [selectedItemId, setSelectedItemId] = useState('');
   const [selectedYarnId, setSelectedYarnId] = useState('');
   const [expandedSections, setExpandedSections] = useState(() => new Set());
@@ -97,96 +97,41 @@ export function CombinedStockView({ db, ensureModuleData }) {
 
   // --- Data loading (only for enabled sections, and only once an item is picked) ---
 
-  // Jumbo + Bobbins both read the legacy cutter module payload, so one call covers both.
-  const needsCutter = (jumboEnabled || bobbinsEnabled) && hasItem;
-  const [cutterLoaded, setCutterLoaded] = useState(false);
-  const [cutterError, setCutterError] = useState(null);
-  const [cutterNonce, setCutterNonce] = useState(0);
-
-  useEffect(() => {
-    if (!needsCutter) return;
-    let cancelled = false;
-    setCutterError(null);
-    Promise.resolve(ensureModuleData('process', { process: 'cutter', full: true }))
-      .then(() => { if (!cancelled) setCutterLoaded(true); })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error('Failed to load cutter stock module', err);
-        setCutterError(err);
-      });
-    return () => { cancelled = true; };
-  }, [needsCutter, ensureModuleData, cutterNonce]);
-
-  const retryCutter = useCallback(() => {
-    setCutterError(null);
-    setCutterNonce((n) => n + 1);
-  }, []);
-
-  // Derived (not stored) so the first render after picking an item already reads as
-  // loading instead of flashing an empty section before the effect fires.
-  const cutterLoading = needsCutter && !cutterLoaded && !cutterError;
-
   // Hooks must run unconditionally; the `enabled` flag is what gates the network call.
-  const holoV2 = useV2StockLots('holo', { enabled: holoEnabled && hasItem, search: '' });
-  const coningV2 = useV2StockLots('coning', { enabled: coningEnabled && hasItem, search: '' });
-
-  // --- Jumbo (same selectors as the Stock page) ---
-
-  const receiveTotalsMap = useMemo(() => (
-    jumboEnabled
-      ? buildReceiveTotalsMap(db, CUTTER_PROCESS.receiveTotalsKey, CUTTER_PROCESS.receiveWeightField, CUTTER_PROCESS.receiveUnitField)
-      : new Map()
-  ), [db, jumboEnabled]);
-
-  const cutterWastageNoteByPieceId = useMemo(() => (
-    jumboEnabled ? buildCutterWastageNoteByPieceId(db, true) : new Map()
-  ), [db?.receive_from_cutter_machine_challans, jumboEnabled]);
-
-  const cutterIssueByPieceId = useMemo(() => (
-    jumboEnabled ? buildCutterIssueByPieceId(db, true) : new Map()
-  ), [db, jumboEnabled]);
-
-  const jumboLotsMap = useMemo(() => (
-    jumboEnabled ? buildJumboLotsMap(db, receiveTotalsMap, cutterIssueByPieceId, cutterWastageNoteByPieceId) : {}
-  ), [db, receiveTotalsMap, cutterIssueByPieceId, jumboEnabled]);
+  const jumboV2 = useV2StockLots('cutter', {
+    enabled: jumboEnabled && hasItem,
+    loadGroups: displayMode === 'full' || expandedSections.has('jumbo'),
+    search: '',
+    filters: { view: 'jumbo', item: selectedItemId, yarn: selectedYarnId, status: CUTTER_DEFAULT_STATUS },
+  });
+  const bobbinV2 = useV2StockLots('cutter', {
+    enabled: bobbinsEnabled && hasItem,
+    loadGroups: displayMode === 'full' || expandedSections.has('bobbins'),
+    search: '',
+    filters: { view: 'bobbins', item: selectedItemId, yarn: selectedYarnId, status: CUTTER_DEFAULT_STATUS },
+  });
+  const holoV2 = useV2StockLots('holo', {
+    enabled: holoEnabled && hasItem,
+    loadGroups: displayMode === 'full' || expandedSections.has('holo'),
+    search: '',
+    filters: { item: selectedItemId, yarn: selectedYarnId, status: V2_DEFAULT_STATUS },
+  });
+  const coningV2 = useV2StockLots('coning', {
+    enabled: coningEnabled && hasItem,
+    loadGroups: displayMode === 'full' || expandedSections.has('coning'),
+    search: '',
+    filters: { item: selectedItemId, yarn: selectedYarnId, status: V2_DEFAULT_STATUS },
+  });
 
   const jumboLots = useMemo(() => {
     if (!jumboEnabled || !selectedItemId) return [];
-    // Mirrors the Jumbo Rolls view: CP-* purchase lots are excluded, then the item
-    // filter and the default "Available to issue" status filter are applied.
-    return Object.values(jumboLotsMap)
-      .filter((l) => !isCutterPurchaseLotNo(l?.lotNo))
-      .filter((l) => idEq(l.itemId, selectedItemId))
-      .filter((l) => !selectedYarnName || l.yarnNames?.has(selectedYarnName))
-      .filter((l) => (l.availableCount || 0) > 0)
-      .sort(byLotNo);
-  }, [jumboLotsMap, jumboEnabled, selectedItemId, selectedYarnName]);
-
-  // --- Bobbins (same selectors as BobbinView) ---
-
-  const inboundPieceMap = useMemo(() => (
-    bobbinsEnabled ? buildInboundPieceMap(db) : new Map()
-  ), [db?.inbound_items, bobbinsEnabled]);
-
-  const bobbinLotMetaMap = useMemo(() => (
-    bobbinsEnabled ? buildBobbinLotMetaMap(db) : new Map()
-  ), [db?.lots, db?.items, db?.firms, db?.suppliers, bobbinsEnabled]);
-
-  const bobbinCrates = useMemo(() => (
-    bobbinsEnabled ? buildBobbinCrates(db, inboundPieceMap, bobbinLotMetaMap) : []
-  ), [db?.receive_from_cutter_machine_rows, inboundPieceMap, bobbinLotMetaMap, db?.cuts, bobbinsEnabled]);
-
-  const allBobbinLots = useMemo(() => buildBobbinLots(bobbinCrates), [bobbinCrates]);
+    return (jumboV2.lots || []).sort(byLotNo);
+  }, [jumboV2.lots, jumboEnabled, selectedItemId]);
 
   const bobbinLots = useMemo(() => {
     if (!bobbinsEnabled || !selectedItemId) return [];
-    // Mirrors the Bobbins view default status filter (available bobbins only).
-    return allBobbinLots
-      .filter((l) => idEq(l.itemId, selectedItemId))
-      .filter((l) => !selectedYarnName || l.yarnNames?.has(selectedYarnName))
-      .filter((l) => (l.availableBobbins || 0) > 0)
-      .sort(byLotNo);
-  }, [allBobbinLots, bobbinsEnabled, selectedItemId, selectedYarnName]);
+    return (bobbinV2.lots || []).sort(byLotNo);
+  }, [bobbinV2.lots, bobbinsEnabled, selectedItemId]);
 
   // --- Holo / Coning (same v2 lot payloads as HoloView / ConingView) ---
 
@@ -219,26 +164,30 @@ export function CombinedStockView({ db, ensureModuleData }) {
 
   // --- Headline totals (the exact fields each view's grand-total row sums) ---
 
-  const jumboTotals = useMemo(() => jumboLots.reduce((acc, lot) => ({
+  const jumboLoadedTotals = useMemo(() => jumboLots.reduce((acc, lot) => ({
     remainingWeight: acc.remainingWeight + Number(lot.remainingWeight || 0),
     availableCount: acc.availableCount + (lot.availableCount ?? countAvailablePieces(lot.pieces || [])),
   }), { remainingWeight: 0, availableCount: 0 }), [jumboLots]);
+  const jumboTotals = jumboV2.summary ? { ...jumboLoadedTotals, ...jumboV2.summary } : null;
 
-  const bobbinTotals = useMemo(() => bobbinLots.reduce((acc, lot) => ({
+  const bobbinLoadedTotals = useMemo(() => bobbinLots.reduce((acc, lot) => ({
     availableWeight: acc.availableWeight + (lot.availableWeight || 0),
     availableBobbins: acc.availableBobbins + (lot.availableBobbins || 0),
   }), { availableWeight: 0, availableBobbins: 0 }), [bobbinLots]);
+  const bobbinTotals = bobbinV2.summary ? { ...bobbinLoadedTotals, ...bobbinV2.summary } : null;
 
-  const holoTotals = useMemo(() => holoLots.reduce((acc, lot) => ({
+  const holoLoadedTotals = useMemo(() => holoLots.reduce((acc, lot) => ({
     totalWeight: acc.totalWeight + (lot.totalWeight || 0),
     totalRolls: acc.totalRolls + (lot.totalRolls || 0),
     steamedRolls: acc.steamedRolls + (lot.steamedRolls || 0),
   }), { totalWeight: 0, totalRolls: 0, steamedRolls: 0 }), [holoLots]);
+  const holoTotals = holoV2.summary ? { ...holoLoadedTotals, ...holoV2.summary } : null;
 
-  const coningTotals = useMemo(() => coningLots.reduce((acc, lot) => ({
+  const coningLoadedTotals = useMemo(() => coningLots.reduce((acc, lot) => ({
     totalWeight: acc.totalWeight + (lot.totalWeight || 0),
     totalCones: acc.totalCones + (lot.totalCones || 0),
   }), { totalWeight: 0, totalCones: 0 }), [coningLots]);
+  const coningTotals = coningV2.summary ? { ...coningLoadedTotals, ...coningV2.summary } : null;
 
   // --- Pinned filters for full-tables mode ---
 
@@ -248,10 +197,10 @@ export function CombinedStockView({ db, ensureModuleData }) {
   // --- Section descriptors ---
 
   const sectionState = {
-    jumbo: { isLoading: cutterLoading, error: cutterError, onRetry: retryCutter },
-    bobbins: { isLoading: cutterLoading, error: cutterError, onRetry: retryCutter },
-    holo: { isLoading: Boolean(holoV2.lotsLoading), error: holoV2.lotsError || null, onRetry: holoV2.retryLots },
-    coning: { isLoading: Boolean(coningV2.lotsLoading), error: coningV2.lotsError || null, onRetry: coningV2.retryLots },
+    jumbo: { isLoading: Boolean(jumboV2.lotsLoading), summaryLoading: jumboV2.summaryLoading, error: jumboV2.lotsError || null, summaryError: jumboV2.summaryError, onRetry: jumboV2.retryLots, hasMore: jumboV2.lotsHasMore, isLoadingMore: jumboV2.lotsLoadingMore, onLoadMore: jumboV2.loadMoreLots },
+    bobbins: { isLoading: Boolean(bobbinV2.lotsLoading), summaryLoading: bobbinV2.summaryLoading, error: bobbinV2.lotsError || null, summaryError: bobbinV2.summaryError, onRetry: bobbinV2.retryLots, hasMore: bobbinV2.lotsHasMore, isLoadingMore: bobbinV2.lotsLoadingMore, onLoadMore: bobbinV2.loadMoreLots },
+    holo: { isLoading: Boolean(holoV2.lotsLoading), summaryLoading: holoV2.summaryLoading, error: holoV2.lotsError || null, summaryError: holoV2.summaryError, onRetry: holoV2.retryLots, hasMore: holoV2.lotsHasMore, isLoadingMore: holoV2.lotsLoadingMore, onLoadMore: holoV2.loadMoreLots },
+    coning: { isLoading: Boolean(coningV2.lotsLoading), summaryLoading: coningV2.summaryLoading, error: coningV2.lotsError || null, summaryError: coningV2.summaryError, onRetry: coningV2.retryLots, hasMore: coningV2.lotsHasMore, isLoadingMore: coningV2.lotsLoadingMore, onLoadMore: coningV2.loadMoreLots },
   };
 
   const summaryConfig = {
@@ -260,8 +209,8 @@ export function CombinedStockView({ db, ensureModuleData }) {
       rows: jumboLots,
       getRowKey: (l) => l.lotNo,
       totals: [
-        { label: 'Remaining Wt', value: `${formatKg(jumboTotals.remainingWeight)} kg` },
-        { label: 'Available Pieces', value: String(jumboTotals.availableCount) },
+        { label: 'Remaining Wt', value: jumboTotals ? `${formatKg(jumboTotals.remainingWeight)} kg` : '—' },
+        { label: 'Available Pieces', value: jumboTotals ? String(jumboTotals.availableCount) : '—' },
       ],
       columns: [
         { key: 'lotNo', header: 'Lot No', cell: (l) => l.lotNo || '—' },
@@ -301,8 +250,8 @@ export function CombinedStockView({ db, ensureModuleData }) {
       rows: bobbinLots,
       getRowKey: (l) => l.lotKey || l.lotNo,
       totals: [
-        { label: 'Available Wt', value: `${formatKg(bobbinTotals.availableWeight)} kg` },
-        { label: 'Available Bobbins', value: String(bobbinTotals.availableBobbins) },
+        { label: 'Available Wt', value: bobbinTotals ? `${formatKg(bobbinTotals.availableWeight)} kg` : '—' },
+        { label: 'Available Bobbins', value: bobbinTotals ? String(bobbinTotals.availableBobbins) : '—' },
       ],
       columns: [
         { key: 'lotNo', header: 'Lot No', cell: (l) => l.lotNo || '—' },
@@ -342,9 +291,9 @@ export function CombinedStockView({ db, ensureModuleData }) {
       rows: holoLots,
       getRowKey: (l) => l.lotKey || l.lotNo,
       totals: [
-        { label: 'Net Weight', value: `${formatKg(holoTotals.totalWeight)} kg` },
-        { label: 'Rolls', value: String(holoTotals.totalRolls) },
-        { label: 'Steamed', value: `${holoTotals.steamedRolls} / ${holoTotals.totalRolls}` },
+        { label: 'Net Weight', value: holoTotals ? `${formatKg(holoTotals.totalWeight)} kg` : '—' },
+        { label: 'Rolls', value: holoTotals ? String(holoTotals.totalRolls) : '—' },
+        { label: 'Steamed', value: holoTotals ? `${holoTotals.steamedRolls} / ${holoTotals.totalRolls}` : '—' },
       ],
       columns: [
         { key: 'lotNo', header: 'Lot No', cell: (l) => l.lotNo || '—' },
@@ -375,8 +324,8 @@ export function CombinedStockView({ db, ensureModuleData }) {
       rows: coningLots,
       getRowKey: (l) => l.lotKey || l.lotNo,
       totals: [
-        { label: 'Net Weight', value: `${formatKg(coningTotals.totalWeight)} kg` },
-        { label: 'Cones', value: String(coningTotals.totalCones) },
+        { label: 'Net Weight', value: coningTotals ? `${formatKg(coningTotals.totalWeight)} kg` : '—' },
+        { label: 'Cones', value: coningTotals ? String(coningTotals.totalCones) : '—' },
       ],
       columns: [
         { key: 'lotNo', header: 'Lot No', cell: (l) => l.lotNo || '—' },
@@ -408,19 +357,28 @@ export function CombinedStockView({ db, ensureModuleData }) {
       return (
         <CombinedJumboTable
           lots={jumboLots}
-          isLoading={cutterLoading}
-          error={cutterError}
-          onRetry={retryCutter}
+          summary={jumboV2.summary}
+          summaryLoading={jumboV2.summaryLoading}
+          rowsByKey={jumboV2.rowsByKey}
+          rowPagesByKey={jumboV2.rowPagesByKey}
+          loadLotRows={jumboV2.loadLotRows}
+          loadMoreLotRows={jumboV2.loadMoreLotRows}
+          isLoading={jumboV2.lotsLoading}
+          error={jumboV2.lotsError}
+          onRetry={jumboV2.retryLots}
+          hasMore={jumboV2.lotsHasMore}
+          isLoadingMore={jumboV2.lotsLoadingMore}
+          onLoadMore={jumboV2.loadMoreLots}
         />
       );
     }
     if (processKey === 'bobbins') {
-      if (cutterLoading || cutterError) {
+      if (bobbinV2.lotsLoading || bobbinV2.lotsError) {
         return (
           <ListState
-            isLoading={cutterLoading}
-            error={cutterError}
-            onRetry={retryCutter}
+            isLoading={bobbinV2.lotsLoading}
+            error={bobbinV2.lotsError}
+            onRetry={bobbinV2.retryLots}
             emptyMessage="No bobbin stock for this item."
             className="border rounded-lg bg-card"
           />
@@ -433,6 +391,7 @@ export function CombinedStockView({ db, ensureModuleData }) {
           search=""
           groupBy={false}
           onApplyFilter={noopApplyFilter}
+          v2={bobbinV2}
         />
       );
     }
@@ -444,7 +403,6 @@ export function CombinedStockView({ db, ensureModuleData }) {
           search=""
           groupBy={false}
           onApplyFilter={noopApplyFilter}
-          ensureProcessData={() => ensureModuleData('process', { process: 'holo', full: true })}
           v2={holoV2}
         />
       );
@@ -457,7 +415,6 @@ export function CombinedStockView({ db, ensureModuleData }) {
           search=""
           groupBy={false}
           onApplyFilter={noopApplyFilter}
-          ensureProcessData={() => ensureModuleData('process', { process: 'coning', full: true })}
           v2={coningV2}
         />
       );
@@ -491,8 +448,13 @@ export function CombinedStockView({ db, ensureModuleData }) {
         renderMobileRow={config.renderMobileRow}
         emptyMessage={config.emptyMessage}
         isLoading={state.isLoading}
+        summaryLoading={state.summaryLoading}
+        summaryError={state.summaryError}
         error={state.error}
         onRetry={state.onRetry}
+        hasMore={state.hasMore}
+        isLoadingMore={state.isLoadingMore}
+        onLoadMore={state.onLoadMore}
         expanded={expandedSections.has(processKey)}
         onToggle={() => toggleSection(processKey)}
       />

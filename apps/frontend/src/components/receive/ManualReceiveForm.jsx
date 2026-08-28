@@ -7,7 +7,7 @@ import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function ManualReceiveForm() {
-    const { db, refreshProcessData, emitInvalidation } = useInventory();
+    const { db, emitInvalidation } = useInventory();
     const [lotNo, setLotNo] = useState('');
     const [pieceId, setPieceId] = useState('');
     const [bobbinId, setBobbinId] = useState('');
@@ -89,9 +89,10 @@ export function ManualReceiveForm() {
                     receiveDate: entry.receiveDate
                 });
             }
-            // Manual receive here maps to cutter receive; refresh only the cutter process module.
-            await refreshProcessData('cutter');
-            emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+            ], {
                 source: 'manualReceiveFromMachine',
                 entryCount: cart.length,
             });

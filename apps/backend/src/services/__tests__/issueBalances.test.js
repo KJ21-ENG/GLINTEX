@@ -86,12 +86,14 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
       ],
       metallicBobbins: 0,
       metallicBobbinsWeight: 0,
+      yarnKg: 1.25,
     },
     {
       id: 'h2',
       receivedRowRefs: [],
       metallicBobbins: 7,
       metallicBobbinsWeight: 3.5,
+      yarnKg: 0.5,
     },
   ];
   const stub = makeStub({
@@ -110,7 +112,7 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
 
   const h1 = result.get('h1');
   assert.equal(h1.originalCount, 14);
-  assert.equal(h1.originalWeight, 7.0);
+  assert.equal(h1.originalWeight, 8.25);
   assert.equal(h1.takeBackCount, 2);
   assert.equal(h1.takeBackWeight, 1.0);
   assert.equal(h1.receivedCount, 3);
@@ -118,14 +120,16 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
   assert.equal(h1.wastageCount, 1);
   assert.equal(h1.wastageWeight, 0.5);
   assert.equal(h1.netIssuedCount, 12);
-  assert.equal(h1.netIssuedWeight, 6.0);
-  assert.equal(h1.pendingCount, 8);
-  assert.equal(h1.pendingWeight, 4.0);
+  assert.equal(h1.netIssuedWeight, 7.25);
+  assert.equal(h1.pendingCount, 12, 'Holo output rolls do not consume input bobbin count');
+  assert.equal(h1.pendingWeight, 5.25);
+  assert.ok(Number.isFinite(Date.parse(h1.asOf)));
 
   const h2 = result.get('h2');
   // empty receivedRowRefs => fall back to issue header
   assert.equal(h2.originalCount, 7);
-  assert.equal(h2.originalWeight, 3.5);
+  assert.equal(h2.originalWeight, 4.0);
+  assert.equal(h2.asOf, h1.asOf);
 });
 
 test('coning: 3 DB calls regardless of issue count', async () => {

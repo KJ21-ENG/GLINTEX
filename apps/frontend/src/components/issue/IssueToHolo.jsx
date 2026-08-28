@@ -9,7 +9,7 @@ import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function IssueToHolo() {
-    const { db, refreshProcessData, emitInvalidation } = useInventory();
+    const { db, emitInvalidation } = useInventory();
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -24,6 +24,7 @@ export function IssueToHolo() {
 
     const [crates, setCrates] = useState([]);
     const [scanInput, setScanInput] = useState('');
+    const [scanLoading, setScanLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [, wrapSubmit] = useSubmitLock();
     // Machine/operator/yarn/twist params are retained after a successful issue —
@@ -88,88 +89,83 @@ export function IssueToHolo() {
 
     // --- Handlers ---
 
-    function addBarcode(raw) {
+    async function addBarcode(raw) {
+        if (scanLoading) return;
         const normalized = String(raw || '').trim().toUpperCase();
         if (!normalized) return;
 
-        // Lookup in cutter receive rows
-        const row = (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && (r.barcode || '').toUpperCase() === normalized);
-
-        if (!row) {
-            alert('Barcode not found in Cutter Receive rows');
-            return;
-        }
-
-        if (crates.some(c => c.rowId === row.id)) {
-            alert('Crate already added');
-            return;
-        }
-
-        // Check Lot Consistency
-        const piece = db.inbound_items.find(p => p.id === row.pieceId);
-        if (!piece) {
-            alert('Inbound piece not found for this crate');
-            return;
-        }
-        const rowLot = piece.lotNo;
-        const rowItem = piece.itemId;
-        if (!rowLot || !rowItem) {
-            alert('Missing lot or item for this crate');
-            return;
-        }
-
-        if (crates.length > 0 && rowItem !== lotSummary.itemId) {
-            alert('Mixed items not allowed');
-            return;
-        }
-
-        const scannedCut = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || db.cuts?.find(c => c.id === row.cutId)?.name || '';
-        if (crates.length > 0) {
-            const existingCut = String(crates[0]?.cut || '').trim().toLowerCase();
-            const nextCut = String(scannedCut || '').trim().toLowerCase();
-            if (existingCut && nextCut && existingCut !== nextCut) {
-                alert('Mixed cuts not allowed');
+        setScanLoading(true);
+        try {
+            const result = await api.getV2IssueSourceRow('holo', normalized);
+            const row = result?.row;
+            if (!row || result?.outcome !== 'found') {
+                alert(result?.error || 'Barcode not found in Cutter Receive rows');
                 return;
             }
-        }
 
-        // Calculate Default Issue Qty (Available), factoring in dispatch
-        const totalCount = Number(row.bobbinQuantity || 0);
-        const issuedCount = Number(row.issuedBobbins || 0);
-        const dispatchedCount = Number(row.dispatchedCount || 0);
-        const availCount = Math.max(0, totalCount - issuedCount - dispatchedCount);
+            if (crates.some(c => c.rowId === row.id)) {
+                alert('Crate already added');
+                return;
+            }
 
-        const netWeight = Number(row.netWt || 0);
-        const issuedWt = Number(row.issuedBobbinWeight || 0);
-        const dispatchedWt = Number(row.dispatchedWeight || 0);
-        const availWt = Math.max(0, netWeight - issuedWt - dispatchedWt);
+            const rowLot = row.lotNo || result?.trace?.lotNo;
+            const rowItem = row.itemId || result?.trace?.itemId;
+            if (!rowLot || !rowItem) {
+                alert('Missing lot or item for this crate');
+                return;
+            }
 
-        if (availCount <= 0 || availWt <= 0) {
-            alert('No bobbins available for issue (may have been dispatched).');
+            if (crates.length > 0 && rowItem !== lotSummary.itemId) {
+                alert('Mixed items not allowed');
+                return;
+            }
+
+            const scannedCut = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || result?.trace?.cutName || '';
+            if (crates.length > 0) {
+                const existingCut = String(crates[0]?.cut || '').trim().toLowerCase();
+                const nextCut = String(scannedCut || '').trim().toLowerCase();
+                if (existingCut && nextCut && existingCut !== nextCut) {
+                    alert('Mixed cuts not allowed');
+                    return;
+                }
+            }
+
+            const availCount = Number(result?.availability?.availableCount ?? row.availableBobbins ?? 0);
+            const availWt = Number(result?.availability?.availableWeight ?? row.availableWeight ?? 0);
+
+            if (availCount <= 0 || availWt <= 0) {
+                alert('No bobbins available for issue (may have been dispatched).');
+                setScanInput('');
+                return;
+            }
+
+            const newCrate = {
+                rowId: row.id,
+                barcode: row.barcode,
+                lotNo: rowLot,
+                pieceId: row.pieceId,
+                itemId: rowItem,
+                itemName: row.itemName || result?.trace?.itemName || '',
+                availCount,
+                availWt,
+                cut: scannedCut,
+                bobbinType: row.bobbin?.name || row.pcsTypeName || '',
+                issuedBobbins: availCount,
+                issuedBobbinWeight: availWt
+            };
+
+            setCrates(prev => [...prev, newCrate]);
             setScanInput('');
-            return;
+            setScanFeedback(`Added ${normalized}`);
+        } catch (e) {
+            alert(e.message || 'Failed to lookup barcode');
+        } finally {
+            setScanLoading(false);
         }
-
-        const newCrate = {
-            rowId: row.id,
-            barcode: row.barcode,
-            lotNo: rowLot,
-            pieceId: row.pieceId, // Show piece ID in the 'Piece' column
-            itemId: rowItem,
-            availCount,
-            availWt,
-            cut: (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || db.cuts?.find(c => c.id === row.cutId)?.name || '',
-            issuedBobbins: availCount, // Default to all available
-            issuedBobbinWeight: availWt
-        };
-
-        setCrates(prev => [...prev, newCrate]);
-        setScanInput('');
-        setScanFeedback(`Added ${normalized}`);
     }
 
     async function handleScan() {
-        return addBarcode(scanInput);
+        return await addBarcode(scanInput);
     }
 
     function updateCrate(rowId, field, val) {
@@ -218,56 +214,46 @@ export function IssueToHolo() {
                     issuedBobbinWeight: Number(c.issuedBobbinWeight)
                 }))
             });
-            const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
-            if (template && created?.issueToHoloMachine) {
-                const confirmPrint = window.confirm('Print sticker for this issue?');
-                if (confirmPrint) {
-                    const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
-                    const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
-                    const itemName = db.items.find((i) => i.id === lotSummary.itemId)?.name;
-                    const twistName = db.twists?.find((t) => t.id === form.twistId)?.name;
-                    const yarnName = db.yarns?.find((y) => y.id === form.yarnId)?.name;
+            const firstCrate = crates[0] || null;
+            const printData = {
+                lotNo: lotSummary.lotLabel || created.issueToHoloMachine?.lotNo,
+                barcode: created.issueToHoloMachine?.barcode,
+                itemName: firstCrate?.itemName || db.items.find((i) => i.id === lotSummary.itemId)?.name,
+                machineName: db.machines.find((m) => m.id === form.machineId)?.name,
+                operatorName: db.operators.find((o) => o.id === form.operatorId)?.name,
+                shift: form.shift || '',
+                totalRolls: holoTotals.rolls,
+                totalWeight: holoTotals.weight,
+                netWeight: holoTotals.weight,
+                bobbinQty: holoTotals.rolls,
+                bobbinType: firstCrate?.bobbinType || '',
+                cut: firstCrate?.cut || '',
+                yarnKg: created.issueToHoloMachine?.yarnKg,
+                twistName: db.twists?.find((t) => t.id === form.twistId)?.name,
+                yarnName: db.yarns?.find((y) => y.id === form.yarnId)?.name,
+                date: form.date,
+            };
 
-                    // Get bobbin info from the first crate's source row
-                    const firstCrateRow = crates[0]
-                        ? (db.receive_from_cutter_machine_rows || []).find(r => !r.isDeleted && r.id === crates[0].rowId)
-                        : null;
-                    const bobbinType = firstCrateRow?.bobbin?.name || firstCrateRow?.pcsTypeName || '';
-                    const cut = (typeof firstCrateRow?.cut === 'string' ? firstCrateRow.cut : firstCrateRow?.cut?.name) || firstCrateRow?.cutMaster?.name || db.cuts?.find(c => c.id === firstCrateRow?.cutId)?.name || '';
-
-                    await printStageTemplate(
-                        LABEL_STAGE_KEYS.HOLO_ISSUE,
-                        {
-                            lotNo: lotSummary.lotLabel || created.issueToHoloMachine.lotNo,
-                            barcode: created.issueToHoloMachine.barcode,
-                            itemName,
-                            machineName,
-                            operatorName,
-                            shift: form.shift || '',
-                            totalRolls: holoTotals.rolls,
-                            totalWeight: holoTotals.weight,
-                            netWeight: holoTotals.weight,
-                            bobbinQty: holoTotals.rolls,
-                            bobbinType,
-                            cut,
-                            yarnKg: created.issueToHoloMachine.yarnKg,
-                            twistName,
-                            yarnName,
-                            date: form.date,
-                        },
-                        { template },
-                    );
-                }
-            }
+            setCrates([]);
+            setForm(prev => ({ ...prev, yarnKg: '', note: '' }));
+            setSubmitting(false);
             emitInvalidation([
                 INVENTORY_INVALIDATION_KEYS.issueOnMachine('holo'),
                 INVENTORY_INVALIDATION_KEYS.issueHistory('holo'),
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+                INVENTORY_INVALIDATION_KEYS.stock('holo'),
             ], { source: 'createIssueToHoloMachine' });
-            // Avoid full bootstrap refresh; issue + cutter rows are covered by the holo process module.
-            await refreshProcessData('holo');
-            setCrates([]);
-            setForm(prev => ({ ...prev, yarnKg: '', note: '' }));
             alert('Issued successfully');
+
+            try {
+                const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
+                if (template && created?.issueToHoloMachine && window.confirm('Print sticker for this issue?')) {
+                    await printStageTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE, printData, { template });
+                }
+            } catch (printError) {
+                console.error('Holo issue label print failed', printError);
+                alert('Issued successfully, sticker not printed');
+            }
         } catch (e) {
             alert(e.message);
         } finally {
@@ -369,7 +355,7 @@ export function IssueToHolo() {
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
                             className="flex-1 sm:w-48"
                         />
-                        <Button onClick={handleScan}>Add</Button>
+                        <Button onClick={handleScan} disabled={scanLoading}>{scanLoading ? 'Checking...' : 'Add'}</Button>
                         <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
                             Scan
                         </Button>

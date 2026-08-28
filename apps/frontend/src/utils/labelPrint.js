@@ -4,6 +4,7 @@
 
 import { formatDateDDMMYYYY } from './formatting';
 import { buildBitmapTsplFromTemplate } from './labelBitmap';
+import { API_BASE } from '../api/base';
 
 export const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
 const DEFAULT_MATERIAL_CODE = (import.meta.env.VITE_BARCODE_MATERIAL_CODE || 'MET').toUpperCase();
@@ -188,15 +189,7 @@ export const STAGE_VARIABLES = {
 
 export const getStageVariables = (stage) => STAGE_VARIABLES[stage] || [];
 
-const getApiOrigin = () => {
-  if (import.meta?.env?.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
-  if (typeof window !== 'undefined' && window.location) {
-    return `${window.location.protocol}//${window.location.hostname}:4000`;
-  }
-  return 'http://localhost:4000';
-};
-
-const API_BASE_DEFAULT = `${getApiOrigin()}/api`;
+const API_BASE_DEFAULT = `${API_BASE}/api`;
 
 const safeReadJson = async (response) => {
   const raw = await response.text();

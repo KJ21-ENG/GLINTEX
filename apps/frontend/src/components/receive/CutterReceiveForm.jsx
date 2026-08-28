@@ -5,10 +5,11 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../../utils';
 import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
+import { chooseLatestIssueBalance } from '../../utils/issueBalance';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 import {
@@ -20,7 +21,7 @@ import {
 } from './ResizableIssueSummary';
 
 export function CutterReceiveForm() {
-    const { db, refreshProcessData, emitInvalidation } = useInventory();
+    const { db, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
     const [barcode, setBarcode] = useState('');
@@ -55,7 +56,7 @@ export function CutterReceiveForm() {
         if (!rawIssue?.id) return rawIssue;
         return {
             ...rawIssue,
-            issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+            issueBalance: chooseLatestIssueBalance(rawIssue.issueBalance, db?.issue_balances?.[rawIssue.id]),
         };
     };
     const toTimeMs = (value) => {
@@ -184,7 +185,10 @@ export function CutterReceiveForm() {
 
     const issueReceiveRows = useMemo(() => {
         if (!issueRecord?.id) return [];
-        const allRows = db.receive_from_cutter_machine_rows || [];
+        const allRows = [
+            ...(Array.isArray(issueRecord.receiveRows) ? issueRecord.receiveRows : []),
+            ...(db.receive_from_cutter_machine_rows || []),
+        ];
         const linkedRows = allRows.filter((row) => !row.isDeleted && row.issueId === issueRecord.id);
         const issuePieceIds = Array.isArray(issueRecord.pieceIds) ? issueRecord.pieceIds : [];
         const issueCreatedAtMs = toTimeMs(issueRecord.createdAt);
@@ -233,7 +237,7 @@ export function CutterReceiveForm() {
             };
         }
         const pieceIds = issueRecord.pieceIds;
-        const issueBalance = issueRecord.issueBalance || db?.issue_balances?.[issueRecord.id] || null;
+        const issueBalance = chooseLatestIssueBalance(issueRecord.issueBalance, db?.issue_balances?.[issueRecord.id]);
 
         const inboundWt = pieceIds.reduce((sum, pid) => {
             const piece = db.inbound_items?.find(p => p.id === pid);
@@ -273,13 +277,17 @@ export function CutterReceiveForm() {
             takenBackWeight: Math.max(0, takenBack),
             netIssuedWeight: Math.max(0, netIssued),
             totalReceived: Math.max(0, receivedBase + receivedInCart),
-            totalReceivedBobbins: Math.max(0, bobbinsFromRows + bobbinsInCart),
+            totalReceivedBobbins: Math.max(0, Number(issueBalance?.receivedCount ?? bobbinsFromRows) + bobbinsInCart),
             pendingWeight: Math.max(0, pendingBase - receivedInCart - wastageInCart),
             wastageWeight: Math.max(0, wastageBase + wastageInCart),
         };
     }, [issueRecord, db.inbound_items, db.issue_balances, issueReceiveRows, cart]);
 
     const pieceIdToUse = issueRecord?.pieceIds?.[0] || '';
+    const lookupPieces = Array.isArray(issueRecord?.pieces) ? issueRecord.pieces : [];
+    const pieceById = (pieceId) => lookupPieces.find((piece) => piece.id === pieceId)
+        || db.inbound_items?.find((piece) => piece.id === pieceId)
+        || null;
 
     const pieceStatus = useMemo(() => {
         if (!pieceIdToUse) {
@@ -292,8 +300,11 @@ export function CutterReceiveForm() {
                 hasWastageInCart: false,
             };
         }
-        const pieceMeta = db.inbound_items?.find(p => p.id === pieceIdToUse);
-        const issueLines = (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === issueRecord?.id);
+        const pieceMeta = pieceById(pieceIdToUse);
+        const lookupLines = Array.isArray(issueRecord?.lines) ? issueRecord.lines : [];
+        const issueLines = lookupLines.length > 0
+            ? lookupLines
+            : (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === issueRecord?.id);
         const issueLineWeight = issueLines
             .filter((line) => line.pieceId === pieceIdToUse)
             .reduce((sum, line) => sum + Number(line.issuedWeight || 0), 0);
@@ -327,6 +338,22 @@ export function CutterReceiveForm() {
             return sum + (Number(entry.netWeight) || 0);
         }, 0);
 
+        const issueBalance = chooseLatestIssueBalance(issueRecord?.issueBalance, db?.issue_balances?.[issueRecord?.id]);
+        if (issueBalance && (issueRecord?.pieceIds || []).length === 1) {
+            const cartReceived = cart.filter((entry) => entry.pieceId === pieceIdToUse && !entry.isWastage)
+                .reduce((sum, entry) => sum + Number(entry.netWeight || 0), 0);
+            const cartWastage = cart.filter((entry) => entry.pieceId === pieceIdToUse && entry.isWastage)
+                .reduce((sum, entry) => sum + Number(entry.netWeight || 0), 0);
+            return {
+                inboundWeight: Number(issueBalance.netIssuedWeight || 0),
+                receivedWeight: Number(issueBalance.receivedWeight || 0) + cartReceived,
+                wastageWeight: Number(issueBalance.wastageWeight || 0) + cartWastage,
+                pendingWeight: Math.max(0, Number(issueBalance.pendingWeight || 0) - cartReceived - cartWastage),
+                hasWastageInDb: Number(issueBalance.wastageWeight || 0) > 0,
+                hasWastageInCart: cartWastage > 0,
+            };
+        }
+
         const legacyInboundWeight = Number(pieceMeta?.weight || 0);
         const issueNetForPiece = issueLineWeight > 0
             ? Math.max(0, issueLineWeight - takeBackForPiece)
@@ -341,7 +368,7 @@ export function CutterReceiveForm() {
             hasWastageInDb: wastageDb > 0,
             hasWastageInCart: cartWastage > 0,
         };
-    }, [pieceIdToUse, db.inbound_items, db.issue_to_cutter_machine_lines, db.issue_take_backs, issueRecord?.id, issueReceiveRows, cart]);
+    }, [pieceIdToUse, db.inbound_items, db.issue_to_cutter_machine_lines, db.issue_take_backs, db.issue_balances, issueRecord, issueReceiveRows, cart]);
 
     const effectiveNetWeight = isWastage ? pieceStatus.pendingWeight : netWeight;
     const isWastageClosed = pieceStatus.pendingWeight <= 0 && pieceStatus.hasWastageInDb;
@@ -350,18 +377,6 @@ export function CutterReceiveForm() {
     const isReceivedOverIssued = netIssuedWeight > 0
         && totalReceived > netIssuedWeight + RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG;
     const excessReceivedWeight = Math.max(0, totalReceived - netIssuedWeight);
-
-    const computeNextBarcode = (pieceId, lotNo, seq) => {
-        const existing = (db.receive_from_cutter_machine_rows || []).filter((row) => row.pieceId === pieceId && !row.isDeleted);
-        const existingMax = existing.reduce((max, row) => {
-            const idx = parseReceiveCrateIndex(row.barcode);
-            if (idx != null && idx > max) return idx;
-            return max;
-        }, 0);
-        const inCartCount = cart.filter((c) => c.pieceId === pieceId && !c.isWastage).length;
-        const nextIndex = existingMax + inCartCount + 1;
-        return makeReceiveBarcode({ lotNo, seq, crateIndex: nextIndex });
-    };
 
     const handleAdd = wrapAdd(async () => {
         if (!issueRecord) return;
@@ -425,7 +440,6 @@ export function CutterReceiveForm() {
         }
 
         // Validate net weight doesn't exceed pending weight
-        const pieceMeta = db.inbound_items.find((p) => p.id === pieceIdToUse);
         const piecePendingWeight = pieceStatus.pendingWeight;
 
         if (pendingWeight <= 0) {
@@ -448,9 +462,6 @@ export function CutterReceiveForm() {
             return;
         }
 
-        const seq = pieceMeta?.seq || Number((pieceMeta?.id || '').split('-').pop());
-        const receiveBarcode = computeNextBarcode(pieceIdToUse, issueRecord.lotNo, seq || 0);
-
         const cutName = db.cuts.find(c => c.id === cutId)?.name;
         const helperName = db.workers.find(o => o.id === helperId)?.name;
 
@@ -463,7 +474,7 @@ export function CutterReceiveForm() {
             operatorId: issueRecord.operatorId, // Capture operator from issue
             cutId, helperId, shift, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
             netWeight: netWeight,
-            barcode: receiveBarcode,
+            barcode: null,
 
             // Display Names
             itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
@@ -476,40 +487,6 @@ export function CutterReceiveForm() {
             boxName: selectedBox?.name
         }]);
 
-        const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE));
-        if (tpl && receiveBarcode) {
-            const confirmPrint = window.confirm('Print sticker for this crate?');
-            if (confirmPrint) {
-                const itemName = db.items.find(i => i.id === issueRecord.itemId)?.name;
-                const machineName = db.machines.find(m => m.id === issueRecord.machineId)?.name;
-                const tareWeight = ((selectedBox?.weight || 0) + (selectedBobbin?.weight || 0) * Number(bobbinQty)).toFixed(3);
-
-                await printStageTemplate(
-                    LABEL_STAGE_KEYS.CUTTER_RECEIVE,
-                    {
-                        lotNo: issueRecord.lotNo,
-                        itemName,
-                        pieceId: pieceIdToUse,
-                        barcode: receiveBarcode,
-                        netWeight: netWeight,
-                        grossWeight,
-                        tareWeight,
-                        bobbinQty,
-                        bobbinName: selectedBobbin?.name,
-                        boxName: selectedBox?.name,
-                        cut: cutName,
-                        cutName,
-                        machineName,
-                        helperName,
-                        operatorName: db.workers.find((o) => o.id === issueRecord.operatorId)?.name,
-                        shift,
-                        date: receiveDate,
-                    },
-                    { template: tpl },
-                );
-            }
-        }
-
         // Reset fields for next box
         setGrossWeight('');
         setBobbinQty('');
@@ -520,7 +497,9 @@ export function CutterReceiveForm() {
         if (cart.length === 0) return;
         setSaving(true);
         try {
+            const submittedCart = [...cart];
             const entries = cart.map(entry => ({
+                issueId: entry.issueId,
                 pieceId: entry.pieceId,
                 lotNo: entry.lotNo,
                 bobbinId: entry.bobbinId,
@@ -537,18 +516,55 @@ export function CutterReceiveForm() {
             }));
 
             const res = await api.createCutterReceiveChallan({ entries });
-            // Avoid full bootstrap refresh; cutter receives are covered by the cutter process module.
-            await refreshProcessData('cutter');
-            emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+            ], {
                 source: 'createCutterReceiveChallan',
                 challanId: res?.challan?.id || null,
             });
             setCart([]);
             setIssueRecord(null);
             setBarcode('');
+            setSaving(false);
             const challanNo = res?.challan?.challanNo;
             alert(challanNo ? `Received successfully. Challan ${challanNo} generated.` : 'Received successfully');
             barcodeInputRef.current?.focus();
+
+            const savedRows = Array.isArray(res?.rows) ? res.rows : [];
+            if (savedRows.length > 0 && window.confirm(`Print ${savedRows.length} committed crate sticker${savedRows.length === 1 ? '' : 's'}?`)) {
+                try {
+                    const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE));
+                    for (let index = 0; index < savedRows.length; index += 1) {
+                        const saved = savedRows[index];
+                        const source = submittedCart.filter((entry) => !entry.isWastage)[index];
+                        if (!source || !saved?.barcode) continue;
+                        const savedBobbin = db.bobbins.find((item) => item.id === source.bobbinId);
+                        const savedBox = db.boxes.find((item) => item.id === source.boxId);
+                        await printStageTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE, {
+                            lotNo: source.lotNo,
+                            itemName: source.itemName,
+                            pieceId: source.pieceId,
+                            barcode: saved.barcode,
+                            netWeight: saved.netWt ?? source.netWeight,
+                            grossWeight: saved.grossWt ?? source.grossWeight,
+                            tareWeight: saved.tareWt ?? ((savedBox?.weight || 0) + (savedBobbin?.weight || 0) * Number(source.bobbinQty)),
+                            bobbinQty: saved.bobbinQuantity ?? source.bobbinQty,
+                            bobbinName: source.bobbinName,
+                            boxName: source.boxName,
+                            cut: source.cutName,
+                            cutName: source.cutName,
+                            machineName: db.machines.find((machine) => machine.id === issueRecord?.machineId)?.name,
+                            helperName: source.helperName,
+                            operatorName: source.operatorName,
+                            shift: source.shift,
+                            date: source.receiveDate,
+                        }, { template: tpl });
+                    }
+                } catch (printError) {
+                    alert(`Received successfully, sticker not printed. ${printError?.message || ''}`.trim());
+                }
+            }
         } catch (e) {
             alert(e.message);
         } finally {

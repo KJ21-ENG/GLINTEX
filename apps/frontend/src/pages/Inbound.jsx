@@ -65,7 +65,7 @@ const EMPTY_CUTTER_ENTRY = {
 
 
 export function Inbound() {
-    const { db, createLot, refreshing, ensureModuleData, refreshProcessData } = useInventory();
+    const { db, createLot, refreshing, ensureModuleData, refreshModuleData, emitInvalidation } = useInventory();
     const { canRead, canWrite } = usePermission('inbound');
     const { canRead: canReadCutter, canWrite: canWriteCutter } = useStagePermission('receive', 'cutter');
     const readOnly = canRead && !canWrite;
@@ -392,8 +392,8 @@ export function Inbound() {
                 })),
             };
             await api.createCutterPurchaseInbound(payload);
-            // Avoid full bootstrap refresh; cutter purchase affects cutter process data (and includes inbound basics).
-            await refreshProcessData('cutter');
+            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-created' });
+            void refreshModuleData('inbound');
 
             // Stickers already printed per-crate during addCutterCrate, no batch print needed
 
@@ -825,7 +825,7 @@ export function Inbound() {
 
 // Sub-component for Recent Lots
 function RecentLotsTable({ db }) {
-    const { refreshProcessData } = useInventory();
+    const { refreshModuleData, emitInvalidation } = useInventory();
     const { canEdit: canEditInbound, canDelete: canDeleteInbound } = usePermission('inbound');
     const { canEdit: canEditCutter, canDelete: canDeleteCutter } = useStagePermission('receive', 'cutter');
     const canEditCutterPurchase = canEditInbound && canEditCutter;
@@ -1199,7 +1199,8 @@ function RecentLotsTable({ db }) {
                 })),
             };
             await api.updateCutterPurchaseLot(cutterEditorLotNo, payload);
-            await refreshProcessData('cutter');
+            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-updated' });
+            await refreshModuleData('inbound');
             closeCutterPurchaseEditor();
         } catch (err) {
             alert(err.message || 'Failed to update cutter purchase');
@@ -1216,7 +1217,8 @@ function RecentLotsTable({ db }) {
         if (!confirmDelete) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            await refreshProcessData('cutter');
+            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-deleted' });
+            await refreshModuleData('inbound');
             if (expandedLot === lotNo) setExpandedLot(null);
         } catch (err) {
             alert(err.message || 'Failed to delete cutter purchase');

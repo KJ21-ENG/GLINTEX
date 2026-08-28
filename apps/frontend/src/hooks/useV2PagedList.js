@@ -13,7 +13,7 @@ import { stableStringify } from './useV2CursorList';
  */
 export function useV2PagedList({
   enabled,
-  fetchPage, // ({limit, page, search, dateFrom, dateTo, filters, order}) => {items, hasMore, summary}
+  fetchPage, // ({limit, page, search, dateFrom, dateTo, filters, order, signal}) => page
   limit = 50,
   scopeKey = '',
   search = '',
@@ -55,11 +55,12 @@ export function useV2PagedList({
     }
 
     const gen = ++genRef.current;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     (async () => {
       try {
-        const res = await fetchPageRef.current({ limit, page, search, dateFrom, dateTo, filters, order });
+        const res = await fetchPageRef.current({ limit, page, search, dateFrom, dateTo, filters, order, signal: controller.signal });
         if (gen !== genRef.current) return; // stale response
         const nextItems = Array.isArray(res?.items) ? res.items : [];
         setItems(nextItems);
@@ -72,7 +73,7 @@ export function useV2PagedList({
           setPageState(Math.max(1, Math.min(page - 1, lastPage)));
         }
       } catch (e) {
-        if (gen !== genRef.current) return;
+        if (e?.name === 'AbortError' || gen !== genRef.current) return;
         setError(e);
         setItems([]);
         setHasMore(false);
@@ -80,6 +81,7 @@ export function useV2PagedList({
         if (gen === genRef.current) setLoading(false);
       }
     })();
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, key, page, refreshNonce, limit]);
 

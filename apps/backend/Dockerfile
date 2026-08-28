@@ -36,28 +36,39 @@ RUN apt-get update \
 WORKDIR /app
 
 FROM base AS deps
-COPY package*.json ./
-COPY prisma ./prisma
-RUN npm install --omit=dev
-RUN npx prisma generate
+COPY package.json package-lock.json ./
+COPY apps/backend/package.json ./apps/backend/package.json
+COPY apps/frontend/package.json ./apps/frontend/package.json
+COPY apps/backend/prisma ./apps/backend/prisma
+RUN npm ci
+RUN npx prisma generate --schema apps/backend/prisma/schema.prisma
+
+FROM deps AS production-deps
+RUN npm prune --omit=dev
+
+FROM deps AS migrate
+WORKDIR /app/apps/backend
+CMD ["sh", "-c", "npx --no-install prisma migrate deploy && psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f prisma/manual/apply_process_pagination_indexes.sql"]
 
 FROM base AS runner
-ENV NODE_ENV=production
 WORKDIR /app
+ENV NODE_ENV=production
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/package*.json ./
-COPY prisma ./prisma
-COPY src ./src
-COPY whatsapp ./whatsapp
-COPY telegram ./telegram
-COPY scripts ./scripts
-COPY backups ./backups
+COPY --from=production-deps /app/node_modules ./node_modules
+COPY --from=production-deps /app/package*.json ./
+COPY --from=production-deps /app/apps/backend/package.json ./apps/backend/package.json
+COPY apps/backend/prisma ./apps/backend/prisma
+COPY apps/backend/src ./apps/backend/src
+COPY apps/backend/whatsapp ./apps/backend/whatsapp
+COPY apps/backend/telegram ./apps/backend/telegram
+COPY apps/backend/scripts ./apps/backend/scripts
 
-RUN mkdir -p /app/.wwebjs_auth && chown -R node:node /app
+RUN mkdir -p /app/apps/backend/.wwebjs_auth /app/apps/backend/.wwebjs_cache /app/apps/backend/backups /app/apps/backend/logs \
+    && chown -R node:node /app
 USER node
+WORKDIR /app/apps/backend
 
 ENV PORT=4000
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && node src/server.js"]
+CMD ["node", "src/server.js"]

@@ -27,7 +27,8 @@ export const stableStringify = (obj) => {
 
 export function useV2CursorList({
   enabled,
-  fetchPage, // ({limit, cursor, search, dateFrom, dateTo, filters, order}) => {items, hasMore, nextCursor}
+  fetchPage, // ({limit, cursor, search, dateFrom, dateTo, filters, order, signal}) => page
+  fetchSummary = null, // ({search, dateFrom, dateTo, filters, order, signal}) => {summary, computedAt}
   limit = 50,
   scopeKey = '',
   search = '',
@@ -42,9 +43,12 @@ export function useV2CursorList({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const inFlightRef = useRef(false);
+  const activePageRequestRef = useRef(null);
   const genRef = useRef(0);
+  const activeControllersRef = useRef(new Set());
 
   // Keep cursor/hasMore in refs so loadMore's identity stays stable across fetches.
   // This prevents the IntersectionObserver from being torn down & re-created on every
@@ -67,6 +71,7 @@ export function useV2CursorList({
     setHasMore(false);
     setError(null);
     setSummary(null);
+    setSummaryError(null);
     setRefreshNonce((n) => n + 1);
   }, []);
 
@@ -74,15 +79,20 @@ export function useV2CursorList({
   // search/filter params (via `key`), not on every render.
   const fetchPageRef = useRef(fetchPage);
   fetchPageRef.current = fetchPage;
+  const fetchSummaryRef = useRef(fetchSummary);
+  fetchSummaryRef.current = fetchSummary;
 
   const loadMore = useCallback(async () => {
     if (!enabled) return;
-    if (inFlightRef.current) return;
+    if (activePageRequestRef.current) return;
     if (!hasMoreRef.current) return;
-    inFlightRef.current = true;
+    const requestToken = Symbol('v2-page-request');
+    activePageRequestRef.current = requestToken;
     setLoading(true);
     setError(null);
     const genAtStart = genRef.current;
+    const controller = new AbortController();
+    activeControllersRef.current.add(controller);
     try {
       const currentCursor = cursorRef.current;
       const {
@@ -100,6 +110,7 @@ export function useV2CursorList({
         dateTo: currentDateTo,
         filters: currentFilters,
         order: currentOrder,
+        signal: controller.signal,
       });
       // Params changed while request was in flight: drop stale response.
       if (genAtStart !== genRef.current) return;
@@ -120,10 +131,13 @@ export function useV2CursorList({
       setCursor(nextCursor);
       setHasMore(nextHasMore);
     } catch (e) {
-      if (genAtStart === genRef.current) setError(e);
+      if (e?.name !== 'AbortError' && genAtStart === genRef.current) setError(e);
     } finally {
-      if (genAtStart === genRef.current) setLoading(false);
-      inFlightRef.current = false;
+      activeControllersRef.current.delete(controller);
+      if (activePageRequestRef.current === requestToken) {
+        activePageRequestRef.current = null;
+        if (genAtStart === genRef.current) setLoading(false);
+      }
     }
     // Only re-create when the *parameters* change (via `key`), not when cursor/hasMore change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -132,18 +146,24 @@ export function useV2CursorList({
   // Reset + load first page on param changes.
   useEffect(() => {
     if (!enabled) return;
+    for (const controller of activeControllersRef.current) controller.abort();
+    activeControllersRef.current.clear();
     genRef.current += 1;
     setItems([]);
     setCursor(null);
     setHasMore(true); // Should initially be true so we can fetch page 1
     setError(null);
     setSummary(null);
+    setSummaryLoading(Boolean(fetchSummaryRef.current));
+    setSummaryError(null);
     setLoading(false);
 
     // Synchronously update refs so the subsequent loadMore() call sees the reset state immediately
     cursorRef.current = null;
     hasMoreRef.current = true;
-    inFlightRef.current = false;
+    // The aborted generation still runs its `finally`. Clear its ownership now;
+    // the token check prevents that stale `finally` from releasing a newer page.
+    activePageRequestRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, key, refreshNonce]);
 
@@ -151,6 +171,34 @@ export function useV2CursorList({
     if (!enabled) return;
     loadMore();
   }, [enabled, key, refreshNonce, loadMore]);
+
+  useEffect(() => {
+    if (!enabled || !fetchSummaryRef.current) return undefined;
+    const controller = new AbortController();
+    const genAtStart = genRef.current;
+    activeControllersRef.current.add(controller);
+    const current = queryParamsRef.current;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    fetchSummaryRef.current({ ...current, signal: controller.signal })
+      .then((res) => {
+        if (controller.signal.aborted || genAtStart !== genRef.current) return;
+        setSummary(res?.summary ?? null);
+        setSummaryLoading(false);
+      })
+      .catch((error) => {
+        if (error?.name === 'AbortError' || genAtStart !== genRef.current) return;
+        setSummaryError(error);
+        setSummaryLoading(false);
+      })
+      .finally(() => activeControllersRef.current.delete(controller));
+    return () => controller.abort();
+  }, [enabled, key, refreshNonce]);
+
+  useEffect(() => () => {
+    for (const controller of activeControllersRef.current) controller.abort();
+    activeControllersRef.current.clear();
+  }, []);
 
   return {
     items,
@@ -161,5 +209,7 @@ export function useV2CursorList({
     loadMore,
     refresh,
     summary,
+    summaryLoading,
+    summaryError,
   };
 }

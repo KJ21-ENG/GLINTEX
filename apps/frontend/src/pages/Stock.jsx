@@ -17,6 +17,7 @@ import { Search, Download, Filter, ChevronDown, ChevronRight, Trash2, AlertTrian
 import { fuzzyScore, calculateMultiTermScore } from '../utils';
 import { HighlightMatch } from '../components/common/HighlightMatch';
 import { LotPopover } from '../components/stock/LotPopover';
+import { LotRowsLoadMore } from '../components/stock/LotRowsLoadMore';
 import { cn } from '../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../utils/labelPrint';
 import { usePermission, useStagePermission } from '../hooks/usePermission';
@@ -53,7 +54,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 }
 
 export function Stock() {
-  const { db, brand, createIssueToMachine, refreshing, refreshProcessData, process, ensureModuleData } = useInventory();
+  const { db, brand, createIssueToMachine, refreshing, process } = useInventory();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -67,14 +68,6 @@ export function Stock() {
   const { canWrite: canIssueWrite } = useStagePermission('issue', issueStage);
   const { canWrite: canReceiveWrite } = useStagePermission('receive', issueStage);
   const canRevertWastage = canReceiveWrite && processId === 'cutter';
-
-  useEffect(() => {
-    // Legacy Stock derives availability/totals from process receive rows; truncating the dataset (full:false)
-    // can produce incorrect on-hand totals once the DB exceeds server-side fetch limits.
-    // Holo/coning use dedicated v2 stock reads instead of the heavy legacy module payload.
-    if (processId === 'holo' || processId === 'coning') return;
-    ensureModuleData('process', { process: processId, full: true });
-  }, [ensureModuleData, processId]);
 
   // --- UI State ---
   const [searchParams, setSearchParams] = useSearchParams();
@@ -176,9 +169,13 @@ export function Stock() {
   // Clear export data when view changes to avoid stale data
   useEffect(() => { setExportData(null); }, [view, processId]);
 
-  // --- v2 Stock Fast-Load (holo/coning only; no UI changes) ---
-  const v2StockEnabled = (isHolo || isConing) && view !== 'combined';
-  const v2Api = useV2StockLots(processId, { enabled: v2StockEnabled, search });
+  // Every process uses server-side lot groups. Expanded rows are fetched lazily.
+  const v2StockEnabled = view !== 'combined';
+  const v2Api = useV2StockLots(processId, {
+    enabled: v2StockEnabled,
+    search,
+    filters: { ...filters, view: isCutter ? view : '', groupBy: groupByItem },
+  });
 
   // Close export menu when clicking outside / pressing escape
   useEffect(() => {
@@ -214,8 +211,14 @@ export function Stock() {
   }, [db, isCutter]);
 
   const lotsMap = useMemo(() => {
+    if (isCutter && view === 'jumbo') {
+      return Object.fromEntries((v2Api.lots || []).map((lot) => [lot.groupKey || lot.lotNo || lot.lotKey, {
+        ...lot,
+        pieces: v2Api.rowsByKey[lot.lotKey] || [],
+      }]));
+    }
     return buildJumboLotsMap(db, receiveTotalsMap, cutterIssueByPieceId, cutterWastageNoteByPieceId);
-  }, [db, receiveTotalsMap, cutterIssueByPieceId]);
+  }, [db, isCutter, receiveTotalsMap, cutterIssueByPieceId, v2Api.lots, v2Api.rowsByKey, view]);
 
   const allLots = useMemo(() => {
     const values = Object.values(lotsMap);
@@ -264,11 +267,13 @@ export function Stock() {
       if (filters.item && !idEq(l.itemId, filters.item)) return false;
       if (filters.cut) {
         const cutName = db?.cuts?.find(c => idEq(c.id, filters.cut))?.name;
-        if (cutName && !l.cutNames?.has(cutName)) return false;
+        const cutNames = l.cutNames instanceof Set ? l.cutNames : new Set(l.cutNames || []);
+        if (cutName && !cutNames.has(cutName)) return false;
       }
       if (filters.yarn) {
         const yarnName = db?.yarns?.find(y => idEq(y.id, filters.yarn))?.name;
-        if (yarnName && !l.yarnNames?.has(yarnName)) return false;
+        const yarnNames = l.yarnNames instanceof Set ? l.yarnNames : new Set(l.yarnNames || []);
+        if (yarnName && !yarnNames.has(yarnName)) return false;
       }
       if (filters.firm && !idEq(l.firmId, filters.firm)) return false;
       if (filters.supplier && !idEq(l.supplierId, filters.supplier)) return false;
@@ -295,6 +300,7 @@ export function Stock() {
 
   const displayedLots = useMemo(() => {
     if (!groupByItem) return filteredLots;
+    if (filteredLots.some((lot) => lot.groupKey && Array.isArray(lot.lots))) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
       const key = buildStockGroupKey(lot);
@@ -355,7 +361,7 @@ export function Stock() {
   });
 
   // Grand Totals for Jumbo Rolls view
-  const grandTotals = useMemo(() => {
+  const loadedGrandTotals = useMemo(() => {
     return displayedLots.reduce((acc, lot) => ({
       availableCount: acc.availableCount + (lot.availableCount ?? countAvailablePieces(lot.pieces || [])),
       totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
@@ -368,6 +374,9 @@ export function Stock() {
       issuedWeightBaseTotal: acc.issuedWeightBaseTotal + Number(lot.issuedWeightBaseTotal || 0),
     }), { availableCount: 0, totalPieces: 0, totalWeight: 0, remainingWeight: 0, pendingWeight: 0, wastageTotal: 0, wastageCount: 0, wastageWeightBaseTotal: 0, issuedWeightBaseTotal: 0 });
   }, [displayedLots]);
+  const grandTotals = (isCutter && view === 'jumbo' && v2Api.summary)
+    ? { ...loadedGrandTotals, ...v2Api.summary }
+    : loadedGrandTotals;
 
   // --- Export Handler ---
   const handleExport = async (format = 'xlsx') => {
@@ -382,7 +391,22 @@ export function Stock() {
 
     // For Jumbo view, we use displayedLots directly since it's managed here
     // For other views, we use exportData from child components
-    const dataToExport = (viewType === 'jumbo') ? displayedLots : exportData;
+    let dataToExport = (viewType === 'jumbo') ? displayedLots : exportData;
+    if (v2StockEnabled) {
+      try {
+        const result = await api.getAllV2StockLots(processId, {
+          ...filters,
+          search,
+          view: isCutter ? view : '',
+          groupBy: groupByItem ? 'true' : '',
+        });
+        dataToExport = result.items;
+      } catch (err) {
+        console.error('Failed to load complete filtered stock export', err);
+        alert(err?.message || 'Failed to prepare complete stock export');
+        return;
+      }
+    }
 
     // Calculate grandTotals based on view type
     let totals = {};
@@ -469,15 +493,34 @@ export function Stock() {
       if (v2StockEnabled && dataToExport && dataToExport.length > 0) {
         setExportingDetailed(true);
         try {
-          const enrichedData = await mapWithConcurrency(
-            dataToExport,
+          const detailParents = groupByItem
+            ? (await api.getAllV2StockLots(processId, {
+              ...filters,
+              search,
+              view: isCutter ? view : '',
+              groupBy: '',
+            })).items
+            : dataToExport;
+          const enrichedParents = await mapWithConcurrency(
+            detailParents,
             4,
             async (lot) => {
               if (!lot.lotKey) return lot;
-              const rows = v2Api.rowsByKey[lot.lotKey] || (await v2Api.loadLotRows(lot.lotKey));
+              const rows = await api.getAllV2StockLotRows(processId, { key: lot.lotKey });
+              if (viewType === 'jumbo') return { ...lot, pieces: rows };
+              if (viewType === 'bobbins') return { ...lot, crates: rows };
               return { ...lot, rows };
             }
           );
+          const enrichedData = groupByItem
+            ? dataToExport.map((group) => {
+              const memberLotKeys = new Set(Array.isArray(group.memberLotKeys) ? group.memberLotKeys : []);
+              const members = enrichedParents.filter((lot) => memberLotKeys.has(lot.lotKey));
+              if (viewType === 'jumbo') return { ...group, pieces: members.flatMap((lot) => lot.pieces || []) };
+              if (viewType === 'bobbins') return { ...group, crates: members.flatMap((lot) => lot.crates || []) };
+              return { ...group, rows: members.flatMap((lot) => lot.rows || []) };
+            })
+            : enrichedParents;
           exportStockDetailedXlsx(enrichedData, {
             viewType,
             groupBy: groupByItem,
@@ -570,7 +613,7 @@ export function Stock() {
     setDeletingPieces(prev => new Set(prev).add(pieceId));
     try {
       await api.deleteInboundItem(pieceId);
-      await refreshProcessData(processId);
+      v2Api.retryLots();
     } catch (err) {
       alert(err.message || 'Failed to delete piece');
     } finally {
@@ -609,7 +652,7 @@ export function Stock() {
     if (!confirm('Delete lot ' + lotNo + '? This will remove all pieces and history for this lot.')) return;
     try {
       await api.deleteLot(lotNo);
-      await refreshProcessData(processId);
+      v2Api.retryLots();
     } catch (err) {
       alert(err.message || 'Failed to delete lot');
     }
@@ -626,6 +669,7 @@ export function Stock() {
   async function doIssue() {
     if (!canIssueWrite) return;
     setIssuing(true);
+    let committed = false;
     try {
       const { lotNo, pieceIds, date, machineId, operatorId, cutId, note } = issueModalData;
       if (!cutId) {
@@ -644,6 +688,11 @@ export function Stock() {
       };
       const result = await createIssueToMachine(payload);
       const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+      committed = true;
+      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+      setIssueModalOpen(false);
+      setIssuing(false);
+      v2Api.retryLots();
       const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
       if (template && issueRecord) {
         const confirmPrint = window.confirm('Print sticker for this issue?');
@@ -653,38 +702,44 @@ export function Stock() {
           const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
           const inboundDate = lotsMap[lotNo]?.date || '';
           const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
-          const selectedPieces = (db?.inbound_items || []).filter((p) => pieceIds.includes(p.id));
+          const selectedPieces = [
+            ...(db?.inbound_items || []),
+            ...(lotsMap[lotNo]?.pieces || []),
+          ].filter((p, index, rows) => pieceIds.includes(p.id) && rows.findIndex((row) => row.id === p.id) === index);
           const primaryPiece =
             selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
           const pieceId = primaryPiece?.id || pieceIds[0] || '';
           const seq = primaryPiece?.seq ?? '';
-          await printStageTemplate(
-            LABEL_STAGE_KEYS.CUTTER_ISSUE,
-            {
-              lotNo: issueRecord.lotNo,
-              itemName,
-              pieceId,
-              seq,
-              barcode: issueRecord.barcode,
-              count: issueRecord.count || pieceIds.length,
-              totalWeight: issueRecord.totalWeight,
-              pieceIds,
-              machineName,
-              operatorName,
-              inboundDate,
-              cut,
-              date,
-            },
-            { template },
-          );
+          try {
+            await printStageTemplate(
+              LABEL_STAGE_KEYS.CUTTER_ISSUE,
+              {
+                lotNo: issueRecord.lotNo,
+                itemName,
+                pieceId,
+                seq,
+                barcode: issueRecord.barcode,
+                count: issueRecord.count || pieceIds.length,
+                totalWeight: issueRecord.totalWeight,
+                pieceIds,
+                machineName,
+                operatorName,
+                inboundDate,
+                cut,
+                date,
+              },
+              { template },
+            );
+          } catch (printError) {
+            console.error('Cutter issue saved but sticker printing failed', printError);
+            alert('Issued successfully, sticker not printed');
+          }
         }
       }
-      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
-      setIssueModalOpen(false);
     } catch (e) {
-      alert(e.message);
+      alert(committed ? 'Issued successfully, sticker not printed' : e.message);
     } finally {
-      setIssuing(false);
+      if (!committed) setIssuing(false);
     }
   }
 
@@ -694,9 +749,21 @@ export function Stock() {
   }
 
   // --- Render Helper ---
-  const toggleExpand = (lotNo) => {
+  const toggleExpand = async (lotNo) => {
     markManualInteraction();
-    setExpandedLot(prev => prev === lotNo ? null : lotNo);
+    if (expandedLot === lotNo) {
+      setExpandedLot(null);
+      return;
+    }
+    setExpandedLot(lotNo);
+    const lot = (v2Api.lots || []).find((entry) => entry.lotNo === lotNo);
+    if (lot?.lotKey && !v2Api.rowsByKey[lot.lotKey]) {
+      try {
+        await v2Api.loadLotRows(lot.lotKey);
+      } catch (err) {
+        console.error('Failed to load cutter lot rows', err);
+      }
+    }
   };
   const showBobbins = isCutter && view === 'bobbins';
   const formatWastageSummary = (lot) => {
@@ -879,7 +946,7 @@ export function Stock() {
 
       {/* Main Content based on View */}
       {isCombined ? (
-        <CombinedStockView db={db} ensureModuleData={ensureModuleData} />
+        <CombinedStockView db={db} />
       ) : processId === 'coning' ? (
         <ConingView
           db={db}
@@ -888,8 +955,8 @@ export function Stock() {
           groupBy={groupByItem}
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
-          ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2Api}
+          canReprint={canReceiveWrite}
         />
       ) : isHolo ? (
         <HoloView
@@ -899,11 +966,11 @@ export function Stock() {
           groupBy={groupByItem}
           onApplyFilter={handleApplyLotFilter}
           onDataChange={setExportData}
-          ensureProcessData={() => ensureModuleData('process', { process: processId, full: true })}
           v2={v2Api}
+          canReprint={canReceiveWrite}
         />
       ) : showBobbins ? (
-        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} />
+        <BobbinView db={db} filters={filters} search={search} groupBy={groupByItem} onApplyFilter={handleApplyLotFilter} onDataChange={setExportData} v2={v2Api} canReprint={canReceiveWrite} />
       ) : (
         <>
           <div className="hidden sm:block rounded-md border bg-card overflow-x-auto">
@@ -1046,7 +1113,7 @@ export function Stock() {
                                         p={p}
                                         selected={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                         onToggle={() => togglePiece(l.lotNo, p.id)}
-                                        onSaved={() => refreshProcessData(processId)}
+                                        onSaved={v2Api.retryLots}
                                         pendingWeight={p.pendingWeight}
                                         wastageWeight={p.wastageWeight}
                                         wastageNote={p.wastageNote}
@@ -1065,6 +1132,10 @@ export function Stock() {
                                     ))}
                                   </TableBody>
                                 </Table>
+                                <LotRowsLoadMore
+                                  pageState={v2Api.rowPagesByKey?.[l.lotKey]}
+                                  onLoadMore={() => v2Api.loadMoreLotRows?.(l.lotKey)}
+                                />
                               </div>
                             </TableCell>
                           </TableRow>
@@ -1074,7 +1145,7 @@ export function Stock() {
                   })
                 )}
                 {/* Grand Total Row */}
-                {displayedLots.length > 0 && (
+                {displayedLots.length > 0 && v2Api.summary && (
                   <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                     <TableCell></TableCell>
                     <TableCell className="font-bold text-primary">Grand Total</TableCell>
@@ -1193,6 +1264,10 @@ export function Stock() {
                             );
                           })}
                         </div>
+                        <LotRowsLoadMore
+                          pageState={v2Api.rowPagesByKey?.[l.lotKey]}
+                          onLoadMore={() => v2Api.loadMoreLotRows?.(l.lotKey)}
+                        />
 
                         {(selectedByLot[l.lotNo] || []).length > 0 && (
                           <Button
@@ -1212,7 +1287,7 @@ export function Stock() {
               })
             )}
             {/* Mobile Grand Total Card */}
-            {displayedLots.length > 0 && (
+            {displayedLots.length > 0 && v2Api.summary && (
               <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
                 <div className="flex justify-between items-center">
                   <span className="font-bold text-primary">Grand Total</span>
@@ -1227,6 +1302,16 @@ export function Stock() {
               </div>
             )}
           </div>
+          {v2Api.summaryLoading && displayedLots.length > 0 && (
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Calculating totals…</div>
+          )}
+          {v2Api.lotsHasMore && (
+            <div className="flex justify-center pt-2">
+              <Button variant="outline" onClick={v2Api.loadMoreLots} disabled={v2Api.lotsLoadingMore}>
+                {v2Api.lotsLoadingMore ? 'Loading…' : 'Load more lots'}
+              </Button>
+            </div>
+          )}
         </>
       )
       }

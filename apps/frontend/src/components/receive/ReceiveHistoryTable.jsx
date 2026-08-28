@@ -23,7 +23,7 @@ import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../ut
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWrite = false }) {
-    const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
+    const { db, process, refreshModuleData, patchDb, patchIssueRecord, subscribeInvalidation, emitInvalidation } = useInventory();
     const { canDelete: canDeleteInbound } = usePermission('inbound');
     const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
@@ -49,11 +49,44 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const [historyDirtyWhileHidden, setHistoryDirtyWhileHidden] = useState(false);
     const scrollRootRef = useRef(null);
     const lastV2RefreshAtRef = useRef(0);
+    const receiveDetailRequestRef = useRef(0);
+    const challanList = useV2PagedList({
+        enabled: process === 'cutter' && activeTab === 'challan',
+        scopeKey: 'receive-cutter-challans',
+        fetchPage: ({ limit, page, search, order, signal }) => v2.getV2CutterChallans({ limit, page, search, order }, { signal }),
+        limit: 50,
+        search: debouncedSearchTerm,
+        order: sortOrder,
+    });
 
     const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
     const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
     const bobbinById = useMemo(() => new Map((db.bobbins || []).map(b => [b.id, b])), [db.bobbins]);
     const rollTypeById = useMemo(() => new Map((db.rollTypes || []).map(r => [r.id, r])), [db.rollTypes]);
+
+    const applyIssueBalance = (issueId, issueBalance) => {
+        if (!issueId || !issueBalance) return;
+        patchIssueRecord(process, { id: issueId, ...issueBalance, issueBalance });
+        patchDb({
+            issue_balances: {
+                ...(db.issue_balances || {}),
+                [issueId]: issueBalance,
+            },
+        });
+    };
+    const applyIssueBalances = (issueBalances) => {
+        const entries = Object.entries(issueBalances || {}).filter(([issueId, balance]) => issueId && balance);
+        if (entries.length === 0) return;
+        entries.forEach(([issueId, balance]) => {
+            patchIssueRecord(process, { id: issueId, ...balance, issueBalance: balance });
+        });
+        patchDb({
+            issue_balances: {
+                ...(db.issue_balances || {}),
+                ...Object.fromEntries(entries),
+            },
+        });
+    };
 
     const calcNetFromGrossTare = (row) => {
         const gross = Number(row?.grossWeight || 0);
@@ -132,16 +165,16 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         const helper = db.workers?.find(w => w.id === challan.helperId) || db.operators?.find(o => o.id === challan.helperId);
         const cut = db.cuts?.find(c => c.id === challan.cutId);
         return {
-            itemName: item?.name || '—',
-            operatorName: operator?.name || '—',
-            helperName: helper?.name || '—',
-            cutName: cut?.name || '—'
+            itemName: challan.itemName || item?.name || '—',
+            operatorName: challan.operatorName || operator?.name || '—',
+            helperName: challan.helperName || helper?.name || '—',
+            cutName: challan.cutName || cut?.name || '—'
         };
     };
 
     const challans = useMemo(() => {
         if (process !== 'cutter') return [];
-        const list = db.receive_from_cutter_machine_challans || [];
+        const list = challanList.items || [];
         let sorted = list
             .filter(challan => !challan.isDeleted)
             .slice()
@@ -169,21 +202,16 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
             return true;
         });
-    }, [db, process, searchTerm]);
-
-    const getChallanEntriesLocal = (challanId) => (db.receive_from_cutter_machine_rows || [])
-        .filter(row => !row.isDeleted && row.challanId === challanId)
-        .slice()
-        .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+    }, [challanList.items, db, process, searchTerm]);
 
     const resolveChallanRows = async (challanId) => {
-        const local = getChallanEntriesLocal(challanId);
-        if (local.length > 0) return local;
         try {
             const res = await api.getCutterReceiveChallan(challanId);
-            return Array.isArray(res?.rows) ? res.rows : local;
+            if (!Array.isArray(res?.rows)) throw new Error('Complete challan rows were not returned');
+            return res.rows;
         } catch (err) {
-            return local;
+            alert(err?.message || 'Failed to load complete challan details. Please retry.');
+            return null;
         }
     };
 
@@ -440,7 +468,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const v2List = useV2PagedList({
         enabled: showHistory,
         scopeKey: `receive-history:${process}`,
-        fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
+        fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order, signal }) => (
             v2.getV2ReceiveHistory(process, {
                 limit,
                 page,
@@ -449,7 +477,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 dateTo,
                 filters: JSON.stringify(filters || []),
                 order,
-            })
+            }, { signal })
         ),
         limit: 50,
         search: debouncedSearchTerm,
@@ -464,17 +492,24 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         lastV2RefreshAtRef.current = now;
         v2List.refresh();
     };
+    const invalidateCutterChallanViews = (source, id) => {
+        emitInvalidation([
+            INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+            INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+        ], { source, id });
+    };
 
     useEffect(() => {
         const key = INVENTORY_INVALIDATION_KEYS.receiveHistory(process);
         return subscribeInvalidation(key, () => {
+            if (process === 'cutter') challanList.refresh();
             if (showHistory) {
                 refreshV2List();
                 return;
             }
             setHistoryDirtyWhileHidden(true);
         });
-    }, [process, showHistory, subscribeInvalidation]);
+    }, [process, showHistory, subscribeInvalidation, challanList.refresh]);
 
     useEffect(() => {
         if (!showHistory || !historyDirtyWhileHidden) return;
@@ -496,8 +531,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     }, [v2List.summary, process, showHistory]);
 
     const [v2FacetsById, setV2FacetsById] = useState({});
+    const v2FacetRequestRef = useRef(null);
     useEffect(() => {
         setV2FacetsById({});
+        v2FacetRequestRef.current = null;
     }, [process]);
 
     useEffect(() => {
@@ -505,59 +542,18 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!openFilterId) return;
         const col = filterColumns.find(c => c.id === openFilterId);
         if (!col || col.kind !== 'values') return;
-        let cancelled = false;
-        (async () => {
-            try {
-                const res = await v2.getV2ReceiveHistoryFacets(process, {
-                    search: debouncedSearchTerm,
-                    dateFrom: v2DateFrom,
-                    dateTo: v2DateTo,
-                    filters: JSON.stringify(v2Filters || []),
-                    excludeField: openFilterId,
-                });
-                const next = res?.facets?.[openFilterId];
-                if (!cancelled && Array.isArray(next)) {
-                    setV2FacetsById((prev) => ({ ...(prev || {}), [openFilterId]: next }));
-                }
-            } catch (_) { }
-        })();
-        return () => { cancelled = true; };
-    }, [showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
-
-    // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
-    useEffect(() => {
-        if (!showHistory) return;
-        let cancelled = false;
-        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift', ...(process === 'coning' ? ['coneType'] : [])];
-        (async () => {
-            try {
-                const res = await Promise.all(fields.map(async (field) => {
-                    if (Array.isArray(v2FacetsById?.[field])) return null;
-                    const col = filterColumns.find(c => c.id === field);
-                    if (!col || col.kind !== 'values') return null;
-                    const out = await v2.getV2ReceiveHistoryFacets(process, {
-                        search: debouncedSearchTerm,
-                        dateFrom: v2DateFrom,
-                        dateTo: v2DateTo,
-                        filters: JSON.stringify(v2Filters || []),
-                        excludeField: field,
-                    });
-                    return { field, values: out?.facets?.[field] };
-                }));
-                if (cancelled) return;
-                const patch = {};
-                for (const item of res) {
-                    if (!item) continue;
-                    if (Array.isArray(item.values)) patch[item.field] = item.values;
-                }
-                if (Object.keys(patch).length) {
-                    setV2FacetsById((prev) => ({ ...(prev || {}), ...patch }));
-                }
-            } catch (_) { }
-        })();
-        return () => { cancelled = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [showHistory, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+        if (Array.isArray(v2FacetsById?.[openFilterId])) return;
+        if (v2FacetRequestRef.current?.process === process) return;
+        const request = v2.getV2ReceiveHistoryFacets(process);
+        v2FacetRequestRef.current = { process, request };
+        request.then((res) => {
+            if (v2FacetRequestRef.current?.request === request && res?.facets) {
+                setV2FacetsById((prev) => ({ ...(prev || {}), ...res.facets }));
+            }
+        }).catch(() => {
+            if (v2FacetRequestRef.current?.request === request) v2FacetRequestRef.current = null;
+        });
+    }, [showHistory, openFilterId, process, filterColumns, v2FacetsById]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
@@ -735,14 +731,23 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
     const handleReprint = async (row) => {
         try {
+            const detail = await v2.getV2ReceiveActionDetail(process, row.id);
+            row = { ...(detail?.row || row), ...(detail?.trace || {}), issue: detail?.issue || detail?.row?.issue };
+            const actionDb = {
+                ...db,
+                inbound_items: detail?.piece ? [detail.piece] : db.inbound_items,
+                issue_to_cutter_machine: process === 'cutter' && detail?.issue ? [detail.issue] : db.issue_to_cutter_machine,
+                issue_to_holo_machine: process === 'holo' && detail?.issue ? [detail.issue] : db.issue_to_holo_machine,
+                issue_to_coning_machine: process === 'coning' && detail?.issue ? [detail.issue] : db.issue_to_coning_machine,
+            };
             let stageKey, data;
 
             if (process === 'cutter') {
                 stageKey = LABEL_STAGE_KEYS.CUTTER_RECEIVE;
 
                 // Get item from inbound piece
-                const piece = db.inbound_items?.find(p => p.id === row.pieceId);
-                const item = db.items?.find(i => i.id === piece?.itemId || row.itemId);
+                const piece = actionDb.inbound_items?.find(p => p.id === row.pieceId);
+                const item = actionDb.items?.find(i => i.id === piece?.itemId || row.itemId);
                 const bobbin = db.bobbins?.find(b => b.id === row.bobbinId);
                 const box = db.boxes?.find(b => b.id === row.boxId);
                 const cut = db.cuts?.find(c => c.id === row.cutId)?.name || row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : row.cut?.name) || '';
@@ -750,7 +755,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 const helper = db.workers?.find(w => w.id === row.helperId);
 
                 // Get machine from issue record
-                const issue = (db.issue_to_cutter_machine || []).find(i =>
+                const issue = (actionDb.issue_to_cutter_machine || []).find(i =>
                     i.pieceIds && (Array.isArray(i.pieceIds) ? i.pieceIds.includes(row.pieceId) : i.pieceIds.includes(row.pieceId))
                 );
                 const machine = db.machines?.find(m => m.id === issue?.machineId);
@@ -775,10 +780,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 };
             } else if (process === 'holo') {
                 stageKey = LABEL_STAGE_KEYS.HOLO_RECEIVE;
-                data = buildHoloReceiveLabelData({ db, row, holoTraceContext });
+                data = buildHoloReceiveLabelData({ db: actionDb, row });
             } else if (process === 'coning') {
                 stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE;
-                data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
+                data = buildConingReceiveLabelData({ db: actionDb, row });
             }
 
 
@@ -804,6 +809,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         try {
             if (process !== 'coning') return;
 
+            const detail = await v2.getV2ReceiveActionDetail('coning', row.id);
+            row = { ...(detail?.row || row), ...(detail?.trace || {}), issue: detail?.issue || detail?.row?.issue };
+            const actionDb = {
+                ...db,
+                issue_to_coning_machine: detail?.issue ? [detail.issue] : db.issue_to_coning_machine,
+            };
+
             const qtyInput = prompt('Enter quantity of stickers to print:', '1');
             if (qtyInput === null) return;
             const qty = parseInt(qtyInput, 10);
@@ -813,7 +825,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             }
 
             const stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL;
-            const data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
+            const data = buildConingReceiveLabelData({ db: actionDb, row });
             const template = await loadTemplate(stageKey);
             if (!template) {
                 alert('No small sticker template found. Please configure it in Label Designer (Receive from machine (coning)_small sticker).');
@@ -834,10 +846,22 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         return resolveHoloPieceOptions(row);
     };
 
-    const openReceiveEditor = (row) => {
+    const openReceiveEditor = async (initialRow) => {
         if (!canEdit) return;
-        if (!row) return;
-        setPieceOptionsOverride(null);
+        if (!initialRow) return;
+        const requestGeneration = receiveDetailRequestRef.current + 1;
+        receiveDetailRequestRef.current = requestGeneration;
+        let row = initialRow;
+        try {
+            const detail = await v2.getV2ReceiveActionDetail(process, initialRow.id);
+            if (receiveDetailRequestRef.current !== requestGeneration) return;
+            row = { ...(detail?.row || initialRow), ...(detail?.trace || {}), issue: detail?.issue || detail?.row?.issue };
+            setPieceOptionsOverride(Array.isArray(detail?.pieceOptions) ? detail.pieceOptions : null);
+        } catch (err) {
+            if (receiveDetailRequestRef.current !== requestGeneration) return;
+            alert(err.message || 'Failed to load receive details');
+            return;
+        }
         setEditingReceiveRow(row);
 
         if (process === 'holo') {
@@ -911,6 +935,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     };
 
     const closeReceiveEditor = () => {
+        receiveDetailRequestRef.current += 1;
         setEditingReceiveRow(null);
         setReceiveDraft(null);
         setPieceOptionsOverride(null);
@@ -983,30 +1008,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 }
                 const res = await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
                 const updatedRow = res?.row || null;
+                applyIssueBalance(updatedRow?.issueId || editingReceiveRow.issueId, res?.issueBalance);
                 if (updatedRow) {
                     const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
                     const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-
-                    const prevWeight = Number.isFinite(Number(editingReceiveRow.rollWeight))
-                        ? Number(editingReceiveRow.rollWeight)
-                        : calcNetFromGrossTare(editingReceiveRow);
-                    const nextWeight = Number.isFinite(Number(updatedRow.rollWeight))
-                        ? Number(updatedRow.rollWeight)
-                        : calcNetFromGrossTare(updatedRow);
-                    const prevRolls = Number(editingReceiveRow.rollCount || 0);
-                    const nextRolls = Number(updatedRow.rollCount || 0);
-                    const deltaNetWeight = nextWeight - prevWeight;
-                    const deltaRolls = nextRolls - prevRolls;
-
                     const pieceId = updatedRow.pieceId || editingReceiveRow.pieceId || null;
-                    if (pieceId) {
-                        const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                        const nextTotal = {
-                            ...baseTotal,
-                            totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
-                            totalRolls: Number(baseTotal.totalRolls || 0) + deltaRolls,
-                        };
-                        const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                    const authoritativeTotal = res?.pieceTotal || null;
+                    if (pieceId && authoritativeTotal) {
+                        const nextTotals = [authoritativeTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
 
                         const nextRows = existingRows.map((r) => {
                             if (r.id !== updatedRow.id) return r;
@@ -1045,29 +1054,15 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 };
                 const res = await api.updateConingReceiveRow(editingReceiveRow.id, payload);
                 const updatedRow = res?.row || null;
+                applyIssueBalance(updatedRow?.issueId || editingReceiveRow.issueId, res?.issueBalance);
                 if (updatedRow) {
                     const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
                     const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
-
-                    const prevWeight = Number.isFinite(Number(editingReceiveRow.netWeight))
-                        ? Number(editingReceiveRow.netWeight)
-                        : calcNetFromGrossTare(editingReceiveRow);
-                    const nextWeight = Number.isFinite(Number(updatedRow.netWeight))
-                        ? Number(updatedRow.netWeight)
-                        : calcNetFromGrossTare(updatedRow);
-                    const prevCones = Number(editingReceiveRow.coneCount || 0);
-                    const nextCones = Number(updatedRow.coneCount || 0);
-                    const deltaNetWeight = nextWeight - prevWeight;
-                    const deltaCones = nextCones - prevCones;
-
                     const pieceId = updatedRow.issueId || editingReceiveRow.issueId;
-                    const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                    const nextTotal = {
-                        ...baseTotal,
-                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
-                        totalCones: Number(baseTotal.totalCones || 0) + deltaCones,
-                    };
-                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                    const authoritativeTotal = res?.pieceTotal || null;
+                    const nextTotals = authoritativeTotal
+                        ? [authoritativeTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)]
+                        : existingTotals;
 
                     const nextRows = existingRows.map((r) => {
                         if (r.id !== updatedRow.id) return r;
@@ -1090,6 +1085,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 }
             }
 
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory(process),
+                INVENTORY_INVALIDATION_KEYS.stock(process),
+            ], { source: 'updateReceiveRow', id: editingReceiveRow.id });
             closeReceiveEditor();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -1127,22 +1126,15 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             if (process === 'holo') {
                 const pieceOptions = resolveHoloPieceOptions(row);
                 const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : null);
-                await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
+                const res = await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
+                applyIssueBalance(row.issueId, res?.issueBalance);
 
                 const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
                 const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-                const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
-                const prevRolls = Number(row.rollCount || 0);
                 const resolvedPieceId = pieceId || row.pieceId || null;
 
-                if (resolvedPieceId) {
-                    const baseTotal = existingTotals.find(t => t.pieceId === resolvedPieceId) || { pieceId: resolvedPieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                    const nextTotal = {
-                        ...baseTotal,
-                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                        totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
-                    };
-                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== resolvedPieceId)];
+                if (resolvedPieceId && res?.pieceTotal) {
+                    const nextTotals = [res.pieceTotal, ...existingTotals.filter(t => t.pieceId !== resolvedPieceId)];
                     const nextRows = existingRows.filter(r => r.id !== row.id);
                     patchDb({
                         receive_from_holo_machine_rows: nextRows,
@@ -1153,20 +1145,15 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     refreshV2List();
                 }
             } else {
-                await api.deleteConingReceiveRow(row.id);
+                const res = await api.deleteConingReceiveRow(row.id);
+                applyIssueBalance(row.issueId, res?.issueBalance);
 
                 const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
                 const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
-                const prevWeight = Number.isFinite(Number(row.netWeight)) ? Number(row.netWeight) : calcNetFromGrossTare(row);
-                const prevCones = Number(row.coneCount || 0);
                 const pieceId = row.issueId;
-                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                const nextTotal = {
-                    ...baseTotal,
-                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                    totalCones: Number(baseTotal.totalCones || 0) - prevCones,
-                };
-                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+                const nextTotals = res?.pieceTotal
+                    ? [res.pieceTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)]
+                    : existingTotals;
                 const nextRows = existingRows.filter(r => r.id !== row.id);
                 patchDb({
                     receive_from_coning_machine_rows: nextRows,
@@ -1174,6 +1161,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 });
                 refreshV2List();
             }
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory(process),
+                INVENTORY_INVALIDATION_KEYS.stock(process),
+            ], { source: 'deleteReceiveRow', id: row.id });
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
                 const pieceIds = Array.isArray(err.details?.pieceIds) ? err.details.pieceIds : [];
@@ -1195,26 +1186,25 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
         setDeletingReceive(true);
         try {
-            await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
+            const res = await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
             const row = deletePrompt.row;
+            applyIssueBalance(row.issueId, res?.issueBalance);
             const pieceId = deletePrompt.pieceId;
             const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
             const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
-            const prevRolls = Number(row.rollCount || 0);
-            const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-            const nextTotal = {
-                ...baseTotal,
-                totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
-            };
-            const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
+            const nextTotals = res?.pieceTotal
+                ? [res.pieceTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)]
+                : existingTotals;
             const nextRows = existingRows.filter(r => r.id !== row.id);
             patchDb({
                 receive_from_holo_machine_rows: nextRows,
                 receive_from_holo_machine_piece_totals: nextTotals,
             });
             refreshV2List();
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('holo'),
+                INVENTORY_INVALIDATION_KEYS.stock('holo'),
+            ], { source: 'deleteReceiveRow', id: row.id });
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');
@@ -1242,6 +1232,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const handleEditChallan = async (challan) => {
         if (!canEdit) return;
         const rows = await resolveChallanRows(challan.id);
+        if (!rows) return;
         const mappedRows = rows.map((row) => {
             const bobbinQty = row.bobbinQuantity != null ? String(row.bobbinQuantity) : '';
             const grossWeight = row.grossWt != null ? String(row.grossWt) : '';
@@ -1330,8 +1321,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
         setSavingEdit(true);
         try {
-            await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
-            refreshV2List();
+            const result = await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds });
+            applyIssueBalances(result?.issueBalances);
+            invalidateCutterChallanViews('updateCutterReceiveChallan', editingChallan.id);
             closeEditDialog();
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
@@ -1382,8 +1374,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     })
                 );
                 if (ok) {
-                    await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
-                    refreshV2List();
+                    const result = await api.updateCutterReceiveChallan(editingChallan.id, { updates, removedRowIds: removedIds, confirmCascade: true });
+                    applyIssueBalances(result?.issueBalances);
+                    invalidateCutterChallanViews('updateCutterReceiveChallan', editingChallan.id);
                     closeEditDialog();
                 }
             } else {
@@ -1399,12 +1392,14 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         const ok = window.confirm(`Delete challan ${challan.challanNo}? This will revert its receive entries.`);
         if (!ok) return;
         try {
-            await api.deleteCutterReceiveChallan(challan.id);
-            refreshV2List();
+            const result = await api.deleteCutterReceiveChallan(challan.id);
+            applyIssueBalances(result?.issueBalances);
+            invalidateCutterChallanViews('deleteCutterReceiveChallan', challan.id);
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'wastage_note_conflict') {
                 const affected = err.details?.affectedChallans || [];
                 const rows = await resolveChallanRows(challan.id);
+                if (!rows) return;
                 const entryWeightBack = rows.reduce((sum, row) => sum + Number(row.netWt || 0), 0);
                 const wastageAmount = resolveWastageResetAmount({
                     pieceId: challan?.pieceId,
@@ -1435,8 +1430,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     })
                 );
                 if (confirm) {
-                    await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
-                    refreshV2List();
+                    const result = await api.deleteCutterReceiveChallan(challan.id, { confirmCascade: true });
+                    applyIssueBalances(result?.issueBalances);
+                    invalidateCutterChallanViews('deleteCutterReceiveChallan', challan.id);
                 }
             } else {
                 alert(err.message || 'Failed to delete challan');
@@ -1452,7 +1448,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
         // Fetch "To" details (from Firm associated with the Lot)
         const lot = db.lots?.find(l => l.lotNo === challan.lotNo);
-        const firm = lot ? db.firms?.find(f => f.id === lot.firmId) : null;
+        const firm = challan.consignee || (lot ? db.firms?.find(f => f.id === lot.firmId) : null);
         const toDetails = {
             name: firm?.name || '—',
             address: firm?.address || '',
@@ -1707,6 +1703,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
     const handleChallanPrint = async (challan) => {
         const rows = await resolveChallanRows(challan.id);
+        if (!rows) return;
         const html = buildChallanPrintHtml(challan, rows);
 
         // Use a hidden iframe to print without opening a new tab
@@ -1737,6 +1734,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
 
     const handleChallanExport = async (challan) => {
         const rows = await resolveChallanRows(challan.id);
+        if (!rows) return;
         const meta = getCutterChallanMeta(challan);
         const dateDisplay = formatDateDDMMYYYY(challan.date || challan.createdAt) || '—';
         const escape = (val) => `"${String(val ?? '').replace(/\"/g, '""')}"`;
@@ -1787,9 +1785,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!confirmed) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            await refreshProcessData(process || 'cutter');
             await refreshModuleData('inbound');
             refreshV2List();
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+            ], { source: 'deleteCutterPurchaseLot', lotNo });
         } catch (err) {
             alert(err.message || 'Failed to delete cutter purchase');
         }
@@ -2106,8 +2107,15 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         exportHistoryToExcel(exportData, columns, `receive-history-${process}-${today}`);
     };
 
-    const handleExportChallans = () => {
-        const exportData = challans.map(c => {
+    const handleExportChallans = async () => {
+        let completeChallans;
+        try {
+            completeChallans = await v2.getAllV2CutterChallans({ search: debouncedSearchTerm, order: sortOrder });
+        } catch (err) {
+            alert(err.message || 'Failed to prepare complete challan export');
+            return;
+        }
+        const exportData = completeChallans.map(c => {
             const meta = getCutterChallanMeta(c);
             return {
                 challanNo: c.challanNo || '—',
@@ -2893,6 +2901,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                 })
                             )}
                         </div>
+                        <TablePagination
+                            page={challanList.page}
+                            totalPages={challanList.totalPages}
+                            hasMore={challanList.hasMore}
+                            onPageChange={challanList.setPage}
+                            isLoading={challanList.isLoading}
+                        />
                     </>
                 )}
             </CardContent>

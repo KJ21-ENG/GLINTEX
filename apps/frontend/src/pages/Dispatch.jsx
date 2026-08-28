@@ -65,7 +65,7 @@ function getDispatchItemDetailFields(item) {
 }
 
 export function Dispatch() {
-    const { db, patchDb, refreshProcessData, refreshModuleData } = useInventory();
+    const { db, patchDb, emitInvalidation, refreshModuleData } = useInventory();
     const { canRead, canWrite, canEdit, canDelete } = usePermission('dispatch');
     const readOnly = canRead && !canWrite;
     const { isMobile, isTouchDevice } = useMobileDetect();
@@ -130,17 +130,17 @@ export function Dispatch() {
     const [newCustomerForm, setNewCustomerForm] = useState({ name: '', phone: '', address: '' });
     const [savingCustomer, setSavingCustomer] = useState(false);
 
-    const refreshAfterDispatch = async (stage) => {
+    const refreshAfterDispatch = (stage) => {
+        emitInvalidation([
+            `stock:${stage}`,
+            `issue:${stage}`,
+            `receive:${stage}`,
+            'dispatch',
+        ], { reason: 'dispatch-mutated', stage });
         if (stage === 'inbound') {
-            await refreshModuleData('inbound');
+            void refreshModuleData('inbound');
             return;
         }
-        if (stage === 'cutter' || stage === 'holo' || stage === 'coning') {
-            await refreshProcessData(stage);
-            return;
-        }
-        // Safe fallback: inbound basics are included in all process modules, but inbound is the lightest.
-        await refreshModuleData('inbound');
     };
 
     // Load customers
@@ -581,7 +581,7 @@ export function Dispatch() {
             // Refresh available items regardless of print choice
             const availRes = await api.getDispatchAvailable(selectedStage);
             setAvailableItems(availRes.items || []);
-            await refreshAfterDispatch(selectedStage);
+            refreshAfterDispatch(selectedStage);
 
         } catch (err) {
             alert(err.message || 'Failed to create dispatch');
@@ -653,7 +653,7 @@ export function Dispatch() {
 
             const availRes = await api.getDispatchAvailable(selectedStage);
             setAvailableItems(availRes.items || []);
-            await refreshAfterDispatch(selectedStage);
+            refreshAfterDispatch(selectedStage);
         } catch (err) {
             alert(err.message || 'Failed to create bulk dispatch');
         } finally {
@@ -671,7 +671,7 @@ export function Dispatch() {
             await api.deleteDispatchChallan(challanNo);
             const res = await api.listDispatches();
             setDispatches(res.dispatches || []);
-            await refreshAfterDispatch(stageToRefresh);
+            refreshAfterDispatch(stageToRefresh);
         } catch (err) {
             alert(err.message || 'Failed to delete dispatch');
         }
@@ -739,7 +739,7 @@ export function Dispatch() {
             setEditDispatchForm(null);
             const dispatchRes = await api.listDispatches();
             setDispatches(dispatchRes.dispatches || []);
-            await refreshAfterDispatch(editDispatchForm.stage);
+            refreshAfterDispatch(editDispatchForm.stage);
             if (selectedStage === editDispatchForm.stage) {
                 const availRes = await api.getDispatchAvailable(selectedStage);
                 setAvailableItems(availRes.items || []);
@@ -821,7 +821,7 @@ export function Dispatch() {
             setEditChallanForm(null);
             const dispatchRes = await api.listDispatches();
             setDispatches(dispatchRes.dispatches || []);
-            await refreshAfterDispatch(editChallanForm.stage);
+            refreshAfterDispatch(editChallanForm.stage);
             if (selectedStage === editChallanForm.stage) {
                 const availRes = await api.getDispatchAvailable(selectedStage);
                 setAvailableItems(availRes.items || []);
@@ -849,7 +849,7 @@ export function Dispatch() {
             const stageToRefresh = editChallanForm.stage;
             const dispatchRes = await api.listDispatches();
             setDispatches(dispatchRes.dispatches || []);
-            await refreshAfterDispatch(stageToRefresh);
+            refreshAfterDispatch(stageToRefresh);
             if (selectedStage === stageToRefresh) {
                 const availRes = await api.getDispatchAvailable(selectedStage);
                 setAvailableItems(availRes.items || []);
@@ -928,7 +928,7 @@ export function Dispatch() {
 
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
-        await refreshAfterDispatch(dispatchData?.stage || selectedStage);
+        refreshAfterDispatch(dispatchData?.stage || selectedStage);
         return res.dispatch;
     }
 
@@ -937,7 +937,7 @@ export function Dispatch() {
         const res = await api.createDispatchBulk(dispatchData);
         const availRes = await api.getDispatchAvailable(selectedStage);
         setAvailableItems(availRes.items || []);
-        await refreshAfterDispatch(dispatchData?.stage || selectedStage);
+        refreshAfterDispatch(dispatchData?.stage || selectedStage);
         return res;
     }
 

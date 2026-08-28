@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "nodemon --watch src --exec node src/server.js",
     "start": "node src/server.js",
-    "test": "node --test \"src/**/__tests__/*.test.js\"",
-    "test:integration": "node --test \"src/**/__tests__/*.integration.test.js\""
+    "test": "node --test --test-concurrency=1 \"src/**/__tests__/*.test.js\"",
+    "test:integration": "node --test --test-concurrency=1 \"src/**/__tests__/*.integration.test.js\""
   },
   "dependencies": {
     "@prisma/client": "^4.16.2",
     "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "bwip-js": "^3.1.0",
+    "compression": "^1.8.1",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "csv-parse": "^5.6.0",

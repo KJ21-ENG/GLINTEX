@@ -12,7 +12,6 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Dialog, DialogContent } from '../ui/Dialog';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
-import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../../api/v2';
 import { InfoPopover } from '../common/InfoPopover';
 
@@ -344,7 +343,7 @@ export function OnMachineTable({ db, process }) {
             return n > EPSILON ? n : 0;
         };
 
-        const activeTakeBacks = activeTakeBacksByIssue.get(entry.id) || [];
+        const activeTakeBacks = entry.__takeBacks || activeTakeBacksByIssue.get(entry.id) || [];
         const activeBySource = new Map();
         activeTakeBacks.forEach((tb) => {
             const lines = Array.isArray(tb.lines) ? tb.lines : [];
@@ -359,16 +358,22 @@ export function OnMachineTable({ db, process }) {
         });
 
         if (process === 'cutter') {
-            const issueLines = (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === entry.id);
-            const linkedRows = (db.receive_from_cutter_machine_rows || [])
-                .filter((row) => !row?.isDeleted && row.issueId === entry.id);
+            const issueLines = entry.__sourceLines || (db.issue_to_cutter_machine_lines || []).filter((line) => line.issueId === entry.id);
             const receivedBySource = new Map();
-            linkedRows.forEach((row) => {
-                const sourceId = String(row?.pieceId || '').trim();
-                if (!sourceId) return;
-                const current = receivedBySource.get(sourceId) || 0;
-                receivedBySource.set(sourceId, current + Number(row?.netWt || 0));
-            });
+            if (entry.__receivedBySource && typeof entry.__receivedBySource === 'object') {
+                Object.entries(entry.__receivedBySource).forEach(([sourceId, totals]) => {
+                    receivedBySource.set(sourceId, Number(totals?.weight || 0));
+                });
+            } else {
+                const linkedRows = (entry.__receiveRows || db.receive_from_cutter_machine_rows || [])
+                    .filter((row) => !row?.isDeleted && row.issueId === entry.id);
+                linkedRows.forEach((row) => {
+                    const sourceId = String(row?.pieceId || '').trim();
+                    if (!sourceId) return;
+                    const current = receivedBySource.get(sourceId) || 0;
+                    receivedBySource.set(sourceId, current + Number(row?.netWt || 0));
+                });
+            }
 
             const stagePendingWeight = Math.max(
                 0,
@@ -414,11 +419,12 @@ export function OnMachineTable({ db, process }) {
             const maxCount = Math.max(0, originalCount - Number(active.count || 0));
             const maxWeight = Math.max(0, originalWeight - Number(active.weight || 0));
             if (maxWeight <= 0.0001) return;
-            const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
-            const holoRow = process === 'coning' ? holoReceiveById.get(sourceId) : null;
-            const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
-            const rollType = process === 'coning' ? rollTypeById.get(String(holoRow?.rollTypeId || '').trim()) : null;
-            const sourceBoxWeight = process === 'coning' ? Number(boxById.get(String(holoRow?.boxId || '').trim())?.weight || 0) : 0;
+            const detailSource = entry.__sourceRows?.find((row) => row.id === sourceId);
+            const cutterRow = process === 'holo' ? (detailSource || cutterReceiveById.get(sourceId)) : null;
+            const holoRow = process === 'coning' ? (detailSource || holoReceiveById.get(sourceId)) : null;
+            const bobbin = process === 'holo' ? (cutterRow?.bobbin || bobbinById.get(String(cutterRow?.bobbinId || '').trim())) : null;
+            const rollType = process === 'coning' ? (holoRow?.rollType || rollTypeById.get(String(holoRow?.rollTypeId || '').trim())) : null;
+            const sourceBoxWeight = process === 'coning' ? Number(holoRow?.box?.weight || boxById.get(String(holoRow?.boxId || '').trim())?.weight || 0) : 0;
             const rollCount = process === 'coning' ? Number(holoRow?.rollCount || 0) : 0;
             const tareWeight = process === 'coning' ? Number(holoRow?.tareWeight || 0) : 0;
             const derivedRollUnitWeight = (process === 'coning' && rollCount > 0 && Number.isFinite(tareWeight))
@@ -439,49 +445,43 @@ export function OnMachineTable({ db, process }) {
             });
         });
 
-        if (process === 'coning') {
-            const updated = [];
-            for (const line of sourceMap.values()) {
-                const issuedWeight = clampZero(Number(line.maxWeight || 0));
-                // maxWeight here is already: original issued − active take-backs (built in sourceMap above)
-                // No FIFO consumed deduction — user selects source freely; pool is enforced at issue level
-                updated.push({
-                    ...line,
-                    issuedWeight,
-                    maxWeight: issuedWeight,
-                    maxCount: clampZero(Number(line.maxCount || 0)),
-                });
-            }
-            // Filter out sources that are fully taken back (no remaining issued allocation)
-            return updated.filter((s) => s.maxWeight > 0.0001);
-        }
-
-        return Array.from(sourceMap.values());
+        return Array.from(sourceMap.values())
+            .map((line) => ({
+                ...line,
+                maxCount: Math.max(0, Number(line.maxCount || 0)),
+                maxWeight: Math.max(0, Number(line.maxWeight || 0)),
+            }))
+            .filter((line) => line.maxCount > 0.0001 || line.maxWeight > 0.0001);
     };
 
-    const openTakeBackModal = (entry) => {
-        const sources = buildTakeBackSources(entry);
-        setTakeBackTarget(entry);
+    const openTakeBackModal = async (entry) => {
+        let actionEntry = entry;
+        try {
+            const detail = await v2.getV2IssueActionDetail(process, entry.id);
+            actionEntry = {
+                ...entry,
+                ...(detail?.issue || {}),
+                __sourceLines: detail?.sourceLines || [],
+                __sourceRows: detail?.sourceRows || [],
+                __receiveRows: detail?.receiveRows || [],
+                __takeBacks: detail?.activeTakeBacks || [],
+                __receivedBySource: detail?.receivedBySource || {},
+            };
+        } catch (err) {
+            alert(err.message || 'Failed to load take-back details');
+            return;
+        }
+        const sources = buildTakeBackSources(actionEntry);
+        setTakeBackTarget(actionEntry);
         setTakeBackDate(new Date().toISOString().slice(0, 10));
         setTakeBackReason('');
         setTakeBackNote('');
         setTakeBackLinesDraft(
             sources.map((line) => {
-                const count = (process === 'cutter' || process === 'coning') ? 0 : line.maxCount;
+                const count = 0;
                 const boxId = (process === 'holo' || process === 'coning') ? (line.sourceBoxId || '') : '';
-                const tareEstimate = process === 'holo'
-                    ? ((Number(line.pieceUnitWeight || 0) * Number(count || 0)) + Number(boxById.get(boxId)?.weight || 0))
-                    : (process === 'coning'
-                        ? (Number(boxById.get(boxId)?.weight || 0) + (Number(line.rollUnitWeight || 0) * Number(count || 0)))
-                        : 0);
-                const grossWeight = process === 'holo'
-                    ? roundTakeBackWeight(Number(line.maxWeight || 0) + tareEstimate)
-                    : 0;
-                const weight = process === 'holo'
-                    ? calcHoloTakeBackNetWeight(line, count, grossWeight, boxId)
-                    : (process === 'coning'
-                        ? calcConingTakeBackNetWeight(line, count, grossWeight, boxId)
-                        : (process === 'cutter' ? line.maxWeight : calcAutoTakeBackWeight(line, count)));
+                const grossWeight = 0;
+                const weight = process === 'cutter' ? line.maxWeight : 0;
                 return {
                     sourceId: line.sourceId,
                     sourceBarcode: line.label,
@@ -539,7 +539,7 @@ export function OnMachineTable({ db, process }) {
                 return;
             }
         }
-        if (process === 'coning') {
+        if (process === 'holo' || process === 'coning') {
             const totalLinesWeight = lines.reduce((sum, l) => sum + l.weight, 0);
             const pending = Number(takeBackTarget.pendingWeight || 0);
             if (totalLinesWeight - pending > 0.001) {
@@ -568,7 +568,14 @@ export function OnMachineTable({ db, process }) {
     };
 
     const handleReverseLatestTakeBack = async (entry) => {
-        const latest = latestReversibleTakeBackByIssue.get(entry.id);
+        let latest = null;
+        try {
+            const detail = await v2.getV2IssueActionDetail(process, entry.id);
+            latest = (detail?.activeTakeBacks || [])[0] || null;
+        } catch (err) {
+            alert(err.message || 'Failed to load take-back details');
+            return;
+        }
         if (!latest) {
             alert('No reversible take-back found for this issue');
             return;
@@ -643,7 +650,7 @@ export function OnMachineTable({ db, process }) {
     const v2List = useV2CursorList({
         enabled: true,
         scopeKey: `on-machine:${process}`,
-        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order }) => (
+        fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order, signal }) => (
             v2.getV2OnMachine(process, {
                 limit,
                 cursor,
@@ -652,7 +659,17 @@ export function OnMachineTable({ db, process }) {
                 dateTo,
                 filters: JSON.stringify(filters || []),
                 order,
-            })
+                summaryMode: 'separate',
+            }, { signal })
+        ),
+        fetchSummary: ({ search, dateFrom, dateTo, filters, order, signal }) => (
+            v2.getV2OnMachineSummary(process, {
+                search,
+                dateFrom,
+                dateTo,
+                filters: JSON.stringify(filters || []),
+                order,
+            }, { signal })
         ),
         limit: 50,
         search: debouncedSearchTerm,
@@ -672,30 +689,32 @@ export function OnMachineTable({ db, process }) {
     const filteredEntries = v2List.items;
     const filterRows = filteredEntries;
 
-    const loadMoreRef = useInfiniteScrollSentinel({
-        enabled: v2List.hasMore && !v2List.isLoading,
-        onLoadMore: v2List.loadMore,
-        rootRef: scrollRootRef,
-    });
-
     // Server facets for the values-filter dropdowns. Without these the options were
     // built from loaded pages only, so values not on the first page couldn't be picked.
     const [v2FacetsById, setV2FacetsById] = useState({});
+    const v2FacetRequestRef = useRef(null);
 
     useEffect(() => {
-        let cancelled = false;
-        (async () => {
-            try {
-                const res = await v2.getV2OnMachineFacets(process);
-                if (!cancelled && res?.facets && typeof res.facets === 'object') {
-                    setV2FacetsById(res.facets);
-                }
-            } catch (_) {
-                // Ignore facet failures; the dropdown falls back to loaded-row values.
-            }
-        })();
-        return () => { cancelled = true; };
+        setV2FacetsById({});
+        v2FacetRequestRef.current = null;
     }, [process]);
+
+    useEffect(() => {
+        if (!openFilterId) return;
+        const column = filterColumns.find((candidate) => candidate.id === openFilterId);
+        if (!column || column.kind !== 'values') return;
+        if (Array.isArray(v2FacetsById?.[openFilterId])) return;
+        if (v2FacetRequestRef.current?.process === process) return;
+        const request = v2.getV2OnMachineFacets(process);
+        v2FacetRequestRef.current = { process, request };
+        request.then((res) => {
+            if (v2FacetRequestRef.current?.request === request && res?.facets && typeof res.facets === 'object') {
+                setV2FacetsById(res.facets);
+            }
+        }).catch(() => {
+            if (v2FacetRequestRef.current?.request === request) v2FacetRequestRef.current = null;
+        });
+    }, [process, openFilterId, filterColumns, v2FacetsById]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
@@ -718,8 +737,7 @@ export function OnMachineTable({ db, process }) {
                 rollsIssued: Number(v2List.summary.rollsIssued || 0),
             };
         }
-        // Legacy / fallback: sum from loaded rows
-        const base = {
+        return {
             originalIssuedWeight: 0,
             takeBackWeight: 0,
             netIssuedWeight: 0,
@@ -728,17 +746,7 @@ export function OnMachineTable({ db, process }) {
             pendingWeight: 0,
             rollsIssued: 0,
         };
-        for (const r of filteredEntries || []) {
-            base.originalIssuedWeight += Number(r.originalIssuedWeight || r.issuedWeight || 0);
-            base.takeBackWeight += Number(r.takeBackWeight || 0);
-            base.netIssuedWeight += Number(r.netIssuedWeight ?? r.issuedWeight ?? 0);
-            base.issuedWeight += Number(r.issuedWeight || 0);
-            base.receivedWeight += Number(r.receivedWeight || 0);
-            base.pendingWeight += Number(r.pendingWeight || 0);
-            if (process === 'coning') base.rollsIssued += Number(r.rollsIssued || 0);
-        }
-        return base;
-    }, [filteredEntries, process, v2List.summary]);
+    }, [v2List.summary]);
 
     const handleGoToReceive = (entry) => {
         // Navigate to receive page with barcode param for auto-scan
@@ -746,8 +754,9 @@ export function OnMachineTable({ db, process }) {
     };
 
     const getActions = (entry) => {
-        const activeTakeBackCount = (activeTakeBacksByIssue.get(entry.id) || []).length;
-        const takeBackSources = buildTakeBackSources(entry);
+        const activeTakeBackCount = Number(entry?.takenBackCount || 0) > 0 || Number(entry?.takeBackWeight || entry?.takenBackWeight || 0) > 0.0001
+            ? 1
+            : (activeTakeBacksByIssue.get(entry.id) || []).length;
         return [
             {
                 label: 'Go to Receive',
@@ -758,7 +767,7 @@ export function OnMachineTable({ db, process }) {
                 label: 'Take Back',
                 icon: <RotateCcw className="w-4 h-4" />,
                 onClick: () => openTakeBackModal(entry),
-                disabled: takeBackSources.length === 0,
+                disabled: Number(entry.pendingWeight || 0) <= 0.0001,
                 disabledReason: 'No take-back-eligible lines available.',
             },
             {
@@ -881,10 +890,10 @@ export function OnMachineTable({ db, process }) {
     const emptyColSpan = process === 'cutter' ? 13 : process === 'holo' ? 15 : 18;
 
     // Shared pool constraint for coning take-back modal
-    const issuePendingPool = process === 'coning'
+    const issuePendingPool = process === 'holo' || process === 'coning'
         ? Math.max(0, Number(takeBackTarget?.pendingWeight || 0))
         : Infinity;
-    const totalEnteredWeight = process === 'coning'
+    const totalEnteredWeight = process === 'holo' || process === 'coning'
         ? (takeBackLinesDraft || []).reduce((sum, l) => sum + Math.max(0, Number(l.weight || 0)), 0)
         : 0;
 
@@ -1282,8 +1291,6 @@ export function OnMachineTable({ db, process }) {
                         )}
                     </TableBody>
                 </Table>
-                {/* Invisible infinite-scroll sentinel (no UI change). */}
-                <div ref={loadMoreRef} style={{ height: 1 }} aria-hidden="true" />
                 {v2List.isLoading && filteredEntries.length > 0 && (
                     <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1291,7 +1298,11 @@ export function OnMachineTable({ db, process }) {
                     </div>
                 )}
             </div>
-            <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+            {v2List.summaryLoading && <div className="hidden sm:flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Calculating totals…
+            </div>}
+            {v2List.summary && !v2List.summaryLoading && <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
                 <span className="text-sm font-semibold">Grand Total (filtered)</span>
                 <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
                     {process === 'coning' && (
@@ -1303,7 +1314,7 @@ export function OnMachineTable({ db, process }) {
                     <span className="font-medium text-green-600">Received: {formatKg(totals.receivedWeight)}</span>
                     <span className="font-medium text-blue-600">Pending: {formatKg(totals.pendingWeight)}</span>
                 </div>
-            </div>
+            </div>}
 
             {/* Mobile Card View - shown on small screens only */}
             <div className="block sm:hidden space-y-3">
@@ -1423,6 +1434,19 @@ export function OnMachineTable({ db, process }) {
                 )}
             </div>
 
+            {v2List.hasMore && (
+                <div className="flex justify-center py-2">
+                    <button
+                        type="button"
+                        className="h-9 rounded-md border px-3 text-sm font-medium disabled:opacity-50"
+                        disabled={v2List.isLoading}
+                        onClick={v2List.loadMore}
+                    >
+                        {v2List.isLoading ? 'Loading…' : (v2Filters.length > 0 ? 'Load more matches' : 'Load more pending issues')}
+                    </button>
+                </div>
+            )}
+
             <Dialog open={takeBackModalOpen} onOpenChange={setTakeBackModalOpen}>
                 <DialogContent
                     title={`Take Back${takeBackTarget?.barcode ? ` • ${takeBackTarget.barcode}` : ''}`}
@@ -1461,7 +1485,7 @@ export function OnMachineTable({ db, process }) {
                                 className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                             />
                         </div>
-                        {process === 'coning' && (
+                        {(process === 'holo' || process === 'coning') && (
                             <div className="text-xs text-muted-foreground flex items-center gap-2">
                                 <span>Issue Pending: <strong>{formatKg(issuePendingPool)}</strong></span>
                                 <span>·</span>
@@ -1491,10 +1515,10 @@ export function OnMachineTable({ db, process }) {
                                         </TableRow>
                                     ) : (
                                         takeBackLinesDraft.map((line, idx) => {
-                                            const otherLinesWeight = process === 'coning'
+                                            const otherLinesWeight = process === 'holo' || process === 'coning'
                                                 ? totalEnteredWeight - Math.max(0, Number(line.weight || 0))
                                                 : 0;
-                                            const effectiveMaxWeight = process === 'coning'
+                                            const effectiveMaxWeight = process === 'holo' || process === 'coning'
                                                 ? Math.max(0, Math.min(
                                                     Number(line.maxWeight || 0),
                                                     issuePendingPool - otherLinesWeight

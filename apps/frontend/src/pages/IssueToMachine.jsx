@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { IssueToCutter } from '../components/issue';
 import { IssueToHolo } from '../components/issue';
@@ -25,7 +25,7 @@ function formatDateDisplay(dateStr) {
 }
 
 export function IssueToMachine() {
-  const { process, db, ensureModuleData } = useInventory();
+  const { process, db } = useInventory();
   const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
   const { canRead, canWrite, canEdit, canDelete } = useStagePermission('issue', stage);
   const readOnly = canRead && !canWrite;
@@ -44,15 +44,6 @@ export function IssueToMachine() {
   const [summaryDateTo, setSummaryDateTo] = useState(getYesterdayISO);
   const [summaryFromShifts, setSummaryFromShifts] = useState(['Day', 'Night']);
   const [summaryToShifts, setSummaryToShifts] = useState(['Day', 'Night']);
-
-  useEffect(() => {
-    if (canRead) {
-      // Issue actions (take-back, edit, labels and received-details popovers) resolve
-      // source rows by id. They need the complete process slice even though the main
-      // tracking tables themselves are paginated through v2.
-      ensureModuleData('process', { process: stage, full: true });
-    }
-  }, [canRead, ensureModuleData, stage]);
 
   const handleSendSummary = async () => {
     if (sendingSum || downloadingSum) return;

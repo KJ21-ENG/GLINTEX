@@ -11,6 +11,7 @@ import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningT
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
+import { chooseLatestIssueBalance } from '../../utils/issueBalance';
 import {
     ResizableIssueSummary,
     ReceiveSummaryGroup,
@@ -39,24 +40,13 @@ export function ConingReceiveForm() {
         if (!rawIssue?.id) return rawIssue;
         return {
             ...rawIssue,
-            issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+            issueBalance: chooseLatestIssueBalance(rawIssue.issueBalance, db?.issue_balances?.[rawIssue.id]),
         };
-    };
-
-    const findIssueByBarcodeInCache = (barcode) => {
-        const normalized = String(barcode || '').trim().toUpperCase();
-        if (!normalized) return null;
-        return (db.issue_to_coning_machine || []).find(
-            (i) => String(i.barcode || '').trim().toUpperCase() === normalized
-        ) || null;
     };
 
     const loadIssueByBarcode = async (barcode, { notFoundMessage = 'Coning issue not found for barcode' } = {}) => {
         const normalized = String(barcode || '').trim();
         if (!normalized) return null;
-
-        const cached = findIssueByBarcodeInCache(normalized);
-        if (cached) return enrichIssueWithBalance(cached);
 
         try {
             const lookedUp = await api.getIssueByConingBarcode(normalized);
@@ -124,7 +114,7 @@ export function ConingReceiveForm() {
     }, [db.receive_from_coning_machine_piece_totals, issue?.id]);
 
     const issueMetrics = useMemo(() => {
-        const balance = issue?.issueBalance || (issue?.id ? db?.issue_balances?.[issue.id] : null) || null;
+        const balance = chooseLatestIssueBalance(issue?.issueBalance, issue?.id ? db?.issue_balances?.[issue.id] : null);
         const originalIssued = Number(balance?.originalWeight ?? fallbackIssuedWeight ?? 0);
         const takenBack = Number(balance?.takeBackWeight || 0);
         const netIssued = Number(balance?.netIssuedWeight ?? Math.max(0, originalIssued - takenBack));
@@ -237,6 +227,18 @@ export function ConingReceiveForm() {
         return Math.max(0, gross - boxWt - coneWt);
     }
 
+    const hasInvalidReceiveRows = cart.some((row) => {
+        if (row.isWastage) return false;
+        const count = Number(row.coneCount);
+        const gross = Number(row.grossWeight);
+        const box = db.boxes.find((entry) => entry.id === row.boxId);
+        const coneTypeId = issueRefs?.[0]?.coneTypeId;
+        const coneType = db.cone_types.find((entry) => entry.id === coneTypeId);
+        return !box || !Number.isFinite(Number(box.weight)) || Number(box.weight) <= 0
+            || !coneType || !Number.isFinite(Number(coneType.weight)) || Number(coneType.weight) < 0
+            || !Number.isInteger(count) || count <= 0 || !Number.isFinite(gross) || gross <= 0 || calcRowNet(row) <= 0;
+    });
+
     const cartTotals = useMemo(() => {
         let totalNetWeight = 0;
         let totalCones = 0;
@@ -299,12 +301,12 @@ export function ConingReceiveForm() {
             const receiveEntries = cart.filter(r => !r.isWastage);
             const wastageEntries = cart.filter(r => r.isWastage);
 
-            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
-            const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;
+            const shouldPrepareLabels = receiveEntries.length > 0;
             const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
             const createdRows = [];
+            let latestIssueBalance = chooseLatestIssueBalance(issue?.issueBalance, db?.issue_balances?.[issue.id]);
 
             // Process receive entries
             for (const row of receiveEntries) {
@@ -319,8 +321,9 @@ export function ConingReceiveForm() {
                     notes: row.notes
                 });
                 if (res?.row) createdRows.push(res.row);
+                if (res?.issueBalance) latestIssueBalance = res.issueBalance;
 
-                if (confirmPrint) {
+                if (shouldPrepareLabels) {
                     // The backend allocates the authoritative sequence against the
                     // complete table. Never reconstruct it from the client cache.
                     const barcode = res?.row?.barcode || '';
@@ -391,18 +394,43 @@ export function ConingReceiveForm() {
                     const wastageNote = wastageEntries[0]?.wastageNote || null;
                     const res = await api.markConingWastage({ issueId: issue.id, note: wastageNote });
                     wastageTotals = res?.updated || null;
+                    if (res?.issueBalance) latestIssueBalance = res.issueBalance;
                 } catch (e) {
                     console.error('Failed to mark coning wastage', e);
                     alert('Warning: Failed to mark wastage. Please try again separately.');
                 }
             }
 
+            if (createdRows.length > 0 || wastageTotals) {
+                emitInvalidation([
+                    INVENTORY_INVALIDATION_KEYS.receiveHistory('coning'),
+                    INVENTORY_INVALIDATION_KEYS.stock('coning'),
+                ], {
+                    source: 'manualReceiveFromConingMachine',
+                    issueId: issue?.id || null,
+                });
+            }
+            setCart([]);
+            setIsWastage(false);
+            setSubmitting(false);
+            alert(wastageEntries.length > 0 && receiveEntries.length === 0
+                ? 'Wastage marked and issue closed successfully'
+                : 'Received successfully');
+
             if (labelsToPrint.length > 0) {
-                await printStageTemplatesBatch(
-                    LABEL_STAGE_KEYS.CONING_RECEIVE,
-                    labelsToPrint,
-                    { template }
-                );
+                try {
+                    const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+                    if (template && window.confirm('Print stickers for these receives?')) {
+                        await printStageTemplatesBatch(
+                            LABEL_STAGE_KEYS.CONING_RECEIVE,
+                            labelsToPrint,
+                            { template }
+                        );
+                    }
+                } catch (printError) {
+                    console.error('Coning receive label print failed', printError);
+                    alert('Received successfully, sticker not printed');
+                }
             }
 
             if (createdRows.length > 0 || wastageTotals) {
@@ -443,19 +471,7 @@ export function ConingReceiveForm() {
                 ];
 
                 const nextIssueBalances = { ...(db.issue_balances || {}) };
-                const prevBalance = nextIssueBalances[issue.id] || issue?.issueBalance;
-                const fallbackNetIssued = Number(issueMetrics.netIssued || 0);
-                if (prevBalance) {
-                    const prevReceived = Number(prevBalance.receivedWeight || 0);
-                    const nextReceived = Number(nextTotal.totalNetWeight || prevReceived);
-                    const nextWastage = Number(nextTotal.wastageNetWeight || 0);
-                    nextIssueBalances[issue.id] = {
-                        ...prevBalance,
-                        receivedWeight: nextReceived,
-                        wastageWeight: nextWastage,
-                        pendingWeight: Math.max(0, fallbackNetIssued - nextReceived - nextWastage),
-                    };
-                }
+                if (latestIssueBalance) nextIssueBalances[issue.id] = latestIssueBalance;
 
                 patchDb({
                     receive_from_coning_machine_rows: nextRows,
@@ -470,18 +486,6 @@ export function ConingReceiveForm() {
                     return { ...prev, issueBalance: updatedBalance };
                 });
             }
-            if (createdRows.length > 0 || wastageTotals) {
-                emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('coning'), {
-                    source: 'manualReceiveFromConingMachine',
-                    issueId: issue?.id || null,
-                });
-            }
-
-            setCart([]);
-            setIsWastage(false);
-            alert(wastageEntries.length > 0 && receiveEntries.length === 0
-                ? 'Wastage marked and issue closed successfully'
-                : 'Received successfully');
         } catch (e) {
             alert(e.message);
         } finally {
@@ -767,7 +771,7 @@ export function ConingReceiveForm() {
                                     </>
                                 )}
                             </div>
-                            <Button onClick={handleSubmit} disabled={submitting || cart.length === 0} className="w-full sm:w-auto">Save Receive</Button>
+                            <Button onClick={handleSubmit} disabled={submitting || cart.length === 0 || hasInvalidReceiveRows} className="w-full sm:w-auto">Save Receive</Button>
                         </div>
                     </CardContent>
                 )}

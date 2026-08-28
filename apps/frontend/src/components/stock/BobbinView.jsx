@@ -5,10 +5,13 @@ import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { TableStateRow } from '../data-table';
 import { LotPopover } from './LotPopover';
+import { LotRowsLoadMore } from './LotRowsLoadMore';
 import { cn } from '../../lib/utils';
 import { useBarcodeAutoExpand } from '../../utils/useBarcodeAutoExpand';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildInboundPieceMap, buildBobbinLotMetaMap, buildBobbinCrates, buildBobbinLots } from './stockSelectors';
+import * as v2Api from '../../api/v2';
+import { Button } from '../ui';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -20,7 +23,7 @@ const buildGroupKey = (lot) => ([
 
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
-export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange }) {
+export function BobbinView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null, canReprint = false }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
@@ -45,8 +48,16 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
   // 4. Aggregate into Lots
   const bobbinLots = useMemo(() => {
+    if (v2) {
+      return (v2.lots || []).map((lot) => ({
+        ...lot,
+        cutNames: new Set(lot.cutNames || []),
+        yarnNames: new Set(lot.yarnNames || []),
+        crates: v2.rowsByKey?.[lot.lotKey] || [],
+      }));
+    }
     return buildBobbinLots(bobbinCrates);
-  }, [bobbinCrates]);
+  }, [bobbinCrates, v2]);
 
   // 5. Filter & Sort
   const filteredLots = useMemo(() => {
@@ -125,6 +136,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
 
   const displayData = useMemo(() => {
     if (!groupBy) return filteredLots;
+    if (v2 && filteredLots.some((lot) => lot.groupKey && Array.isArray(lot.lots))) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
       const key = buildGroupKey(lot);
@@ -159,7 +171,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       map.set(key, existing);
     });
     return Array.from(map.values());
-  }, [filteredLots, groupBy]);
+  }, [filteredLots, groupBy, v2]);
 
   // Bubble up data for export (pass displayed data which respects groupBy)
   useEffect(() => {
@@ -167,7 +179,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
   }, [displayData, onDataChange]);
 
   // Grand Totals
-  const grandTotals = useMemo(() => {
+  const loadedGrandTotals = useMemo(() => {
     return displayData.reduce((acc, lot) => ({
       totalBobbins: acc.totalBobbins + (lot.totalBobbins || 0),
       availableBobbins: acc.availableBobbins + (lot.availableBobbins || 0),
@@ -176,20 +188,38 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
       crateCount: acc.crateCount + (lot.crates?.length || lot.crateCount || 0),
     }), { totalBobbins: 0, availableBobbins: 0, totalWeight: 0, availableWeight: 0, crateCount: 0 });
   }, [displayData]);
+  const grandTotals = v2?.summary ? { ...loadedGrandTotals, ...v2.summary } : loadedGrandTotals;
+
+  const toggleLot = async (lot, isExpanded) => {
+    markManualInteraction();
+    if (isExpanded) {
+      setExpandedLot(null);
+      return;
+    }
+    setExpandedLot(lot.lotNo);
+    if (v2 && lot.lotKey && !v2.rowsByKey?.[lot.lotKey]) {
+      try {
+        await v2.loadLotRows(lot.lotKey);
+      } catch (err) {
+        console.error('Failed to load bobbin lot rows', err);
+      }
+    }
+  };
 
   const handleReprintCrate = async (c) => {
     if (reprintingId) return;
     setReprintingId(c.id);
     try {
-      const fullRow = db.receive_from_cutter_machine_rows?.find(x => x.id === c.id) || c;
-      const piece = db.inbound_items?.find(p => p.id === fullRow.pieceId);
+      const detail = await v2Api.getV2ReceiveActionDetail('cutter', c.id);
+      const fullRow = detail?.row || db.receive_from_cutter_machine_rows?.find(x => x.id === c.id) || c;
+      const piece = detail?.piece || db.inbound_items?.find(p => p.id === fullRow.pieceId);
       const item = db.items?.find(i => i.id === (piece?.itemId || fullRow.itemId));
       const bobbin = db.bobbins?.find(b => b.id === fullRow.bobbinId);
       const box = db.boxes?.find(b => b.id === fullRow.boxId);
       const cut = db.cuts?.find(ct => ct.id === fullRow.cutId)?.name || c.cutName || '';
       const operator = db.operators?.find(o => o.id === fullRow.operatorId);
       const helper = db.workers?.find(w => w.id === fullRow.helperId);
-      const issue = (db.issue_to_cutter_machine || []).find(i =>
+      const issue = detail?.issue || (db.issue_to_cutter_machine || []).find(i =>
         Array.isArray(i.pieceIds) && i.pieceIds.includes(fullRow.pieceId)
       );
       const machine = db.machines?.find(m => m.id === issue?.machineId);
@@ -256,7 +286,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                       onClick={() => {
                         if (groupBy) return;
                         markManualInteraction();
-                        setExpandedLot(isExpanded ? null : l.lotNo);
+                        toggleLot(l, isExpanded);
                       }}
                     >
                       <TableCell>
@@ -329,9 +359,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell>{c.employee || c.operator?.name || '—'}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={c.notes || '—'} query={search} /></TableCell>
                                       <TableCell className="p-1">
-                                        <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                        {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                           <Printer className="w-3.5 h-3.5" />
-                                        </button>
+                                        </button>}
                                       </TableCell>
                                     </TableRow>
                                   );
@@ -339,6 +369,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                               </TableBody>
                             </Table>
                           </div>
+                          <LotRowsLoadMore
+                            pageState={v2?.rowPagesByKey?.[l.lotKey]}
+                            onLoadMore={() => v2?.loadMoreLotRows?.(l.lotKey)}
+                          />
                         </TableCell>
                       </TableRow>
                     )}
@@ -347,7 +381,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
               })
             )}
             {/* Grand Total Row */}
-            {displayData.length > 0 && (
+            {displayData.length > 0 && v2?.summary && (
               <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">Grand Total</TableCell>
@@ -384,7 +418,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                   onClick={() => {
                     if (groupBy) return;
                     markManualInteraction();
-                    setExpandedLot(isExpanded ? null : l.lotNo);
+                    toggleLot(l, isExpanded);
                   }}
                 >
                   <div className="flex justify-between items-start gap-2">
@@ -433,9 +467,9 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                             <span className="font-semibold text-primary"><HighlightMatch text={c.barcode} query={search} /></span>
                             <span className="flex items-center gap-1.5">
                               <span>{formatKg(c.availableWeight)} / {formatKg(c.netWeight)}</span>
-                              <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                              {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintCrate(c); }} disabled={reprintingId === c.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                 <Printer className="w-3 h-3" />
-                              </button>
+                              </button>}
                             </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
@@ -446,6 +480,10 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
                         </div>
                       );
                     })}
+                    <LotRowsLoadMore
+                      pageState={v2?.rowPagesByKey?.[l.lotKey]}
+                      onLoadMore={() => v2?.loadMoreLotRows?.(l.lotKey)}
+                    />
                   </div>
                 )}
               </div>
@@ -453,7 +491,7 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           })
         )}
         {/* Mobile Grand Total Card */}
-        {displayData.length > 0 && (
+        {displayData.length > 0 && v2?.summary && (
           <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
             <div className="flex justify-between items-center">
               <span className="font-bold text-primary">Grand Total</span>
@@ -465,6 +503,16 @@ export function BobbinView({ db, filters, search = '', groupBy = false, onApplyF
           </div>
         )}
       </div>
+      {v2?.summaryLoading && displayData.length > 0 && (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Calculating totals…</div>
+      )}
+      {v2?.lotsHasMore && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={v2.loadMoreLots} disabled={v2.lotsLoadingMore}>
+            {v2.lotsLoadingMore ? 'Loading…' : 'Load more lots'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

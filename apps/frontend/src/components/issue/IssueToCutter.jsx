@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO, formatDateDDMMYYYY } from '../../utils';
@@ -40,6 +40,17 @@ export function IssueToCutter() {
     useUnsavedGuard('issue-to-cutter', selectedLines.length > 0);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
+    const [scannedPieces, setScannedPieces] = useState([]);
+    const [remoteLots, setRemoteLots] = useState([]);
+    const [remotePieces, setRemotePieces] = useState([]);
+    const [candidateRefreshNonce, setCandidateRefreshNonce] = useState(0);
+    const [candidateLoading, setCandidateLoading] = useState(false);
+    const [lotCandidateCursor, setLotCandidateCursor] = useState(null);
+    const [pieceCandidateCursor, setPieceCandidateCursor] = useState(null);
+    const [lotsHaveMore, setLotsHaveMore] = useState(false);
+    const [piecesHaveMore, setPiecesHaveMore] = useState(false);
+    const lotCandidateGeneration = useRef(0);
+    const pieceCandidateGeneration = useRef(0);
 
     useEffect(() => {
         if (!scanFeedback) return;
@@ -48,8 +59,25 @@ export function IssueToCutter() {
     }, [scanFeedback]);
 
     // Filtered Lots
-    const lots = db?.lots || [];
-    const inboundItems = db?.inbound_items || [];
+    const inboundItems = useMemo(() => {
+        const byId = new Map((db?.inbound_items || []).map((piece) => [piece.id, piece]));
+        remotePieces.forEach((piece) => byId.set(piece.id, { ...(byId.get(piece.id) || {}), ...piece }));
+        scannedPieces.forEach((piece) => byId.set(piece.id, { ...(byId.get(piece.id) || {}), ...piece }));
+        return Array.from(byId.values());
+    }, [db?.inbound_items, remotePieces, scannedPieces]);
+    const lots = useMemo(() => {
+        const byLotNo = new Map((db?.lots || []).map((lot) => [lot.lotNo, lot]));
+        remoteLots.forEach((lot) => byLotNo.set(lot.lotNo, { ...(byLotNo.get(lot.lotNo) || {}), ...lot, itemId }));
+        scannedPieces.forEach((piece) => {
+            if (!piece?.lotNo || byLotNo.has(piece.lotNo)) return;
+            byLotNo.set(piece.lotNo, {
+                lotNo: piece.lotNo,
+                itemId: piece.itemId,
+                date: piece.date || piece.createdAt || '',
+            });
+        });
+        return Array.from(byLotNo.values());
+    }, [db?.lots, itemId, remoteLots, scannedPieces]);
     const issueToCutterRows = db?.issue_to_cutter_machine || [];
     const getIssueableWeight = (piece) => {
         const gross = Number(piece?.weight || 0);
@@ -77,6 +105,93 @@ export function IssueToCutter() {
             .filter((ii) => ii.issueableWeight > EPSILON)
             .sort((a, b) => a.seq - b.seq);
     }, [inboundItems, lotNo, itemId]);
+
+    useEffect(() => {
+        const generation = ++lotCandidateGeneration.current;
+        let active = true;
+        setRemoteLots([]);
+        setRemotePieces([]);
+        setLotCandidateCursor(null);
+        setPieceCandidateCursor(null);
+        setLotsHaveMore(false);
+        setPiecesHaveMore(false);
+        if (!itemId) return () => { active = false; };
+        setCandidateLoading(true);
+        api.getV2CutterSourceCandidates({ itemId, limit: 100 })
+            .then((result) => {
+                if (!active || generation !== lotCandidateGeneration.current) return;
+                setRemoteLots(Array.isArray(result?.items) ? result.items : []);
+                setLotCandidateCursor(result?.nextCursor || null);
+                setLotsHaveMore(Boolean(result?.hasMore));
+            })
+            .catch((err) => {
+                if (active) setScanFeedback(err?.message || 'Failed to load lots');
+            })
+            .finally(() => {
+                if (active) setCandidateLoading(false);
+            });
+        return () => { active = false; };
+    }, [itemId, candidateRefreshNonce]);
+
+    useEffect(() => {
+        const generation = ++pieceCandidateGeneration.current;
+        let active = true;
+        setRemotePieces([]);
+        setPieceCandidateCursor(null);
+        setPiecesHaveMore(false);
+        if (!itemId || !lotNo) return () => { active = false; };
+        setCandidateLoading(true);
+        api.getV2CutterSourceCandidates({ itemId, lotNo, limit: 100 })
+            .then((result) => {
+                if (!active || generation !== pieceCandidateGeneration.current) return;
+                setRemotePieces(Array.isArray(result?.items) ? result.items : []);
+                setPieceCandidateCursor(result?.nextCursor || null);
+                setPiecesHaveMore(Boolean(result?.hasMore));
+            })
+            .catch((err) => {
+                if (active) setScanFeedback(err?.message || 'Failed to load pieces');
+            })
+            .finally(() => {
+                if (active) setCandidateLoading(false);
+            });
+        return () => { active = false; };
+    }, [itemId, lotNo, candidateRefreshNonce]);
+
+    const loadMoreLots = async () => {
+        if (!itemId || !lotsHaveMore || !lotCandidateCursor || candidateLoading) return;
+        const generation = lotCandidateGeneration.current;
+        setCandidateLoading(true);
+        try {
+            const result = await api.getV2CutterSourceCandidates({ itemId, limit: 100, cursor: lotCandidateCursor });
+            if (generation !== lotCandidateGeneration.current) return;
+            const nextItems = Array.isArray(result?.items) ? result.items : [];
+            setRemoteLots((prev) => [...prev, ...nextItems.filter((row) => !prev.some((existing) => existing.lotNo === row.lotNo))]);
+            setLotCandidateCursor(result?.nextCursor || null);
+            setLotsHaveMore(Boolean(result?.hasMore));
+        } catch (err) {
+            if (generation === lotCandidateGeneration.current) setScanFeedback(err?.message || 'Failed to load more lots');
+        } finally {
+            if (generation === lotCandidateGeneration.current) setCandidateLoading(false);
+        }
+    };
+
+    const loadMorePieces = async () => {
+        if (!itemId || !lotNo || !piecesHaveMore || !pieceCandidateCursor || candidateLoading) return;
+        const generation = pieceCandidateGeneration.current;
+        setCandidateLoading(true);
+        try {
+            const result = await api.getV2CutterSourceCandidates({ itemId, lotNo, limit: 100, cursor: pieceCandidateCursor });
+            if (generation !== pieceCandidateGeneration.current) return;
+            const nextItems = Array.isArray(result?.items) ? result.items : [];
+            setRemotePieces((prev) => [...prev, ...nextItems.filter((row) => !prev.some((existing) => existing.id === row.id))]);
+            setPieceCandidateCursor(result?.nextCursor || null);
+            setPiecesHaveMore(Boolean(result?.hasMore));
+        } catch (err) {
+            if (generation === pieceCandidateGeneration.current) setScanFeedback(err?.message || 'Failed to load more pieces');
+        } finally {
+            if (generation === pieceCandidateGeneration.current) setCandidateLoading(false);
+        }
+    };
 
     const selectedLineByPieceId = useMemo(() => {
         const map = new Map();
@@ -113,8 +228,8 @@ export function IssueToCutter() {
         ));
     }, [availablePieces]);
 
-    const addPieceLine = (pieceId, issuedWeight = null) => {
-        const piece = availablePieces.find((entry) => entry.id === pieceId)
+    const addPieceLine = (pieceId, issuedWeight = null, pieceOverride = null) => {
+        const piece = pieceOverride || availablePieces.find((entry) => entry.id === pieceId)
             || (inboundItems || []).find((entry) => entry.id === pieceId);
         if (!piece) return;
         const maxWeight = Number(piece.issueableWeight ?? getIssueableWeight(piece));
@@ -142,13 +257,16 @@ export function IssueToCutter() {
         if (!barcode) return;
         setScanLoading(true);
         try {
-            const piece = await api.getInboundByBarcode(barcode);
-            if (!piece) throw new Error('Barcode not found');
-            if (piece.status !== 'available' && piece.status !== 'consumed') throw new Error('Piece is not available');
-            if (Number(piece.dispatchedWeight || 0) > 0) {
-                throw new Error('Piece has been partially dispatched and cannot be issued to cutter');
-            }
-            const issueableWeight = getIssueableWeight(piece);
+            const lookup = await api.getV2IssueSourceRow('cutter', barcode);
+            const rawPiece = lookup?.row;
+            if (!rawPiece) throw new Error('Barcode not found');
+            const piece = {
+                ...rawPiece,
+                issueableWeight: Number(lookup?.availability?.availableWeight ?? rawPiece.availableWeight ?? 0),
+                issuedToCutterWeight: Number(lookup?.availability?.issuedWeight ?? rawPiece.issuedToCutterWeight ?? 0),
+                dispatchedWeight: Number(lookup?.availability?.dispatchedWeight ?? rawPiece.dispatchedWeight ?? 0),
+            };
+            const issueableWeight = Number(piece.issueableWeight || 0);
             if (issueableWeight <= EPSILON) {
                 throw new Error('Piece has no available issue weight');
             }
@@ -156,7 +274,8 @@ export function IssueToCutter() {
             // Auto-select context
             if (itemId !== piece.itemId) setItemId(piece.itemId);
             if (lotNo !== piece.lotNo) setLotNo(piece.lotNo);
-            addPieceLine(piece.id, issueableWeight);
+            setScannedPieces((prev) => [piece, ...prev.filter((entry) => entry.id !== piece.id)]);
+            addPieceLine(piece.id, issueableWeight, piece);
             setScanFeedback(`Added ${barcode} (${formatKg(issueableWeight)})`);
         } catch (err) {
             alert(err.message);
@@ -184,6 +303,14 @@ export function IssueToCutter() {
             const payload = { date, itemId, lotNo, pieceIds, pieceLines, note, machineId, operatorId, cutId };
             const result = await createIssueToMachine(payload);
             const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+            setSelectedLines([]);
+            setScannedPieces((prev) => prev.filter((piece) => !pieceIds.includes(piece.id)));
+            setCandidateRefreshNonce((value) => value + 1);
+            setCutId("");
+            setNote("");
+            setIssuing(false);
+            alert(`Issued ${pieceIds.length} pieces successfully.`);
+
             const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
             if (template && issueRecord) {
                 const confirmPrint = window.confirm('Print sticker for this issue?');
@@ -219,10 +346,6 @@ export function IssueToCutter() {
                     );
                 }
             }
-            setSelectedLines([]);
-            setCutId("");
-            setNote("");
-            alert(`Issued ${pieceIds.length} pieces successfully.`);
         } catch (e) {
             alert(e.message);
         } finally {
@@ -275,7 +398,11 @@ export function IssueToCutter() {
                             <Label>Item</Label>
                             <Select
                                 value={itemId}
-                                onChange={e => setItemId(e.target.value)}
+                                onChange={e => {
+                                    setItemId(e.target.value);
+                                    setLotNo('');
+                                    setSelectedLines([]);
+                                }}
                                 options={db.items.map(i => ({ id: i.id, name: i.name }))}
                                 labelKey="name"
                                 valueKey="id"
@@ -291,7 +418,13 @@ export function IssueToCutter() {
                                 options={candidateLots.map(l => ({ value: l.lotNo, label: `${l.lotNo} (${formatDateDDMMYYYY(l.date)})` }))}
                                 placeholder="Select Lot"
                                 clearable
+                                disabled={!itemId || candidateLoading}
                             />
+                            {lotsHaveMore && (
+                                <Button type="button" variant="ghost" size="sm" className="mt-1 px-0" onClick={loadMoreLots} disabled={candidateLoading}>
+                                    {candidateLoading ? 'Loading…' : 'Load more lots'}
+                                </Button>
+                            )}
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -429,6 +562,13 @@ export function IssueToCutter() {
                                     </TableBody>
                                 </Table>
                             </div>
+                            {piecesHaveMore && (
+                                <div className="mt-3 flex justify-center">
+                                    <Button type="button" variant="outline" size="sm" onClick={loadMorePieces} disabled={candidateLoading}>
+                                        {candidateLoading ? 'Loading…' : 'Load more pieces'}
+                                    </Button>
+                                </div>
+                            )}
                             <div className="mt-4 flex justify-end">
                                 <Button onClick={handleIssue} disabled={issuing || selectedLines.length === 0 || refreshing || hasInvalidSelectedWeights}>
                                     {issuing ? 'Issuing...' : `Issue ${selectedLines.length} Pieces`}

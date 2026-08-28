@@ -107,6 +107,7 @@ export const INVENTORY_INVALIDATION_KEYS = Object.freeze({
   issueOnMachine: (process) => `issue:on-machine:${normalizeProcess(process)}`,
   issueHistory: (process) => `issue:history:${normalizeProcess(process)}`,
   receiveHistory: (process) => `receive:history:${normalizeProcess(process)}`,
+  stock: (process) => `stock:${normalizeProcess(process)}`,
   openingStockHistory: (stage) => `opening-stock:history:${normalizeOpeningStage(stage)}`,
 });
 
@@ -255,11 +256,9 @@ export const InventoryProvider = ({ children }) => {
     return await loadModuleData(module, options, { force: true });
   }, [loadModuleData]);
 
-  const refreshProcessData = useCallback(async (process, options = {}) => {
+  const refreshProcessData = useCallback(async (process) => {
     if (!process) return null;
-    const fullKey = `process:${process}:full`;
-    const wantsFull = options.full === true || loadedModulesRef.current.has(fullKey);
-    return await loadModuleData('process', { process, full: wantsFull }, { force: true });
+    return await loadModuleData('process', { process, full: false }, { force: true });
   }, [loadModuleData]);
 
   const refreshDb = useCallback(async () => {
@@ -430,21 +429,21 @@ export const InventoryProvider = ({ children }) => {
 
     createIssueToMachine: async (payload) => {
       const res = await api.createIssueToMachine(payload);
-      // This action is cutter-only; avoid full bootstrap refresh.
-      await refreshProcessData('cutter');
+      patchIssueRecord('cutter', res?.issueToCutterMachine || res?.issue_to_cutter_machine);
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine('cutter'),
         INVENTORY_INVALIDATION_KEYS.issueHistory('cutter'),
+        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
       ], { source: 'createIssueToMachine' });
       return res;
     },
     createIssueTakeBack: async (process, issueId, payload) => {
       const stage = process || 'cutter';
       const res = await api.createIssueTakeBack(stage, issueId, payload);
-      await refreshProcessData(stage);
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
         INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
+        INVENTORY_INVALIDATION_KEYS.stock(stage),
       ], { source: 'createIssueTakeBack', issueId });
       return res;
     },
@@ -452,22 +451,21 @@ export const InventoryProvider = ({ children }) => {
       const res = await api.reverseIssueTakeBack(takeBackId, payload);
       const stage = res?.issue_take_back?.stage || payload?.stage || process;
       if (stage) {
-        await refreshProcessData(stage);
-      } else {
-        await refreshDb();
-      }
-      if (stage) {
         emitInvalidation([
           INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
           INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
+          INVENTORY_INVALIDATION_KEYS.stock(stage),
         ], { source: 'reverseIssueTakeBack', takeBackId });
       }
       return res;
     },
     deleteIssueToMachine: async (id) => {
       await api.deleteIssueToMachine(id);
-      // This action is cutter-only; avoid full bootstrap refresh.
-      await refreshProcessData('cutter');
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.issueOnMachine('cutter'),
+        INVENTORY_INVALIDATION_KEYS.issueHistory('cutter'),
+        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+      ], { source: 'deleteIssueToMachine', id });
     },
 
     // Masters - Items (Side required)
@@ -592,7 +590,7 @@ export const InventoryProvider = ({ children }) => {
       }
       await refreshDb();
     },
-  }), [emitInvalidation, refreshDb, refreshProcessData, refreshModuleData, process]);
+  }), [emitInvalidation, patchIssueRecord, refreshDb, refreshProcessData, refreshModuleData, process]);
 
   const value = useMemo(() => ({
     db,

@@ -21,7 +21,7 @@ function formatDateDisplay(dateStr) {
 }
 
 export function ReceiveFromMachine() {
-  const { process, ensureModuleData } = useInventory();
+  const { process } = useInventory();
   const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
   const { canRead, canWrite, canEdit, canDelete } = useStagePermission('receive', stage);
   const readOnly = canRead && !canWrite;
@@ -46,15 +46,6 @@ export function ReceiveFromMachine() {
       setCutterMode('scan');
     }
   }, [process]);
-
-  useEffect(() => {
-    if (canRead) {
-      // Receive forms and label/reprint actions still resolve source rows, challans
-      // and trace metadata by id. Keep that operational slice complete while the
-      // visible history table remains server-paginated through v2.
-      ensureModuleData('process', { process: stage, full: true });
-    }
-  }, [canRead, ensureModuleData, stage]);
 
   const handleSendSummary = async () => {
     if (sendingSum || downloadingSum) return;

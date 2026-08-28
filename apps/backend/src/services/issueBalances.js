@@ -42,10 +42,11 @@ function parsePieceIdsCsv(value) {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function emptyBalance(stage, issueId) {
+function emptyBalance(stage, issueId, asOf) {
   return {
     stage,
     issueId,
+    asOf,
     originalCount: 0,
     originalWeight: 0,
     takeBackCount: 0,
@@ -61,7 +62,7 @@ function emptyBalance(stage, issueId) {
   };
 }
 
-function finalizeBalance(stage, issueId, parts) {
+function finalizeBalance(stage, issueId, parts, asOf) {
   const original = parts.original || { count: 0, weight: 0 };
   const takeBack = parts.takeBack || { count: 0, weight: 0 };
   const received = parts.received || { count: 0, weight: 0 };
@@ -69,12 +70,18 @@ function finalizeBalance(stage, issueId, parts) {
 
   const netIssuedCount = clampZero(original.count - takeBack.count);
   const netIssuedWeight = clampZero(original.weight - takeBack.weight);
-  const accountedCount = clampZero(received.count + wastage.count);
+  // Holo issue counts are input bobbins, while receive counts are output rolls.
+  // Preserve count availability for input take-backs and enforce production
+  // consumption through the shared weight unit.
+  const accountedCount = stage === 'holo'
+    ? 0
+    : clampZero(received.count + wastage.count);
   const accountedWeight = clampZero(received.weight + wastage.weight);
 
   return {
     stage,
     issueId,
+    asOf,
     originalCount: clampZero(original.count),
     originalWeight: clampZero(original.weight),
     takeBackCount: clampZero(takeBack.count),
@@ -289,6 +296,7 @@ function loadHoloOrConingOriginal(stage, issues) {
       }
       if (count <= 0) count = Number(issue.metallicBobbins || 0);
       if (weight <= 0) weight = Number(issue.metallicBobbinsWeight || 0);
+      weight += Number(issue.yarnKg || 0);
     } else {
       for (const ref of refs) {
         count += Number(ref?.issueRolls || 0);
@@ -384,7 +392,8 @@ async function loadConingReceivedAndWastage(client, issues) {
 export async function computeIssueBalancesBatch(client, stage, issues = []) {
   const out = new Map();
   if (!Array.isArray(issues) || issues.length === 0) return out;
-  for (const issue of issues) out.set(issue.id, emptyBalance(stage, issue.id));
+  const asOf = new Date().toISOString();
+  for (const issue of issues) out.set(issue.id, emptyBalance(stage, issue.id, asOf));
 
   const ids = issues.map((i) => i.id);
   const takeBack = await loadTakeBackTotals(client, stage, ids);
@@ -419,7 +428,7 @@ export async function computeIssueBalancesBatch(client, stage, issues = []) {
         takeBack: takeBack.get(id),
         received: received.get(id),
         wastage: wastage.get(id),
-      }),
+      }, asOf),
     );
   }
   return out;

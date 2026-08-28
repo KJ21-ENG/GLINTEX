@@ -17,12 +17,12 @@ const parseRefs = (value) => {
 export function buildHoloReceiveLabelData({ db, row, holoTraceContext = buildHoloTraceContext(db) }) {
   const issue = row?.issue || findById(db.issue_to_holo_machine, row?.issueId);
   const item = findById(db.items, issue?.itemId);
-  const rollType = findById(db.rollTypes, row?.rollTypeId);
+  const rollType = row?.rollType || findById(db.rollTypes, row?.rollTypeId);
   const box = findById(db.boxes, row?.boxId);
-  const yarnName = findById(db.yarns, issue?.yarnId)?.name || '';
+  const yarnName = row?.yarnName || findById(db.yarns, issue?.yarnId)?.name || '';
   const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', twistName: '—' };
-  const cut = resolved.cutName === '—' ? '' : resolved.cutName;
-  const twistName = resolved.twistName === '—' ? '' : resolved.twistName;
+  const cut = row?.cutName || (resolved.cutName === '—' ? '' : resolved.cutName);
+  const twistName = row?.twistName || (resolved.twistName === '—' ? '' : resolved.twistName);
 
   const boxWeight = Number(box?.weight || 0);
   const rollTypeWeight = Number(rollType?.weight || 0);
@@ -46,7 +46,7 @@ export function buildHoloReceiveLabelData({ db, row, holoTraceContext = buildHol
 
   return {
     lotNo: lotLabel,
-    itemName: item?.name || '',
+    itemName: row?.itemName || issue?.itemName || item?.name || '',
     rollCount,
     rollType: rollType?.name || '',
     netWeight,
@@ -102,7 +102,7 @@ export function buildConingReceiveLabelData({ db, row, coningTraceContext = buil
   const cutResolved = cut === '—' ? '' : cut;
   const yarnResolved = yarnName === '—' ? '' : yarnName;
   const twistResolved = twist === '—' ? '' : twist;
-  const rollTypeResolved = rollType === '—' ? '' : rollType;
+  const rollTypeResolved = row?.rollTypeName || (rollType === '—' ? '' : rollType);
   const machineName = row?.machineNo
     || row?.machine?.name
     || (issue?.machineId ? findById(db.machines, issue.machineId)?.name : '')

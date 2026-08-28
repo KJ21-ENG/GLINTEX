@@ -41,7 +41,7 @@ COPY apps/backend/package.json ./apps/backend/package.json
 COPY apps/frontend/package.json ./apps/frontend/package.json
 COPY apps/backend/prisma ./apps/backend/prisma
 RUN npm ci
-RUN npx prisma generate --schema apps/backend/prisma/schema.prisma
+RUN npx --no-install prisma generate --schema apps/backend/prisma/schema.prisma
 
 FROM deps AS production-deps
 RUN npm prune --omit=dev
@@ -57,6 +57,7 @@ ENV NODE_ENV=production
 COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=production-deps /app/package*.json ./
 COPY --from=production-deps /app/apps/backend/package.json ./apps/backend/package.json
+COPY --from=production-deps /app/apps/backend/node_modules ./apps/backend/node_modules
 COPY apps/backend/prisma ./apps/backend/prisma
 COPY apps/backend/src ./apps/backend/src
 COPY apps/backend/whatsapp ./apps/backend/whatsapp

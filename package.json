@@ -16,5 +16,8 @@
   },
   "dependencies": {
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+  },
+  "devDependencies": {
+    "prisma": "4.16.2"
   }
 }

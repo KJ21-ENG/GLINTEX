@@ -55,6 +55,7 @@ if (!TEST_DB) {
     await prisma.receiveFromConingMachinePieceTotal.deleteMany({});
     await prisma.receiveFromConingMachineRow.deleteMany({});
     await prisma.issueToConingMachine.deleteMany({});
+    await prisma.box.deleteMany({});
     await prisma.userSession.deleteMany({});
     await prisma.userRole.deleteMany({});
     await prisma.user.deleteMany({});
@@ -80,6 +81,8 @@ if (!TEST_DB) {
     const item = await prisma.item.create({ data: { name: 'S/S 40', side: 'SINGLE' } });
     const yarn = await prisma.yarn.create({ data: { name: '40s' } });
     const cut = await prisma.cut.create({ data: { name: '40' } });
+    const coneType = await prisma.coneType.create({ data: { name: 'Test cone', weight: 0.1 } });
+    const box = await prisma.box.create({ data: { name: 'Test box', weight: 1, processType: 'coning' } });
     const contractor = await prisma.contractor.create({ data: { name: 'Ravi' } });
     await prisma.contractorAssignment.create({ data: { contractorId: contractor.id, process: 'coning' } });
     await prisma.contractorRate.create({
@@ -90,11 +93,22 @@ if (!TEST_DB) {
       const issue = await prisma.issueToConingMachine.create({
         data: {
           date: '2026-03-15', itemId: item.id, lotNo: `L-${suffix}`, yarnId: yarn.id, cutId: cut.id,
-          barcode: `CI-${suffix}`, receivedRowRefs: [],
+          barcode: `CI-${suffix}`, receivedRowRefs: [{ coneTypeId: coneType.id }],
         },
       });
       const row = await prisma.receiveFromConingMachineRow.create({
-        data: { issueId: issue.id, coneCount: 1, netWeight, date: '2026-03-15', barcode: `CR-${suffix}`, createdBy: 'manual' },
+        data: {
+          issueId: issue.id,
+          boxId: box.id,
+          coneCount: 1,
+          grossWeight: netWeight + 1.1,
+          tareWeight: 1.1,
+          coneWeight: netWeight,
+          netWeight,
+          date: '2026-03-15',
+          barcode: `CR-${suffix}`,
+          createdBy: 'manual',
+        },
       });
       // The production row-edit routes require the per-issue receive totals.
       await prisma.receiveFromConingMachinePieceTotal.create({
@@ -398,8 +412,8 @@ if (!TEST_DB) {
       data: { issueId: childIssue.id, coneCount: 1, netWeight: 5, date: '2026-03-20', barcode: 'CR-T2', createdBy: 'manual' },
     });
     const draft = await request(app).post(`${CP}/settlements`).set('Authorization', auth)
-      .send({ contractorId, ...base, sourceRowIds: [childRow.id] });
-    assert.equal(draft.status, 200);
+      .send({ contractorId, process: 'coning', date: '2026-03-20', sourceRowIds: [childRow.id] });
+    assert.equal(draft.status, 200, JSON.stringify(draft.body));
     const paid = await request(app).post(`${CP}/settlements/${draft.body.id}/mark-paid`).set('Authorization', auth)
       .send({ paymentDate: '2026-04-01', paymentMode: 'Cash' });
     assert.equal(paid.status, 200);
@@ -488,7 +502,7 @@ if (!TEST_DB) {
     // Production mutations must refuse; corrections go through admin paid-edit.
     const edit = await request(app).put(`/api/receive_from_coning_machine/rows/${rowA}`)
       .set('Authorization', auth).send({ coneCount: 1, grossWeight: 7 });
-    assert.equal(edit.status, 409);
+    assert.equal(edit.status, 409, JSON.stringify(edit.body));
     const del = await request(app).delete(`/api/receive_from_coning_machine/rows/${rowA}`)
       .set('Authorization', auth);
     assert.equal(del.status, 409);

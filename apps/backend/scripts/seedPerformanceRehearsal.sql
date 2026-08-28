@@ -53,6 +53,65 @@ SELECT
   '2026-08-01 00:00:00+00'::timestamptz + ((n % 20) * interval '1 second')
 FROM generate_series(1, 2000) AS n;
 
+-- Pending Cutter issues exercise the Cutter On Machine list and summary without
+-- colliding with the legacy receive rows below, which intentionally reference
+-- only the original PERF-PIECE sources.
+INSERT INTO "Lot" (
+  id, "lotNo", date, "itemId", "firmId", "supplierId", "totalPieces", "totalWeight", "createdAt", "updatedAt"
+)
+SELECT
+  'perf-cutter-pending-lot-id-' || lpad(n::text, 4, '0'),
+  'PERF-CUT-PENDING-' || lpad(n::text, 4, '0'),
+  '2026-08-' || lpad((((n - 1) % 27) + 1)::text, 2, '0'),
+  'perf-item', 'perf-firm', 'perf-supplier', 1, 10,
+  '2026-08-01 01:00:00+00'::timestamptz + ((n % 20) * interval '1 second'),
+  '2026-08-01 01:00:00+00'::timestamptz + ((n % 20) * interval '1 second')
+FROM generate_series(1, 200) AS n;
+
+INSERT INTO "InboundItem" (
+  id, "lotNo", "itemId", weight, status, seq, barcode,
+  "dispatchedWeight", "issuedToCutterWeight", "createdAt", "updatedAt"
+)
+SELECT
+  'PERF-CUT-PENDING-PIECE-' || lpad(n::text, 4, '0'),
+  'PERF-CUT-PENDING-' || lpad(n::text, 4, '0'),
+  'perf-item', 10, 'available', 1,
+  'PERF-CUT-PENDING-IN-' || lpad(n::text, 4, '0'),
+  0, 5,
+  '2026-08-01 01:00:00+00'::timestamptz + ((n % 20) * interval '1 second'),
+  '2026-08-01 01:00:00+00'::timestamptz + ((n % 20) * interval '1 second')
+FROM generate_series(1, 200) AS n;
+
+INSERT INTO "IssueToCutterMachine" (
+  id, date, "itemId", "lotNo", "cutId", count, "totalWeight", "pieceIds",
+  reason, barcode, "isDeleted", "createdAt", "updatedAt"
+)
+SELECT
+  'perf-cutter-issue-' || lpad(n::text, 4, '0'),
+  '2026-08-' || lpad((((n - 1) % 27) + 1)::text, 2, '0'),
+  'perf-item',
+  'PERF-CUT-PENDING-' || lpad(n::text, 4, '0'),
+  'perf-cut', 1, 5,
+  'PERF-CUT-PENDING-PIECE-' || lpad(n::text, 4, '0'),
+  'Performance rehearsal',
+  'PERF-CUT-I-' || lpad(n::text, 4, '0'),
+  false,
+  '2026-08-01 02:00:00+00'::timestamptz + ((n % 20) * interval '1 second'),
+  '2026-08-01 02:00:00+00'::timestamptz + ((n % 20) * interval '1 second')
+FROM generate_series(1, 200) AS n;
+
+INSERT INTO "IssueToCutterMachineLine" (
+  id, "issueId", "pieceId", "issuedWeight", "createdAt", "updatedAt"
+)
+SELECT
+  'perf-cutter-issue-line-' || lpad(n::text, 4, '0'),
+  'perf-cutter-issue-' || lpad(n::text, 4, '0'),
+  'PERF-CUT-PENDING-PIECE-' || lpad(n::text, 4, '0'),
+  5,
+  '2026-08-01 02:00:00+00'::timestamptz + ((n % 20) * interval '1 second'),
+  '2026-08-01 02:00:00+00'::timestamptz + ((n % 20) * interval '1 second')
+FROM generate_series(1, 200) AS n;
+
 INSERT INTO "ReceiveFromCutterMachineUpload" (id, "originalFilename", "uploadedAt", "createdAt", "updatedAt", "rowCount")
 VALUES ('perf-upload', 'performance-rehearsal.csv', now(), now(), now(), 15000);
 
@@ -302,6 +361,7 @@ FROM generate_series(1, 100) AS n;
 ANALYZE;
 
 SELECT 'Lot' AS table_name, count(*) AS row_count FROM "Lot" WHERE id LIKE 'perf-%'
+UNION ALL SELECT 'IssueToCutterMachine', count(*) FROM "IssueToCutterMachine" WHERE id LIKE 'perf-%'
 UNION ALL SELECT 'IssueToHoloMachine', count(*) FROM "IssueToHoloMachine" WHERE id LIKE 'perf-%'
 UNION ALL SELECT 'ReceiveFromHoloMachineRow', count(*) FROM "ReceiveFromHoloMachineRow" WHERE id LIKE 'perf-%'
 UNION ALL SELECT 'IssueToConingMachine', count(*) FROM "IssueToConingMachine" WHERE id LIKE 'perf-%'

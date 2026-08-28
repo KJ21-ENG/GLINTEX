@@ -159,6 +159,24 @@ test('Cutter grouped stock and post-mutation projections retain authoritative id
   assert.match(history, /INVENTORY_INVALIDATION_KEYS\.issueOnMachine\('cutter'\)/);
 });
 
+test('issue editor scans are aborted and generation-guarded when the editor changes', async () => {
+  const history = await readFile(join(frontendSource, 'pages/IssueHistory.jsx'), 'utf8');
+  const v2Api = await readFile(join(frontendSource, 'api/v2.js'), 'utf8');
+  assert.match(history, /issueScanRequestRef/);
+  assert.match(history, /active\.controller\?\.abort\(\)/);
+  assert.match(history, /cancelIssueScanRequest\(\);[\s\S]{0,160}setEditingIssue\(null\)/);
+  assert.equal((history.match(/isCurrentIssueScanRequest\(generation\)/g) || []).length >= 6, true);
+  assert.equal((history.match(/signal: controller\.signal/g) || []).length, 3);
+  assert.match(v2Api, /getV2IssueSourceRow = \(process, barcode, options = \{\}\)/);
+});
+
+test('Cutter stock closes expanded rows before post-mutation list refreshes', async () => {
+  const stock = await readFile(join(frontendSource, 'pages/Stock.jsx'), 'utf8');
+  assert.match(stock, /const refreshCutterStockAfterMutation = useCallback\(\(\) => \{\s*setExpandedLot\(null\);\s*v2Api\.retryLots\(\);/);
+  assert.equal((stock.match(/refreshCutterStockAfterMutation\(\);/g) || []).length, 3);
+  assert.match(stock, /onSaved=\{refreshCutterStockAfterMutation\}/);
+});
+
 test('stock pagination preserves grouped identities and resets stale load-more state', async () => {
   const source = await readFile(join(frontendSource, 'hooks/useV2StockLots.js'), 'utf8');
   assert.match(source, /item\?\.groupKey \|\| item\?\.lotKey/);

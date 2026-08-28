@@ -176,6 +176,10 @@ export function Stock() {
     search,
     filters: { ...filters, view: isCutter ? view : '', groupBy: groupByItem },
   });
+  const refreshCutterStockAfterMutation = useCallback(() => {
+    setExpandedLot(null);
+    v2Api.retryLots();
+  }, [v2Api.retryLots]);
 
   // Close export menu when clicking outside / pressing escape
   useEffect(() => {
@@ -614,7 +618,7 @@ export function Stock() {
     setDeletingPieces(prev => new Set(prev).add(pieceId));
     try {
       await api.deleteInboundItem(pieceId);
-      v2Api.retryLots();
+      refreshCutterStockAfterMutation();
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.stock('cutter'),
         'inbound',
@@ -658,7 +662,7 @@ export function Stock() {
     if (!confirm('Delete lot ' + lotNo + '? This will remove all pieces and history for this lot.')) return;
     try {
       await api.deleteLot(lotNo);
-      v2Api.retryLots();
+      refreshCutterStockAfterMutation();
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.stock('cutter'),
         'inbound',
@@ -703,7 +707,7 @@ export function Stock() {
       setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
       setIssueModalOpen(false);
       setIssuing(false);
-      v2Api.retryLots();
+      refreshCutterStockAfterMutation();
       const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
       if (template && issueRecord) {
         const confirmPrint = window.confirm('Print sticker for this issue?');
@@ -1124,7 +1128,7 @@ export function Stock() {
                                         p={p}
                                         selected={(selectedByLot[l.lotNo] || []).includes(p.id)}
                                         onToggle={() => togglePiece(l.lotNo, p.id)}
-                                        onSaved={v2Api.retryLots}
+                                        onSaved={refreshCutterStockAfterMutation}
                                         pendingWeight={p.pendingWeight}
                                         wastageWeight={p.wastageWeight}
                                         wastageNote={p.wastageNote}

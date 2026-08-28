@@ -46,8 +46,8 @@ export const getV2IssueTrackingFacets = (process, params = {}) =>
 export const exportV2IssueTrackingJson = (process, params = {}) =>
   request(`/api/v2/issue/${process}/tracking/export.json`, params);
 
-export const getV2IssueSourceRow = (process, barcode) =>
-  request(`/api/v2/issue/${process}/source-row`, { barcode });
+export const getV2IssueSourceRow = (process, barcode, options = {}) =>
+  request(`/api/v2/issue/${process}/source-row`, { barcode }, options);
 
 export const getV2CutterSourceCandidates = (params = {}) =>
   request('/api/v2/issue/cutter/source-candidates', params);

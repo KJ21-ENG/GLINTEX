@@ -116,9 +116,11 @@ jobs:
             'nginx -t; nginx; wget -qO- http://127.0.0.1/ >/dev/null; nginx -s quit'
           "${compose[@]}" run --rm --no-deps agent-api node --input-type=module -e \
             "import { createAgentApp } from './src/agentApp.js'; const app=createAgentApp(); const server=app.listen(0,'127.0.0.1',async()=>{try{const port=server.address().port;const response=await fetch('http://127.0.0.1:'+port+'/healthz');if(!response.ok)process.exitCode=1}catch(error){console.error(error);process.exitCode=1}finally{server.close()}})"
-          "${compose[@]}" up -d --no-deps --wait frontend
+          # Publish both external paths through one health-gated cutover. Neither
+          # candidate is intentionally made available while the other is still
+          # waiting on a separate production start command.
+          "${compose[@]}" up -d --no-deps --wait frontend agent-api
           "${compose[@]}" exec -T frontend wget -qO- http://127.0.0.1/ >/dev/null
-          "${compose[@]}" up -d --no-deps --wait agent-api
           "${compose[@]}" exec -T agent-api node -e \
             "fetch('http://127.0.0.1:4003/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 

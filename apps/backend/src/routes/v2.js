@@ -4708,6 +4708,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
           ) st ON true
           LEFT JOIN "Machine" bm ON bm.id = st."boilerMachineId"
           WHERE r."isDeleted" = false
+            AND r."isWastage" IS NOT TRUE
         ),
         base_groups AS (
         SELECT
@@ -5501,6 +5502,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           JOIN candidate_issues ci ON ci.id = r."issueId"
           JOIN issue_labels il ON il.issue_id = ci.id
           WHERE r."isDeleted" = false
+            AND r."isWastage" IS NOT TRUE
             AND il.lot_label = ${lotLabel}
             AND (${lotNos.length} = 0 OR il.lot_nos_final = ${lotNos}::text[])
             AND (${rowCursor?.afterId || ''} = ''
@@ -5848,6 +5850,7 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
         LEFT JOIN "Lot" lot ON lot."lotNo" = i."lotNo"
         LEFT JOIN "Cut" ct ON ct.id = i."cutId"
         WHERE r."isDeleted" = false
+          AND r."isWastage" IS NOT TRUE
           AND (r."barcode" ILIKE ${'%' + q + '%'} OR r."notes" ILIKE ${'%' + q + '%'})
         GROUP BY
           il.lot_label,

@@ -40,6 +40,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const scrollRootRef = useRef(null);
   const takeBackScrollRef = useRef(null);
   const issueDetailRequestRef = useRef(0);
+  const issueScanRequestRef = useRef({ generation: 0, controller: null });
   const [savingIssue, setSavingIssue] = useState(false);
   const [revertTarget, setRevertTarget] = useState(null);
   const [revertBusy, setRevertBusy] = useState(false);
@@ -257,8 +258,41 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       .some(r => !r.isDeleted && r.issueId === row.id);
   };
 
+  const cancelIssueScanRequest = () => {
+    const active = issueScanRequestRef.current;
+    active.controller?.abort();
+    issueScanRequestRef.current = { generation: active.generation + 1, controller: null };
+    setIssueScanLoading(false);
+  };
+
+  const beginIssueScanRequest = () => {
+    const active = issueScanRequestRef.current;
+    active.controller?.abort();
+    const controller = new AbortController();
+    const generation = active.generation + 1;
+    issueScanRequestRef.current = { generation, controller };
+    setIssueScanLoading(true);
+    return { generation, controller };
+  };
+
+  const isCurrentIssueScanRequest = (generation) => (
+    issueScanRequestRef.current.generation === generation
+      && !issueScanRequestRef.current.controller?.signal.aborted
+  );
+
+  const finishIssueScanRequest = (generation) => {
+    if (issueScanRequestRef.current.generation !== generation) return;
+    issueScanRequestRef.current = { generation, controller: null };
+    setIssueScanLoading(false);
+  };
+
+  useEffect(() => () => {
+    issueScanRequestRef.current.controller?.abort();
+  }, []);
+
   const openIssueEditor = async (initialRow) => {
     if (!initialRow) return;
+    cancelIssueScanRequest();
     const requestGeneration = issueDetailRequestRef.current + 1;
     issueDetailRequestRef.current = requestGeneration;
     let detail;
@@ -367,11 +401,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const closeIssueEditor = () => {
     issueDetailRequestRef.current += 1;
+    cancelIssueScanRequest();
     setEditingIssue(null);
     setIssueDraft(null);
     setIssueSourcePieces([]);
     setIssueScanInput('');
-    setIssueScanLoading(false);
   };
 
   const updateIssueDraftField = (field, value) => {
@@ -391,15 +425,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!raw) return;
     const normalized = raw.toUpperCase();
     let result;
-    setIssueScanLoading(true);
+    const { generation, controller } = beginIssueScanRequest();
     try {
-      result = await api.getV2IssueSourceRow('cutter', normalized);
+      result = await api.getV2IssueSourceRow('cutter', normalized, { signal: controller.signal });
     } catch (err) {
+      if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
       alert(err.message || 'Piece not found');
       return;
     } finally {
-      setIssueScanLoading(false);
+      finishIssueScanRequest(generation);
     }
+    if (!isCurrentIssueScanRequest(generation)) return;
     if (result?.outcome !== 'found' || !result?.row) return;
     const piece = result.row;
     if (issueDraft.pieceIds.includes(piece.id)) {
@@ -423,11 +459,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       alert('Piece is not available');
       return;
     }
-    setIssueDraft((prev) => ({
+    setIssueDraft((prev) => prev ? ({
       ...prev,
       pieceIds: [...prev.pieceIds, piece.id],
       piecesTouched: true,
-    }));
+    }) : prev);
     setIssueSourcePieces((prev) => [piece, ...prev.filter((entry) => entry.id !== piece.id)]);
     setIssueScanInput('');
   };
@@ -445,15 +481,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
     let result;
-    setIssueScanLoading(true);
+    const { generation, controller } = beginIssueScanRequest();
     try {
-      result = await api.getV2IssueSourceRow('holo', normalized);
+      result = await api.getV2IssueSourceRow('holo', normalized, { signal: controller.signal });
     } catch (err) {
+      if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
       alert(err.message || 'Barcode not found in Cutter Receive rows');
       return;
     } finally {
-      setIssueScanLoading(false);
+      finishIssueScanRequest(generation);
     }
+    if (!isCurrentIssueScanRequest(generation)) return;
     if (result?.outcome !== 'found' || !result?.row) {
       alert(result?.error || 'Barcode not found in Cutter Receive rows');
       return;
@@ -485,7 +523,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const availWt = Number(result.availability?.availableWeight ?? row.availableWeight ?? 0);
     const unitWeight = bobbinQty > 0 ? Number(row.netWt || 0) / bobbinQty : null;
 
-    setIssueDraft((prev) => ({
+    setIssueDraft((prev) => prev ? ({
       ...prev,
       crates: [
         ...prev.crates,
@@ -501,7 +539,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         },
       ],
       cratesTouched: true,
-    }));
+    }) : prev);
     setIssueScanInput('');
   };
 
@@ -536,10 +574,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
     let row = null;
     let availability = null;
-    setIssueScanLoading(true);
+    const { generation, controller } = beginIssueScanRequest();
     try {
       try {
-        const result = await api.getV2IssueSourceRow('coning', normalized);
+        const result = await api.getV2IssueSourceRow('coning', normalized, { signal: controller.signal });
         if (result?.outcome !== 'found') {
           alert(result?.error || 'Barcode not found in receive rows');
           return;
@@ -547,12 +585,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         row = result.row;
         availability = result.availability || null;
       } catch (err) {
+        if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
         alert(err.message || 'Barcode not found in receive rows');
         return;
       }
     } finally {
-      setIssueScanLoading(false);
+      finishIssueScanRequest(generation);
     }
+
+    if (!isCurrentIssueScanRequest(generation)) return;
 
     if (!row) return;
     if (issueDraft.crates.some(c => c.rowId === row.id)) {
@@ -586,7 +627,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const baseWeight = availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0;
     const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
 
-    setIssueDraft((prev) => ({
+    setIssueDraft((prev) => prev ? ({
       ...prev,
       crates: [
         ...prev.crates,
@@ -602,7 +643,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         },
       ],
       cratesTouched: true,
-    }));
+    }) : prev);
     setIssueScanInput('');
   };
 

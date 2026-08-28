@@ -733,6 +733,61 @@ if (!TEST_DB) {
     }
   });
 
+  test('Holo stock excludes explicit wastage rows from groups, summaries, expansion, and barcode lookup', async () => {
+    const suffix = `${Date.now()}-holo-wastage-stock`;
+    const [item, cut, yarn, twist] = await Promise.all([
+      prisma.item.create({ data: { name: `Holo Wastage Item ${suffix}` } }),
+      prisma.cut.create({ data: { name: `Holo Wastage Cut ${suffix}` } }),
+      prisma.yarn.create({ data: { name: `Holo Wastage Yarn ${suffix}` } }),
+      prisma.twist.create({ data: { name: `Holo Wastage Twist ${suffix}` } }),
+    ]);
+    const lotNo = `HW-${suffix}`;
+    await prisma.lot.create({
+      data: { lotNo, date: '2026-08-27', itemId: item.id, totalPieces: 1, totalWeight: 10 },
+    });
+    const issue = await prisma.issueToHoloMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
+        barcode: `HW-IHO-${suffix}`, metallicBobbins: 10, metallicBobbinsWeight: 10, receivedRowRefs: [],
+      },
+    });
+    const normalRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: issue.id, barcode: `HW-NORMAL-${suffix}`, rollCount: 6, rollWeight: 6,
+        grossWeight: 6, tareWeight: 0, isWastage: false,
+      },
+    });
+    const wastageRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: issue.id, barcode: `HW-WASTAGE-${suffix}`, rollCount: 4, rollWeight: 4,
+        grossWeight: 4, tareWeight: 0, isWastage: true,
+      },
+    });
+
+    const groups = await get('/api/v2/stock/holo/lot-groups', { search: item.name, limit: 20 });
+    assert.equal(groups.response.status, 200, groups.response.text);
+    assert.equal(groups.response.body.items.length, 1);
+    assert.equal(groups.response.body.items[0].totalRolls, 6);
+    assert.equal(groups.response.body.items[0].totalWeight, 6);
+    assert.equal(groups.response.body.summary.totalRolls, 6);
+    assert.equal(groups.response.body.summary.totalWeight, 6);
+
+    const expanded = await get('/api/v2/stock/holo/lot-rows', {
+      key: groups.response.body.items[0].lotKey,
+      limit: 20,
+    });
+    assert.equal(expanded.response.status, 200, expanded.response.text);
+    assert.deepEqual(expanded.response.body.items.map((row) => row.id), [normalRow.id]);
+    assert.equal(expanded.response.body.items.some((row) => row.id === wastageRow.id), false);
+
+    const normalKeys = await get('/api/v2/stock/holo/barcode-lot-keys', { q: normalRow.barcode });
+    assert.equal(normalKeys.response.status, 200, normalKeys.response.text);
+    assert.deepEqual(normalKeys.response.body.keys, [groups.response.body.items[0].lotKey]);
+    const wastageKeys = await get('/api/v2/stock/holo/barcode-lot-keys', { q: wastageRow.barcode });
+    assert.equal(wastageKeys.response.status, 200, wastageKeys.response.text);
+    assert.deepEqual(wastageKeys.response.body.keys, []);
+  });
+
   test('Coning tracking, On Machine, filters, and export use traced Holo lineage', async () => {
     const suffix = `${Date.now()}-trace-first`;
     const [item, cutA, cutB, yarnA, yarnB, twistA, twistB] = await Promise.all([

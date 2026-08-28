@@ -65,15 +65,15 @@ test('production deployment keeps external writers quiesced until every replacem
   const backendIndex = workflow.indexOf('up -d --no-deps --wait backend', stopWritersIndex);
   const frontendPreflightIndex = workflow.indexOf('run --rm --no-deps frontend sh -ec', backendIndex);
   const agentPreflightIndex = workflow.indexOf('run --rm --no-deps agent-api node --input-type=module', frontendPreflightIndex);
-  const frontendIndex = workflow.indexOf('up -d --no-deps --wait frontend', agentPreflightIndex);
-  const agentIndex = workflow.indexOf('up -d --no-deps --wait agent-api', frontendIndex);
+  const writerCutoverIndex = workflow.indexOf('up -d --no-deps --wait frontend agent-api', agentPreflightIndex);
   assert.ok(migrationIndex > 0);
   assert.ok(stopWritersIndex > migrationIndex);
   assert.ok(backendIndex > stopWritersIndex);
   assert.ok(frontendPreflightIndex > backendIndex);
   assert.ok(agentPreflightIndex > frontendPreflightIndex);
-  assert.ok(frontendIndex > agentPreflightIndex);
-  assert.ok(agentIndex > frontendIndex);
+  assert.ok(writerCutoverIndex > agentPreflightIndex);
+  assert.equal(workflow.indexOf('up -d --no-deps --wait frontend\n'), -1);
+  assert.equal(workflow.indexOf('up -d --no-deps --wait agent-api\n'), -1);
 });
 
 test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {

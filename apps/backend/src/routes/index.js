@@ -1016,6 +1016,15 @@ function sendInventoryMutationError(res, err, fallbackMessage) {
       error: 'Inventory changed while saving. Please rescan and try again.',
     });
   }
+  const statusCode = Number(err?.statusCode);
+  if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500) {
+    return res.status(statusCode).json({
+      ...(err?.code ? { outcome: err.code } : {}),
+      error: err?.message || fallbackMessage,
+      ...(err?.availability ? { availability: err.availability } : {}),
+      ...(Array.isArray(err?.crates) ? { crates: err.crates } : {}),
+    });
+  }
   return res.status(500).json({ error: err?.message || fallbackMessage });
 }
 

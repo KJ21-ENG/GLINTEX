@@ -573,7 +573,10 @@ if (!TEST_DB) {
   test('receive creation rejects missing tare masters and invalid physical counts', async () => {
     const suffix = `${Date.now()}-tare-validation`;
     const auth = await adminAuth(suffix);
-    const item = await prisma.item.create({ data: { name: `Perf Item ${suffix}` } });
+    const [item, coningBox] = await Promise.all([
+      prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
+      prisma.box.create({ data: { name: `Perf Coning Box ${suffix}`, weight: 1, processType: 'coning' } }),
+    ]);
     const holoIssue = await prisma.issueToHoloMachine.create({
       data: {
         date: '2026-08-27', itemId: item.id, lotNo: `PERF-H-${suffix}`, barcode: `IHO-${4_000_000 + Number(String(Date.now()).slice(-6))}`,
@@ -598,6 +601,26 @@ if (!TEST_DB) {
       .set('Authorization', auth)
       .send({ issueId: coningIssue.id, pieceId: coningIssue.id, coneCount: -10, grossWeight: 5 });
     assert.equal(invalidConing.status, 400);
+
+    const missingConeType = await request(app)
+      .post('/api/receive_from_coning_machine/manual')
+      .set('Authorization', auth)
+      .send({
+        issueId: coningIssue.id,
+        pieceId: coningIssue.id,
+        coneCount: 10,
+        boxId: coningBox.id,
+        grossWeight: 5,
+      });
+    assert.equal(missingConeType.status, 400, missingConeType.text);
+    assert.match(missingConeType.body.error, /no cone type/i);
+
+    const missingWastageIssue = await request(app)
+      .post('/api/receive_from_coning_machine/mark_wastage')
+      .set('Authorization', auth)
+      .send({ issueId: `missing-${suffix}`, note: 'Close missing issue' });
+    assert.equal(missingWastageIssue.status, 404, missingWastageIssue.text);
+    assert.match(missingWastageIssue.body.error, /not found/i);
   });
 
   test('concurrent Coning close accounts for take-backs exactly once and returns the closed balance', async () => {

@@ -11135,27 +11135,6 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     }
     const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
-    const sourceIssueMap = new Map((rows || []).map(r => [r.issue?.id, r.issue]));
-    const sourceCutIds = new Set();
-    const sourceYarnIds = new Set();
-    const sourceTwistIds = new Set();
-    resolvedCrates.forEach((c) => {
-      if (!c.sourceIssueId) return;
-      const issue = sourceIssueMap.get(c.sourceIssueId);
-      if (issue?.cutId) sourceCutIds.add(issue.cutId);
-      if (issue?.yarnId) sourceYarnIds.add(issue.yarnId);
-      if (issue?.twistId) sourceTwistIds.add(issue.twistId);
-    });
-    if (sourceCutIds.size > 1) {
-      return res.status(400).json({ error: 'Crates must belong to a single cut' });
-    }
-    const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
-    if (sourceYarnIds.size > 1) {
-      return res.status(400).json({ error: 'Crates must belong to a single yarn' });
-    }
-    const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
-    const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
-
     // Validate masters if provided
     const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
     const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
@@ -11422,9 +11401,58 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const lockedParentIssues = [...lockedConingRows, ...lockedHoloRows].map((row) => row.issue);
       const lockedItemIds = new Set(lockedParentIssues.map((parent) => parent.itemId).filter(Boolean));
       const lockedLotNos = Array.from(new Set(lockedParentIssues.map((parent) => parent.lotNo).filter(Boolean)));
-      const lockedCutIds = new Set(lockedParentIssues.map((parent) => parent.cutId).filter(Boolean));
-      const lockedYarnIds = new Set(lockedParentIssues.map((parent) => parent.yarnId).filter(Boolean));
-      const lockedTwistIds = new Set(lockedParentIssues.map((parent) => parent.twistId).filter(Boolean));
+      const tracedConingRows = coningParentIssueIds.length > 0
+        ? await tx.$queryRaw`
+          WITH RECURSIVE lineage AS (
+            SELECT ic.id AS root_issue_id, ic.id AS issue_id, ARRAY[ic.id]::text[] AS path, 0 AS depth
+            FROM "IssueToConingMachine" ic
+            WHERE ic.id = ANY (${coningParentIssueIds}::text[]) AND ic."isDeleted" = false
+            UNION ALL
+            SELECT l.root_issue_id, parent.id, l.path || parent.id, l.depth + 1
+            FROM lineage l
+            JOIN "IssueToConingMachine" current_issue ON current_issue.id = l.issue_id
+            JOIN LATERAL jsonb_array_elements(COALESCE(current_issue."receivedRowRefs", '[]'::jsonb)) elem ON true
+            JOIN "ReceiveFromConingMachineRow" parent_row
+              ON parent_row.id = elem->>'rowId' AND parent_row."isDeleted" = false
+            JOIN "IssueToConingMachine" parent
+              ON parent.id = parent_row."issueId" AND parent."isDeleted" = false
+            WHERE l.depth < 20 AND NOT parent.id = ANY(l.path)
+          )
+          SELECT
+            l.root_issue_id,
+            array_remove(array_agg(DISTINCT hi."cutId"), NULL) AS cut_ids,
+            array_remove(array_agg(DISTINCT hi."yarnId"), NULL) AS yarn_ids,
+            array_remove(array_agg(DISTINCT hi."twistId"), NULL) AS twist_ids
+          FROM lineage l
+          JOIN "IssueToConingMachine" ci ON ci.id = l.issue_id
+          JOIN LATERAL jsonb_array_elements(COALESCE(ci."receivedRowRefs", '[]'::jsonb)) elem ON true
+          JOIN "ReceiveFromHoloMachineRow" hr
+            ON hr.id = elem->>'rowId' AND hr."isDeleted" = false
+          JOIN "IssueToHoloMachine" hi
+            ON hi.id = hr."issueId" AND hi."isDeleted" = false
+          GROUP BY l.root_issue_id
+        `
+        : [];
+      const traceByConingIssueId = new Map((tracedConingRows || []).map((trace) => [trace.root_issue_id, trace]));
+      const lockedCutIds = new Set();
+      const lockedYarnIds = new Set();
+      const lockedTwistIds = new Set();
+      const addLineageIds = (target, tracedIds, fallbackId) => {
+        const ids = Array.isArray(tracedIds) ? tracedIds.filter(Boolean) : [];
+        if (ids.length > 0) ids.forEach((id) => target.add(id));
+        else if (fallbackId) target.add(fallbackId);
+      };
+      lockedHoloRows.forEach((row) => {
+        addLineageIds(lockedCutIds, [], row.issue?.cutId);
+        addLineageIds(lockedYarnIds, [], row.issue?.yarnId);
+        addLineageIds(lockedTwistIds, [], row.issue?.twistId);
+      });
+      lockedConingRows.forEach((row) => {
+        const trace = traceByConingIssueId.get(row.issueId);
+        addLineageIds(lockedCutIds, trace?.cut_ids, row.issue?.cutId);
+        addLineageIds(lockedYarnIds, trace?.yarn_ids, row.issue?.yarnId);
+        addLineageIds(lockedTwistIds, trace?.twist_ids, row.issue?.twistId);
+      });
       if (lockedItemIds.size !== 1 || lockedLotNos.length === 0 || lockedCutIds.size > 1 || lockedYarnIds.size > 1 || lockedTwistIds.size > 1) {
         throw Object.assign(new Error('Source lineage changed. Rescan the affected crate.'), {
           statusCode: 409,

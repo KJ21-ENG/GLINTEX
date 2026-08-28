@@ -925,6 +925,78 @@ if (!TEST_DB) {
     assert.equal(edit.status, 400);
   });
 
+  test('re-coning compares authoritative Holo lineage instead of stale parent masters', async () => {
+    const suffix = `${Date.now()}-reconing-trace-first`;
+    const auth = await adminAuth(suffix);
+    const [item, cutA, cutB, yarnA, yarnB, twistA, twistB, coneType] = await Promise.all([
+      prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
+      prisma.cut.create({ data: { name: `Perf Cut A ${suffix}` } }),
+      prisma.cut.create({ data: { name: `Perf Cut B ${suffix}` } }),
+      prisma.yarn.create({ data: { name: `Perf Yarn A ${suffix}` } }),
+      prisma.yarn.create({ data: { name: `Perf Yarn B ${suffix}` } }),
+      prisma.twist.create({ data: { name: `Perf Twist A ${suffix}` } }),
+      prisma.twist.create({ data: { name: `Perf Twist B ${suffix}` } }),
+      prisma.coneType.create({ data: { name: `Perf Cone ${suffix}`, weight: 0.01 } }),
+    ]);
+    const holoIssue = await prisma.issueToHoloMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: `PERF-${suffix}`,
+        cutId: cutA.id, yarnId: yarnA.id, twistId: twistA.id,
+        barcode: `HI-${suffix}`, metallicBobbins: 10, metallicBobbinsWeight: 10, receivedRowRefs: [],
+      },
+    });
+    const holoSource = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: holoIssue.id, barcode: `RHO-${5_400_000 + Number(String(Date.now()).slice(-6))}-C001`,
+        rollCount: 10, rollWeight: 10, grossWeight: 10, tareWeight: 0,
+      },
+    });
+    const parentA = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: holoIssue.lotNo,
+        cutId: cutA.id, yarnId: yarnA.id, twistId: twistA.id,
+        barcode: `ICO-${7_100_000 + Number(String(Date.now()).slice(-6))}`,
+        rollsIssued: 5, requiredPerConeNetWeight: 10, expectedCones: 500,
+        receivedRowRefs: [{ rowId: holoSource.id, stage: 'holo', issueRolls: 5, issueWeight: 5, coneTypeId: coneType.id }],
+      },
+    });
+    const parentB = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: holoIssue.lotNo,
+        cutId: cutB.id, yarnId: yarnB.id, twistId: twistB.id,
+        barcode: `ICO-${7_200_000 + Number(String(Date.now()).slice(-6))}`,
+        rollsIssued: 5, requiredPerConeNetWeight: 10, expectedCones: 500,
+        receivedRowRefs: [{ rowId: holoSource.id, stage: 'holo', issueRolls: 5, issueWeight: 5, coneTypeId: coneType.id }],
+      },
+    });
+    const [sourceA, sourceB] = await Promise.all([
+      prisma.receiveFromConingMachineRow.create({
+        data: { issueId: parentA.id, barcode: `RCO-${7_300_000 + Number(String(Date.now()).slice(-6))}-C001`, coneCount: 5, netWeight: 5, coneWeight: 5, grossWeight: 5, tareWeight: 0, sourceRowRefs: [] },
+      }),
+      prisma.receiveFromConingMachineRow.create({
+        data: { issueId: parentB.id, barcode: `RCO-${7_400_000 + Number(String(Date.now()).slice(-6))}-C001`, coneCount: 5, netWeight: 5, coneWeight: 5, grossWeight: 5, tareWeight: 0, sourceRowRefs: [] },
+      }),
+    ]);
+
+    const response = await request(app)
+      .post('/api/issue_to_coning_machine')
+      .set('Authorization', auth)
+      .send({
+        date: '2026-08-27', requiredPerConeNetWeight: 10,
+        crates: [sourceA, sourceB].map((source) => ({
+          rowId: source.id,
+          barcode: source.barcode,
+          issueRolls: 5,
+          issueWeight: 5,
+          coneTypeId: coneType.id,
+        })),
+      });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.body.issueToConingMachine.cutId, cutA.id);
+    assert.equal(response.body.issueToConingMachine.yarnId, yarnA.id);
+    assert.equal(response.body.issueToConingMachine.twistId, twistA.id);
+  });
+
   test('Cutter challan edit respects its issue allocation and downstream lineage', async () => {
     const suffix = `${Date.now()}-cutter-challan-guard`;
     const auth = await adminAuth(suffix);

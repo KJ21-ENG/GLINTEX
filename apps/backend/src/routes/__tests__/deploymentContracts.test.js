@@ -21,6 +21,13 @@ const holoWastageMigration = fs.readFileSync(
   ),
   'utf8',
 );
+const holoWastageCleanupMigration = fs.readFileSync(
+  path.join(
+    repositoryRoot,
+    'apps/backend/prisma/migrations/20260828212000_remove_holo_wastage_compatibility_trigger/migration.sql',
+  ),
+  'utf8',
+);
 
 test('production deployment selects only the reviewed base plus production Compose model', () => {
   assert.match(workflow, /compose=\(docker compose -f docker-compose\.yml -f docker-compose\.prod\.yml\)/);
@@ -85,4 +92,6 @@ test('Holo receive migration preserves legacy totals while enabling explicit new
   assert.doesNotMatch(holoWastageMigration, /UPDATE "ReceiveFromHoloMachineRow"/);
   assert.doesNotMatch(holoWastageMigration, /CREATE TRIGGER/);
   assert.match(holoWastageMigration, /writes from the previous backend stay NULL/);
+  assert.match(holoWastageCleanupMigration, /DROP TRIGGER IF EXISTS classify_holo_receive_wastage_bucket/);
+  assert.match(holoWastageCleanupMigration, /DROP FUNCTION IF EXISTS classify_holo_receive_wastage_bucket/);
 });

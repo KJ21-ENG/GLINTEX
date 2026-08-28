@@ -40,8 +40,13 @@ jobs:
 
           test -s .github/scripts/deploy-production.sh
           bash -n .github/scripts/deploy-production.sh
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           printf -v app_dir_q '%q' "$APP_DIR"
           printf -v deploy_sha_q '%q' "$DEPLOY_SHA"
+          remote_script="/tmp/glintex-deploy-${DEPLOY_SHA}.sh"
+          printf -v remote_script_q '%q' "$remote_script"
+          scp -q -i ~/.ssh/production_deploy_key \
+            .github/scripts/deploy-production.sh \
+            "$SSH_USER@$SSH_HOST:$remote_script"
           ssh -i ~/.ssh/production_deploy_key "$SSH_USER@$SSH_HOST" \
-            "bash -se -- $app_dir_q $deploy_sha_q" \
-            < .github/scripts/deploy-production.sh
+            "set -e; trap 'rm -f $remote_script_q' EXIT; bash $remote_script_q $app_dir_q $deploy_sha_q"

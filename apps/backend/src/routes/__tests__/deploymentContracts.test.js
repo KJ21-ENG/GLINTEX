@@ -97,12 +97,17 @@ test('production deployment verifies database identity and a fresh dump before c
   assert.ok(migrationIndex > checkoutIndex);
 });
 
-test('production workflow streams the checked-in deployment script to the remote shell', () => {
+test('production workflow uploads and executes the checked-in deployment script as a file', () => {
   assert.match(workflow, /uses: actions\/checkout@v4/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /test -s \.github\/scripts\/deploy-production\.sh/);
   assert.match(workflow, /bash -n \.github\/scripts\/deploy-production\.sh/);
-  assert.match(workflow, /< \.github\/scripts\/deploy-production\.sh/);
+  assert.match(workflow, /\[\[ "\$DEPLOY_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
+  assert.match(workflow, /scp -q -i ~\/\.ssh\/production_deploy_key/);
+  assert.match(workflow, /remote_script="\/tmp\/glintex-deploy-\$\{DEPLOY_SHA\}\.sh"/);
+  assert.match(workflow, /trap 'rm -f \$remote_script_q' EXIT/);
+  assert.match(workflow, /bash \$remote_script_q \$app_dir_q \$deploy_sha_q/);
+  assert.doesNotMatch(workflow, /< \.github\/scripts\/deploy-production\.sh/);
   assert.doesNotMatch(workflow, /<<['"]?REMOTE_SCRIPT/);
   assert.match(deploymentScript, /Starting production deployment for \$deploy_sha/);
   assert.match(deploymentScript, /Production deployment completed for \$deploy_sha/);

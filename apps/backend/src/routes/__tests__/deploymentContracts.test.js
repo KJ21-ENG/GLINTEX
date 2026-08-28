@@ -10,6 +10,10 @@ const workflow = fs.readFileSync(path.join(repositoryRoot, '.github/workflows/de
 const override = fs.readFileSync(path.join(repositoryRoot, 'docker-compose.override.yml'), 'utf8');
 const productionCompose = fs.readFileSync(path.join(repositoryRoot, 'docker-compose.prod.yml'), 'utf8');
 const backendDockerfile = fs.readFileSync(path.join(repositoryRoot, 'apps/backend/Dockerfile'), 'utf8');
+const frontendNginx = fs.readFileSync(
+  path.join(repositoryRoot, 'apps/frontend/docker/nginx.conf'),
+  'utf8',
+);
 
 test('production deployment selects only the reviewed base plus production Compose model', () => {
   assert.match(workflow, /compose=\(docker compose -f docker-compose\.yml -f docker-compose\.prod\.yml\)/);
@@ -58,5 +62,13 @@ test('backend image resolves pinned Prisma tooling without network fallback', ()
   assert.match(
     backendDockerfile,
     /COPY --from=production-deps \/app\/apps\/backend\/node_modules \.\/apps\/backend\/node_modules/,
+  );
+});
+
+test('production frontend proxies same-origin API calls and preserves SSE streaming', () => {
+  assert.match(frontendNginx, /location \/api\/ \{[\s\S]*proxy_pass http:\/\/backend:4000;/);
+  assert.match(
+    frontendNginx,
+    /location = \/api\/whatsapp\/events \{[\s\S]*proxy_buffering off;[\s\S]*proxy_read_timeout 1h;/,
   );
 });

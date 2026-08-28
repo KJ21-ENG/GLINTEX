@@ -7,7 +7,7 @@ import { computeIssueBalancesBatch } from '../issueBalances.js';
 // computeIssueBalancesBatch is set-based — i.e. its query count does NOT scale
 // with the number of input issues.
 function makeStub({
-  cutterLineGroups = [],
+  cutterLines = [],
   cutterLinkedGroups = [],
   cutterFallbackRows = [],
   cutterChallans = [],
@@ -27,9 +27,9 @@ function makeStub({
       },
     },
     issueToCutterMachineLine: {
-      groupBy: async (args) => {
-        record('issueToCutterMachineLine.groupBy', args);
-        return cutterLineGroups;
+      findMany: async (args) => {
+        record('issueToCutterMachineLine.findMany', args);
+        return cutterLines;
       },
     },
     receiveFromCutterMachineRow: {
@@ -65,6 +65,10 @@ function makeStub({
         record('receiveFromConingMachinePieceTotal.findMany', args);
         return coningPieceTotals;
       },
+    },
+    $queryRaw: async (...args) => {
+      record('$queryRaw', args);
+      return [];
     },
   };
 }
@@ -153,10 +157,10 @@ test('cutter: at most 5 DB calls regardless of issue count (regression guard)', 
     createdAt: new Date('2026-01-01T00:00:00Z'),
   }));
   const stub = makeStub({
-    cutterLineGroups: issues.map((i) => ({
+    cutterLines: issues.map((i) => ({
       issueId: i.id,
-      _sum: { issuedWeight: 1.0 },
-      _count: { _all: 1 },
+      pieceId: i.pieceIds,
+      issuedWeight: 1.0,
     })),
   });
   const result = await computeIssueBalancesBatch(stub, 'cutter', issues);
@@ -169,7 +173,10 @@ test('cutter: no piece ids => skips fallback + challan queries', async () => {
     { id: 'cu1', pieceIds: '', totalWeight: 5.0, count: 2, createdAt: new Date() },
   ];
   const stub = makeStub({
-    cutterLineGroups: [{ issueId: 'cu1', _sum: { issuedWeight: 4.0 }, _count: { _all: 2 } }],
+    cutterLines: [
+      { issueId: 'cu1', pieceId: '', issuedWeight: 2.0 },
+      { issueId: 'cu1', pieceId: '', issuedWeight: 2.0 },
+    ],
     cutterLinkedGroups: [{ issueId: 'cu1', _sum: { bobbinQuantity: 1, netWt: 0.5 } }],
   });
   const result = await computeIssueBalancesBatch(stub, 'cutter', issues);

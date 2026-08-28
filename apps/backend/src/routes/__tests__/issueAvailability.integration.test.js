@@ -738,6 +738,54 @@ if (!TEST_DB) {
     assert.match(missingWastageIssue.body.error, /not found/i);
   });
 
+  test('metadata-only Coning edits preserve legacy physical values without tare masters', async () => {
+    const suffix = `${Date.now()}-legacy-coning-metadata`;
+    const auth = await adminAuth(suffix);
+    const item = await prisma.item.create({ data: { name: `Perf Item ${suffix}` } });
+    const issue = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: `PERF-${suffix}`,
+        barcode: `ICO-${5_150_000 + Number(String(Date.now()).slice(-6))}`,
+        rollsIssued: 10, requiredPerConeNetWeight: 10, expectedCones: 100,
+        receivedRowRefs: [],
+      },
+    });
+    const row = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId: issue.id,
+        barcode: `RCO-${5_150_000 + Number(String(Date.now()).slice(-6))}-C001`,
+        coneCount: 100,
+        grossWeight: 10,
+        tareWeight: 2,
+        netWeight: 8,
+        coneWeight: 8,
+        boxId: null,
+        sourceRowRefs: [],
+      },
+    });
+    await prisma.receiveFromConingMachinePieceTotal.create({
+      data: { pieceId: issue.id, totalCones: 100, totalNetWeight: 8, wastageNetWeight: 0 },
+    });
+
+    const edited = await request(app)
+      .put(`/api/receive_from_coning_machine/rows/${row.id}`)
+      .set('Authorization', auth)
+      .send({
+        coneCount: 100,
+        grossWeight: 10,
+        boxId: '',
+        notes: 'Legacy metadata repaired',
+      });
+    assert.equal(edited.status, 200, edited.text);
+    assert.equal(edited.body.row.notes, 'Legacy metadata repaired');
+    assert.equal(edited.body.row.grossWeight, 10);
+    assert.equal(edited.body.row.tareWeight, 2);
+    assert.equal(edited.body.row.netWeight, 8);
+    assert.equal(edited.body.row.coneCount, 100);
+    assert.equal(edited.body.pieceTotal.totalNetWeight, 8);
+    assert.equal(edited.body.pieceTotal.totalCones, 100);
+  });
+
   test('legacy Holo tare and receive bucket survive edit and delete', async () => {
     const suffix = `${Date.now()}-legacy-holo-accounting`;
     const auth = await adminAuth(suffix);

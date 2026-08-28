@@ -2277,29 +2277,19 @@ async function buildOnMachineWhere({ process, filters, dateFrom, dateTo, search 
 async function buildOnMachineCutterItems(rowsRaw) {
   const rowsWithUsers = await resolveUserFields(rowsRaw);
   const rowsWithItems = await attachItemNamesToIssueRows(rowsWithUsers);
-  const issueIds = rowsWithItems.map(i => i.id);
-  const takeBackTotalsByIssueId = await fetchTakeBackTotalsByIssueIds('cutter', issueIds);
-  const wastageByIssueId = await buildCutterIssueWastageByIssueId(rowsWithItems);
-  const receiveRows = issueIds.length
-    ? await prisma.receiveFromCutterMachineRow.findMany({
-      where: { isDeleted: false, issueId: { in: issueIds } },
-      select: { issueId: true, pieceId: true, netWt: true },
-    })
-    : [];
-  const receivedByIssue = new Map();
-  for (const r of receiveRows) {
-    const cur = receivedByIssue.get(r.issueId) || 0;
-    receivedByIssue.set(r.issueId, cur + Number(r.netWt || 0));
-  }
+  const unresolved = rowsWithItems.filter((issue) => !issue.__onMachineBalance);
+  const balanceByIssueId = unresolved.length > 0
+    ? await computeIssueBalancesBatch(prisma, 'cutter', unresolved)
+    : new Map();
 
   return rowsWithItems.map((issue) => {
-    const tb = takeBackTotalsByIssueId.get(issue.id) || { count: 0, weight: 0 };
-    const originalIssuedWeight = Number(issue.totalWeight || 0);
-    const takeBackWeight = Number(tb.weight || 0);
-    const netIssuedWeight = Math.max(0, originalIssuedWeight - takeBackWeight);
-    const receivedWeight = Number(receivedByIssue.get(issue.id) || 0);
-    const wastageWeight = Number(wastageByIssueId.get(issue.id) || 0);
-    const pendingWeight = Math.max(0, netIssuedWeight - receivedWeight - wastageWeight);
+    const balance = issue.__onMachineBalance || balanceByIssueId.get(issue.id) || {};
+    const originalIssuedWeight = Number(balance.original_weight ?? balance.originalWeight ?? 0);
+    const takeBackWeight = Number(balance.takeback_weight ?? balance.takeBackWeight ?? 0);
+    const netIssuedWeight = Number(balance.net_issued_weight ?? balance.netIssuedWeight ?? 0);
+    const receivedWeight = Number(balance.received_weight ?? balance.receivedWeight ?? 0);
+    const wastageWeight = Number(balance.wastage_weight ?? balance.wastageWeight ?? 0);
+    const pendingWeight = Number(balance.pending_weight ?? balance.pendingWeight ?? 0);
     const pieceIdsList = Array.isArray(issue.pieceIds)
       ? issue.pieceIds
       : String(issue.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -2571,7 +2561,11 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         WHERE c."isDeleted" = false AND COALESCE(c."wastageNetWeight", 0) > 0
         GROUP BY assigned.issue_id
       ), pending AS (
-        SELECT i.id, i."createdAt",
+        SELECT i.id, i."createdAt", i.original_weight,
+          COALESCE(tb.weight, 0)::numeric AS takeback_weight,
+          GREATEST(0, i.original_weight - COALESCE(tb.weight, 0))::numeric AS net_issued_weight,
+          COALESCE(rc.received_weight, 0)::numeric AS received_weight,
+          COALESCE(w.wastage_weight, 0)::numeric AS wastage_weight,
           GREATEST(0,
             GREATEST(0, i.original_weight - COALESCE(tb.weight, 0))
             - COALESCE(rc.received_weight, 0) - COALESCE(w.wastage_weight, 0)
@@ -2581,7 +2575,8 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         LEFT JOIN receives rc ON rc.issue_id = i.id
         LEFT JOIN assigned_wastage w ON w.issue_id = i.id
       )
-      SELECT id, "createdAt"
+      SELECT id, "createdAt", original_weight, takeback_weight, net_issued_weight,
+             received_weight, wastage_weight, pending_weight
       FROM pending
       WHERE pending_weight > 0.001 ${cursorSql}
       ORDER BY "createdAt" ${direction}, id ${direction}
@@ -2676,7 +2671,11 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
     : [];
   const orderById = new Map(pageIds.map((id, index) => [id, index]));
   raw.sort((a, b) => (orderById.get(a.id) ?? 0) - (orderById.get(b.id) ?? 0));
-  const items = await buildOnMachineItems(process, raw);
+  const selectedById = new Map(page.map((row) => [row.id, row]));
+  const rowsWithSelectedBalances = process === 'cutter'
+    ? raw.map((row) => ({ ...row, __onMachineBalance: selectedById.get(row.id) || null }))
+    : raw;
+  const items = await buildOnMachineItems(process, rowsWithSelectedBalances);
   const last = page[page.length - 1];
   return {
     items,
@@ -3369,11 +3368,39 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
       }),
       receiveModelForProcess(process).count({ where: { issueId: id, isDeleted: false } }),
       process === 'cutter'
-        ? prisma.receiveFromCutterMachineRow.groupBy({
-          by: ['pieceId'],
-          where: { issueId: id, isDeleted: false },
-          _sum: { netWt: true, bobbinQuantity: true },
-        })
+        ? prisma.$queryRaw`
+          WITH active_issues AS (
+            SELECT id, "createdAt"
+            FROM "IssueToCutterMachine"
+            WHERE "isDeleted" = false
+          ), receive_allocations AS (
+            SELECT r."issueId" AS issue_id, r."pieceId" AS piece_id,
+                   COALESCE(r."bobbin_quantity", 0)::numeric AS received_count,
+                   COALESCE(r."netWt", 0)::numeric AS received_weight
+            FROM "ReceiveFromCutterMachineRow" r
+            WHERE r."isDeleted" = false AND r."issueId" = ${id}
+            UNION ALL
+            SELECT assigned.issue_id, r."pieceId" AS piece_id,
+                   COALESCE(r."bobbin_quantity", 0)::numeric AS received_count,
+                   COALESCE(r."netWt", 0)::numeric AS received_weight
+            FROM "ReceiveFromCutterMachineRow" r
+            JOIN LATERAL (
+              SELECT l."issueId" AS issue_id
+              FROM "IssueToCutterMachineLine" l
+              JOIN active_issues i ON i.id = l."issueId"
+              WHERE l."pieceId" = r."pieceId" AND i."createdAt" <= r."createdAt"
+              ORDER BY i."createdAt" DESC, i.id DESC
+              LIMIT 1
+            ) assigned ON true
+            WHERE r."isDeleted" = false AND r."issueId" IS NULL
+          )
+          SELECT piece_id,
+                 COALESCE(SUM(received_count), 0)::float8 AS received_count,
+                 COALESCE(SUM(received_weight), 0)::float8 AS received_weight
+          FROM receive_allocations
+          WHERE issue_id = ${id}
+          GROUP BY piece_id
+        `
         : Promise.resolve([]),
       fetchTakeBackTotalsByIssueIds(process, [id]),
     ]);
@@ -3412,10 +3439,27 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
         }),
         prisma.receiveFromConingMachineRow.findMany({
           where: { id: { in: sourceRowIds }, isDeleted: false },
-          include: { issue: { include: { cut: true, yarn: true, twist: true } } },
+          include: { box: true, issue: { include: { cut: true, yarn: true, twist: true } } },
         }),
       ]);
-      sourceRows = [...holoRows, ...coningRows];
+      const coningSourceConeTypeIds = new Map();
+      coningRows.forEach((row) => {
+        const ref = normalizeReceivedRowRefs(row.issue?.receivedRowRefs)
+          .find((entry) => typeof entry?.coneTypeId === 'string' && entry.coneTypeId.trim());
+        coningSourceConeTypeIds.set(row.id, ref?.coneTypeId || null);
+      });
+      const coneTypeIds = Array.from(new Set(Array.from(coningSourceConeTypeIds.values()).filter(Boolean)));
+      const coneTypes = coneTypeIds.length > 0
+        ? await prisma.coneType.findMany({ where: { id: { in: coneTypeIds } } })
+        : [];
+      const coneTypeById = new Map(coneTypes.map((coneType) => [coneType.id, coneType]));
+      sourceRows = [
+        ...holoRows,
+        ...coningRows.map((row) => {
+          const coneTypeId = coningSourceConeTypeIds.get(row.id) || null;
+          return { ...row, coneTypeId, coneType: coneTypeId ? (coneTypeById.get(coneTypeId) || null) : null };
+        }),
+      ];
     }
 
     return res.json({
@@ -3427,9 +3471,9 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
       receiveRows,
       takeBacks,
       activeTakeBacks: takeBacks.filter((takeBack) => !takeBack.isReverse && !takeBack.isReversed),
-      receivedBySource: Object.fromEntries((receivedBySourceRows || []).map((row) => [row.pieceId, {
-        count: Number(row._sum?.bobbinQuantity || 0),
-        weight: Number(row._sum?.netWt || 0),
+      receivedBySource: Object.fromEntries((receivedBySourceRows || []).map((row) => [row.piece_id, {
+        count: Number(row.received_count || 0),
+        weight: Number(row.received_weight || 0),
       }])),
       meta: {
         process,

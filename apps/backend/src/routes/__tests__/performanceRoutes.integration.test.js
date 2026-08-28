@@ -247,7 +247,7 @@ if (!TEST_DB) {
     }
   });
 
-  test('Cutter On Machine attributes legacy receive rows without issueId to the latest eligible issue', async () => {
+  test('Cutter On Machine and action detail attribute legacy receives to the latest eligible issue', async () => {
     const suffix = `${Date.now()}-legacy-cutter-receive`;
     const baseline = await get('/api/v2/on-machine/cutter/summary');
     assert.equal(baseline.response.status, 200, baseline.response.text);
@@ -261,6 +261,7 @@ if (!TEST_DB) {
     ]);
     const lotNo = `LEGACY-CUTTER-${suffix}`;
     const pieceId = `${lotNo}-1`;
+    const olderIssueId = `LEGACY-CUTTER-OLDER-${suffix}`;
     const issueId = `LEGACY-CUTTER-ISSUE-${suffix}`;
     const issueCreatedAt = new Date(Date.now() - 1_000);
     await prisma.lot.create({
@@ -279,6 +280,22 @@ if (!TEST_DB) {
     });
     await prisma.issueToCutterMachine.create({
       data: {
+        id: olderIssueId,
+        date: '2026-08-27',
+        itemId: item.id,
+        lotNo,
+        cutId: cut.id,
+        count: 1,
+        totalWeight: 5,
+        pieceIds: pieceId,
+        reason: 'Older allocation must not claim a later legacy receive',
+        barcode: `LEGACY-CUTTER-OLDER-BC-${suffix}`,
+        createdAt: new Date(issueCreatedAt.getTime() - 1_000),
+        lines: { create: [{ pieceId, issuedWeight: 5, createdAt: new Date(issueCreatedAt.getTime() - 1_000) }] },
+      },
+    });
+    await prisma.issueToCutterMachine.create({
+      data: {
         id: issueId,
         date: '2026-08-27',
         itemId: item.id,
@@ -293,7 +310,7 @@ if (!TEST_DB) {
         lines: { create: [{ pieceId, issuedWeight: 5, createdAt: issueCreatedAt }] },
       },
     });
-    await prisma.receiveFromCutterMachineRow.create({
+    const legacyRow = await prisma.receiveFromCutterMachineRow.create({
       data: {
         uploadId: upload.id,
         issueId: null,
@@ -301,7 +318,7 @@ if (!TEST_DB) {
         vchNo: `LEGACY-CUTTER-VCH-${suffix}`,
         barcode: `LEGACY-CUTTER-ROW-${suffix}`,
         bobbinQuantity: 10,
-        netWt: 5,
+        netWt: 2,
         createdAt: new Date(),
       },
     });
@@ -312,8 +329,26 @@ if (!TEST_DB) {
     ]);
     assert.equal(list.response.status, 200, list.response.text);
     assert.equal(summary.response.status, 200, summary.response.text);
-    assert.equal(list.response.body.items.some((row) => row.id === issueId), false);
-    assert.deepEqual(summary.response.body.summary, baseline.response.body.summary);
+    const pendingRow = list.response.body.items.find((row) => row.id === issueId);
+    assert.equal(pendingRow?.receivedWeight, 2);
+    assert.equal(pendingRow?.pendingWeight, 3);
+    const actionDetail = await get(`/api/v2/issue/cutter/${issueId}/action-detail`);
+    assert.equal(actionDetail.response.status, 200, actionDetail.response.text);
+    assert.equal(actionDetail.response.body.receivedBySource[pieceId]?.weight, 2);
+    assert.equal(actionDetail.response.body.issueBalance.receivedWeight, 2);
+    assert.equal(actionDetail.response.body.issueBalance.pendingWeight, 3);
+    const olderDetail = await get(`/api/v2/issue/cutter/${olderIssueId}/action-detail`);
+    assert.equal(olderDetail.response.status, 200, olderDetail.response.text);
+    assert.equal(olderDetail.response.body.receivedBySource[pieceId]?.weight || 0, 0);
+    assert.equal(olderDetail.response.body.issueBalance.receivedWeight, 0);
+
+    await Promise.all([
+      prisma.receiveFromCutterMachineRow.update({ where: { id: legacyRow.id }, data: { netWt: 5 } }),
+      prisma.issueToCutterMachine.update({ where: { id: olderIssueId }, data: { isDeleted: true } }),
+    ]);
+    const settledSummary = await get('/api/v2/on-machine/cutter/summary');
+    assert.equal(settledSummary.response.status, 200, settledSummary.response.text);
+    assert.deepEqual(settledSummary.response.body.summary, baseline.response.body.summary);
   });
 
   test('separate stock lists omit totals and stock summary endpoints preserve inline totals', async () => {
@@ -729,11 +764,12 @@ if (!TEST_DB) {
 
   test('legacy baseRolls references reduce Holo and Coning stock counts consistently with weight', async () => {
     const suffix = `${Date.now()}-legacy-base-rolls`;
-    const [item, cut, yarn, twist] = await Promise.all([
+    const [item, cut, yarn, twist, coneType] = await Promise.all([
       prisma.item.create({ data: { name: `Legacy Rolls Item ${suffix}` } }),
       prisma.cut.create({ data: { name: `Legacy Rolls Cut ${suffix}` } }),
       prisma.yarn.create({ data: { name: `Legacy Rolls Yarn ${suffix}` } }),
       prisma.twist.create({ data: { name: `Legacy Rolls Twist ${suffix}` } }),
+      prisma.coneType.create({ data: { name: `Legacy Rolls Cone ${suffix}`, weight: 0.02 } }),
     ]);
     const lotNo = `LEGACY-ROLLS-${suffix}`;
     const holoIssue = await prisma.issueToHoloMachine.create({
@@ -752,7 +788,7 @@ if (!TEST_DB) {
       data: {
         date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
         barcode: `LEGACY-ICO-${suffix}`, rollsIssued: 4, requiredPerConeNetWeight: 10, expectedCones: 400,
-        receivedRowRefs: [{ rowId: holoRow.id, stage: 'holo', baseRolls: 4, issueWeight: 4 }],
+        receivedRowRefs: [{ rowId: holoRow.id, stage: 'holo', baseRolls: 4, issueWeight: 4, coneTypeId: coneType.id }],
       },
     });
     const coningRow = await prisma.receiveFromConingMachineRow.create({
@@ -761,7 +797,7 @@ if (!TEST_DB) {
         coneCount: 10, netWeight: 10, coneWeight: 10, grossWeight: 10, tareWeight: 0, sourceRowRefs: [],
       },
     });
-    await prisma.issueToConingMachine.create({
+    const reConingIssue = await prisma.issueToConingMachine.create({
       data: {
         date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
         barcode: `LEGACY-RECON-${suffix}`, rollsIssued: 4, requiredPerConeNetWeight: 10, expectedCones: 400,
@@ -784,6 +820,13 @@ if (!TEST_DB) {
     const coningRows = await get('/api/v2/stock/coning/lot-rows', { key: coningGroup.lotKey, limit: 20 });
     assert.equal(coningRows.response.status, 200, coningRows.response.text);
     assert.equal(coningRows.response.body.items.find((row) => row.id === coningRow.id)?.availableCones, 6);
+
+    const actionDetail = await get(`/api/v2/issue/coning/${reConingIssue.id}/action-detail`);
+    assert.equal(actionDetail.response.status, 200, actionDetail.response.text);
+    const actionSource = actionDetail.response.body.sourceRows.find((row) => row.id === coningRow.id);
+    assert.equal(actionSource?.coneCount, 10);
+    assert.equal(actionSource?.coneTypeId, coneType.id);
+    assert.equal(actionSource?.coneType?.weight, coneType.weight);
   });
 
   test('one global facet response contains every process-specific option set', async () => {

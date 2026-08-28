@@ -49,6 +49,19 @@ test('production deployment restores and health-checks the prior SHA on failure'
   assert.match(workflow, /Rollback to \$previous_sha passed health checks/);
 });
 
+test('production deployment keeps external writers quiesced until every replacement service passes', () => {
+  const migrationIndex = workflow.indexOf('--profile migration run --rm migrate');
+  const stopWritersIndex = workflow.indexOf('stop frontend agent-api');
+  const backendIndex = workflow.indexOf('up -d --no-deps --wait backend', stopWritersIndex);
+  const agentIndex = workflow.indexOf('up -d --no-deps --wait agent-api', backendIndex);
+  const frontendIndex = workflow.indexOf('up -d --no-deps --wait frontend', agentIndex);
+  assert.ok(migrationIndex > 0);
+  assert.ok(stopWritersIndex > migrationIndex);
+  assert.ok(backendIndex > stopWritersIndex);
+  assert.ok(agentIndex > backendIndex);
+  assert.ok(frontendIndex > agentIndex);
+});
+
 test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {
   assert.match(workflow, /SELECT current_database\(\), current_user, system_identifier FROM pg_control_system\(\)/);
   assert.match(workflow, /expected_db_identity=/);

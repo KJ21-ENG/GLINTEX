@@ -12030,9 +12030,19 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       return res.status(400).json({ error: 'Cannot edit row: box transfer exists' });
     }
 
-    const coneCount = toInt(req.body?.coneCount ?? row.coneCount);
-    const grossWeight = toNumber(req.body?.grossWeight ?? row.grossWeight);
-    const boxId = typeof req.body?.boxId === 'string' ? req.body.boxId : row.boxId;
+    const prevConeCount = Number(row.coneCount || 0);
+    const prevTareWeight = Number(row.tareWeight || 0);
+    const prevNetWeight = Number.isFinite(row.netWeight)
+      ? Number(row.netWeight)
+      : roundTo3Decimals((Number(row.grossWeight || 0) - prevTareWeight));
+    const storedGrossWeight = Number.isFinite(row.grossWeight)
+      ? Number(row.grossWeight)
+      : roundTo3Decimals(prevNetWeight + prevTareWeight);
+    const coneCount = toInt(req.body?.coneCount ?? prevConeCount);
+    const grossWeight = toNumber(req.body?.grossWeight ?? storedGrossWeight);
+    const boxId = typeof req.body?.boxId === 'string'
+      ? (req.body.boxId.trim() || null)
+      : (row.boxId || null);
     const date = toOptionalString(req.body?.date ?? row.date);
     const machineNo = toOptionalString(req.body?.machineNo ?? row.machineNo);
     const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId : row.operatorId;
@@ -12046,41 +12056,41 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
     }
 
-    if (!boxId) return res.status(400).json({ error: 'Box type is required' });
-    const box = await prisma.box.findUnique({ where: { id: boxId } });
-    if (!box || !Number.isFinite(box.weight) || Number(box.weight) <= 0) {
-      return res.status(400).json({ error: 'Box weight missing. Update box first.' });
-    }
-
-    let coneTypeId = null;
-    try {
-      let refs = row.issue?.receivedRowRefs;
-      if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
-      if (Array.isArray(refs) && refs.length > 0) {
-        coneTypeId = refs[0]?.coneTypeId || null;
+    const physicalInputsChanged = coneCount !== prevConeCount
+      || Math.abs(grossWeight - storedGrossWeight) > TAKE_BACK_EPSILON
+      || (boxId || null) !== (row.boxId || null);
+    let tareWeight = prevTareWeight;
+    let netWeight = prevNetWeight;
+    if (physicalInputsChanged) {
+      if (!boxId) return res.status(400).json({ error: 'Box type is required' });
+      const box = await prisma.box.findUnique({ where: { id: boxId } });
+      if (!box || !Number.isFinite(box.weight) || Number(box.weight) <= 0) {
+        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
       }
-    } catch (e) {
-      coneTypeId = null;
-    }
 
-    if (!coneTypeId) return res.status(400).json({ error: 'Issue has no cone type for tare calculation' });
-    const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId } });
-    if (!coneType || !Number.isFinite(coneType.weight) || Number(coneType.weight) < 0) {
-      return res.status(400).json({ error: 'Cone type weight missing. Update cone type first.' });
-    }
-    const coneWeightPerPiece = Number(coneType.weight);
+      let coneTypeId = null;
+      try {
+        let refs = row.issue?.receivedRowRefs;
+        if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+        if (Array.isArray(refs) && refs.length > 0) {
+          coneTypeId = refs[0]?.coneTypeId || null;
+        }
+      } catch (e) {
+        coneTypeId = null;
+      }
 
-    const boxWeight = box ? Number(box.weight) : 0;
-    const tareWeight = roundTo3Decimals(boxWeight + coneWeightPerPiece * coneCount);
-    const netWeight = roundTo3Decimals(grossWeight - tareWeight);
+      if (!coneTypeId) return res.status(400).json({ error: 'Issue has no cone type for tare calculation' });
+      const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId } });
+      if (!coneType || !Number.isFinite(coneType.weight) || Number(coneType.weight) < 0) {
+        return res.status(400).json({ error: 'Cone type weight missing. Update cone type first.' });
+      }
+      const coneWeightPerPiece = Number(coneType.weight);
+      tareWeight = roundTo3Decimals(Number(box.weight) + coneWeightPerPiece * coneCount);
+      netWeight = roundTo3Decimals(grossWeight - tareWeight);
+    }
     if (!Number.isFinite(netWeight) || netWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
-
-    const prevNetWeight = Number.isFinite(row.netWeight)
-      ? Number(row.netWeight)
-      : roundTo3Decimals((Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
-    const prevConeCount = Number(row.coneCount || 0);
     const deltaNetWeight = roundTo3Decimals(netWeight - prevNetWeight);
     const deltaCones = coneCount - prevConeCount;
 
@@ -12125,7 +12135,9 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
         throw new Error('Invalid totals after update');
       }
 
-      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, lockedIssue, netWeight, id);
+      const sourceRowRefs = physicalInputsChanged
+        ? await computeConingReceiveSourceRowRefs(tx, lockedIssue, netWeight, id)
+        : lockedRow.sourceRowRefs;
       const updatedRow = await tx.receiveFromConingMachineRow.update({
         where: { id },
         data: {

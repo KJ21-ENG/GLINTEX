@@ -12,7 +12,7 @@
 // downstream code or frontend consumer needs to change.
 //
 // Total queries per call (regardless of issue count):
-//   cutter : up to 5
+//   cutter : up to 4
 //   holo   : 2
 //   coning : 3
 
@@ -125,22 +125,24 @@ async function loadTakeBackTotals(client, stage, issueIds) {
 // issue.totalWeight / issue.count for legacy issues that have no lines.
 async function loadCutterOriginalTotals(client, issues) {
   const map = new Map();
+  const pieceIdsByIssue = new Map();
   for (const issue of issues) map.set(issue.id, { count: 0, weight: 0 });
-  if (issues.length === 0) return map;
+  if (issues.length === 0) return { totals: map, pieceIdsByIssue };
 
   const ids = issues.map((i) => i.id);
-  const grouped = await client.issueToCutterMachineLine.groupBy({
-    by: ['issueId'],
+  const lines = await client.issueToCutterMachineLine.findMany({
     where: { issueId: { in: ids } },
-    _sum: { issuedWeight: true },
-    _count: { _all: true },
+    select: { issueId: true, pieceId: true, issuedWeight: true },
   });
   const fromLines = new Map();
-  for (const g of grouped) {
-    fromLines.set(g.issueId, {
-      count: Number(g._count?._all || 0),
-      weight: Number(g._sum?.issuedWeight || 0),
-    });
+  for (const line of lines) {
+    const current = fromLines.get(line.issueId) || { count: 0, weight: 0 };
+    current.count += 1;
+    current.weight += Number(line.issuedWeight || 0);
+    fromLines.set(line.issueId, current);
+    const pieceIds = pieceIdsByIssue.get(line.issueId) || [];
+    pieceIds.push(line.pieceId);
+    pieceIdsByIssue.set(line.issueId, pieceIds);
   }
 
   for (const issue of issues) {
@@ -158,15 +160,13 @@ async function loadCutterOriginalTotals(client, issues) {
       });
     }
   }
-  return map;
+  return { totals: map, pieceIdsByIssue };
 }
 
-// Cutter received: linked rows by issueId + fallback rows where issueId is NULL
-// but pieceId matches an issue's pieceIds list and createdAt >= issue.createdAt.
-// Wastage: from ReceiveFromCutterMachineChallan, deterministically attributed
-// to a single issue per piece (latest issue created on or before challan time)
-// to match the legacy per-issue algorithm.
-async function loadCutterReceivedAndWastage(client, issues) {
+// Cutter received: linked rows by issueId + fallback rows where issueId is NULL,
+// deterministically attributed to the latest active issue for the piece created
+// on or before the row. Wastage uses the same one-issue attribution rule.
+async function loadCutterReceivedAndWastage(client, issues, linePieceIdsByIssue) {
   const received = new Map();
   const wastage = new Map();
   for (const issue of issues) {
@@ -190,93 +190,113 @@ async function loadCutterReceivedAndWastage(client, issues) {
     acc.weight += Number(g._sum?.netWt || 0);
   }
 
-  // (2) Fallback rows: per-piece map -> { issueId, issueCreatedAt }[].
-  const issuesByPiece = new Map();
+  // (2) Legacy receive rows and challan wastage are assigned to exactly one
+  // issue: the latest active issue for the piece created on or before the
+  // event. The single SQL query builds the global candidate set before
+  // restricting the aggregate to this selected issue page, so page-sized
+  // balance requests cannot claim events belonging to later issues.
   const allPieceIds = new Set();
-  let earliestCreatedAt = null;
+  const selectedCandidates = [];
   for (const issue of issues) {
-    const pieceIds = parsePieceIdsCsv(issue.pieceIds);
+    const pieceIds = Array.from(new Set([
+      ...parsePieceIdsCsv(issue.pieceIds),
+      ...(linePieceIdsByIssue.get(issue.id) || []),
+    ].map((pieceId) => String(pieceId || '').trim()).filter(Boolean)));
     if (pieceIds.length === 0) continue;
     const issueCreatedAt = new Date(issue.createdAt || 0);
-    if (!earliestCreatedAt || issueCreatedAt < earliestCreatedAt) {
-      earliestCreatedAt = issueCreatedAt;
-    }
     for (const pieceId of pieceIds) {
       const pid = String(pieceId).trim();
       if (!pid) continue;
       allPieceIds.add(pid);
-      const list = issuesByPiece.get(pid) || [];
-      list.push({ issueId: issue.id, createdAtMs: issueCreatedAt.getTime() });
-      issuesByPiece.set(pid, list);
+      selectedCandidates.push({
+        issueId: issue.id,
+        pieceId: pid,
+        createdAt: issueCreatedAt.toISOString(),
+      });
     }
   }
-  // De-dup and sort each piece's issue list by createdAt asc, issueId asc.
-  for (const [pid, list] of issuesByPiece.entries()) {
-    const dedup = Array.from(
-      new Map(list.map((entry) => [entry.issueId, entry])).values(),
-    );
-    dedup.sort(
-      (a, b) =>
-        a.createdAtMs - b.createdAtMs ||
-        String(a.issueId).localeCompare(String(b.issueId)),
-    );
-    issuesByPiece.set(pid, dedup);
-  }
 
-  if (allPieceIds.size > 0 && earliestCreatedAt) {
-    const fallbackRows = await client.receiveFromCutterMachineRow.findMany({
-      where: {
-        issueId: null,
-        pieceId: { in: Array.from(allPieceIds) },
-        isDeleted: false,
-        createdAt: { gte: earliestCreatedAt },
-      },
-      select: { pieceId: true, bobbinQuantity: true, netWt: true, createdAt: true },
-    });
-    // Legacy attribution: the per-issue version filters by the SPECIFIC issue's
-    // createdAt, so a fallback row counts toward every issue created on or before
-    // that row's createdAt for the same piece. Mirror that here.
-    for (const row of fallbackRows) {
-      const pid = String(row.pieceId || '').trim();
-      const candidates = issuesByPiece.get(pid);
-      if (!candidates) continue;
-      const rowMs = new Date(row.createdAt || 0).getTime();
-      for (const cand of candidates) {
-        if (cand.createdAtMs <= rowMs) {
-          const acc = received.get(cand.issueId);
-          if (!acc) continue;
-          acc.count += Number(row.bobbinQuantity || 0);
-          acc.weight += Number(row.netWt || 0);
-        }
+  if (allPieceIds.size > 0) {
+    const pieceIds = Array.from(allPieceIds);
+    const candidateJson = JSON.stringify(selectedCandidates);
+    const rows = await client.$queryRaw`
+      WITH selected_candidates AS (
+        SELECT
+          candidate."issueId" AS issue_id,
+          candidate."pieceId" AS piece_id,
+          candidate."createdAt"::timestamptz AS created_at
+        FROM jsonb_to_recordset(${candidateJson}::jsonb)
+          AS candidate("issueId" text, "pieceId" text, "createdAt" text)
+      ),
+      candidates AS (
+        SELECT DISTINCT issue_id, piece_id, created_at
+        FROM (
+          SELECT
+            line."issueId" AS issue_id,
+            line."pieceId" AS piece_id,
+            issue."createdAt" AS created_at
+          FROM "IssueToCutterMachineLine" line
+          JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId"
+          WHERE line."pieceId" = ANY(${pieceIds}::text[])
+            AND issue."isDeleted" = false
+          UNION ALL
+          SELECT issue_id, piece_id, created_at
+          FROM selected_candidates
+        ) all_candidates
+      ),
+      events AS (
+        SELECT
+          row."pieceId" AS piece_id,
+          row."createdAt" AS created_at,
+          COALESCE(row.bobbin_quantity, 0)::double precision AS received_count,
+          COALESCE(row."netWt", 0)::double precision AS received_weight,
+          0::double precision AS wastage_weight
+        FROM "ReceiveFromCutterMachineRow" row
+        WHERE row."issueId" IS NULL
+          AND row."pieceId" = ANY(${pieceIds}::text[])
+          AND row."isDeleted" = false
+        UNION ALL
+        SELECT
+          challan."pieceId" AS piece_id,
+          challan."createdAt" AS created_at,
+          0::double precision AS received_count,
+          0::double precision AS received_weight,
+          COALESCE(challan."wastageNetWeight", 0)::double precision AS wastage_weight
+        FROM "ReceiveFromCutterMachineChallan" challan
+        WHERE challan."pieceId" = ANY(${pieceIds}::text[])
+          AND challan."isDeleted" = false
+      ),
+      assigned AS (
+        SELECT event.*, owner.issue_id
+        FROM events event
+        JOIN LATERAL (
+          SELECT candidate.issue_id
+          FROM candidates candidate
+          WHERE candidate.piece_id = event.piece_id
+            AND candidate.created_at <= event.created_at
+          ORDER BY candidate.created_at DESC, candidate.issue_id DESC
+          LIMIT 1
+        ) owner ON true
+      )
+      SELECT
+        assigned.issue_id AS "issueId",
+        SUM(assigned.received_count)::double precision AS "receivedCount",
+        SUM(assigned.received_weight)::double precision AS "receivedWeight",
+        SUM(assigned.wastage_weight)::double precision AS "wastageWeight"
+      FROM assigned
+      WHERE assigned.issue_id = ANY(${ids}::text[])
+      GROUP BY assigned.issue_id
+    `;
+    for (const row of rows) {
+      const receiveAcc = received.get(row.issueId);
+      const wastageAcc = wastage.get(row.issueId);
+      if (receiveAcc) {
+        receiveAcc.count += Number(row.receivedCount || 0);
+        receiveAcc.weight += Number(row.receivedWeight || 0);
       }
-    }
-  }
-
-  // (3) Wastage attribution from challans, deterministic to a single issue per piece.
-  if (allPieceIds.size > 0 && earliestCreatedAt) {
-    const challans = await client.receiveFromCutterMachineChallan.findMany({
-      where: {
-        pieceId: { in: Array.from(allPieceIds) },
-        isDeleted: false,
-        createdAt: { gte: earliestCreatedAt },
-      },
-      select: { pieceId: true, wastageNetWeight: true, createdAt: true },
-    });
-    for (const ch of challans) {
-      const pid = String(ch.pieceId || '').trim();
-      const candidates = issuesByPiece.get(pid);
-      if (!candidates) continue;
-      const chMs = new Date(ch.createdAt || 0).getTime();
-      // latest issue with createdAt <= challan time
-      const assigned = [...candidates]
-        .reverse()
-        .find((c) => c.createdAtMs <= chMs);
-      if (!assigned) continue;
-      const wt = Number(ch.wastageNetWeight || 0);
-      if (wt <= 0) continue;
-      const acc = wastage.get(assigned.issueId);
-      if (!acc) continue;
-      acc.weight += wt;
+      if (wastageAcc) {
+        wastageAcc.weight += Number(row.wastageWeight || 0);
+      }
     }
   }
 
@@ -403,8 +423,9 @@ export async function computeIssueBalancesBatch(client, stage, issues = []) {
   let wastage;
 
   if (stage === 'cutter') {
-    original = await loadCutterOriginalTotals(client, issues);
-    const cutter = await loadCutterReceivedAndWastage(client, issues);
+    const cutterOriginal = await loadCutterOriginalTotals(client, issues);
+    original = cutterOriginal.totals;
+    const cutter = await loadCutterReceivedAndWastage(client, issues, cutterOriginal.pieceIdsByIssue);
     received = cutter.received;
     wastage = cutter.wastage;
   } else if (stage === 'holo') {

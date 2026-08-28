@@ -411,7 +411,7 @@ export function OnMachineTable({ db, process }) {
             if (!sourceId) return;
             const originalCount = process === 'holo'
                 ? Number(ref?.issuedBobbins || 0)
-                : Number(ref?.issueRolls || 0);
+                : Number(ref?.issueRolls || ref?.baseRolls || 0);
             const originalWeight = process === 'holo'
                 ? Number(ref?.issuedBobbinWeight || 0)
                 : Number(ref?.issueWeight || 0);
@@ -422,10 +422,18 @@ export function OnMachineTable({ db, process }) {
             const detailSource = entry.__sourceRows?.find((row) => row.id === sourceId);
             const cutterRow = process === 'holo' ? (detailSource || cutterReceiveById.get(sourceId)) : null;
             const holoRow = process === 'coning' ? (detailSource || holoReceiveById.get(sourceId)) : null;
+            const isReConingSource = process === 'coning'
+                && (ref?.stage === 'coning' || Number.isFinite(Number(detailSource?.coneCount)));
             const bobbin = process === 'holo' ? (cutterRow?.bobbin || bobbinById.get(String(cutterRow?.bobbinId || '').trim())) : null;
-            const rollType = process === 'coning' ? (holoRow?.rollType || rollTypeById.get(String(holoRow?.rollTypeId || '').trim())) : null;
+            const rollType = process === 'coning'
+                ? (isReConingSource
+                    ? holoRow?.coneType
+                    : (holoRow?.rollType || rollTypeById.get(String(holoRow?.rollTypeId || '').trim())))
+                : null;
             const sourceBoxWeight = process === 'coning' ? Number(holoRow?.box?.weight || boxById.get(String(holoRow?.boxId || '').trim())?.weight || 0) : 0;
-            const rollCount = process === 'coning' ? Number(holoRow?.rollCount || 0) : 0;
+            const rollCount = process === 'coning'
+                ? Number(isReConingSource ? holoRow?.coneCount : holoRow?.rollCount || 0)
+                : 0;
             const tareWeight = process === 'coning' ? Number(holoRow?.tareWeight || 0) : 0;
             const derivedRollUnitWeight = (process === 'coning' && rollCount > 0 && Number.isFinite(tareWeight))
                 ? Math.max(0, (tareWeight - sourceBoxWeight) / rollCount)

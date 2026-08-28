@@ -163,6 +163,9 @@ test('take-back actions use free source selection with an authoritative shared c
   assert.match(source, /process === 'holo' \|\| process === 'coning'[\s\S]{0,180}takeBackTarget\?\.pendingWeight/);
   assert.match(source, /const detail = await v2\.getV2IssueActionDetail\(process, entry\.id\);[\s\S]{0,120}activeTakeBacks/);
   assert.doesNotMatch(source, /let latest = latestReversibleTakeBackByIssue\.get/);
+  assert.match(source, /ref\?\.stage === 'coning' \|\| Number\.isFinite\(Number\(detailSource\?\.coneCount\)\)/);
+  assert.match(source, /isReConingSource[\s\S]{0,160}holoRow\?\.coneType/);
+  assert.match(source, /isReConingSource \? holoRow\?\.coneCount : holoRow\?\.rollCount/);
 });
 
 test('targeted issue balances win until a newer mutation balance arrives', async () => {

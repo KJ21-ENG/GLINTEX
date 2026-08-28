@@ -233,6 +233,10 @@ if (!TEST_DB) {
     assert.deepEqual(first.response.body.items.map((row) => row.id).filter((id) => secondIds.has(id)), []);
     assert.equal(first.response.body.nextCursor, null);
     assert.equal(second.response.body.nextCursor, null);
+
+    const beyondWindow = await get('/api/v2/issue/holo/tracking', { limit: 50, page: 100, filters });
+    assert.equal(beyondWindow.response.status, 400, beyondWindow.response.text);
+    assert.equal(beyondWindow.response.body.code, 'cursor_required');
   });
 
   test('default On Machine summaries use bounded aggregate responses', async () => {
@@ -351,10 +355,32 @@ if (!TEST_DB) {
     assert.equal(actionDetail.response.body.receivedBySource[pieceId]?.weight, 2);
     assert.equal(actionDetail.response.body.issueBalance.receivedWeight, 2);
     assert.equal(actionDetail.response.body.issueBalance.pendingWeight, 3);
+    assert.deepEqual(actionDetail.response.body.sourceLines, [{
+      issueId,
+      pieceId,
+      issuedWeight: 5,
+      legacyHeaderSource: true,
+    }]);
     const olderDetail = await get(`/api/v2/issue/cutter/${olderIssueId}/action-detail`);
     assert.equal(olderDetail.response.status, 200, olderDetail.response.text);
     assert.equal(olderDetail.response.body.receivedBySource[pieceId]?.weight || 0, 0);
     assert.equal(olderDetail.response.body.issueBalance.receivedWeight, 0);
+
+    const stockGroups = await get('/api/v2/stock/cutter/lot-groups', {
+      view: 'jumbo',
+      search: lotNo,
+      limit: 50,
+      summaryMode: 'separate',
+    });
+    assert.equal(stockGroups.response.status, 200, stockGroups.response.text);
+    const stockGroup = stockGroups.response.body.items.find((row) => row.lotNo === lotNo);
+    assert.ok(stockGroup, 'header-only Cutter issue lot must remain visible in stock');
+    assert.match(String(stockGroup.cutName || stockGroup.cut || ''), new RegExp(cut.name));
+    const stockRows = await get('/api/v2/stock/cutter/lot-rows', { key: stockGroup.lotKey, limit: 50 });
+    assert.equal(stockRows.response.status, 200, stockRows.response.text);
+    const stockPiece = stockRows.response.body.items.find((row) => row.id === pieceId);
+    assert.equal(stockPiece?.cutName, cut.name);
+    assert.match(stockPiece?.issuedLabel || '', /^Issued/);
 
     await Promise.all([
       prisma.receiveFromCutterMachineRow.update({ where: { id: legacyRow.id }, data: { netWt: 5 } }),

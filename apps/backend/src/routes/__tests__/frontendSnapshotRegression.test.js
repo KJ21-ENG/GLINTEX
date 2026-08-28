@@ -64,6 +64,17 @@ test('Cutter issue printing cannot turn a committed issue into a reported failur
   assert.ok(outerCatchIndex > printFailureIndex);
 });
 
+test('dispatch and Cutter purchase mutations emit canonical projection invalidations', async () => {
+  const dispatch = await readFile(join(frontendSource, 'pages/Dispatch.jsx'), 'utf8');
+  const inbound = await readFile(join(frontendSource, 'pages/Inbound.jsx'), 'utf8');
+  assert.match(dispatch, /INVENTORY_INVALIDATION_KEYS\.receiveHistory\(stage\)/);
+  assert.match(dispatch, /INVENTORY_INVALIDATION_KEYS\.issueOnMachine\(stage\)/);
+  assert.match(dispatch, /INVENTORY_INVALIDATION_KEYS\.issueHistory\(stage\)/);
+  assert.doesNotMatch(dispatch, /`receive:\$\{stage\}`|`issue:\$\{stage\}`/);
+  assert.equal((inbound.match(/INVENTORY_INVALIDATION_KEYS\.receiveHistory\('cutter'\)/g) || []).length, 3);
+  assert.doesNotMatch(inbound, /['"]receive:cutter['"]/);
+});
+
 test('stock and combined stock never load a legacy process module', async () => {
   const files = [
     join(frontendSource, 'pages/Stock.jsx'),

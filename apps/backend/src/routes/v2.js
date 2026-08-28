@@ -1270,6 +1270,12 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
     const wherePage = applyCursorWhere(whereAll, cursorWhere);
 
     if (computedFilters.length > 0 || traceFilters.length > 0) {
+      if (pageNum != null && ((pageNum - 1) * limit + limit + 1) > 5000) {
+        return res.status(400).json({
+          error: 'This filtered page is beyond the bounded page window. Reload and continue with the cursor.',
+          code: 'cursor_required',
+        });
+      }
       const result = await buildBoundedIssueTrackingResult({
         process,
         whereAll,
@@ -3442,7 +3448,7 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
       itemName: item?.name || '',
     }, { takeBackTotalsByIssueId });
     const issueBalance = (await computeIssueBalancesBatch(prisma, process, [issue])).get(id) || null;
-    const sourceLines = process === 'cutter'
+    let sourceLines = process === 'cutter'
       ? (issue.lines || [])
       : normalizeReceivedRowRefs(issue.receivedRowRefs);
     const sourceRowIds = Array.from(new Set(sourceLines.map((line) => line?.rowId).filter(Boolean)));
@@ -3453,6 +3459,15 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
       sourcePieces = pieceIds.length > 0
         ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
         : [];
+      if (sourceLines.length === 0) {
+        const pieceById = new Map(sourcePieces.map((piece) => [piece.id, piece]));
+        sourceLines = pieceIds.map((pieceId) => ({
+          issueId: issue.id,
+          pieceId,
+          issuedWeight: Number(pieceById.get(pieceId)?.weight || 0),
+          legacyHeaderSource: true,
+        }));
+      }
     } else if (process === 'holo' && sourceRowIds.length > 0) {
       sourceRows = await prisma.receiveFromCutterMachineRow.findMany({
         where: { id: { in: sourceRowIds }, isDeleted: false },
@@ -4031,15 +4046,24 @@ async function queryCutterJumboStockGroups(req) {
     0::float8 AS summary_crate_count
   `;
   const rows = await prisma.$queryRaw(Prisma.sql`
-    WITH latest_issue AS (
-      SELECT DISTINCT ON (line."pieceId")
-        line."pieceId" AS piece_id,
+    WITH issue_candidates AS (
+      SELECT line."pieceId" AS piece_id, line."issueId" AS issue_id
+      FROM "IssueToCutterMachineLine" line
+      UNION
+      SELECT trim(header_piece.piece_id) AS piece_id, issue.id AS issue_id
+      FROM "IssueToCutterMachine" issue
+      CROSS JOIN LATERAL regexp_split_to_table(COALESCE(issue."pieceIds", ''), '\\s*,\\s*')
+        AS header_piece(piece_id)
+      WHERE trim(header_piece.piece_id) <> ''
+    ), latest_issue AS (
+      SELECT DISTINCT ON (candidate.piece_id)
+        candidate.piece_id,
         issue."cutId" AS cut_id,
         cut.name AS cut_name
-      FROM "IssueToCutterMachineLine" line
-      JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId" AND issue."isDeleted" = false
+      FROM issue_candidates candidate
+      JOIN "IssueToCutterMachine" issue ON issue.id = candidate.issue_id AND issue."isDeleted" = false
       LEFT JOIN "Cut" cut ON cut.id = issue."cutId"
-      ORDER BY line."pieceId", issue."createdAt" DESC, issue.id DESC
+      ORDER BY candidate.piece_id, issue."createdAt" DESC, issue.id DESC
     ),
     yarn_by_lot AS (
       SELECT
@@ -5309,16 +5333,36 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
       const pagePieces = pieces.slice(0, limit);
       const pieceIds = pagePieces.map((piece) => piece.id);
 
-      const [totals, issues, challans] = await Promise.all([
+      const [totals, issueCandidates, challans] = await Promise.all([
         pieceIds.length > 0
           ? prisma.receiveFromCutterMachinePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } })
           : [],
         pieceIds.length > 0
-          ? prisma.issueToCutterMachine.findMany({
-            where: { isDeleted: false, lines: { some: { pieceId: { in: pieceIds } } } },
-            include: { machine: true, cut: true, lines: true },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          })
+          ? prisma.$queryRaw`
+            WITH candidates AS (
+              SELECT line."pieceId" AS piece_id, line."issueId" AS issue_id
+              FROM "IssueToCutterMachineLine" line
+              WHERE line."pieceId" = ANY(${pieceIds}::text[])
+              UNION
+              SELECT trim(header_piece.piece_id) AS piece_id, issue.id AS issue_id
+              FROM "IssueToCutterMachine" issue
+              CROSS JOIN LATERAL regexp_split_to_table(COALESCE(issue."pieceIds", ''), '\\s*,\\s*')
+                AS header_piece(piece_id)
+              WHERE trim(header_piece.piece_id) = ANY(${pieceIds}::text[])
+            )
+            SELECT DISTINCT ON (candidate.piece_id)
+              candidate.piece_id AS "pieceId",
+              issue.id AS "issueId",
+              issue.date,
+              cut.name AS "cutName",
+              machine.name AS "machineName"
+            FROM candidates candidate
+            JOIN "IssueToCutterMachine" issue ON issue.id = candidate.issue_id
+            LEFT JOIN "Cut" cut ON cut.id = issue."cutId"
+            LEFT JOIN "Machine" machine ON machine.id = issue."machineId"
+            WHERE issue."isDeleted" = false
+            ORDER BY candidate.piece_id, issue."createdAt" DESC, issue.id DESC
+          `
           : [],
         pieceIds.length > 0
           ? prisma.receiveFromCutterMachineChallan.findMany({
@@ -5328,12 +5372,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           : [],
       ]);
       const totalsByPiece = new Map(totals.map((row) => [row.pieceId, row]));
-      const issueByPiece = new Map();
-      for (const issue of issues) {
-        for (const line of issue.lines || []) {
-          if (!issueByPiece.has(line.pieceId)) issueByPiece.set(line.pieceId, issue);
-        }
-      }
+      const issueByPiece = new Map(issueCandidates.map((issue) => [issue.pieceId, issue]));
       const wastageNoteByPiece = new Map();
       for (const row of challans) {
         if (wastageNoteByPiece.has(row.pieceId)) continue;
@@ -5355,9 +5394,9 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
           wastageNote: wastageNoteByPiece.get(piece.id) || null,
           totalUnits: Number(aggregate?.totalBob || 0),
           issueableWeight: Math.max(0, inboundWeight - dispatchedWeight - Number(piece.issuedToCutterWeight || 0)),
-          cutName: issue?.cut?.name || '',
+          cutName: issue?.cutName || '',
           yarnName: '',
-          issuedLabel: issue ? `Issued${issue.machine?.name ? `: ${issue.machine.name}` : ''}${issue.date ? ` • ${issue.date}` : ''}` : '',
+          issuedLabel: issue ? `Issued${issue.machineName ? `: ${issue.machineName}` : ''}${issue.date ? ` • ${issue.date}` : ''}` : '',
         };
       });
       const hasMore = pieces.length > limit;

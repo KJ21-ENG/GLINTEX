@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useInventory } from '../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
@@ -392,7 +392,11 @@ export function Inbound() {
                 })),
             };
             await api.createCutterPurchaseInbound(payload);
-            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-created' });
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                'inbound',
+            ], { reason: 'cutter-purchase-created' });
             void refreshModuleData('inbound');
 
             // Stickers already printed per-crate during addCutterCrate, no batch print needed
@@ -1199,7 +1203,11 @@ function RecentLotsTable({ db }) {
                 })),
             };
             await api.updateCutterPurchaseLot(cutterEditorLotNo, payload);
-            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-updated' });
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                'inbound',
+            ], { reason: 'cutter-purchase-updated' });
             await refreshModuleData('inbound');
             closeCutterPurchaseEditor();
         } catch (err) {
@@ -1217,7 +1225,11 @@ function RecentLotsTable({ db }) {
         if (!confirmDelete) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            emitInvalidation(['stock:cutter', 'receive:cutter', 'inbound'], { reason: 'cutter-purchase-deleted' });
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
+                'inbound',
+            ], { reason: 'cutter-purchase-deleted' });
             await refreshModuleData('inbound');
             if (expandedLot === lotNo) setExpandedLot(null);
         } catch (err) {

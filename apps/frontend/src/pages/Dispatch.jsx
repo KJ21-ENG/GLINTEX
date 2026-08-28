@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useInventory } from '../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
 import {
     Button, Input, Select, Card, CardContent, CardHeader, CardTitle,
@@ -131,16 +131,22 @@ export function Dispatch() {
     const [savingCustomer, setSavingCustomer] = useState(false);
 
     const refreshAfterDispatch = (stage) => {
-        emitInvalidation([
-            `stock:${stage}`,
-            `issue:${stage}`,
-            `receive:${stage}`,
-            'dispatch',
-        ], { reason: 'dispatch-mutated', stage });
         if (stage === 'inbound') {
+            emitInvalidation([
+                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+                'inbound',
+                'dispatch',
+            ], { reason: 'dispatch-mutated', stage });
             void refreshModuleData('inbound');
             return;
         }
+        emitInvalidation([
+            INVENTORY_INVALIDATION_KEYS.stock(stage),
+            INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
+            INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
+            INVENTORY_INVALIDATION_KEYS.receiveHistory(stage),
+            'dispatch',
+        ], { reason: 'dispatch-mutated', stage });
     };
 
     // Load customers

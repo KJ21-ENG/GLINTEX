@@ -81,6 +81,11 @@ test('production frontend proxies same-origin API calls and preserves SSE stream
 });
 
 test('Holo receive migration preserves legacy totals while enabling explicit new-row buckets', () => {
+  assert.match(holoWastageMigration, /BEGIN;/);
   assert.match(holoWastageMigration, /ADD COLUMN IF NOT EXISTS "isWastage" BOOLEAN/);
+  assert.match(holoWastageMigration, /CREATE OR REPLACE FUNCTION classify_holo_receive_wastage_bucket/);
+  assert.match(holoWastageMigration, /BEFORE INSERT OR UPDATE OF "rollTypeId"/);
+  assert.match(holoWastageMigration, /NEW\."isWastage" := COALESCE\(LOWER\(roll_type_name\) LIKE '%wastage%', FALSE\)/);
   assert.doesNotMatch(holoWastageMigration, /UPDATE "ReceiveFromHoloMachineRow"/);
+  assert.match(holoWastageMigration, /COMMIT;/);
 });

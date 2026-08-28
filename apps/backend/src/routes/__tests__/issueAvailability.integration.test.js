@@ -771,6 +771,13 @@ if (!TEST_DB) {
         barcode: `RHO-${5_200_000 + Number(String(Date.now()).slice(-6))}-C001`,
       },
     });
+    // Simulate a row that existed before the nullable classification column.
+    // The compatibility trigger classifies all newly inserted rows, including
+    // inserts from a previous backend during migration-first rollout.
+    await prisma.receiveFromHoloMachineRow.update({
+      where: { id: legacyRow.id },
+      data: { isWastage: null },
+    });
     await prisma.receiveFromHoloMachinePieceTotal.create({
       data: { pieceId, totalRolls: 10, totalNetWeight: 9.5, wastageNetWeight: 0 },
     });
@@ -792,6 +799,23 @@ if (!TEST_DB) {
     assert.equal(edited.body.pieceTotal.totalNetWeight, 9.5);
     assert.equal(edited.body.pieceTotal.wastageNetWeight, 0);
 
+    await prisma.rollType.update({ where: { id: rollType.id }, data: { weight: 0.3 } });
+    const countCorrected = await request(app)
+      .put(`/api/receive_from_holo_machine/rows/${legacyRow.id}`)
+      .set('Authorization', auth)
+      .send({
+        rollCount: 11,
+        grossWeight: 12.3,
+        rollTypeId: rollType.id,
+        boxId: box.id,
+        notes: 'Preserve signed tare residual after master change',
+      });
+    assert.equal(countCorrected.status, 200, countCorrected.text);
+    assert.equal(countCorrected.body.row.tareWeight, 2.8);
+    assert.equal(countCorrected.body.row.rollWeight, 9.5);
+    assert.equal(countCorrected.body.pieceTotal.totalNetWeight, 9.5);
+    assert.equal(countCorrected.body.pieceTotal.totalRolls, 11);
+
     await prisma.receiveFromHoloMachineRow.update({ where: { id: legacyRow.id }, data: { isWastage: null } });
     const deleted = await request(app)
       .delete(`/api/receive_from_holo_machine/rows/${legacyRow.id}`)
@@ -801,6 +825,37 @@ if (!TEST_DB) {
     assert.equal(deleted.body.pieceTotal.totalNetWeight, 0);
     assert.equal(deleted.body.pieceTotal.wastageNetWeight, 0);
     assert.equal(deleted.body.pieceTotal.totalRolls, 0);
+  });
+
+  test('migration compatibility trigger classifies writes from the previous Holo backend', async () => {
+    const suffix = `${Date.now()}-holo-old-writer-trigger`;
+    const [item, rollType] = await Promise.all([
+      prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
+      prisma.rollType.create({ data: { name: `Wastage ${suffix}`, weight: 0.1 } }),
+    ]);
+    const issue = await prisma.issueToHoloMachine.create({
+      data: {
+        date: '2026-08-27',
+        itemId: item.id,
+        lotNo: `PERF-${suffix}`,
+        barcode: `IHO-${5_300_000 + Number(String(Date.now()).slice(-6))}`,
+        metallicBobbins: 10,
+        metallicBobbinsWeight: 10,
+        receivedRowRefs: [],
+      },
+    });
+    const oldWriterRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: issue.id,
+        rollCount: 1,
+        rollWeight: 1,
+        grossWeight: 1.1,
+        tareWeight: 0.1,
+        rollTypeId: rollType.id,
+        barcode: `RHO-${5_300_000 + Number(String(Date.now()).slice(-6))}-C001`,
+      },
+    });
+    assert.equal(oldWriterRow.isWastage, true);
   });
 
   test('concurrent Coning close accounts for take-backs exactly once and returns the closed balance', async () => {

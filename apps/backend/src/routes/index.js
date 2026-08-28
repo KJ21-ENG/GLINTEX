@@ -10265,10 +10265,15 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
       const previousBaseTare = Number.isFinite(storedTareWeight)
         ? (previousRollTypeWeight * Number(row.rollCount || 0)) + previousBoxWeight
         : 0;
-      const preservedExtraTare = Number.isFinite(storedTareWeight)
-        ? Math.max(0, storedTareWeight - previousBaseTare)
+      const preservedTareResidual = Number.isFinite(storedTareWeight)
+        ? storedTareWeight - previousBaseTare
         : 0;
-      tareWeight = roundTo3Decimals((rollTypeWeight * rollCount) + boxWeight + preservedExtraTare);
+      tareWeight = roundTo3Decimals((rollTypeWeight * rollCount) + boxWeight + preservedTareResidual);
+      if (!Number.isFinite(tareWeight) || tareWeight < 0) {
+        return res.status(409).json({
+          error: 'The requested change would make the preserved historical tare invalid.',
+        });
+      }
     }
     const netWeight = roundTo3Decimals(grossWeight - tareWeight);
     if (!Number.isFinite(netWeight) || netWeight <= 0) {

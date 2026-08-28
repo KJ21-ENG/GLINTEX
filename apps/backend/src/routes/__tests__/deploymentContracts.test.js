@@ -41,7 +41,12 @@ test('production deployment selects only the reviewed base plus production Compo
 
 test('production deployment restores and health-checks the prior SHA on failure', () => {
   assert.match(workflow, /previous_sha=\$\(git rev-parse HEAD\)/);
-  assert.match(workflow, /trap rollback ERR/);
+  assert.match(workflow, /trap 'rollback \$\?' ERR/);
+  assert.match(workflow, /trap 'rollback 129' HUP/);
+  assert.match(workflow, /trap 'rollback 130' INT/);
+  assert.match(workflow, /trap 'rollback 143' TERM/);
+  assert.match(workflow, /trap 'rollback \$\?' EXIT/);
+  assert.match(workflow, /deployment_started=0[\s\S]*trap - ERR HUP INT TERM EXIT/);
   assert.match(workflow, /git checkout --detach "\$previous_sha"/);
   const rollbackIndex = workflow.indexOf('Deployment failed. Restoring $previous_sha');
   const rollbackStopIndex = workflow.indexOf('stop frontend agent-api || true', rollbackIndex);
@@ -102,6 +107,7 @@ test('backend image resolves pinned Prisma tooling without network fallback', ()
 });
 
 test('production frontend proxies same-origin API calls and preserves SSE streaming', () => {
+  assert.match(frontendNginx, /client_max_body_size 20m;/);
   assert.match(frontendNginx, /location \/api\/ \{[\s\S]*proxy_pass http:\/\/backend:4000;/);
   assert.match(
     frontendNginx,

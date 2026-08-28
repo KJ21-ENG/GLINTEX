@@ -67,7 +67,26 @@ export function CombinedJumboTable({
     setExpandedLot(key);
     if (lot.lotKey && !rowsByKey?.[lot.lotKey] && loadLotRows) {
       setLoadingLot(key);
-      try { await loadLotRows(lot.lotKey); } finally { setLoadingLot(null); }
+      try {
+        await loadLotRows(lot.lotKey);
+      } catch {
+        // The row-page state owns the retryable error shown below.
+      } finally {
+        setLoadingLot(null);
+      }
+    }
+  };
+
+  const retryLotRows = async (event, lot) => {
+    event.stopPropagation();
+    if (!lot?.lotKey || !loadLotRows) return;
+    setLoadingLot(lot.lotKey);
+    try {
+      await loadLotRows(lot.lotKey);
+    } catch {
+      // Keep the authoritative error in rowPagesByKey for another retry.
+    } finally {
+      setLoadingLot(null);
     }
   };
 
@@ -103,6 +122,7 @@ export function CombinedJumboTable({
                 const lotIdentity = l.lotKey || l.lotNo;
                 const isExpanded = expandedLot === lotIdentity;
                 const pieces = piecesFor(l);
+                const rowError = l.lotKey ? rowPagesByKey?.[l.lotKey]?.error : null;
                 return (
                   <React.Fragment key={lotIdentity || idx}>
                     <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(l)}>
@@ -140,6 +160,15 @@ export function CombinedJumboTable({
                               <TableBody>
                                 {loadingLot === lotIdentity ? (
                                   <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">Loading pieces...</TableCell></TableRow>
+                                ) : rowError ? (
+                                  <TableRow>
+                                    <TableCell colSpan={5} className="py-4 text-center">
+                                      <div className="flex items-center justify-center gap-2 text-sm text-destructive">
+                                        <span>Could not load pieces.</span>
+                                        <Button type="button" variant="outline" size="sm" onClick={(event) => retryLotRows(event, l)}>Retry</Button>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
                                 ) : pieces.length === 0 ? (
                                   <TableRow>
                                     <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
@@ -210,6 +239,7 @@ export function CombinedJumboTable({
             const lotIdentity = l.lotKey || l.lotNo;
             const isExpanded = expandedLot === lotIdentity;
             const pieces = piecesFor(l);
+            const rowError = l.lotKey ? rowPagesByKey?.[l.lotKey]?.error : null;
             const available = l.availableCount ?? countAvailablePieces(l.pieces || []);
             const total = l.totalPieces ?? (l.pieces || []).length;
 
@@ -242,6 +272,11 @@ export function CombinedJumboTable({
                     <div className="text-xs text-muted-foreground">Firm: {l.firmName}</div>
                     {loadingLot === lotIdentity ? (
                       <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">Loading pieces...</div>
+                    ) : rowError ? (
+                      <div className="flex items-center justify-center gap-2 rounded border bg-background p-2 text-xs text-destructive">
+                        <span>Could not load pieces.</span>
+                        <Button type="button" variant="outline" size="sm" onClick={(event) => retryLotRows(event, l)}>Retry</Button>
+                      </div>
                     ) : pieces.length === 0 ? (
                       <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">
                         No pieces.

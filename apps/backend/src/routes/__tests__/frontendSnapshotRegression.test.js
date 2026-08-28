@@ -103,12 +103,16 @@ test('stock and combined stock never load a legacy process module', async () => 
 
 test('combined stock keeps pagination user-driven instead of draining every cursor', async () => {
   const source = await readFile(join(frontendSource, 'components/stock/CombinedStockView.jsx'), 'utf8');
+  const jumbo = await readFile(join(frontendSource, 'components/stock/combined/CombinedJumboTable.jsx'), 'utf8');
   assert.doesNotMatch(source, /state\.lotsHasMore[\s\S]{0,160}state\.loadMoreLots\(\)/);
   assert.match(source, /hasMore=\{state\.hasMore\}/);
   assert.match(source, /onLoadMore=\{state\.onLoadMore\}/);
   assert.match(source, /hasMore=\{jumboV2\.lotsHasMore\}/);
   assert.match(source, /loadGroups: displayMode === 'full' \|\| expandedSections\.has\('jumbo'\)/);
   assert.match(source, /loadGroups: displayMode === 'full' \|\| expandedSections\.has\('coning'\)/);
+  assert.match(jumbo, /rowPagesByKey\?\.\[l\.lotKey\]\?\.error/);
+  assert.match(jumbo, /Could not load pieces\./);
+  assert.match(jumbo, />Retry<\/Button>/);
 });
 
 test('rows render independently from exact separate summaries', async () => {

@@ -67,8 +67,8 @@ jobs:
           echo "Verified pre-deployment backup: $backup_path ($(wc -c < "$backup_path") bytes)"
 
           rollback() {
-            result=$?
-            trap - ERR
+            result=${1:-1}
+            trap - ERR HUP INT TERM EXIT
             if [ "$deployment_started" -eq 1 ]; then
               echo "Deployment failed. Restoring $previous_sha"
               # Quiesce both external write paths before the previous backend is
@@ -87,7 +87,11 @@ jobs:
             fi
             exit "$result"
           }
-          trap rollback ERR
+          trap 'rollback $?' ERR
+          trap 'rollback 129' HUP
+          trap 'rollback 130' INT
+          trap 'rollback 143' TERM
+          trap 'rollback $?' EXIT
 
           git fetch origin "$deploy_sha"
           git checkout --detach "$deploy_sha"
@@ -118,5 +122,6 @@ jobs:
           "${compose[@]}" exec -T agent-api node -e \
             "fetch('http://127.0.0.1:4003/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-          trap - ERR
+          deployment_started=0
+          trap - ERR HUP INT TERM EXIT
           REMOTE_SCRIPT

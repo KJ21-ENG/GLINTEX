@@ -336,6 +336,49 @@ if (!TEST_DB) {
     assert.equal(blockedDispatch.body.outcome, 'availability_changed');
   });
 
+  test('re-coning count availability is capped by remaining source weight', async () => {
+    const suffix = `${Date.now()}-reconing-weight-cap`;
+    const auth = await adminAuth(suffix);
+    const [item, coneType] = await Promise.all([
+      prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
+      prisma.coneType.create({ data: { name: `Perf Cone ${suffix}`, weight: 0.01 } }),
+    ]);
+    const parentIssue = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: `PERF-${suffix}`,
+        barcode: `ICO-${6_700_000 + Number(String(Date.now()).slice(-6))}`,
+        rollsIssued: 10, requiredPerConeNetWeight: 10, expectedCones: 1000,
+        receivedRowRefs: [{ rowId: `holo-${suffix}`, issueRolls: 10, issueWeight: 10, coneTypeId: coneType.id, stage: 'holo' }],
+      },
+    });
+    const source = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId: parentIssue.id,
+        barcode: `RCO-${6_800_000 + Number(String(Date.now()).slice(-6))}-C001`,
+        coneCount: 10,
+        netWeight: 10,
+        coneWeight: 10,
+        grossWeight: 10,
+        tareWeight: 0,
+        dispatchedCount: 2,
+        dispatchedWeight: 5,
+        sourceRowRefs: [],
+      },
+    });
+    const response = await request(app)
+      .post('/api/issue_to_coning_machine')
+      .set('Authorization', auth)
+      .send({
+        date: '2026-08-27',
+        requiredPerConeNetWeight: 10,
+        crates: [{ rowId: source.id, issueRolls: 8, issueWeight: 5, coneTypeId: coneType.id }],
+      });
+    assert.equal(response.status, 409, response.text);
+    assert.equal(response.body.outcome, 'availability_changed');
+    assert.equal(response.body.crates[0].availableRolls, 5);
+    assert.equal(response.body.crates[0].availableWeight, 5);
+  });
+
   test('two Holo receives cannot exceed one issue balance', async () => {
     const suffix = `${Date.now()}-holo-receive`;
     const issueSeries = 2_000_000 + Number(String(Date.now()).slice(-6));

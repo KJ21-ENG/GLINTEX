@@ -11232,30 +11232,30 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const baseWeight = Number(crate.baseWeight) || 0;
       const dispatchedCount = Number(crate.dispatchedCount || 0);
       const dispatchedWeight = Number(crate.dispatchedWeight || 0);
-      const availableWeight = Math.max(0, baseWeight - dispatchedWeight);
-      const baseAvailableRolls = Math.max(0, baseRolls - dispatchedCount);
-
       const existingIssued = Math.max(0, previouslyIssuedByRowId.get(rid) || 0);
       const alreadyPlanned = issueTracker.get(rid) || 0;
-      const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
-
       const existingIssuedWeight = Math.max(0, previouslyIssuedWeightByRowId.get(rid) || 0);
       const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
-      const totalWeightAfter = existingIssuedWeight + alreadyPlannedWeight + (Number(crate.issueWeight) || 0);
+      const availableWeight = Math.max(0, baseWeight - dispatchedWeight - existingIssuedWeight - alreadyPlannedWeight);
+      const availableRolls = calcAvailableCountFromWeight({
+        totalCount: baseRolls,
+        issuedCount: existingIssued + alreadyPlanned,
+        dispatchedCount,
+        totalWeight: baseWeight,
+        availableWeight,
+      }) || 0;
 
-      const exceedsRolls = totalAfterRequest > baseAvailableRolls;
-      const exceedsWeight = availableWeight <= 0
-        ? (Number(crate.issueWeight) || 0) > 0
-        : totalWeightAfter > availableWeight + 1e-6;
+      const exceedsRolls = Number(crate.issueRolls || 0) > availableRolls;
+      const exceedsWeight = Number(crate.issueWeight || 0) > availableWeight + 1e-6;
 
       if (exceedsRolls || exceedsWeight) {
         overIssuedCrates.push({
           rowId: rid,
           barcode: crate.barcode,
           requestedRolls: crate.issueRolls,
-          availableRolls: Math.max(baseAvailableRolls - existingIssued - alreadyPlanned, 0),
+          availableRolls,
           requestedWeight: roundTo3Decimals(crate.issueWeight),
-          availableWeight: roundTo3Decimals(Math.max(availableWeight - existingIssuedWeight - alreadyPlannedWeight, 0)),
+          availableWeight: roundTo3Decimals(availableWeight),
         });
       }
 
@@ -11390,6 +11390,8 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
 
       const lockedSourceMap = new Map([...lockedConingRows, ...lockedHoloRows].map((row) => [row.id, row]));
       const issuedMap = await buildHoloIssuedToConingMap(tx, preparedCrates.map((crate) => crate.rowId));
+      const plannedCountByRowId = new Map();
+      const plannedWeightByRowId = new Map();
       const availabilityConflicts = [];
       const lockedPreparedCrates = preparedCrates.map((crate) => {
         const source = lockedSourceMap.get(crate.rowId);
@@ -11402,8 +11404,16 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         const dispatchedCount = Number(source?.dispatchedCount || 0);
         const dispatchedWeight = Number(source?.dispatchedWeight || 0);
         const alreadyIssued = issuedMap.get(crate.rowId) || { issuedRolls: 0, issuedWeight: 0 };
-        const availableRolls = Math.max(0, baseRolls - dispatchedCount - Number(alreadyIssued.issuedRolls || 0));
-        const availableWeight = Math.max(0, baseWeight - dispatchedWeight - Number(alreadyIssued.issuedWeight || 0));
+        const alreadyPlannedCount = Number(plannedCountByRowId.get(crate.rowId) || 0);
+        const alreadyPlannedWeight = Number(plannedWeightByRowId.get(crate.rowId) || 0);
+        const availableWeight = Math.max(0, baseWeight - dispatchedWeight - Number(alreadyIssued.issuedWeight || 0) - alreadyPlannedWeight);
+        const availableRolls = calcAvailableCountFromWeight({
+          totalCount: baseRolls,
+          issuedCount: Number(alreadyIssued.issuedRolls || 0) + alreadyPlannedCount,
+          dispatchedCount,
+          totalWeight: baseWeight,
+          availableWeight,
+        }) || 0;
         if (Number(crate.issueRolls || 0) > availableRolls || Number(crate.issueWeight || 0) > availableWeight + TAKE_BACK_EPSILON) {
           availabilityConflicts.push({
             rowId: crate.rowId,
@@ -11415,6 +11425,8 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
             updatedAt: source?.updatedAt,
           });
         }
+        plannedCountByRowId.set(crate.rowId, alreadyPlannedCount + Number(crate.issueRolls || 0));
+        plannedWeightByRowId.set(crate.rowId, alreadyPlannedWeight + Number(crate.issueWeight || 0));
         return {
           ...crate,
           lotNo: source?.issue?.lotNo || null,
@@ -11464,12 +11476,28 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       });
       return {
         issue,
-        sourceUpdates: lockedPreparedCrates.map((crate) => ({
-          rowId: crate.rowId,
-          barcode: crate.barcode,
-          availableRolls: Math.max(0, Number(crate.baseRolls || 0) - Number(crate.dispatchedCount || 0) - Number(crate.issueRolls || 0) - Number(issuedMap.get(crate.rowId)?.issuedRolls || 0)),
-          availableWeight: roundTo3Decimals(Math.max(0, Number(crate.baseWeight || 0) - Number(crate.dispatchedWeight || 0) - Number(crate.issueWeight || 0) - Number(issuedMap.get(crate.rowId)?.issuedWeight || 0))),
-        })),
+        sourceUpdates: lockedPreparedCrates.map((crate) => {
+          const issued = issuedMap.get(crate.rowId) || { issuedRolls: 0, issuedWeight: 0 };
+          const remainingWeight = Math.max(
+            0,
+            Number(crate.baseWeight || 0)
+              - Number(crate.dispatchedWeight || 0)
+              - Number(issued.issuedWeight || 0)
+              - Number(plannedWeightByRowId.get(crate.rowId) || 0),
+          );
+          return {
+            rowId: crate.rowId,
+            barcode: crate.barcode,
+            availableRolls: calcAvailableCountFromWeight({
+              totalCount: Number(crate.baseRolls || 0),
+              issuedCount: Number(issued.issuedRolls || 0) + Number(plannedCountByRowId.get(crate.rowId) || 0),
+              dispatchedCount: Number(crate.dispatchedCount || 0),
+              totalWeight: Number(crate.baseWeight || 0),
+              availableWeight: remainingWeight,
+            }) || 0,
+            availableWeight: roundTo3Decimals(remainingWeight),
+          };
+        }),
       };
     });
     const created = transactionResult.issue;

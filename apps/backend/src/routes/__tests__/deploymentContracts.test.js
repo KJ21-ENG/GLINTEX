@@ -40,7 +40,11 @@ test('production deployment selects only the reviewed base plus production Compo
   assert.match(override, /\.\/apps\/backend:\/app\/apps\/backend/);
   assert.doesNotMatch(override, /\.\/apps\/backend:\/app\s*$/m);
   assert.match(productionCompose, /ports: !override\s+\- "127\.0\.0\.1:4002:4000"/);
+  assert.match(productionCompose, /ports: !override\s+\- "127\.0\.0\.1:4173:80"/);
   assert.match(productionCompose, /ports: !override \[\]/);
+  assert.match(productionCompose, /PERF_LOG: "1"/);
+  assert.match(productionCompose, /PERF_LOG_QUERIES: "0"/);
+  assert.match(productionCompose, /PERF_SLOW_REQUEST_MS: "5000"/);
 });
 
 test('production deployment restores and health-checks the prior SHA on failure', () => {

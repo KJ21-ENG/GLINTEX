@@ -21,10 +21,10 @@ services:
       GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}
       GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI}
       WWEBJS_WEB_CACHE_PATH: ${WWEBJS_WEB_CACHE_PATH:-/app/apps/backend/.wwebjs_cache}
-      PERF_LOG: ${PERF_LOG:-1}
-      PERF_LOG_QUERIES: ${PERF_LOG_QUERIES:-0}
+      PERF_LOG: "1"
+      PERF_LOG_QUERIES: "0"
       PERF_SLOW_QUERY_MS: ${PERF_SLOW_QUERY_MS:-100}
-      PERF_SLOW_REQUEST_MS: ${PERF_SLOW_REQUEST_MS:-5000}
+      PERF_SLOW_REQUEST_MS: "5000"
       PERF_LOG_MAX_BYTES: ${PERF_LOG_MAX_BYTES:-52428800}
       PERF_LOG_RETAIN_FILES: ${PERF_LOG_RETAIN_FILES:-5}
     volumes: !override
@@ -77,7 +77,7 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE}
     ports: !override
-      - "127.0.0.1:4174:80"
+      - "127.0.0.1:4173:80"
     depends_on:
       backend:
         condition: service_healthy

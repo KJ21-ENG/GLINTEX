@@ -4545,7 +4545,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
         issued AS (
           SELECT
             elem->>'rowId' AS row_id,
-            SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
+            SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, NULLIF(elem->>'baseRolls', '')::numeric, 0)) AS issue_rolls,
             SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
           FROM "IssueToConingMachine" ic,
             jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem
@@ -4911,7 +4911,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
       ),
       issued AS (
         SELECT elem->>'rowId' AS row_id,
-               SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, 0)) AS issue_count,
+               SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, NULLIF(elem->>'baseRolls', '')::numeric, 0)) AS issue_count,
                SUM(COALESCE(NULLIF(elem->>'issueWeight', '')::numeric, 0)) AS issue_weight
         FROM coning_refs
         GROUP BY elem->>'rowId'
@@ -5387,7 +5387,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
         issued AS (
           SELECT
             elem->>'rowId' AS row_id,
-            SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
+            SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, NULLIF(elem->>'baseRolls', '')::numeric, 0)) AS issue_rolls,
             SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
           FROM "IssueToConingMachine" ic
           JOIN LATERAL jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem ON true
@@ -5545,7 +5545,7 @@ router.get('/stock/:process/lot-rows', requireAuth, requirePermission('stock', P
       ),
       issued AS (
         SELECT elem->>'rowId' AS row_id,
-               SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, 0)) AS issue_count,
+               SUM(COALESCE(NULLIF(elem->>'issueRolls', '')::numeric, NULLIF(elem->>'baseRolls', '')::numeric, 0)) AS issue_count,
                SUM(COALESCE(NULLIF(elem->>'issueWeight', '')::numeric, 0)) AS issue_weight
         FROM "IssueToConingMachine" ic
         JOIN LATERAL jsonb_array_elements(COALESCE(ic."receivedRowRefs", '[]'::jsonb)) elem ON true

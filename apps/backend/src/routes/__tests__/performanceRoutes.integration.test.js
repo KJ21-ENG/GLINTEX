@@ -727,6 +727,65 @@ if (!TEST_DB) {
     assert.ok(barcodeKeys.response.body.keys.includes(traceGroups[0].lotKey));
   });
 
+  test('legacy baseRolls references reduce Holo and Coning stock counts consistently with weight', async () => {
+    const suffix = `${Date.now()}-legacy-base-rolls`;
+    const [item, cut, yarn, twist] = await Promise.all([
+      prisma.item.create({ data: { name: `Legacy Rolls Item ${suffix}` } }),
+      prisma.cut.create({ data: { name: `Legacy Rolls Cut ${suffix}` } }),
+      prisma.yarn.create({ data: { name: `Legacy Rolls Yarn ${suffix}` } }),
+      prisma.twist.create({ data: { name: `Legacy Rolls Twist ${suffix}` } }),
+    ]);
+    const lotNo = `LEGACY-ROLLS-${suffix}`;
+    const holoIssue = await prisma.issueToHoloMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
+        barcode: `LEGACY-IHO-${suffix}`, metallicBobbins: 10, metallicBobbinsWeight: 10, receivedRowRefs: [],
+      },
+    });
+    const holoRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: holoIssue.id, barcode: `LEGACY-RHO-${suffix}`,
+        rollCount: 10, rollWeight: 10, grossWeight: 10, tareWeight: 0,
+      },
+    });
+    const parentConingIssue = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
+        barcode: `LEGACY-ICO-${suffix}`, rollsIssued: 4, requiredPerConeNetWeight: 10, expectedCones: 400,
+        receivedRowRefs: [{ rowId: holoRow.id, stage: 'holo', baseRolls: 4, issueWeight: 4 }],
+      },
+    });
+    const coningRow = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId: parentConingIssue.id, barcode: `LEGACY-RCO-${suffix}`,
+        coneCount: 10, netWeight: 10, coneWeight: 10, grossWeight: 10, tareWeight: 0, sourceRowRefs: [],
+      },
+    });
+    await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, yarnId: yarn.id, twistId: twist.id,
+        barcode: `LEGACY-RECON-${suffix}`, rollsIssued: 4, requiredPerConeNetWeight: 10, expectedCones: 400,
+        receivedRowRefs: [{ rowId: coningRow.id, stage: 'coning', baseRolls: 4, issueWeight: 4 }],
+      },
+    });
+
+    const holoGroups = await get('/api/v2/stock/holo/lot-groups', { search: item.name, limit: 20 });
+    assert.equal(holoGroups.response.status, 200, holoGroups.response.text);
+    const holoGroup = holoGroups.response.body.items.find((group) => group.itemId === item.id);
+    assert.equal(holoGroup?.totalRolls, 6);
+    const holoRows = await get('/api/v2/stock/holo/lot-rows', { key: holoGroup.lotKey, limit: 20 });
+    assert.equal(holoRows.response.status, 200, holoRows.response.text);
+    assert.equal(holoRows.response.body.items.find((row) => row.id === holoRow.id)?.availableRolls, 6);
+
+    const coningGroups = await get('/api/v2/stock/coning/lot-groups', { search: item.name, limit: 20 });
+    assert.equal(coningGroups.response.status, 200, coningGroups.response.text);
+    const coningGroup = coningGroups.response.body.items.find((group) => group.itemId === item.id);
+    assert.equal(coningGroup?.totalCones, 6);
+    const coningRows = await get('/api/v2/stock/coning/lot-rows', { key: coningGroup.lotKey, limit: 20 });
+    assert.equal(coningRows.response.status, 200, coningRows.response.text);
+    assert.equal(coningRows.response.body.items.find((row) => row.id === coningRow.id)?.availableCones, 6);
+  });
+
   test('one global facet response contains every process-specific option set', async () => {
     const expected = {
       holo: ['machine', 'operator', 'employee', 'helper', 'item', 'cut', 'yarn', 'twist', 'box', 'bobbin', 'addedBy', 'shift'],

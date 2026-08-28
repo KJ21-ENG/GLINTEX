@@ -25,7 +25,23 @@ test('production deployment restores and health-checks the prior SHA on failure'
   assert.match(workflow, /previous_sha=\$\(git rev-parse HEAD\)/);
   assert.match(workflow, /trap rollback ERR/);
   assert.match(workflow, /git checkout --detach "\$previous_sha"/);
+  assert.match(workflow, /build backend frontend agent-api/);
+  assert.match(workflow, /up -d --no-deps --wait backend frontend agent-api/);
+  assert.match(workflow, /exec -T agent-api node -e/);
   assert.match(workflow, /Rollback to \$previous_sha passed health checks/);
+});
+
+test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {
+  assert.match(workflow, /SELECT current_database\(\), current_user, inet_server_addr\(\), inet_server_port\(\)/);
+  assert.match(workflow, /pg_dump --format=custom --no-owner --no-privileges/);
+  assert.match(workflow, /test -s "\$backup_path"/);
+  assert.match(workflow, /pg_restore --list >\/dev\/null/);
+  const backupIndex = workflow.indexOf('Verified pre-deployment backup:');
+  const checkoutIndex = workflow.indexOf('git checkout --detach "$deploy_sha"');
+  const migrationIndex = workflow.indexOf('--profile migration run --rm migrate');
+  assert.ok(backupIndex > 0);
+  assert.ok(checkoutIndex > backupIndex);
+  assert.ok(migrationIndex > checkoutIndex);
 });
 
 test('backend image resolves pinned Prisma tooling without network fallback', () => {

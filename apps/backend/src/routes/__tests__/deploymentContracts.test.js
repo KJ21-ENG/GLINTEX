@@ -32,7 +32,11 @@ test('production deployment restores and health-checks the prior SHA on failure'
 });
 
 test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {
-  assert.match(workflow, /SELECT current_database\(\), current_user, inet_server_addr\(\), inet_server_port\(\)/);
+  assert.match(workflow, /SELECT current_database\(\), current_user, system_identifier FROM pg_control_system\(\)/);
+  assert.match(workflow, /expected_db_identity=/);
+  assert.match(workflow, /actual_db_identity=/);
+  assert.match(workflow, /if \[ "\$actual_db_identity" != "\$expected_db_identity" \]/);
+  assert.match(workflow, /Production database identity mismatch; refusing deployment/);
   assert.match(workflow, /pg_dump --format=custom --no-owner --no-privileges/);
   assert.match(workflow, /test -s "\$backup_path"/);
   assert.match(workflow, /pg_restore --list >\/dev\/null/);

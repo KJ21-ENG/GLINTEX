@@ -48,8 +48,17 @@ jobs:
           backup_dir="$app_dir/apps/backend/backups"
           backup_path="$backup_dir/${backup_stamp}_predeploy_${deploy_sha:0:12}.dump"
           mkdir -p "$backup_dir"
-          "${compose[@]}" exec -T backend sh -lc \
-            'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT current_database(), current_user, inet_server_addr(), inet_server_port();"'
+          identity_query='SELECT current_database(), current_user, system_identifier FROM pg_control_system();'
+          expected_db_identity=$("${compose[@]}" exec -T db sh -lc \
+            'psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -AtF "|" -c "$1"' sh "$identity_query")
+          actual_db_identity=$("${compose[@]}" exec -T backend sh -lc \
+            'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -AtF "|" -c "$1"' sh "$identity_query")
+          test -n "$expected_db_identity"
+          if [ "$actual_db_identity" != "$expected_db_identity" ]; then
+            echo "Production database identity mismatch; refusing deployment" >&2
+            exit 1
+          fi
+          echo "Verified production database identity: $actual_db_identity"
           "${compose[@]}" exec -T backend sh -lc \
             'pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL"' > "$backup_path"
           test -s "$backup_path"

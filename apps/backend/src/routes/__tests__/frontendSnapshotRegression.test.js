@@ -98,6 +98,8 @@ test('API origin and cursor request ownership are environment and generation saf
   assert.match(apiBase, /window\.location\.hostname}:4000/);
   assert.match(cursorHook, /const requestToken = Symbol\('v2-page-request'\)/);
   assert.match(cursorHook, /activePageRequestRef\.current === requestToken/);
+  assert.match(cursorHook, /const pageOwnsSummary = !fetchSummaryRef\.current/);
+  assert.match(cursorHook, /pageOwnsSummary && res\?\.summary != null/);
   assert.doesNotMatch(cursorHook, /inFlightRef/);
 });
 

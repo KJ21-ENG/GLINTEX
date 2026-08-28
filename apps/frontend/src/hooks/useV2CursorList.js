@@ -91,6 +91,7 @@ export function useV2CursorList({
     setLoading(true);
     setError(null);
     const genAtStart = genRef.current;
+    const pageOwnsSummary = !fetchSummaryRef.current;
     const controller = new AbortController();
     activeControllersRef.current.add(controller);
     try {
@@ -117,11 +118,12 @@ export function useV2CursorList({
       const nextItems = Array.isArray(res?.items) ? res.items : [];
       const nextCursor = res?.nextCursor ?? null;
       const nextHasMore = Boolean(res?.hasMore);
-      // Only update summary when the server actually provides one (first page).
-      // Subsequent pages return summary: null; preserve the existing one.
-      if (res?.summary != null) {
+      // Inline-summary mode owns summary state through page responses. When a
+      // dedicated summary loader exists, its response remains authoritative
+      // regardless of whether the list or summary request finishes first.
+      if (pageOwnsSummary && res?.summary != null) {
         setSummary(res.summary);
-      } else if (!currentCursor) {
+      } else if (pageOwnsSummary && !currentCursor) {
         // First page with no summary — clear any stale value.
         setSummary(null);
       }

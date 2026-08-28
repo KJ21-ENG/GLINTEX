@@ -237,6 +237,11 @@ if (!TEST_DB) {
     const beyondWindow = await get('/api/v2/issue/holo/tracking', { limit: 50, page: 100, filters });
     assert.equal(beyondWindow.response.status, 400, beyondWindow.response.text);
     assert.equal(beyondWindow.response.body.code, 'cursor_required');
+
+    const sparseFilters = JSON.stringify([{ field: 'takenBackWeight', op: 'between', min: 999999, max: 1000000 }]);
+    const sparsePage = await get('/api/v2/issue/coning/tracking', { limit: 50, page: 1, filters: sparseFilters });
+    assert.equal(sparsePage.response.status, 400, sparsePage.response.text);
+    assert.equal(sparsePage.response.body.code, 'cursor_required');
   });
 
   test('default On Machine summaries use bounded aggregate responses', async () => {
@@ -406,6 +411,36 @@ if (!TEST_DB) {
       assert.ok(summary.response.body.computedAt);
       assert.deepEqual(summary.response.body.summary, inline.response.body.summary);
     }
+  });
+
+  test('Cutter orphan bobbin barcodes expand the supported No Lot stock group', async () => {
+    const suffix = `${Date.now()}-orphan-cutter-stock`;
+    const upload = await prisma.receiveFromCutterMachineUpload.create({
+      data: { originalFilename: `orphan-cutter-${suffix}.csv`, rowCount: 1 },
+    });
+    const orphan = await prisma.receiveFromCutterMachineRow.create({
+      data: {
+        uploadId: upload.id,
+        pieceId: `MISSING-PIECE-${suffix}`,
+        vchNo: `ORPHAN-VCH-${suffix}`,
+        barcode: `ORPHAN-CUTTER-${suffix}`,
+        bobbinQuantity: 2,
+        netWt: 1,
+      },
+    });
+
+    const barcode = await get('/api/v2/stock/cutter/barcode-lot-keys', {
+      view: 'bobbins',
+      q: orphan.barcode,
+    });
+    assert.equal(barcode.response.status, 200, barcode.response.text);
+    assert.equal(barcode.response.body.keys.length, 1);
+    const rows = await get('/api/v2/stock/cutter/lot-rows', {
+      key: barcode.response.body.keys[0],
+      limit: 50,
+    });
+    assert.equal(rows.response.status, 200, rows.response.text);
+    assert.ok(rows.response.body.items.some((row) => row.id === orphan.id));
   });
 
   test('cold-load list and summary routes meet repeated and concurrent budgets', {

@@ -75,6 +75,14 @@ test('dispatch and Cutter purchase mutations emit canonical projection invalidat
   assert.doesNotMatch(inbound, /['"]receive:cutter['"]/);
 });
 
+test('Stock deletions invalidate and refresh the shared inbound projection', async () => {
+  const stock = await readFile(join(frontendSource, 'pages/Stock.jsx'), 'utf8');
+  assert.match(stock, /INVENTORY_INVALIDATION_KEYS\.stock\('cutter'\)/);
+  assert.equal((stock.match(/void refreshModuleData\('inbound'\)/g) || []).length, 2);
+  assert.match(stock, /source: 'deleteInboundItem'/);
+  assert.match(stock, /source: 'deleteLot'/);
+});
+
 test('stock and combined stock never load a legacy process module', async () => {
   const files = [
     join(frontendSource, 'pages/Stock.jsx'),

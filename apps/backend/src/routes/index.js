@@ -1399,12 +1399,29 @@ async function assertCutterReceiveRowsMutable(tx, rows, action = 'change') {
 }
 
 async function loadActiveCutterIssueIdsForPiece(client, pieceId, rowIssueIds = []) {
-  const lines = await client.issueToCutterMachineLine.findMany({
-    where: { pieceId, issue: { isDeleted: false } },
-    select: { issueId: true },
-  });
+  const pieceKey = String(pieceId || '').trim();
+  if (!pieceKey) return Array.from(new Set((rowIssueIds || []).filter(Boolean))).sort();
+  const issues = await client.$queryRaw`
+    SELECT DISTINCT candidate.issue_id AS "issueId"
+    FROM (
+      SELECT line."issueId" AS issue_id
+      FROM "IssueToCutterMachineLine" line
+      JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId"
+      WHERE line."pieceId" = ${pieceKey}
+        AND issue."isDeleted" = false
+      UNION ALL
+      SELECT issue.id AS issue_id
+      FROM "IssueToCutterMachine" issue
+      CROSS JOIN LATERAL regexp_split_to_table(
+        COALESCE(issue."pieceIds", ''),
+        '\\s*,\\s*'
+      ) AS header_piece(piece_id)
+      WHERE issue."isDeleted" = false
+        AND trim(header_piece.piece_id) = ${pieceKey}
+    ) candidate
+  `;
   return Array.from(new Set([
-    ...lines.map((line) => line.issueId),
+    ...(issues || []).map((issue) => issue.issueId),
     ...(rowIssueIds || []),
   ].filter(Boolean))).sort();
 }

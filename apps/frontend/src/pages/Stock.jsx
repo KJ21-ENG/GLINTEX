@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useInventory } from '../context/InventoryContext';
+import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../components/ui';
 import { PieceRow } from '../components/stock/PieceRow';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
@@ -54,7 +54,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 }
 
 export function Stock() {
-  const { db, brand, createIssueToMachine, refreshing, process } = useInventory();
+  const { db, brand, createIssueToMachine, refreshing, process, emitInvalidation, refreshModuleData } = useInventory();
 
   // --- Process Config ---
   const processId = process || 'cutter';
@@ -615,6 +615,11 @@ export function Stock() {
     try {
       await api.deleteInboundItem(pieceId);
       v2Api.retryLots();
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+        'inbound',
+      ], { source: 'deleteInboundItem', pieceId });
+      void refreshModuleData('inbound');
     } catch (err) {
       alert(err.message || 'Failed to delete piece');
     } finally {
@@ -654,6 +659,11 @@ export function Stock() {
     try {
       await api.deleteLot(lotNo);
       v2Api.retryLots();
+      emitInvalidation([
+        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
+        'inbound',
+      ], { source: 'deleteLot', lotNo });
+      void refreshModuleData('inbound');
     } catch (err) {
       alert(err.message || 'Failed to delete lot');
     }

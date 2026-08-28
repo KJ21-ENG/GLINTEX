@@ -851,6 +851,10 @@ async function buildBoundedIssueTrackingResult({
   }
 
   const hasBufferedMatch = items.length > pageOffset + limit;
+  const cursorRequired = pageNum != null
+    && !exhausted
+    && scannedRows >= maxScanRows
+    && items.length < desiredMatchCount;
   const hasMore = hasBufferedMatch || (!exhausted && Boolean(scanCursor));
   const pageItems = items.slice(pageOffset, pageOffset + limit);
   // If a full result page was found, resume after the last returned match so
@@ -861,7 +865,7 @@ async function buildBoundedIssueTrackingResult({
   const nextCursor = pageNum == null && hasMore && continuation
     ? encodeCursor({ createdAt: continuation.createdAt, id: continuation.id })
     : null;
-  return { items: pageItems, hasMore, nextCursor, summary };
+  return { items: pageItems, hasMore, nextCursor, summary, cursorRequired };
 }
 
 async function buildCutterIssueWastageByIssueId(issueRows = []) {
@@ -1286,6 +1290,13 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
         order,
         limit,
       });
+      if (result.cursorRequired) {
+        return res.status(400).json({
+          error: 'This filtered page cannot be resolved inside the bounded page window. Reload and continue with the cursor.',
+          code: 'cursor_required',
+        });
+      }
+      delete result.cursorRequired;
       return res.json(result);
     }
 
@@ -5776,9 +5787,16 @@ router.get('/stock/:process/barcode-lot-keys', requireAuth, requirePermission('s
       });
       const pieceIds = [...new Set(rows.map((row) => row.pieceId).filter(Boolean))];
       const pieces = pieceIds.length > 0
-        ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } }, select: { lotNo: true }, distinct: ['lotNo'], take: 50 })
+        ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } }, select: { id: true, lotNo: true }, take: 100 })
         : [];
-      return res.json({ keys: pieces.map((piece) => encodeStockLotKey({ v: 1, process, view, lotNo: piece.lotNo })) });
+      const resolvedPieceIds = new Set(pieces.map((piece) => piece.id));
+      const lotNos = new Set(pieces.map((piece) => piece.lotNo).filter(Boolean));
+      if (rows.some((row) => !row.pieceId || !resolvedPieceIds.has(row.pieceId))) {
+        lotNos.add('(No Lot)');
+      }
+      return res.json({
+        keys: Array.from(lotNos).map((lotNo) => encodeStockLotKey({ v: 1, process, view, lotNo })),
+      });
     }
 
     if (process === 'holo') {

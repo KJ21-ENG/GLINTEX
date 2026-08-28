@@ -1063,7 +1063,7 @@ if (!TEST_DB) {
     const issue = await prisma.issueToCutterMachine.create({
       data: {
         id: `issue-${suffix}`, date: '2026-08-27', itemId: item.id, lotNo, cutId: cut.id, count: 1, totalWeight: 5,
-        pieceIds: pieceId, reason: 'internal', barcode: `ICU-${suffix}`, lines: { create: [{ pieceId, issuedWeight: 5 }] },
+        pieceIds: pieceId, reason: 'legacy header-only allocation', barcode: `ICU-${suffix}`,
       },
     });
     const upload = await prisma.receiveFromCutterMachineUpload.create({ data: { originalFilename: `challan-${suffix}`, rowCount: 1 } });
@@ -1072,7 +1072,7 @@ if (!TEST_DB) {
     });
     const row = await prisma.receiveFromCutterMachineRow.create({
       data: {
-        uploadId: upload.id, challanId: challan.id, issueId: issue.id, pieceId, vchNo: `VCH-${suffix}`, barcode: `CUT-${suffix}`,
+        uploadId: upload.id, challanId: challan.id, issueId: null, pieceId, vchNo: `VCH-${suffix}`, barcode: `CUT-${suffix}`,
         bobbinId: bobbin.id, boxId: box.id, bobbinQuantity: 10, grossWt: 6, tareWt: 2, netWt: 4, totalKg: 4,
       },
     });

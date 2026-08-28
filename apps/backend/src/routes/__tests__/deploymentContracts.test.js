@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(dirname, '../../../../..');
 const workflow = fs.readFileSync(path.join(repositoryRoot, '.github/workflows/deploy-production.yml'), 'utf8');
+const deploymentScript = fs.readFileSync(
+  path.join(repositoryRoot, '.github/scripts/deploy-production.sh'),
+  'utf8',
+);
 const override = fs.readFileSync(path.join(repositoryRoot, 'docker-compose.override.yml'), 'utf8');
 const productionCompose = fs.readFileSync(path.join(repositoryRoot, 'docker-compose.prod.yml'), 'utf8');
 const backendDockerfile = fs.readFileSync(path.join(repositoryRoot, 'apps/backend/Dockerfile'), 'utf8');
@@ -30,8 +34,8 @@ const holoWastageCleanupMigration = fs.readFileSync(
 );
 
 test('production deployment selects only the reviewed base plus production Compose model', () => {
-  assert.match(workflow, /compose=\(docker compose -f docker-compose\.yml -f docker-compose\.prod\.yml\)/);
-  const bareCommands = workflow.split('\n').filter((line) => /docker compose (?!-f )/.test(line));
+  assert.match(deploymentScript, /compose=\(docker compose -f docker-compose\.yml -f docker-compose\.prod\.yml\)/);
+  const bareCommands = deploymentScript.split('\n').filter((line) => /docker compose (?!-f )/.test(line));
   assert.deepEqual(bareCommands, []);
   assert.match(override, /\.\/apps\/backend:\/app\/apps\/backend/);
   assert.doesNotMatch(override, /\.\/apps\/backend:\/app\s*$/m);
@@ -40,57 +44,68 @@ test('production deployment selects only the reviewed base plus production Compo
 });
 
 test('production deployment restores and health-checks the prior SHA on failure', () => {
-  assert.match(workflow, /previous_sha=\$\(git rev-parse HEAD\)/);
-  assert.match(workflow, /trap 'rollback \$\?' ERR/);
-  assert.match(workflow, /trap 'rollback 129' HUP/);
-  assert.match(workflow, /trap 'rollback 130' INT/);
-  assert.match(workflow, /trap 'rollback 143' TERM/);
-  assert.match(workflow, /trap 'rollback \$\?' EXIT/);
-  assert.match(workflow, /deployment_started=0[\s\S]*trap - ERR HUP INT TERM EXIT/);
-  assert.match(workflow, /git checkout --detach "\$previous_sha"/);
-  const rollbackIndex = workflow.indexOf('Deployment failed. Restoring $previous_sha');
-  const rollbackStopIndex = workflow.indexOf('stop frontend agent-api || true', rollbackIndex);
-  const rollbackCheckoutIndex = workflow.indexOf('git checkout --detach "$previous_sha"', rollbackIndex);
+  assert.match(deploymentScript, /previous_sha=\$\(git rev-parse HEAD\)/);
+  assert.match(deploymentScript, /trap 'rollback \$\?' ERR/);
+  assert.match(deploymentScript, /trap 'rollback 129' HUP/);
+  assert.match(deploymentScript, /trap 'rollback 130' INT/);
+  assert.match(deploymentScript, /trap 'rollback 143' TERM/);
+  assert.match(deploymentScript, /trap 'rollback \$\?' EXIT/);
+  assert.match(deploymentScript, /deployment_started=0[\s\S]*trap - ERR HUP INT TERM EXIT/);
+  assert.match(deploymentScript, /git checkout --detach "\$previous_sha"/);
+  const rollbackIndex = deploymentScript.indexOf('Deployment failed. Restoring $previous_sha');
+  const rollbackStopIndex = deploymentScript.indexOf('stop frontend agent-api || true', rollbackIndex);
+  const rollbackCheckoutIndex = deploymentScript.indexOf('git checkout --detach "$previous_sha"', rollbackIndex);
   assert.ok(rollbackStopIndex > rollbackIndex);
   assert.ok(rollbackCheckoutIndex > rollbackStopIndex);
-  assert.match(workflow, /build backend frontend agent-api/);
-  assert.match(workflow, /up -d --no-deps --wait backend frontend agent-api/);
-  assert.match(workflow, /exec -T agent-api node -e/);
-  assert.match(workflow, /Rollback to \$previous_sha passed health checks/);
+  assert.match(deploymentScript, /build backend frontend agent-api/);
+  assert.match(deploymentScript, /up -d --no-deps --wait backend frontend agent-api/);
+  assert.match(deploymentScript, /exec -T agent-api node -e/);
+  assert.match(deploymentScript, /Rollback to \$previous_sha passed health checks/);
 });
 
 test('production deployment keeps external writers quiesced until every replacement service passes', () => {
-  const migrationIndex = workflow.indexOf('--profile migration run --rm migrate');
-  const stopWritersIndex = workflow.indexOf('stop frontend agent-api', migrationIndex);
-  const backendIndex = workflow.indexOf('up -d --no-deps --wait backend', stopWritersIndex);
-  const frontendPreflightIndex = workflow.indexOf('run --rm --no-deps frontend sh -ec', backendIndex);
-  const agentPreflightIndex = workflow.indexOf('run --rm --no-deps agent-api node --input-type=module', frontendPreflightIndex);
-  const writerCutoverIndex = workflow.indexOf('up -d --no-deps --wait frontend agent-api', agentPreflightIndex);
+  const migrationIndex = deploymentScript.indexOf('--profile migration run --rm migrate');
+  const stopWritersIndex = deploymentScript.indexOf('stop frontend agent-api', migrationIndex);
+  const backendIndex = deploymentScript.indexOf('up -d --no-deps --wait backend', stopWritersIndex);
+  const frontendPreflightIndex = deploymentScript.indexOf('run --rm --no-deps frontend sh -ec', backendIndex);
+  const agentPreflightIndex = deploymentScript.indexOf('run --rm --no-deps agent-api node --input-type=module', frontendPreflightIndex);
+  const writerCutoverIndex = deploymentScript.indexOf('up -d --no-deps --wait frontend agent-api', agentPreflightIndex);
   assert.ok(migrationIndex > 0);
   assert.ok(stopWritersIndex > migrationIndex);
   assert.ok(backendIndex > stopWritersIndex);
   assert.ok(frontendPreflightIndex > backendIndex);
   assert.ok(agentPreflightIndex > frontendPreflightIndex);
   assert.ok(writerCutoverIndex > agentPreflightIndex);
-  assert.equal(workflow.indexOf('up -d --no-deps --wait frontend\n'), -1);
-  assert.equal(workflow.indexOf('up -d --no-deps --wait agent-api\n'), -1);
+  assert.equal(deploymentScript.indexOf('up -d --no-deps --wait frontend\n'), -1);
+  assert.equal(deploymentScript.indexOf('up -d --no-deps --wait agent-api\n'), -1);
 });
 
 test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {
-  assert.match(workflow, /SELECT current_database\(\), current_user, system_identifier FROM pg_control_system\(\)/);
-  assert.match(workflow, /expected_db_identity=/);
-  assert.match(workflow, /actual_db_identity=/);
-  assert.match(workflow, /if \[ "\$actual_db_identity" != "\$expected_db_identity" \]/);
-  assert.match(workflow, /Production database identity mismatch; refusing deployment/);
-  assert.match(workflow, /pg_dump --format=custom --no-owner --no-privileges/);
-  assert.match(workflow, /test -s "\$backup_path"/);
-  assert.match(workflow, /pg_restore --list >\/dev\/null/);
-  const backupIndex = workflow.indexOf('Verified pre-deployment backup:');
-  const checkoutIndex = workflow.indexOf('git checkout --detach "$deploy_sha"');
-  const migrationIndex = workflow.indexOf('--profile migration run --rm migrate');
+  assert.match(deploymentScript, /SELECT current_database\(\), current_user, system_identifier FROM pg_control_system\(\)/);
+  assert.match(deploymentScript, /expected_db_identity=/);
+  assert.match(deploymentScript, /actual_db_identity=/);
+  assert.match(deploymentScript, /if \[ "\$actual_db_identity" != "\$expected_db_identity" \]/);
+  assert.match(deploymentScript, /Production database identity mismatch; refusing deployment/);
+  assert.match(deploymentScript, /pg_dump --format=custom --no-owner --no-privileges/);
+  assert.match(deploymentScript, /test -s "\$backup_path"/);
+  assert.match(deploymentScript, /pg_restore --list >\/dev\/null/);
+  const backupIndex = deploymentScript.indexOf('Verified pre-deployment backup:');
+  const checkoutIndex = deploymentScript.indexOf('git checkout --detach "$deploy_sha"');
+  const migrationIndex = deploymentScript.indexOf('--profile migration run --rm migrate');
   assert.ok(backupIndex > 0);
   assert.ok(checkoutIndex > backupIndex);
   assert.ok(migrationIndex > checkoutIndex);
+});
+
+test('production workflow streams the checked-in deployment script to the remote shell', () => {
+  assert.match(workflow, /uses: actions\/checkout@v4/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /test -s \.github\/scripts\/deploy-production\.sh/);
+  assert.match(workflow, /bash -n \.github\/scripts\/deploy-production\.sh/);
+  assert.match(workflow, /< \.github\/scripts\/deploy-production\.sh/);
+  assert.doesNotMatch(workflow, /<<['"]?REMOTE_SCRIPT/);
+  assert.match(deploymentScript, /Starting production deployment for \$deploy_sha/);
+  assert.match(deploymentScript, /Production deployment completed for \$deploy_sha/);
 });
 
 test('backend image resolves pinned Prisma tooling without network fallback', () => {

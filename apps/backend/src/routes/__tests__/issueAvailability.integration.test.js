@@ -687,12 +687,120 @@ if (!TEST_DB) {
     const repairedIssue = await prisma.issueToConingMachine.findUnique({ where: { id: coningIssue.id } });
     assert.equal(repairedIssue.receivedRowRefs[0].coneTypeId, coningConeType.id);
 
+    const partiallyReceivedLegacyIssue = await prisma.issueToConingMachine.create({
+      data: {
+        date: '2026-08-27', itemId: item.id, lotNo: `PERF-PC-${suffix}`, barcode: `ICO-${5_100_000 + Number(String(Date.now()).slice(-6))}`,
+        rollsIssued: 10, requiredPerConeNetWeight: 10, expectedCones: 1000,
+        receivedRowRefs: [{ rowId: `partial-source-${suffix}`, issueRolls: 10, issueWeight: 10 }],
+      },
+    });
+    const legacyReceive = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId: partiallyReceivedLegacyIssue.id,
+        coneCount: 20,
+        netWeight: 2,
+        coneWeight: 2,
+        grossWeight: 3,
+        tareWeight: 1,
+        boxId: coningBox.id,
+        barcode: `RCO-${5_100_000 + Number(String(Date.now()).slice(-6))}-C001`,
+        sourceRowRefs: [],
+      },
+    });
+    await prisma.receiveFromConingMachinePieceTotal.create({
+      data: { pieceId: partiallyReceivedLegacyIssue.id, totalCones: 20, totalNetWeight: 2, wastageNetWeight: 0 },
+    });
+    const repairedPartialReceive = await request(app)
+      .post('/api/receive_from_coning_machine/manual')
+      .set('Authorization', auth)
+      .send({
+        issueId: partiallyReceivedLegacyIssue.id,
+        pieceId: partiallyReceivedLegacyIssue.id,
+        coneCount: 10,
+        boxId: coningBox.id,
+        grossWeight: 5,
+        coneTypeId: coningConeType.id,
+      });
+    assert.equal(repairedPartialReceive.status, 200, repairedPartialReceive.text);
+    const [preservedLegacyReceive, repairedPartialIssue] = await Promise.all([
+      prisma.receiveFromConingMachineRow.findUnique({ where: { id: legacyReceive.id } }),
+      prisma.issueToConingMachine.findUnique({ where: { id: partiallyReceivedLegacyIssue.id } }),
+    ]);
+    assert.equal(preservedLegacyReceive.netWeight, 2);
+    assert.equal(preservedLegacyReceive.tareWeight, 1);
+    assert.equal(repairedPartialIssue.receivedRowRefs[0].coneTypeId, coningConeType.id);
+
     const missingWastageIssue = await request(app)
       .post('/api/receive_from_coning_machine/mark_wastage')
       .set('Authorization', auth)
       .send({ issueId: `missing-${suffix}`, note: 'Close missing issue' });
     assert.equal(missingWastageIssue.status, 404, missingWastageIssue.text);
     assert.match(missingWastageIssue.body.error, /not found/i);
+  });
+
+  test('legacy Holo tare and receive bucket survive edit and delete', async () => {
+    const suffix = `${Date.now()}-legacy-holo-accounting`;
+    const auth = await adminAuth(suffix);
+    const [item, rollType, box] = await Promise.all([
+      prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
+      prisma.rollType.create({ data: { name: `Legacy Wastage Label ${suffix}`, weight: 0.1 } }),
+      prisma.box.create({ data: { name: `Perf Holo Box ${suffix}`, weight: 0.5, processType: 'holo' } }),
+    ]);
+    const issue = await prisma.issueToHoloMachine.create({
+      data: {
+        date: '2026-08-27',
+        itemId: item.id,
+        lotNo: `PERF-${suffix}`,
+        barcode: `IHO-${5_200_000 + Number(String(Date.now()).slice(-6))}`,
+        metallicBobbins: 20,
+        metallicBobbinsWeight: 20,
+        receivedRowRefs: [],
+      },
+    });
+    const pieceId = `${issue.lotNo}-1`;
+    const legacyRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId: issue.id,
+        pieceId,
+        rollCount: 10,
+        rollWeight: 9.5,
+        grossWeight: 12,
+        tareWeight: 2.5,
+        rollTypeId: rollType.id,
+        boxId: box.id,
+        barcode: `RHO-${5_200_000 + Number(String(Date.now()).slice(-6))}-C001`,
+      },
+    });
+    await prisma.receiveFromHoloMachinePieceTotal.create({
+      data: { pieceId, totalRolls: 10, totalNetWeight: 9.5, wastageNetWeight: 0 },
+    });
+
+    const edited = await request(app)
+      .put(`/api/receive_from_holo_machine/rows/${legacyRow.id}`)
+      .set('Authorization', auth)
+      .send({
+        rollCount: 10,
+        grossWeight: 12,
+        rollTypeId: rollType.id,
+        boxId: box.id,
+        notes: 'Metadata-only legacy edit',
+      });
+    assert.equal(edited.status, 200, edited.text);
+    assert.equal(edited.body.row.tareWeight, 2.5);
+    assert.equal(edited.body.row.rollWeight, 9.5);
+    assert.equal(edited.body.row.isWastage, false);
+    assert.equal(edited.body.pieceTotal.totalNetWeight, 9.5);
+    assert.equal(edited.body.pieceTotal.wastageNetWeight, 0);
+
+    await prisma.receiveFromHoloMachineRow.update({ where: { id: legacyRow.id }, data: { isWastage: null } });
+    const deleted = await request(app)
+      .delete(`/api/receive_from_holo_machine/rows/${legacyRow.id}`)
+      .set('Authorization', auth)
+      .send({});
+    assert.equal(deleted.status, 200, deleted.text);
+    assert.equal(deleted.body.pieceTotal.totalNetWeight, 0);
+    assert.equal(deleted.body.pieceTotal.wastageNetWeight, 0);
+    assert.equal(deleted.body.pieceTotal.totalRolls, 0);
   });
 
   test('concurrent Coning close accounts for take-backs exactly once and returns the closed balance', async () => {

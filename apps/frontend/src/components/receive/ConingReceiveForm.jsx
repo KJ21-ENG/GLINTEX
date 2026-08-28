@@ -519,7 +519,7 @@ export function ConingReceiveForm() {
                             <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
                                 <Label>Cone Type required for this legacy issue</Label>
                                 <p className="mb-3 mt-1 text-sm">
-                                    Select the cone type once. It will be saved on the issue before its first receive so tare remains authoritative.
+                                    Select the cone type once. Existing receive weights stay unchanged; the selected tare applies to this and future receives.
                                 </p>
                                 <Select
                                     value={legacyConeTypeId}

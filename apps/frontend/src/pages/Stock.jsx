@@ -399,6 +399,7 @@ export function Stock() {
           search,
           view: isCutter ? view : '',
           groupBy: groupByItem ? 'true' : '',
+          includeMembers: format === 'xlsx-detailed' && groupByItem ? 'true' : '',
         });
         dataToExport = result.items;
       } catch (err) {

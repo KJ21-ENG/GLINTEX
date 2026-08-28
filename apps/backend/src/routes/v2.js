@@ -2330,7 +2330,13 @@ async function buildOnMachineHoloItems(rowsRaw) {
   const receiveRows = issueIds.length
     ? await prisma.receiveFromHoloMachineRow.findMany({
       where: { isDeleted: false, issueId: { in: issueIds } },
-      include: { rollType: true },
+      select: {
+        issueId: true,
+        rollWeight: true,
+        grossWeight: true,
+        tareWeight: true,
+        isWastage: true,
+      },
     })
     : [];
   const receivedByIssue = new Map();
@@ -2339,7 +2345,7 @@ async function buildOnMachineHoloItems(rowsRaw) {
     const netWeight = Number.isFinite(r.rollWeight)
       ? Number(r.rollWeight)
       : (Number(r.grossWeight || 0) - Number(r.tareWeight || 0));
-    const isWastage = String(r.rollType?.name || '').toLowerCase().includes('wastage');
+    const isWastage = r.isWastage === true;
     if (isWastage) {
       wastageByIssue.set(r.issueId, (wastageByIssue.get(r.issueId) || 0) + netWeight);
     } else {
@@ -2590,12 +2596,11 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         GROUP BY "issueId"
       ), receives AS (
         SELECT r."issueId",
-          SUM(CASE WHEN LOWER(COALESCE(rt.name, '')) LIKE '%wastage%' THEN 0
+          SUM(CASE WHEN r."isWastage" IS TRUE THEN 0
             ELSE COALESCE(r."rollWeight", COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)) END)::numeric AS received_weight,
-          SUM(CASE WHEN LOWER(COALESCE(rt.name, '')) LIKE '%wastage%'
+          SUM(CASE WHEN r."isWastage" IS TRUE
             THEN COALESCE(r."rollWeight", COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)) ELSE 0 END)::numeric AS wastage_weight
         FROM "ReceiveFromHoloMachineRow" r
-        LEFT JOIN "RollType" rt ON rt.id = r."rollTypeId"
         WHERE r."isDeleted" = false
         GROUP BY r."issueId"
       ), pending AS (
@@ -2794,12 +2799,11 @@ async function buildUnfilteredOnMachineSummarySql(process) {
         GROUP BY "issueId"
       ), receives AS (
         SELECT r."issueId",
-          SUM(CASE WHEN LOWER(COALESCE(rt.name, '')) LIKE '%wastage%' THEN 0
+          SUM(CASE WHEN r."isWastage" IS TRUE THEN 0
             ELSE COALESCE(r."rollWeight", COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)) END)::numeric AS received_weight,
-          SUM(CASE WHEN LOWER(COALESCE(rt.name, '')) LIKE '%wastage%'
+          SUM(CASE WHEN r."isWastage" IS TRUE
             THEN COALESCE(r."rollWeight", COALESCE(r."grossWeight", 0) - COALESCE(r."tareWeight", 0)) ELSE 0 END)::numeric AS wastage_weight
         FROM "ReceiveFromHoloMachineRow" r
-        LEFT JOIN "RollType" rt ON rt.id = r."rollTypeId"
         WHERE r."isDeleted" = false
         GROUP BY r."issueId"
       ), balances AS (
@@ -3825,14 +3829,14 @@ function stageStockSummaryFromRow(row, process) {
   };
 }
 
-function mapCutterStockQueryRow(row, view, groupBy) {
+function mapCutterStockQueryRow(row, view, groupBy, includeMembers = false) {
   const base = {
     lotKey: groupBy ? null : encodeStockLotKey({ v: 1, process: 'cutter', view, lotNo: row.lot_no }),
     expandable: !groupBy,
     lotNo: groupBy ? '' : (row.lot_no || ''),
     groupKey: groupBy ? row.group_key : null,
     lots: Array.isArray(row.lot_nos) ? row.lot_nos : [],
-    memberLotKeys: groupBy
+    memberLotKeys: groupBy && includeMembers
       ? (Array.isArray(row.lot_nos) ? row.lot_nos : []).map((lotNo) => encodeStockLotKey({ v: 1, process: 'cutter', view, lotNo }))
       : [],
     date: row.date || '',
@@ -3917,6 +3921,7 @@ async function queryCutterJumboStockGroups(req) {
   const limit = clampLimit(req.query.limit);
   const afterSortKey = decodeCutterStockCursor(req.query.cursor);
   const groupBy = ['1', 'true', 'yes'].includes(String(req.query.groupBy || '').toLowerCase());
+  const includeMembers = ['1', 'true', 'yes'].includes(String(req.query.includeMembers || '').toLowerCase());
   const filterSql = cutterStockFilterSql(req, 'jumbo');
   const separateSummary = String(req.query.summaryMode || '').toLowerCase() === 'separate';
   const summaryColumns = separateSummary ? Prisma.sql`
@@ -4071,7 +4076,7 @@ async function queryCutterJumboStockGroups(req) {
   `);
   const hasMore = rows.length > limit;
   const pageRows = rows.slice(0, limit);
-  const items = pageRows.map((row) => mapCutterStockQueryRow(row, 'jumbo', groupBy));
+  const items = pageRows.map((row) => mapCutterStockQueryRow(row, 'jumbo', groupBy, includeMembers));
   const last = pageRows[pageRows.length - 1];
   const nextCursor = hasMore && last
     ? Buffer.from(JSON.stringify({ afterSortKey: last.sort_key }), 'utf8').toString('base64')
@@ -4083,6 +4088,7 @@ async function queryCutterBobbinStockGroups(req) {
   const limit = clampLimit(req.query.limit);
   const afterSortKey = decodeCutterStockCursor(req.query.cursor);
   const groupBy = ['1', 'true', 'yes'].includes(String(req.query.groupBy || '').toLowerCase());
+  const includeMembers = ['1', 'true', 'yes'].includes(String(req.query.includeMembers || '').toLowerCase());
   const filterSql = cutterStockFilterSql(req, 'bobbins');
   const separateSummary = String(req.query.summaryMode || '').toLowerCase() === 'separate';
   const summaryColumns = separateSummary ? Prisma.sql`
@@ -4221,7 +4227,7 @@ async function queryCutterBobbinStockGroups(req) {
   `);
   const hasMore = rows.length > limit;
   const pageRows = rows.slice(0, limit);
-  const items = pageRows.map((row) => mapCutterStockQueryRow(row, 'bobbins', groupBy));
+  const items = pageRows.map((row) => mapCutterStockQueryRow(row, 'bobbins', groupBy, includeMembers));
   const last = pageRows[pageRows.length - 1];
   const nextCursor = hasMore && last
     ? Buffer.from(JSON.stringify({ afterSortKey: last.sort_key }), 'utf8').toString('base64')
@@ -4418,6 +4424,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
   try {
     const process = String(req.params.process || '').trim().toLowerCase();
     const separateSummary = !summaryOnly && String(req.query.summaryMode || '').toLowerCase() === 'separate';
+    const includeMembers = ['1', 'true', 'yes'].includes(String(req.query.includeMembers || '').toLowerCase());
     if (!['cutter', 'holo', 'coning'].includes(process)) {
       return res.status(400).json({ error: 'Invalid process' });
     }
@@ -4724,7 +4731,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
           expandable: !isGroup,
           groupKey: r.group_key || null,
           lots: Array.isArray(r.lots) ? r.lots : [],
-          memberLotKeys: memberGroups.map((member) => encodeStockLotKey({
+          memberLotKeys: includeMembers ? memberGroups.map((member) => encodeStockLotKey({
             v: 1,
             process: 'holo',
             lotLabel: member.lotLabel || '',
@@ -4737,7 +4744,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
             cutNames: Array.isArray(member.cutNames) ? member.cutNames : [],
             lotNos: Array.isArray(member.lotNos) ? member.lotNos : [],
             isMixed: Boolean(member.isMixed),
-          })),
+          })) : [],
           lotNo: isGroup ? '' : (r.lot_label || '—'),
           lotNoRaw: r.lot_no_raw || '',
           lotNos,
@@ -5025,7 +5032,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
         expandable: !isGroup,
         groupKey: r.group_key || null,
         lots: Array.isArray(r.lots) ? r.lots : [],
-        memberLotKeys: memberGroups.map((member) => encodeStockLotKey({
+        memberLotKeys: includeMembers ? memberGroups.map((member) => encodeStockLotKey({
           v: 1,
           process: 'coning',
           lotNo: member.lotNo || '',
@@ -5036,7 +5043,7 @@ async function handleStockGroups(req, res, { summaryOnly = false } = {}) {
           cutIds: Array.isArray(member.cutIds) ? member.cutIds : [],
           yarnIds: Array.isArray(member.yarnIds) ? member.yarnIds : [],
           twistIds: Array.isArray(member.twistIds) ? member.twistIds : [],
-        })),
+        })) : [],
         lotNo: isGroup ? '' : (r.lot_no || '—'),
         itemId: r.item_id || '',
         itemName: r.item_name || '—',

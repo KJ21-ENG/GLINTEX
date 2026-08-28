@@ -426,7 +426,16 @@ if (!TEST_DB) {
       assert.ok(grouped.response.body.items.length > 0);
       assert.equal(grouped.response.body.items[0].lotKey, null);
       assert.ok(Array.isArray(grouped.response.body.items[0].memberLotKeys));
-      assert.ok(grouped.response.body.items[0].memberLotKeys.length > 0);
+      assert.equal(grouped.response.body.items[0].memberLotKeys.length, 0);
+      assert.ok(grouped.bytes < 500 * 1024, `${process} grouped stock was ${grouped.bytes} bytes`);
+
+      const groupedForExport = await get(`/api/v2/stock/${process}/lot-groups`, {
+        limit: 100,
+        groupBy: true,
+        includeMembers: true,
+      });
+      assert.equal(groupedForExport.response.status, 200, groupedForExport.response.text);
+      assert.ok(groupedForExport.response.body.items[0].memberLotKeys.length > 0);
     }
   });
 
@@ -691,7 +700,12 @@ if (!TEST_DB) {
     assert.deepEqual(traceGroups[0].yarnIds, [yarnA.id]);
     assert.equal(traceGroups[0].twistId, twistA.id);
     assert.deepEqual(traceGroups[0].twistIds, [twistA.id]);
-    const groupedStock = await get('/api/v2/stock/coning/lot-groups', { search: item.name, limit: 20, groupBy: true });
+    const groupedStock = await get('/api/v2/stock/coning/lot-groups', {
+      search: item.name,
+      limit: 20,
+      groupBy: true,
+      includeMembers: true,
+    });
     assert.equal(groupedStock.response.status, 200, groupedStock.response.text);
     const tracedGroupedRows = groupedStock.response.body.items.filter((group) => group.twistName === twistA.name);
     assert.equal(tracedGroupedRows.length, 1, 'trace-first Twist split one grouped stock identity');

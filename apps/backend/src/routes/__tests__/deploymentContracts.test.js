@@ -14,6 +14,13 @@ const frontendNginx = fs.readFileSync(
   path.join(repositoryRoot, 'apps/frontend/docker/nginx.conf'),
   'utf8',
 );
+const holoWastageMigration = fs.readFileSync(
+  path.join(
+    repositoryRoot,
+    'apps/backend/prisma/migrations/20260828193000_add_holo_receive_wastage_classification/migration.sql',
+  ),
+  'utf8',
+);
 
 test('production deployment selects only the reviewed base plus production Compose model', () => {
   assert.match(workflow, /compose=\(docker compose -f docker-compose\.yml -f docker-compose\.prod\.yml\)/);
@@ -71,4 +78,9 @@ test('production frontend proxies same-origin API calls and preserves SSE stream
     frontendNginx,
     /location = \/api\/whatsapp\/events \{[\s\S]*proxy_buffering off;[\s\S]*proxy_read_timeout 1h;/,
   );
+});
+
+test('Holo receive migration preserves legacy totals while enabling explicit new-row buckets', () => {
+  assert.match(holoWastageMigration, /ADD COLUMN IF NOT EXISTS "isWastage" BOOLEAN/);
+  assert.doesNotMatch(holoWastageMigration, /UPDATE "ReceiveFromHoloMachineRow"/);
 });

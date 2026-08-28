@@ -652,7 +652,7 @@ async function getIssueReceivedAndWastage(client, stage, issue) {
         rollWeight: true,
         grossWeight: true,
         tareWeight: true,
-        rollType: { select: { name: true } },
+        isWastage: true,
       },
     });
 
@@ -661,7 +661,7 @@ async function getIssueReceivedAndWastage(client, stage, issue) {
       const weight = Number.isFinite(Number(row.rollWeight))
         ? Number(row.rollWeight)
         : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
-      const isWastage = String(row.rollType?.name || '').toLowerCase().includes('wastage');
+      const isWastage = row.isWastage === true;
       if (isWastage) {
         wastageCount += count;
         wastageWeight += weight;
@@ -4748,6 +4748,7 @@ router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock'
             helperId: row.helperId || null,
             notes: row.notes || null,
             createdBy: 'opening',
+            isWastage: false,
             barcode,
             ...actorCreateFields(actorUserId),
           },
@@ -6059,6 +6060,7 @@ async function processOpeningHoloUpload(rows, { date, itemId, firmId, supplierId
           date,
           rollCount: crate.rollCount, rollWeight: crate.netWeight,
           rollTypeId: crate.rollTypeId,
+          isWastage: false,
           createdBy: 'opening_bulk', barcode: makeHoloReceiveBarcode({ series: seriesNumber, crateIndex }),
           notes: crate.notes, ...actorCreateFields(actorUserId),
         }
@@ -10078,6 +10080,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
 
       const existingCrates = await tx.receiveFromHoloMachineRow.count({ where: { issueId } });
       const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex: existingCrates + 1 });
+      const isWastageRow = String(rollType?.name || '').toLowerCase().includes('wastage');
       const createdRow = await tx.receiveFromHoloMachineRow.create({
         data: {
           issueId,
@@ -10095,10 +10098,10 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
           boxId: boxId || null,
           notes: notes || null,
           createdBy: createdBy || 'manual',
+          isWastage: isWastageRow,
           ...actorCreateFields(actorUserId),
         },
       });
-      const isWastageRow = String(rollType?.name || '').toLowerCase().includes('wastage');
       const pieceTotal = await tx.receiveFromHoloMachinePieceTotal.upsert({
         where: { pieceId },
         update: {
@@ -10174,7 +10177,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
 
     const row = await prisma.receiveFromHoloMachineRow.findUnique({
       where: { id },
-      include: { issue: true, rollType: true },
+      include: { issue: true, rollType: true, box: true },
     });
     if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
     if (!row.issue) return res.status(404).json({ error: 'Receive issue not found' });
@@ -10200,8 +10203,12 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
 
     const rollCount = toInt(req.body?.rollCount ?? row.rollCount);
     const grossWeight = toNumber(req.body?.grossWeight ?? row.grossWeight);
-    const rollTypeId = typeof req.body?.rollTypeId === 'string' ? req.body.rollTypeId : row.rollTypeId;
-    const boxId = typeof req.body?.boxId === 'string' ? req.body.boxId : row.boxId;
+    const rollTypeId = typeof req.body?.rollTypeId === 'string'
+      ? (req.body.rollTypeId.trim() || null)
+      : row.rollTypeId;
+    const boxId = typeof req.body?.boxId === 'string'
+      ? (req.body.boxId.trim() || null)
+      : row.boxId;
     const date = toOptionalString(req.body?.date ?? row.date);
     const machineNo = toOptionalString(req.body?.machineNo ?? row.machineNo);
     const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId : row.operatorId;
@@ -10213,23 +10220,56 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
     if (!Number.isFinite(grossWeight) || grossWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
     }
-    if (!rollTypeId) return res.status(400).json({ error: 'Roll type is required' });
-    if (!boxId) return res.status(400).json({ error: 'Box type is required' });
+    const tareInputsChanged = rollCount !== Number(row.rollCount || 0)
+      || String(rollTypeId || '') !== String(row.rollTypeId || '')
+      || String(boxId || '') !== String(row.boxId || '');
+    const storedTareWeight = Number(row.tareWeight);
+    const preserveStoredTare = !tareInputsChanged
+      && Number.isFinite(storedTareWeight)
+      && storedTareWeight >= 0;
 
-    const [rollType, box] = await Promise.all([
-      prisma.rollType.findUnique({ where: { id: rollTypeId } }),
-      prisma.box.findUnique({ where: { id: boxId } }),
-    ]);
-    const rollTypeWeight = Number(rollType?.weight);
-    const boxWeight = Number(box?.weight);
-    if (!rollType || !Number.isFinite(rollTypeWeight) || rollTypeWeight <= 0) {
-      return res.status(400).json({ error: 'Roll type weight missing. Update roll type first.' });
+    let rollType = row.rollType || null;
+    let box = row.box || null;
+    let tareWeight;
+    if (preserveStoredTare) {
+      // Legacy Holo rows persisted only the aggregate tare. Keeping it intact
+      // prevents a metadata or gross-weight edit from silently dropping a
+      // historical crate-tare component or applying changed master weights.
+      tareWeight = roundTo3Decimals(storedTareWeight);
+    } else {
+      if (!rollTypeId) return res.status(400).json({ error: 'Roll type is required' });
+      if (!boxId) return res.status(400).json({ error: 'Box type is required' });
+      [rollType, box] = await Promise.all([
+        prisma.rollType.findUnique({ where: { id: rollTypeId } }),
+        prisma.box.findUnique({ where: { id: boxId } }),
+      ]);
+      const rollTypeWeight = Number(rollType?.weight);
+      const boxWeight = Number(box?.weight);
+      if (!rollType || !Number.isFinite(rollTypeWeight) || rollTypeWeight < 0) {
+        return res.status(400).json({ error: 'Roll type weight missing. Update roll type first.' });
+      }
+      if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
+        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+      }
+      const previousRollTypeWeight = Number(row.rollType?.weight);
+      const previousBoxWeight = Number(row.box?.weight);
+      if (
+        Number.isFinite(storedTareWeight)
+        && storedTareWeight >= 0
+        && (!row.rollType || !Number.isFinite(previousRollTypeWeight) || !row.box || !Number.isFinite(previousBoxWeight))
+      ) {
+        return res.status(409).json({
+          error: 'Legacy tare components cannot be safely recalculated. Keep roll count, roll type, and box unchanged.',
+        });
+      }
+      const previousBaseTare = Number.isFinite(storedTareWeight)
+        ? (previousRollTypeWeight * Number(row.rollCount || 0)) + previousBoxWeight
+        : 0;
+      const preservedExtraTare = Number.isFinite(storedTareWeight)
+        ? Math.max(0, storedTareWeight - previousBaseTare)
+        : 0;
+      tareWeight = roundTo3Decimals((rollTypeWeight * rollCount) + boxWeight + preservedExtraTare);
     }
-    if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
-      return res.status(400).json({ error: 'Box weight missing. Update box first.' });
-    }
-
-    const tareWeight = roundTo3Decimals(rollTypeWeight * rollCount + boxWeight);
     const netWeight = roundTo3Decimals(grossWeight - tareWeight);
     if (!Number.isFinite(netWeight) || netWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
@@ -10275,7 +10315,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
       await tx.$queryRaw`SELECT id FROM "ReceiveFromHoloMachineRow" WHERE id = ${id} FOR UPDATE`;
       const lockedRow = await tx.receiveFromHoloMachineRow.findUnique({
         where: { id },
-        include: { issue: true, rollType: true },
+        include: { issue: true, rollType: true, box: true },
       });
       if (!lockedRow || lockedRow.isDeleted) {
         throw Object.assign(new Error('Receive row is no longer available.'), { statusCode: 409, code: 'availability_changed' });
@@ -10311,8 +10351,13 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
       }
-      const oldIsWastage = String(lockedRow.rollType?.name || '').toLowerCase().includes('wastage');
-      const newIsWastage = String(rollType?.name || '').toLowerCase().includes('wastage');
+      // NULL is the deliberate legacy value: those rows were accumulated in
+      // totalNetWeight regardless of their roll-type label.
+      const oldIsWastage = lockedRow.isWastage === true;
+      const rollTypeChanged = String(rollTypeId || '') !== String(lockedRow.rollTypeId || '');
+      const newIsWastage = rollTypeChanged
+        ? String(rollType?.name || '').toLowerCase().includes('wastage')
+        : oldIsWastage;
       const nextTotalNet = roundTo3Decimals(
         Number(totals.totalNetWeight || 0)
         - (oldIsWastage ? 0 : prevNetWeight)
@@ -10343,6 +10388,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
           tareWeight,
           boxId,
           notes,
+          isWastage: newIsWastage,
           ...actorUpdateFields(actorUserId),
         },
       });
@@ -10477,7 +10523,7 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
       }
-      const oldIsWastage = String(lockedRow.rollType?.name || '').toLowerCase().includes('wastage');
+      const oldIsWastage = lockedRow.isWastage === true;
       const nextTotalNet = roundTo3Decimals(Number(totals.totalNetWeight || 0) - (oldIsWastage ? 0 : prevNetWeight));
       const nextWastageNet = roundTo3Decimals(Number(totals.wastageNetWeight || 0) - (oldIsWastage ? prevNetWeight : 0));
       const nextTotalRolls = Number(totals.totalRolls || 0) + deltaRolls;
@@ -10528,8 +10574,8 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
   }
 });
 
-// Revert (soft-delete) a holo wastage receive row. Only allowed when the row's RollType
-// is a wastage type and no downstream consumption has occurred. Records a WastageEvent
+// Revert (soft-delete) a Holo row explicitly recorded in the wastage bucket.
+// Legacy NULL rows stay in their historical ordinary-receive bucket. Records a WastageEvent
 // so the action shows up in the audit trail.
 router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermission('receive.holo', PERM_WRITE), async (req, res) => {
   try {
@@ -10549,8 +10595,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
     if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
     if (!row.issue) return res.status(404).json({ error: 'Receive issue not found' });
 
-    const rollTypeName = String(row.rollType?.name || '').toLowerCase();
-    if (!rollTypeName.includes('wastage')) {
+    if (row.isWastage !== true) {
       return res.status(400).json({ error: 'Row is not a wastage row' });
     }
 
@@ -10607,7 +10652,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
             await tx.receiveFromHoloMachinePieceTotal.update({
               where: { pieceId },
               data: {
-                totalNetWeight: { increment: deltaNetWeight },
+                wastageNetWeight: { increment: deltaNetWeight },
                 totalRolls: { increment: deltaRolls },
                 ...actorUpdateFields(actorUserId),
               },
@@ -11592,15 +11637,13 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       let lockedRefs = parseJsonArraySafe(lockedIssue.receivedRowRefs);
       let coneTypeId = lockedRefs[0]?.coneTypeId || null;
       if (!coneTypeId && requestedConeTypeId) {
-        const existingReceiveCount = await tx.receiveFromConingMachineRow.count({
-          where: { issueId, isDeleted: false },
-        });
-        if (existingReceiveCount > 0) {
-          throw Object.assign(new Error('Legacy issue cone type cannot be changed after receiving has started'), { statusCode: 409 });
-        }
         if (lockedRefs.length === 0) {
           throw Object.assign(new Error('Issue source lineage is missing; repair the issue before receiving'), { statusCode: 409 });
         }
+        // This is a one-time metadata repair. Existing receive rows retain
+        // their stored gross/tare/net values and aggregate totals exactly as
+        // recorded; the selected cone master applies only to this and future
+        // receives for the issue.
         coneTypeId = String(requestedConeTypeId);
         const repairedRefs = lockedRefs.map((ref) => ({ ...ref, coneTypeId }));
         await tx.issueToConingMachine.update({

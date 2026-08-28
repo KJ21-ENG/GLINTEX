@@ -101,9 +101,9 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
       { issueId: 'h1', totalCount: 2, totalWeight: 1.0 },
     ],
     holoRows: [
-      { issueId: 'h1', rollCount: 3, rollWeight: 1.5, grossWeight: null, tareWeight: null, rollType: { name: 'good' } },
-      { issueId: 'h1', rollCount: 1, rollWeight: 0.5, grossWeight: null, tareWeight: null, rollType: { name: 'wastage rolls' } },
-      { issueId: 'h2', rollCount: 2, rollWeight: 1.0, grossWeight: null, tareWeight: null, rollType: { name: 'good' } },
+      { issueId: 'h1', rollCount: 3, rollWeight: 1.5, grossWeight: null, tareWeight: null, isWastage: false },
+      { issueId: 'h1', rollCount: 1, rollWeight: 0.5, grossWeight: null, tareWeight: null, isWastage: true },
+      { issueId: 'h2', rollCount: 2, rollWeight: 1.0, grossWeight: null, tareWeight: null, isWastage: null },
     ],
   });
 

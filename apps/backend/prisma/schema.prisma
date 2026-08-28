@@ -237,6 +237,10 @@ model ReceiveFromHoloMachineRow {
   helperId         String?
   notes            String?
   createdBy        String?
+  // Null identifies a row created before row-level Holo wastage classification.
+  // Legacy rows were historically counted in totalNetWeight, even if their
+  // roll-type label contained "wastage".
+  isWastage        Boolean?
   isDeleted        Boolean            @default(false)
   deletedAt        DateTime?
   deletedByUserId  String?

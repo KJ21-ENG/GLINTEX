@@ -309,9 +309,9 @@ function loadHoloOrConingOriginal(stage, issues) {
   return map;
 }
 
-// Holo received/wastage. We need rollType names to split wastage vs received,
-// matching the legacy logic — so we fetch the rows with rollType joined, then
-// reduce in memory.
+// Holo received/wastage uses the persisted row bucket. NULL is intentional for
+// legacy rows, which were historically accumulated as ordinary receive weight
+// even when their roll-type label contained "wastage".
 async function loadHoloReceivedAndWastage(client, issues) {
   const received = new Map();
   const wastage = new Map();
@@ -329,7 +329,7 @@ async function loadHoloReceivedAndWastage(client, issues) {
       rollWeight: true,
       grossWeight: true,
       tareWeight: true,
-      rollType: { select: { name: true } },
+      isWastage: true,
     },
   });
   for (const row of rows) {
@@ -337,7 +337,7 @@ async function loadHoloReceivedAndWastage(client, issues) {
     const weight = Number.isFinite(Number(row.rollWeight))
       ? Number(row.rollWeight)
       : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
-    const isWastage = String(row.rollType?.name || '').toLowerCase().includes('wastage');
+    const isWastage = row.isWastage === true;
     const target = isWastage ? wastage.get(row.issueId) : received.get(row.issueId);
     if (!target) continue;
     target.count += count;

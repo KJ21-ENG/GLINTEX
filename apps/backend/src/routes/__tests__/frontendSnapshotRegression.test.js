@@ -184,6 +184,7 @@ test('Coning issue and legacy first-receive flows preserve authoritative cone ta
   assert.match(receiveForm, /Cone Type required for this legacy issue/);
   assert.match(receiveForm, /coneTypeId: issueConeTypeId \|\| null/);
   assert.match(receiveForm, /issueToConingMachine\?\.receivedRowRefs/);
+  assert.match(receiveForm, /Existing receive weights stay unchanged/);
 });
 
 test('no operational frontend screen loads the deprecated process module', async () => {
@@ -220,6 +221,7 @@ test('detailed Cutter stock exports hydrate the exporter-specific row field', as
   assert.match(source, /viewType === 'bobbins'\) return \{ \.\.\.lot, crates: rows \}/);
   assert.match(source, /getAllV2StockLotRows\(processId, \{ key: lot\.lotKey \}\)/);
   assert.match(source, /memberLotKeys/);
+  assert.match(source, /includeMembers: format === 'xlsx-detailed' && groupByItem \? 'true' : ''/);
   assert.doesNotMatch(source, /memberLots\.has\(lot\.lotNo\)/);
 });
 

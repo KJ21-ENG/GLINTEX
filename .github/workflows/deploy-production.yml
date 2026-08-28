@@ -71,6 +71,10 @@ jobs:
             trap - ERR
             if [ "$deployment_started" -eq 1 ]; then
               echo "Deployment failed. Restoring $previous_sha"
+              # Quiesce both external write paths before the previous backend is
+              # rebuilt or restarted. A failed candidate must never keep writing
+              # records that the rollback backend cannot interpret.
+              "${compose[@]}" stop frontend agent-api || true
               export GLINTEX_DEPLOY_SHA="$previous_sha"
               git checkout --detach "$previous_sha"
               "${compose[@]}" build backend frontend agent-api
@@ -101,12 +105,18 @@ jobs:
           "${compose[@]}" stop frontend agent-api
           "${compose[@]}" up -d --no-deps --wait backend
           "${compose[@]}" exec -T backend wget -qO- http://127.0.0.1:4000/api/health >/dev/null
-          "${compose[@]}" run --rm --no-deps frontend nginx -t
+          # Exercise the frontend and agent images in unpublished one-off
+          # containers. The production writer containers stay stopped until
+          # every candidate component has passed its preflight.
+          "${compose[@]}" run --rm --no-deps frontend sh -ec \
+            'nginx -t; nginx; wget -qO- http://127.0.0.1/ >/dev/null; nginx -s quit'
+          "${compose[@]}" run --rm --no-deps agent-api node --input-type=module -e \
+            "import { createAgentApp } from './src/agentApp.js'; const app=createAgentApp(); const server=app.listen(0,'127.0.0.1',async()=>{try{const port=server.address().port;const response=await fetch('http://127.0.0.1:'+port+'/healthz');if(!response.ok)process.exitCode=1}catch(error){console.error(error);process.exitCode=1}finally{server.close()}})"
+          "${compose[@]}" up -d --no-deps --wait frontend
+          "${compose[@]}" exec -T frontend wget -qO- http://127.0.0.1/ >/dev/null
           "${compose[@]}" up -d --no-deps --wait agent-api
           "${compose[@]}" exec -T agent-api node -e \
             "fetch('http://127.0.0.1:4003/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-          "${compose[@]}" up -d --no-deps --wait frontend
-          "${compose[@]}" exec -T frontend wget -qO- http://127.0.0.1/ >/dev/null
 
           trap - ERR
           REMOTE_SCRIPT

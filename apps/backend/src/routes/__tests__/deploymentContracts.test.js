@@ -43,6 +43,11 @@ test('production deployment restores and health-checks the prior SHA on failure'
   assert.match(workflow, /previous_sha=\$\(git rev-parse HEAD\)/);
   assert.match(workflow, /trap rollback ERR/);
   assert.match(workflow, /git checkout --detach "\$previous_sha"/);
+  const rollbackIndex = workflow.indexOf('Deployment failed. Restoring $previous_sha');
+  const rollbackStopIndex = workflow.indexOf('stop frontend agent-api || true', rollbackIndex);
+  const rollbackCheckoutIndex = workflow.indexOf('git checkout --detach "$previous_sha"', rollbackIndex);
+  assert.ok(rollbackStopIndex > rollbackIndex);
+  assert.ok(rollbackCheckoutIndex > rollbackStopIndex);
   assert.match(workflow, /build backend frontend agent-api/);
   assert.match(workflow, /up -d --no-deps --wait backend frontend agent-api/);
   assert.match(workflow, /exec -T agent-api node -e/);
@@ -51,15 +56,19 @@ test('production deployment restores and health-checks the prior SHA on failure'
 
 test('production deployment keeps external writers quiesced until every replacement service passes', () => {
   const migrationIndex = workflow.indexOf('--profile migration run --rm migrate');
-  const stopWritersIndex = workflow.indexOf('stop frontend agent-api');
+  const stopWritersIndex = workflow.indexOf('stop frontend agent-api', migrationIndex);
   const backendIndex = workflow.indexOf('up -d --no-deps --wait backend', stopWritersIndex);
-  const agentIndex = workflow.indexOf('up -d --no-deps --wait agent-api', backendIndex);
-  const frontendIndex = workflow.indexOf('up -d --no-deps --wait frontend', agentIndex);
+  const frontendPreflightIndex = workflow.indexOf('run --rm --no-deps frontend sh -ec', backendIndex);
+  const agentPreflightIndex = workflow.indexOf('run --rm --no-deps agent-api node --input-type=module', frontendPreflightIndex);
+  const frontendIndex = workflow.indexOf('up -d --no-deps --wait frontend', agentPreflightIndex);
+  const agentIndex = workflow.indexOf('up -d --no-deps --wait agent-api', frontendIndex);
   assert.ok(migrationIndex > 0);
   assert.ok(stopWritersIndex > migrationIndex);
   assert.ok(backendIndex > stopWritersIndex);
-  assert.ok(agentIndex > backendIndex);
-  assert.ok(frontendIndex > agentIndex);
+  assert.ok(frontendPreflightIndex > backendIndex);
+  assert.ok(agentPreflightIndex > frontendPreflightIndex);
+  assert.ok(frontendIndex > agentPreflightIndex);
+  assert.ok(agentIndex > frontendIndex);
 });
 
 test('production deployment verifies database identity and a fresh dump before changing source or running migrations', () => {

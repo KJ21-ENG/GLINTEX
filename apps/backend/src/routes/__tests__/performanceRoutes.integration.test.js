@@ -219,6 +219,22 @@ if (!TEST_DB) {
     }
   });
 
+  test('computed-filter page mode preserves the requested page offset', async () => {
+    const filters = JSON.stringify([{ field: 'takenBackWeight', op: 'between', min: 0, max: 999999 }]);
+    const [first, second] = await Promise.all([
+      get('/api/v2/issue/holo/tracking', { limit: 5, page: 1, filters }),
+      get('/api/v2/issue/holo/tracking', { limit: 5, page: 2, filters }),
+    ]);
+    assert.equal(first.response.status, 200, first.response.text);
+    assert.equal(second.response.status, 200, second.response.text);
+    assert.equal(first.response.body.items.length, 5);
+    assert.equal(second.response.body.items.length, 5);
+    const secondIds = new Set(second.response.body.items.map((row) => row.id));
+    assert.deepEqual(first.response.body.items.map((row) => row.id).filter((id) => secondIds.has(id)), []);
+    assert.equal(first.response.body.nextCursor, null);
+    assert.equal(second.response.body.nextCursor, null);
+  });
+
   test('default On Machine summaries use bounded aggregate responses', async () => {
     for (const process of ['cutter', 'holo', 'coning']) {
       const result = await get(`/api/v2/on-machine/${process}`, { limit: 50 });
@@ -291,7 +307,6 @@ if (!TEST_DB) {
         reason: 'Older allocation must not claim a later legacy receive',
         barcode: `LEGACY-CUTTER-OLDER-BC-${suffix}`,
         createdAt: new Date(issueCreatedAt.getTime() - 1_000),
-        lines: { create: [{ pieceId, issuedWeight: 5, createdAt: new Date(issueCreatedAt.getTime() - 1_000) }] },
       },
     });
     await prisma.issueToCutterMachine.create({
@@ -307,7 +322,6 @@ if (!TEST_DB) {
         reason: 'Legacy receive attribution parity',
         barcode: `LEGACY-CUTTER-ISSUE-BC-${suffix}`,
         createdAt: issueCreatedAt,
-        lines: { create: [{ pieceId, issuedWeight: 5, createdAt: issueCreatedAt }] },
       },
     });
     const legacyRow = await prisma.receiveFromCutterMachineRow.create({

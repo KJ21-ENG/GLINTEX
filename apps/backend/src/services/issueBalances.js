@@ -240,6 +240,19 @@ async function loadCutterReceivedAndWastage(client, issues, linePieceIdsByIssue)
           WHERE line."pieceId" = ANY(${pieceIds}::text[])
             AND issue."isDeleted" = false
           UNION ALL
+          SELECT
+            issue.id AS issue_id,
+            trim(header_piece.piece_id) AS piece_id,
+            issue."createdAt" AS created_at
+          FROM "IssueToCutterMachine" issue
+          CROSS JOIN LATERAL regexp_split_to_table(
+            COALESCE(issue."pieceIds", ''),
+            '\\s*,\\s*'
+          ) AS header_piece(piece_id)
+          WHERE issue."isDeleted" = false
+            AND trim(header_piece.piece_id) <> ''
+            AND trim(header_piece.piece_id) = ANY(${pieceIds}::text[])
+          UNION ALL
           SELECT issue_id, piece_id, created_at
           FROM selected_candidates
         ) all_candidates

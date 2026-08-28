@@ -808,6 +808,7 @@ async function buildBoundedIssueTrackingResult({
   filters,
   computedFilters,
   cursor,
+  pageNum,
   order,
   limit,
 }) {
@@ -818,13 +819,15 @@ async function buildBoundedIssueTrackingResult({
   // matching issue through application-level lineage/balance mapping. Keep the
   // ordinary page bounded and omit the global footer for this filtered context.
   const summary = null;
-  let scanCursor = cursor;
+  const pageOffset = pageNum != null ? (pageNum - 1) * limit : 0;
+  const desiredMatchCount = pageOffset + limit + 1;
+  let scanCursor = pageNum != null ? null : cursor;
   let exhausted = false;
   const batchSize = Math.max(200, Math.min(1000, limit * 5));
-  const maxScanRows = Math.max(batchSize, Math.min(1000, limit * 10));
+  const maxScanRows = Math.max(batchSize, Math.min(5000, desiredMatchCount * 10));
   let scannedRows = 0;
 
-  while (!exhausted && items.length <= limit && scannedRows < maxScanRows) {
+  while (!exhausted && items.length < desiredMatchCount && scannedRows < maxScanRows) {
     const where = applyCursorWhere(whereAll, buildCursorWhere(scanCursor, order));
     const requestedBatchSize = Math.min(batchSize, maxScanRows - scannedRows);
     const raw = await model.findMany({
@@ -847,15 +850,15 @@ async function buildBoundedIssueTrackingResult({
     exhausted = raw.length < requestedBatchSize;
   }
 
-  const hasBufferedMatch = items.length > limit;
+  const hasBufferedMatch = items.length > pageOffset + limit;
   const hasMore = hasBufferedMatch || (!exhausted && Boolean(scanCursor));
-  const pageItems = items.slice(0, limit);
+  const pageItems = items.slice(pageOffset, pageOffset + limit);
   // If a full result page was found, resume after the last returned match so
   // any additional matches already seen in the final raw batch are retained.
   // Otherwise resume after the final scanned raw row and never replay the same
   // sparse segment.
   const continuation = hasBufferedMatch ? pageItems[pageItems.length - 1] : scanCursor;
-  const nextCursor = hasMore && continuation
+  const nextCursor = pageNum == null && hasMore && continuation
     ? encodeCursor({ createdAt: continuation.createdAt, id: continuation.id })
     : null;
   return { items: pageItems, hasMore, nextCursor, summary };
@@ -871,17 +874,20 @@ async function buildCutterIssueWastageByIssueId(issueRows = []) {
   ));
   if (!pieceIds.length) return output;
 
-  const issueLines = await prisma.issueToCutterMachineLine.findMany({
-    where: {
-      pieceId: { in: pieceIds },
-      issue: { isDeleted: false },
-    },
-    select: {
-      pieceId: true,
-      issueId: true,
-      issue: { select: { createdAt: true } },
-    },
-  });
+  const issueLines = await prisma.$queryRaw`
+    SELECT line."pieceId" AS "pieceId", line."issueId" AS "issueId", issue."createdAt" AS "createdAt"
+    FROM "IssueToCutterMachineLine" line
+    JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId"
+    WHERE issue."isDeleted" = false AND line."pieceId" = ANY(${pieceIds}::text[])
+    UNION
+    SELECT trim(header_piece.piece_id) AS "pieceId", issue.id AS "issueId", issue."createdAt" AS "createdAt"
+    FROM "IssueToCutterMachine" issue
+    CROSS JOIN LATERAL regexp_split_to_table(COALESCE(issue."pieceIds", ''), '\\s*,\\s*')
+      AS header_piece(piece_id)
+    WHERE issue."isDeleted" = false
+      AND trim(header_piece.piece_id) <> ''
+      AND trim(header_piece.piece_id) = ANY(${pieceIds}::text[])
+  `;
 
   const issuesByPiece = new Map();
   issueLines.forEach((line) => {
@@ -890,7 +896,7 @@ async function buildCutterIssueWastageByIssueId(issueRows = []) {
     const entries = issuesByPiece.get(pieceId) || [];
     entries.push({
       issueId: line.issueId,
-      createdAtMs: toTimeMs(line.issue?.createdAt),
+      createdAtMs: toTimeMs(line.createdAt),
     });
     issuesByPiece.set(pieceId, entries);
   });
@@ -1270,6 +1276,7 @@ router.get('/issue/:process/tracking', requireAuth, requireStageReadPermission(i
         filters,
         computedFilters,
         cursor,
+        pageNum,
         order,
         limit,
       });
@@ -2522,6 +2529,17 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         SELECT id, "createdAt", COALESCE("totalWeight", 0)::numeric AS original_weight
         FROM "IssueToCutterMachine"
         WHERE "isDeleted" = false
+      ), issue_candidates AS (
+        SELECT line."issueId" AS issue_id, line."pieceId" AS piece_id, issue."createdAt" AS created_at
+        FROM "IssueToCutterMachineLine" line
+        JOIN active_issues issue ON issue.id = line."issueId"
+        UNION
+        SELECT issue.id AS issue_id, trim(header_piece.piece_id) AS piece_id, issue."createdAt" AS created_at
+        FROM "IssueToCutterMachine" source_issue
+        JOIN active_issues issue ON issue.id = source_issue.id
+        CROSS JOIN LATERAL regexp_split_to_table(COALESCE(source_issue."pieceIds", ''), '\\s*,\\s*')
+          AS header_piece(piece_id)
+        WHERE trim(header_piece.piece_id) <> ''
       ), takebacks AS (
         SELECT "issueId", SUM("totalWeight")::numeric AS weight
         FROM "IssueTakeBack"
@@ -2535,11 +2553,10 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         SELECT assigned.issue_id, COALESCE(r."netWt", 0)::numeric AS received_weight
         FROM "ReceiveFromCutterMachineRow" r
         JOIN LATERAL (
-          SELECT l."issueId" AS issue_id
-          FROM "IssueToCutterMachineLine" l
-          JOIN active_issues i ON i.id = l."issueId"
-          WHERE l."pieceId" = r."pieceId" AND i."createdAt" <= r."createdAt"
-          ORDER BY i."createdAt" DESC, i.id DESC
+          SELECT candidate.issue_id
+          FROM issue_candidates candidate
+          WHERE candidate.piece_id = r."pieceId" AND candidate.created_at <= r."createdAt"
+          ORDER BY candidate.created_at DESC, candidate.issue_id DESC
           LIMIT 1
         ) assigned ON true
         WHERE r."isDeleted" = false AND r."issueId" IS NULL
@@ -2551,11 +2568,10 @@ async function loadUnfilteredPendingOnMachinePageSql({ process, cursor, order, l
         SELECT assigned.issue_id, SUM(COALESCE(c."wastageNetWeight", 0))::numeric AS wastage_weight
         FROM "ReceiveFromCutterMachineChallan" c
         JOIN LATERAL (
-          SELECT l."issueId" AS issue_id
-          FROM "IssueToCutterMachineLine" l
-          JOIN active_issues i ON i.id = l."issueId"
-          WHERE l."pieceId" = c."pieceId" AND i."createdAt" <= c."createdAt"
-          ORDER BY i."createdAt" DESC, i.id DESC
+          SELECT candidate.issue_id
+          FROM issue_candidates candidate
+          WHERE candidate.piece_id = c."pieceId" AND candidate.created_at <= c."createdAt"
+          ORDER BY candidate.created_at DESC, candidate.issue_id DESC
           LIMIT 1
         ) assigned ON true
         WHERE c."isDeleted" = false AND COALESCE(c."wastageNetWeight", 0) > 0
@@ -2714,6 +2730,17 @@ async function buildUnfilteredOnMachineSummarySql(process) {
         SELECT id, "totalWeight", "createdAt"
         FROM "IssueToCutterMachine"
         WHERE "isDeleted" = false
+      ), issue_candidates AS (
+        SELECT line."issueId" AS issue_id, line."pieceId" AS piece_id, issue."createdAt" AS created_at
+        FROM "IssueToCutterMachineLine" line
+        JOIN active_issues issue ON issue.id = line."issueId"
+        UNION
+        SELECT issue.id AS issue_id, trim(header_piece.piece_id) AS piece_id, issue."createdAt" AS created_at
+        FROM "IssueToCutterMachine" source_issue
+        JOIN active_issues issue ON issue.id = source_issue.id
+        CROSS JOIN LATERAL regexp_split_to_table(COALESCE(source_issue."pieceIds", ''), '\\s*,\\s*')
+          AS header_piece(piece_id)
+        WHERE trim(header_piece.piece_id) <> ''
       ), takebacks AS (
         SELECT "issueId", SUM("totalWeight")::numeric AS weight
         FROM "IssueTakeBack"
@@ -2727,11 +2754,10 @@ async function buildUnfilteredOnMachineSummarySql(process) {
         SELECT assigned.issue_id, COALESCE(r."netWt", 0)::numeric AS received_weight
         FROM "ReceiveFromCutterMachineRow" r
         JOIN LATERAL (
-          SELECT l."issueId" AS issue_id
-          FROM "IssueToCutterMachineLine" l
-          JOIN active_issues i ON i.id = l."issueId"
-          WHERE l."pieceId" = r."pieceId" AND i."createdAt" <= r."createdAt"
-          ORDER BY i."createdAt" DESC, i.id DESC
+          SELECT candidate.issue_id
+          FROM issue_candidates candidate
+          WHERE candidate.piece_id = r."pieceId" AND candidate.created_at <= r."createdAt"
+          ORDER BY candidate.created_at DESC, candidate.issue_id DESC
           LIMIT 1
         ) assigned ON true
         WHERE r."isDeleted" = false AND r."issueId" IS NULL
@@ -2743,12 +2769,11 @@ async function buildUnfilteredOnMachineSummarySql(process) {
         SELECT assigned.issue_id, SUM(COALESCE(c."wastageNetWeight", 0))::numeric AS wastage_weight
         FROM "ReceiveFromCutterMachineChallan" c
         JOIN LATERAL (
-          SELECT l."issueId" AS issue_id
-          FROM "IssueToCutterMachineLine" l
-          JOIN active_issues i ON i.id = l."issueId"
-          WHERE l."pieceId" = c."pieceId"
-            AND i."createdAt" <= c."createdAt"
-          ORDER BY i."createdAt" DESC, i.id DESC
+          SELECT candidate.issue_id
+          FROM issue_candidates candidate
+          WHERE candidate.piece_id = c."pieceId"
+            AND candidate.created_at <= c."createdAt"
+          ORDER BY candidate.created_at DESC, candidate.issue_id DESC
           LIMIT 1
         ) assigned ON true
         WHERE c."isDeleted" = false AND COALESCE(c."wastageNetWeight", 0) > 0
@@ -3369,10 +3394,17 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
       receiveModelForProcess(process).count({ where: { issueId: id, isDeleted: false } }),
       process === 'cutter'
         ? prisma.$queryRaw`
-          WITH active_issues AS (
-            SELECT id, "createdAt"
-            FROM "IssueToCutterMachine"
-            WHERE "isDeleted" = false
+          WITH issue_candidates AS (
+            SELECT line."issueId" AS issue_id, line."pieceId" AS piece_id, issue."createdAt" AS created_at
+            FROM "IssueToCutterMachineLine" line
+            JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId"
+            WHERE issue."isDeleted" = false
+            UNION
+            SELECT issue.id AS issue_id, trim(header_piece.piece_id) AS piece_id, issue."createdAt" AS created_at
+            FROM "IssueToCutterMachine" issue
+            CROSS JOIN LATERAL regexp_split_to_table(COALESCE(issue."pieceIds", ''), '\\s*,\\s*')
+              AS header_piece(piece_id)
+            WHERE issue."isDeleted" = false AND trim(header_piece.piece_id) <> ''
           ), receive_allocations AS (
             SELECT r."issueId" AS issue_id, r."pieceId" AS piece_id,
                    COALESCE(r."bobbin_quantity", 0)::numeric AS received_count,
@@ -3385,11 +3417,10 @@ router.get('/issue/:process/:id/action-detail', requireAuth, requireStageReadPer
                    COALESCE(r."netWt", 0)::numeric AS received_weight
             FROM "ReceiveFromCutterMachineRow" r
             JOIN LATERAL (
-              SELECT l."issueId" AS issue_id
-              FROM "IssueToCutterMachineLine" l
-              JOIN active_issues i ON i.id = l."issueId"
-              WHERE l."pieceId" = r."pieceId" AND i."createdAt" <= r."createdAt"
-              ORDER BY i."createdAt" DESC, i.id DESC
+              SELECT candidate.issue_id
+              FROM issue_candidates candidate
+              WHERE candidate.piece_id = r."pieceId" AND candidate.created_at <= r."createdAt"
+              ORDER BY candidate.created_at DESC, candidate.issue_id DESC
               LIMIT 1
             ) assigned ON true
             WHERE r."isDeleted" = false AND r."issueId" IS NULL

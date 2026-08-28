@@ -52,6 +52,18 @@ test('issue and receive mutations do not await process snapshot refreshes', asyn
   assert.deepEqual(offenders, []);
 });
 
+test('Cutter issue printing cannot turn a committed issue into a reported failure', async () => {
+  const source = await readFile(join(frontendSource, 'components/issue/IssueToCutter.jsx'), 'utf8');
+  const successIndex = source.indexOf('alert(`Issued ${pieceIds.length} pieces successfully.`)');
+  const printTryIndex = source.indexOf('try {', successIndex);
+  const printFailureIndex = source.indexOf("alert('Issued successfully, sticker not printed')", printTryIndex);
+  const outerCatchIndex = source.indexOf('} catch (e) {', printTryIndex);
+  assert.ok(successIndex > 0);
+  assert.ok(printTryIndex > successIndex);
+  assert.ok(printFailureIndex > printTryIndex);
+  assert.ok(outerCatchIndex > printFailureIndex);
+});
+
 test('stock and combined stock never load a legacy process module', async () => {
   const files = [
     join(frontendSource, 'pages/Stock.jsx'),

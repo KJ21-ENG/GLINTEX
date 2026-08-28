@@ -311,40 +311,45 @@ export function IssueToCutter() {
             setIssuing(false);
             alert(`Issued ${pieceIds.length} pieces successfully.`);
 
-            const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
-            if (template && issueRecord) {
-                const confirmPrint = window.confirm('Print sticker for this issue?');
-                if (confirmPrint) {
-                    const itemName = db?.items?.find((i) => i.id === itemId)?.name;
-                    const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
-                    const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
-                    const inboundDate = candidateLots.find((l) => l.lotNo === lotNo)?.date || '';
-                    const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
-                    const selectedPieces = (inboundItems || []).filter((p) => pieceIds.includes(p.id));
-                    const primaryPiece =
-                        selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
-                    const pieceId = primaryPiece?.id || pieceIds[0] || '';
-                    const seq = primaryPiece?.seq ?? '';
-                    await printStageTemplate(
-                        LABEL_STAGE_KEYS.CUTTER_ISSUE,
-                        {
-                            lotNo: issueRecord.lotNo,
-                            itemName,
-                            pieceId,
-                            seq,
-                            barcode: issueRecord.barcode,
-                            count: issueRecord.count || pieceIds.length,
-                            totalWeight: issueRecord.totalWeight,
-                            pieceIds,
-                            machineName,
-                            operatorName,
-                            inboundDate,
-                            cut,
-                            date,
-                        },
-                        { template },
-                    );
+            try {
+                const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
+                if (template && issueRecord) {
+                    const confirmPrint = window.confirm('Print sticker for this issue?');
+                    if (confirmPrint) {
+                        const itemName = db?.items?.find((i) => i.id === itemId)?.name;
+                        const machineName = db?.machines?.find((m) => m.id === machineId)?.name;
+                        const operatorName = db?.operators?.find((o) => o.id === operatorId)?.name;
+                        const inboundDate = candidateLots.find((l) => l.lotNo === lotNo)?.date || '';
+                        const cut = db?.cuts?.find((c) => c.id === cutId)?.name || '';
+                        const selectedPieces = (inboundItems || []).filter((p) => pieceIds.includes(p.id));
+                        const primaryPiece =
+                            selectedPieces.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] || selectedPieces[0] || null;
+                        const pieceId = primaryPiece?.id || pieceIds[0] || '';
+                        const seq = primaryPiece?.seq ?? '';
+                        await printStageTemplate(
+                            LABEL_STAGE_KEYS.CUTTER_ISSUE,
+                            {
+                                lotNo: issueRecord.lotNo,
+                                itemName,
+                                pieceId,
+                                seq,
+                                barcode: issueRecord.barcode,
+                                count: issueRecord.count || pieceIds.length,
+                                totalWeight: issueRecord.totalWeight,
+                                pieceIds,
+                                machineName,
+                                operatorName,
+                                inboundDate,
+                                cut,
+                                date,
+                            },
+                            { template },
+                        );
+                    }
                 }
+            } catch (printError) {
+                console.error('Cutter issue label print failed', printError);
+                alert('Issued successfully, sticker not printed');
             }
         } catch (e) {
             alert(e.message);

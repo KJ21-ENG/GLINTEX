@@ -772,8 +772,6 @@ if (!TEST_DB) {
       },
     });
     // Simulate a row that existed before the nullable classification column.
-    // The compatibility trigger classifies all newly inserted rows, including
-    // inserts from a previous backend during migration-first rollout.
     await prisma.receiveFromHoloMachineRow.update({
       where: { id: legacyRow.id },
       data: { isWastage: null },
@@ -827,8 +825,8 @@ if (!TEST_DB) {
     assert.equal(deleted.body.pieceTotal.totalRolls, 0);
   });
 
-  test('migration compatibility trigger classifies writes from the previous Holo backend', async () => {
-    const suffix = `${Date.now()}-holo-old-writer-trigger`;
+  test('migration-first rollout keeps previous-backend Holo writes in their legacy bucket', async () => {
+    const suffix = `${Date.now()}-holo-old-writer-null`;
     const [item, rollType] = await Promise.all([
       prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
       prisma.rollType.create({ data: { name: `Wastage ${suffix}`, weight: 0.1 } }),
@@ -855,7 +853,10 @@ if (!TEST_DB) {
         barcode: `RHO-${5_300_000 + Number(String(Date.now()).slice(-6))}-C001`,
       },
     });
-    assert.equal(oldWriterRow.isWastage, true);
+    // The deployed previous backend omits isWastage and increments
+    // totalNetWeight for every Holo receive. NULL tells the new readers to use
+    // that same ordinary-receive bucket.
+    assert.equal(oldWriterRow.isWastage, null);
   });
 
   test('concurrent Coning close accounts for take-backs exactly once and returns the closed balance', async () => {

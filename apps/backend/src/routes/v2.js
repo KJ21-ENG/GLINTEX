@@ -3759,10 +3759,12 @@ function cutterStockFilterSql(req, view) {
   if (req.query.from) clauses.push(Prisma.sql`date >= ${String(req.query.from)}`);
   if (req.query.to) clauses.push(Prisma.sql`date <= ${String(req.query.to)}`);
   const status = String(req.query.status || 'all');
-  if (status === 'available_to_issue' || status === 'active') {
+  if (status === 'available_to_issue') {
     clauses.push(view === 'bobbins' ? Prisma.sql`available_bobbins > 0` : Prisma.sql`available_count > 0`);
+  } else if (status === 'active') {
+    clauses.push(Prisma.sql`status_type = 'active'`);
   } else if (status === 'inactive') {
-    clauses.push(view === 'bobbins' ? Prisma.sql`available_bobbins <= 0` : Prisma.sql`status_type = 'inactive'`);
+    clauses.push(Prisma.sql`status_type = 'inactive'`);
   }
   const searchClause = cutterStockSearchSql(req, view);
   if (searchClause !== Prisma.empty) clauses.push(searchClause);

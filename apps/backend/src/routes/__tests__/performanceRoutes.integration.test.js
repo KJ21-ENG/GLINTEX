@@ -855,7 +855,7 @@ if (!TEST_DB) {
       const sorted = [...values].sort((a, b) => a - b);
       return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
     };
-    const [holoSourceCandidates, coningSources] = await Promise.all([
+    const [holoSourceCandidates, coningSources, coneType] = await Promise.all([
       prisma.receiveFromCutterMachineRow.findMany({
         where: {
           id: { startsWith: 'perf-cutter-row-' },
@@ -881,6 +881,7 @@ if (!TEST_DB) {
         take: 100,
         select: { id: true, barcode: true },
       }),
+      prisma.coneType.findFirst({ orderBy: { id: 'asc' } }),
     ]);
     // Rehearsal rows intentionally include partially issued production-like data.
     // Select by authoritative remaining count and weight so this opt-in load gate
@@ -891,6 +892,7 @@ if (!TEST_DB) {
     )).slice(0, 100);
     assert.equal(holoSources.length, 100);
     assert.equal(coningSources.length, 100);
+    assert.ok(coneType?.id, 'performance rehearsal requires a cone type master');
 
     const scenarios = [
       {
@@ -913,6 +915,7 @@ if (!TEST_DB) {
             barcode: coningSources[index - 1].barcode,
             issueRolls: 1,
             issueWeight: 0.5,
+            coneTypeId: coneType.id,
           }],
         }),
       },

@@ -117,6 +117,12 @@ test('normal trace and computed filters keep pages bounded and omit exhaustive s
   assert.doesNotMatch(v2Source, /function buildOnMachineComputedResult/);
 });
 
+test('Cutter stock keeps active production distinct from source availability', () => {
+  assert.match(v2Source, /status === 'available_to_issue'[\s\S]{0,180}available_count > 0/);
+  assert.match(v2Source, /status === 'active'[\s\S]{0,100}status_type = 'active'/);
+  assert.match(v2Source, /status === 'inactive'[\s\S]{0,100}status_type = 'inactive'/);
+});
+
 test('Holo stock keys retain exact canonical source-lot identity', () => {
   assert.match(v2Source, /lotNos,/);
   assert.match(v2Source, /il\.lot_nos_final = \$\{lotNos\}::text\[\]/);

@@ -18,6 +18,8 @@ INSERT INTO "Yarn" (id, name, "createdAt", "updatedAt") VALUES
   ('perf-yarn', 'Performance Yarn', now(), now());
 INSERT INTO "Twist" (id, name, "createdAt", "updatedAt") VALUES
   ('perf-twist', 'Performance Twist', now(), now());
+INSERT INTO "ConeType" (id, name, weight, "createdAt", "updatedAt") VALUES
+  ('perf-cone-type', 'Performance Cone Type', 0.01, now(), now());
 INSERT INTO "Firm" (id, name, "createdAt", "updatedAt") VALUES
   ('perf-firm', 'Performance Firm', now(), now());
 INSERT INTO "Supplier" (id, name, "createdAt", "updatedAt") VALUES
@@ -215,7 +217,7 @@ SELECT
   jsonb_build_array(jsonb_build_object(
     'rowId', 'perf-holo-row-' || lpad(n::text, 5, '0'),
     'barcode', 'PERF-HR-' || lpad(n::text, 5, '0'),
-    'issueRolls', 25, 'issueWeight', 12.5
+    'issueRolls', 25, 'issueWeight', 12.5, 'coneTypeId', 'perf-cone-type'
   )),
   n % 109 = 0,
   '2026-08-05 00:00:00+00'::timestamptz + ((n % 40) * interval '1 second'),
@@ -283,17 +285,17 @@ INSERT INTO "IssueToConingMachine" (
 ) VALUES
   ('perf-recon-issue-1', '2026-08-08', 'perf-item', 'PERF-LOT-0001', 'perf-stale-yarn', 'perf-stale-twist', 'perf-stale-cut', 'PERF-RECON-I-1',
     20, 10, 200, jsonb_build_array(
-      jsonb_build_object('rowId', 'perf-coning-row-00001', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1),
-      jsonb_build_object('rowId', 'perf-coning-row-00002', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1)
+      jsonb_build_object('rowId', 'perf-coning-row-00001', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1, 'coneTypeId', 'perf-cone-type'),
+      jsonb_build_object('rowId', 'perf-coning-row-00002', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1, 'coneTypeId', 'perf-cone-type')
     ), '2026-08-08 00:00:00+00', '2026-08-08 00:00:00+00'),
   ('perf-recon-issue-2', '2026-08-09', 'perf-item', 'PERF-LOT-0001', 'perf-stale-yarn', 'perf-stale-twist', 'perf-stale-cut', 'PERF-RECON-I-2',
     20, 10, 200, jsonb_build_array(
-      jsonb_build_object('rowId', 'perf-recon-row-1', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1),
-      jsonb_build_object('rowId', 'perf-coning-row-00003', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1)
+      jsonb_build_object('rowId', 'perf-recon-row-1', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1, 'coneTypeId', 'perf-cone-type'),
+      jsonb_build_object('rowId', 'perf-coning-row-00003', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1, 'coneTypeId', 'perf-cone-type')
     ), '2026-08-09 00:00:00+00', '2026-08-09 00:00:00+00'),
   ('perf-recon-issue-3', '2026-08-10', 'perf-item', 'PERF-LOT-0001', 'perf-stale-yarn', 'perf-stale-twist', 'perf-stale-cut', 'PERF-RECON-I-3',
     10, 10, 100, jsonb_build_array(
-      jsonb_build_object('rowId', 'perf-recon-row-2', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1)
+      jsonb_build_object('rowId', 'perf-recon-row-2', 'stage', 'coning', 'issueRolls', 10, 'issueWeight', 1, 'coneTypeId', 'perf-cone-type')
     ), '2026-08-10 00:00:00+00', '2026-08-10 00:00:00+00');
 
 INSERT INTO "ReceiveFromConingMachineRow" (

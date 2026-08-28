@@ -11110,10 +11110,11 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
     const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
     const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
-    if (coneTypeIds.length) {
-      const ctCount = await prisma.coneType.count({ where: { id: { in: coneTypeIds } } });
-      if (ctCount !== coneTypeIds.length) return res.status(400).json({ error: 'One or more cone types not found' });
+    if (coneTypeIds.length !== 1 || resolvedCrates.some((crate) => !crate.coneTypeId)) {
+      return res.status(400).json({ error: 'Select one cone type for the complete Coning issue' });
     }
+    const ctCount = await prisma.coneType.count({ where: { id: { in: coneTypeIds } } });
+    if (ctCount !== coneTypeIds.length) return res.status(400).json({ error: 'One or more cone types not found' });
     if (coneTypeIds.length > 1) {
       return res.status(400).json({ error: 'Crates must use a single cone type for coning issues' });
     }
@@ -11277,6 +11278,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       : 0;
 
     const transactionResult = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
+      const requestedConeTypeId = coneTypeIds[0];
       const coningSourceIds = preparedCrates.map((crate) => crate.rowId).filter((id) => matchedConingRowIds.has(id)).sort();
       const holoSourceIds = preparedCrates.map((crate) => crate.rowId).filter((id) => !matchedConingRowIds.has(id)).sort();
       if (holoSourceIds.length > 0) {
@@ -11296,6 +11298,14 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
           ORDER BY id
           FOR UPDATE
         `;
+      }
+      await tx.$queryRaw`SELECT id FROM "ConeType" WHERE id = ${requestedConeTypeId} FOR KEY SHARE`;
+      const lockedConeType = await tx.coneType.findUnique({
+        where: { id: requestedConeTypeId },
+        select: { weight: true },
+      });
+      if (!lockedConeType || lockedConeType.weight == null || !Number.isFinite(Number(lockedConeType.weight)) || Number(lockedConeType.weight) < 0) {
+        throw Object.assign(new Error('Selected cone type has no valid tare weight'), { statusCode: 409, code: 'availability_changed' });
       }
 
       const [initialLockedConingRows, initialLockedHoloRows] = await Promise.all([
@@ -11531,6 +11541,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       helperId,
       notes,
       createdBy,
+      coneTypeId: requestedConeTypeId,
     } = req.body || {};
     const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
     if (!issueId || !pieceId || !Number.isInteger(coneCount) || coneCount <= 0 || !boxId || !Number.isFinite(providedGross) || Number(providedGross) <= 0) {
@@ -11550,10 +11561,34 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
         throw Object.assign(new Error('Selected box has no valid tare weight'), { statusCode: 400 });
       }
-      const lockedRefs = parseJsonArraySafe(lockedIssue.receivedRowRefs);
-      const coneTypeId = lockedRefs[0]?.coneTypeId || null;
+      let lockedRefs = parseJsonArraySafe(lockedIssue.receivedRowRefs);
+      let coneTypeId = lockedRefs[0]?.coneTypeId || null;
+      if (!coneTypeId && requestedConeTypeId) {
+        const existingReceiveCount = await tx.receiveFromConingMachineRow.count({
+          where: { issueId, isDeleted: false },
+        });
+        if (existingReceiveCount > 0) {
+          throw Object.assign(new Error('Legacy issue cone type cannot be changed after receiving has started'), { statusCode: 409 });
+        }
+        if (lockedRefs.length === 0) {
+          throw Object.assign(new Error('Issue source lineage is missing; repair the issue before receiving'), { statusCode: 409 });
+        }
+        coneTypeId = String(requestedConeTypeId);
+        const repairedRefs = lockedRefs.map((ref) => ({ ...ref, coneTypeId }));
+        await tx.issueToConingMachine.update({
+          where: { id: issueId },
+          data: { receivedRowRefs: repairedRefs, ...actorUpdateFields(actorUserId) },
+        });
+        lockedRefs = repairedRefs;
+        lockedIssue.receivedRowRefs = repairedRefs;
+      } else if (coneTypeId && requestedConeTypeId && String(requestedConeTypeId) !== coneTypeId) {
+        throw Object.assign(new Error('Issue cone type changed. Rescan before receiving.'), {
+          statusCode: 409,
+          code: 'availability_changed',
+        });
+      }
       if (!coneTypeId) {
-        throw Object.assign(new Error('Issue has no cone type for tare calculation'), { statusCode: 400 });
+        throw Object.assign(new Error('Select a cone type to repair this legacy issue before receiving'), { statusCode: 400 });
       }
       const coneType = await tx.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
       const coneWeightPerPiece = coneType?.weight == null ? NaN : Number(coneType.weight);
@@ -11616,15 +11651,16 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
         },
       });
       const issueBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(issueId) || null;
-      return { createdRow, pieceTotal, issueBalance, grossWeight, tareWeight, netWeight };
+      return { createdRow, pieceTotal, issueBalance, issueToConingMachine: lockedIssue, grossWeight, tareWeight, netWeight };
     });
-    const { createdRow, pieceTotal, issueBalance, tareWeight, netWeight } = txResult;
+    const { createdRow, pieceTotal, issueBalance, issueToConingMachine, tareWeight, netWeight } = txResult;
     const barcode = createdRow.barcode;
     res.json({
       ok: true,
       row: createdRow,
       pieceTotal,
       issueBalance,
+      issueToConingMachine,
       sourceUpdates: [{
         pieceId,
         totalCones: pieceTotal.totalCones,
@@ -14282,6 +14318,12 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     if (hasReceives && (wantsCrateUpdate || reqPerConeWt !== undefined)) {
       return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
     }
+    if (hasReceives && wantsMetaUpdate) {
+      return res.status(400).json({ error: 'Cannot change issue cone, wrapper, or box metadata after receiving has started' });
+    }
+    if (coneTypeId !== undefined && !coneTypeId) {
+      return res.status(400).json({ error: 'Cone type is required' });
+    }
     if (wantsQuantityUpdate && activeTakeBackCount > 0) {
       return res.status(400).json({ error: 'Cannot change issue quantities while active take-backs exist' });
     }
@@ -14299,6 +14341,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
           : Promise.resolve(0),
       ]);
       if (freshReceiveCount > 0 && wantsQuantityUpdate) throw new Error('Cannot change issue quantities: receive records exist for this issue');
+      if (freshReceiveCount > 0 && wantsMetaUpdate) throw new Error('Cannot change issue cone, wrapper, or box metadata after receiving has started');
       if (wantsQuantityUpdate && freshTakeBackCount > 0) throw new Error('Cannot change issue quantities while active take-backs exist');
       // Frozen once any dependent receive row is paid (incl. re-coning
       // children); corrections go through the paid-edit workflow.
@@ -14478,10 +14521,11 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
         const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
         const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
         const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
-        if (coneTypeIds.length) {
-          const ctCount = await tx.coneType.count({ where: { id: { in: coneTypeIds } } });
-          if (ctCount !== coneTypeIds.length) throw new Error('One or more cone types not found');
+        if (coneTypeIds.length !== 1 || resolvedCrates.some((crate) => !crate.coneTypeId)) {
+          throw new Error('Select one cone type for the complete Coning issue');
         }
+        const ctCount = await tx.coneType.count({ where: { id: { in: coneTypeIds } } });
+        if (ctCount !== coneTypeIds.length) throw new Error('One or more cone types not found');
         if (coneTypeIds.length > 1) {
           throw new Error('Crates must use a single cone type for coning issues');
         }
@@ -14657,6 +14701,12 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       }
 
       if (!hasReceives && !wantsCrateUpdate && wantsMetaUpdate) {
+        if (coneTypeId !== undefined) {
+          const selectedConeType = await tx.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
+          if (!selectedConeType || selectedConeType.weight == null || !Number.isFinite(Number(selectedConeType.weight)) || Number(selectedConeType.weight) < 0) {
+            throw new Error('Selected cone type has no valid tare weight');
+          }
+        }
         const refsRaw = issueRecord.receivedRowRefs;
         let refs = Array.isArray(refsRaw) ? refsRaw : [];
         if (typeof refsRaw === 'string') {

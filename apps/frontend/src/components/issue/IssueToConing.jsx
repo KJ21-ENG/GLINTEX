@@ -199,6 +199,7 @@ export function IssueToConing() {
     const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (!form.targetWeight) { alert('Enter target cone weight'); return; }
+        if (!form.coneTypeId) { alert('Select cone type'); return; }
 
         setSubmitting(true);
         try {
@@ -431,7 +432,7 @@ export function IssueToConing() {
                         <div className="text-sm font-medium">
                             Total Rolls: {coningMeta.totalRolls} | Total Net: {formatKg(coningMeta.totalNet)}
                         </div>
-                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0} className="w-full sm:w-auto">
+                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0 || !form.coneTypeId} className="w-full sm:w-auto">
                             {submitting ? 'Issuing...' : 'Confirm Issue'}
                         </Button>
                     </div>

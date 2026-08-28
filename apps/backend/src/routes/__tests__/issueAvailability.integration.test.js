@@ -84,11 +84,12 @@ if (!TEST_DB) {
   test('two Coning submissions cannot consume the same Holo availability', async () => {
     const suffix = `${Date.now()}-coning`;
     const auth = await adminAuth(suffix);
-    const [item, twist, yarn, cut] = await Promise.all([
+    const [item, twist, yarn, cut, coneType] = await Promise.all([
       prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
       prisma.twist.create({ data: { name: `Perf Twist ${suffix}` } }),
       prisma.yarn.create({ data: { name: `Perf Yarn ${suffix}` } }),
       prisma.cut.create({ data: { name: `Perf Cut ${suffix}` } }),
+      prisma.coneType.create({ data: { name: `Perf Cone ${suffix}`, weight: 0.01 } }),
     ]);
     const holoIssue = await prisma.issueToHoloMachine.create({
       data: {
@@ -118,8 +119,17 @@ if (!TEST_DB) {
     const body = {
       date: '2026-08-27',
       requiredPerConeNetWeight: 10,
-      crates: [{ rowId: source.id, barcode: source.barcode, issueRolls: 10, issueWeight: 10 }],
+      crates: [{ rowId: source.id, barcode: source.barcode, issueRolls: 10, issueWeight: 10, coneTypeId: coneType.id }],
     };
+    const missingConeType = await request(app)
+      .post('/api/issue_to_coning_machine')
+      .set('Authorization', auth)
+      .send({
+        ...body,
+        crates: [{ rowId: source.id, barcode: source.barcode, issueRolls: 10, issueWeight: 10 }],
+      });
+    assert.equal(missingConeType.status, 400, missingConeType.text);
+    assert.match(missingConeType.body.error, /cone type/i);
     const responses = await Promise.all([
       request(app).post('/api/issue_to_coning_machine').set('Authorization', auth).send(body),
       request(app).post('/api/issue_to_coning_machine').set('Authorization', auth).send(body),
@@ -132,12 +142,13 @@ if (!TEST_DB) {
   test('Coning issue creation derives lineage from the locked parent issue', async () => {
     const suffix = `${Date.now()}-coning-parent-lineage-lock`;
     const auth = await adminAuth(suffix);
-    const [item, cutA, cutB, yarn, twist] = await Promise.all([
+    const [item, cutA, cutB, yarn, twist, coneType] = await Promise.all([
       prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
       prisma.cut.create({ data: { name: `Perf Cut A ${suffix}` } }),
       prisma.cut.create({ data: { name: `Perf Cut B ${suffix}` } }),
       prisma.yarn.create({ data: { name: `Perf Yarn ${suffix}` } }),
       prisma.twist.create({ data: { name: `Perf Twist ${suffix}` } }),
+      prisma.coneType.create({ data: { name: `Perf Cone ${suffix}`, weight: 0.01 } }),
     ]);
     const holoIssue = await prisma.issueToHoloMachine.create({
       data: {
@@ -169,7 +180,7 @@ if (!TEST_DB) {
       .set('Authorization', auth)
       .send({
         date: '2026-08-27', requiredPerConeNetWeight: 10,
-        crates: [{ rowId: source.id, barcode: source.barcode, issueRolls: 10, issueWeight: 10 }],
+        crates: [{ rowId: source.id, barcode: source.barcode, issueRolls: 10, issueWeight: 10, coneTypeId: coneType.id }],
       })
       .then((response) => response);
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -259,7 +270,7 @@ if (!TEST_DB) {
     const [issueResponse, dispatchResponse] = await Promise.all([
       request(app).post('/api/issue_to_coning_machine').set('Authorization', auth).send({
         date: '2026-08-27', requiredPerConeNetWeight: 10,
-        crates: [{ rowId: source.id, issueRolls: 10, issueWeight: 10 }],
+        crates: [{ rowId: source.id, issueRolls: 10, issueWeight: 10, coneTypeId: coneType.id }],
       }),
       request(app).post('/api/dispatch').set('Authorization', auth).send({
         customerId: customer.id,
@@ -298,7 +309,7 @@ if (!TEST_DB) {
       .set('Authorization', auth)
       .send({
         date: '2026-08-27', requiredPerConeNetWeight: 10,
-        crates: [{ rowId: allocatedSource.id, issueRolls: 8, issueWeight: 8 }],
+        crates: [{ rowId: allocatedSource.id, issueRolls: 8, issueWeight: 8, coneTypeId: coneType.id }],
       });
     assert.equal(allocatedIssue.status, 200, allocatedIssue.text);
 
@@ -573,9 +584,10 @@ if (!TEST_DB) {
   test('receive creation rejects missing tare masters and invalid physical counts', async () => {
     const suffix = `${Date.now()}-tare-validation`;
     const auth = await adminAuth(suffix);
-    const [item, coningBox] = await Promise.all([
+    const [item, coningBox, coningConeType] = await Promise.all([
       prisma.item.create({ data: { name: `Perf Item ${suffix}` } }),
       prisma.box.create({ data: { name: `Perf Coning Box ${suffix}`, weight: 1, processType: 'coning' } }),
+      prisma.coneType.create({ data: { name: `Perf Legacy Cone ${suffix}`, weight: 0.01 } }),
     ]);
     const holoIssue = await prisma.issueToHoloMachine.create({
       data: {
@@ -613,7 +625,24 @@ if (!TEST_DB) {
         grossWeight: 5,
       });
     assert.equal(missingConeType.status, 400, missingConeType.text);
-    assert.match(missingConeType.body.error, /no cone type/i);
+    assert.match(missingConeType.body.error, /select a cone type/i);
+
+    const repairedLegacyReceive = await request(app)
+      .post('/api/receive_from_coning_machine/manual')
+      .set('Authorization', auth)
+      .send({
+        issueId: coningIssue.id,
+        pieceId: coningIssue.id,
+        coneCount: 10,
+        boxId: coningBox.id,
+        grossWeight: 5,
+        coneTypeId: coningConeType.id,
+      });
+    assert.equal(repairedLegacyReceive.status, 200, repairedLegacyReceive.text);
+    assert.equal(repairedLegacyReceive.body.row.tareWeight, 1.1);
+    assert.equal(repairedLegacyReceive.body.issueToConingMachine.receivedRowRefs[0].coneTypeId, coningConeType.id);
+    const repairedIssue = await prisma.issueToConingMachine.findUnique({ where: { id: coningIssue.id } });
+    assert.equal(repairedIssue.receivedRowRefs[0].coneTypeId, coningConeType.id);
 
     const missingWastageIssue = await request(app)
       .post('/api/receive_from_coning_machine/mark_wastage')
@@ -679,7 +708,7 @@ if (!TEST_DB) {
     const child = await request(app)
       .post('/api/issue_to_coning_machine')
       .set('Authorization', auth)
-      .send({ date: '2026-08-27', requiredPerConeNetWeight: 10, crates: [{ rowId: source.id, issueRolls: 5 }] });
+      .send({ date: '2026-08-27', requiredPerConeNetWeight: 10, crates: [{ rowId: source.id, issueRolls: 5, coneTypeId: coneType.id }] });
     assert.equal(child.status, 200);
     assert.equal(child.body.issueToConingMachine.receivedRowRefs[0].stage, 'coning');
     const edit = await request(app)

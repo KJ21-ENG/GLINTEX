@@ -33,6 +33,7 @@ export function ConingReceiveForm() {
     // so only the staged cart counts as unsaved.
     useUnsavedGuard('receive-coning', cart.length > 0);
     const [receiveDate, setReceiveDate] = useState(todayISO());
+    const [legacyConeTypeId, setLegacyConeTypeId] = useState('');
     const [isWastage, setIsWastage] = useState(false);
     const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
     const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
@@ -73,6 +74,7 @@ export function ConingReceiveForm() {
                 if (!cancelled && found) {
                     setIssue(found);
                     setCart([]);
+                    setLegacyConeTypeId('');
                 }
             } catch (e) {
                 if (!cancelled) alert(e?.message || 'Failed to lookup coning issue');
@@ -97,6 +99,7 @@ export function ConingReceiveForm() {
             return [];
         }
     }, [issue?.receivedRowRefs]);
+    const issueConeTypeId = issueRefs?.[0]?.coneTypeId || legacyConeTypeId || '';
 
     const fallbackIssuedWeight = useMemo(() => {
         const sumFromRefs = issueRefs.reduce((sum, ref) => sum + (Number(ref?.issueWeight) || 0), 0);
@@ -162,6 +165,7 @@ export function ConingReceiveForm() {
             if (found) {
                 setIssue(found);
                 setCart([]);
+                setLegacyConeTypeId('');
             }
         } catch (e) {
             alert(e.message);
@@ -220,8 +224,7 @@ export function ConingReceiveForm() {
 
         // Cone Tare? 
         // We need to know the cone type from the issue.
-        const coneTypeId = issueRefs?.[0]?.coneTypeId;
-        const coneType = db.cone_types.find(c => c.id === coneTypeId);
+        const coneType = db.cone_types.find(c => c.id === issueConeTypeId);
         const coneWt = (coneType?.weight || 0) * Number(row.coneCount || 0);
 
         return Math.max(0, gross - boxWt - coneWt);
@@ -232,8 +235,7 @@ export function ConingReceiveForm() {
         const count = Number(row.coneCount);
         const gross = Number(row.grossWeight);
         const box = db.boxes.find((entry) => entry.id === row.boxId);
-        const coneTypeId = issueRefs?.[0]?.coneTypeId;
-        const coneType = db.cone_types.find((entry) => entry.id === coneTypeId);
+        const coneType = db.cone_types.find((entry) => entry.id === issueConeTypeId);
         return !box || !Number.isFinite(Number(box.weight)) || Number(box.weight) <= 0
             || !coneType || !Number.isFinite(Number(coneType.weight)) || Number(coneType.weight) < 0
             || !Number.isInteger(count) || count <= 0 || !Number.isFinite(gross) || gross <= 0 || calcRowNet(row) <= 0;
@@ -248,7 +250,7 @@ export function ConingReceiveForm() {
             if (Number.isFinite(cones)) totalCones += cones;
         }
         return { totalNetWeight, totalCones };
-    }, [cart, db.boxes, db.cone_types, issueRefs]);
+    }, [cart, db.boxes, db.cone_types, issueConeTypeId]);
 
     const totalReceivedWeight = Number(issueMetrics.received || 0) + cartTotals.totalNetWeight;
     const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
@@ -264,16 +266,13 @@ export function ConingReceiveForm() {
         let cutName = '';
         let coneTypeName = '';
 
-        if (issueRefs.length > 0) {
-            const firstRef = issueRefs[0];
-            if (firstRef.coneTypeId) {
-                coneTypeName = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
-            }
+        if (issueConeTypeId) {
+            coneTypeName = db.cone_types?.find(c => c.id === issueConeTypeId)?.name || '';
         }
         const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
         cutName = resolved.cutName === '—' ? '' : resolved.cutName;
         return { itemName, cutName, coneTypeName };
-    }, [issue, issueRefs, db, traceContext]);
+    }, [issue, issueConeTypeId, db, traceContext]);
 
     const receiveRowsForIssue = useMemo(() => {
         if (!issue?.id) return [];
@@ -316,12 +315,16 @@ export function ConingReceiveForm() {
                     coneCount: Number(row.coneCount),
                     boxId: row.boxId,
                     grossWeight: Number(row.grossWeight),
+                    coneTypeId: issueConeTypeId || null,
                     date: receiveDate,
                     operatorId: row.operatorId,
                     notes: row.notes
                 });
                 if (res?.row) createdRows.push(res.row);
                 if (res?.issueBalance) latestIssueBalance = res.issueBalance;
+                if (res?.issueToConingMachine?.receivedRowRefs) {
+                    setIssue((prev) => prev ? { ...prev, receivedRowRefs: res.issueToConingMachine.receivedRowRefs } : prev);
+                }
 
                 if (shouldPrepareLabels) {
                     // The backend allocates the authoritative sequence against the
@@ -344,7 +347,8 @@ export function ConingReceiveForm() {
                         const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
                         if (Array.isArray(refs) && refs.length > 0) {
                             const firstRef = refs[0];
-                            if (firstRef.coneTypeId) coneType = db.cone_types.find(c => c.id === firstRef.coneTypeId)?.name || '';
+                            const labelConeTypeId = firstRef.coneTypeId || issueConeTypeId;
+                            if (labelConeTypeId) coneType = db.cone_types.find(c => c.id === labelConeTypeId)?.name || '';
                             if (firstRef.wrapperId) wrapperName = db.wrappers.find(w => w.id === firstRef.wrapperId)?.name || '';
 
                             refs.forEach(ref => {
@@ -511,6 +515,23 @@ export function ConingReceiveForm() {
                 </CardHeader>
                 {issue && (
                     <CardContent className="space-y-6">
+                        {!issueRefs?.[0]?.coneTypeId && (
+                            <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
+                                <Label>Cone Type required for this legacy issue</Label>
+                                <p className="mb-3 mt-1 text-sm">
+                                    Select the cone type once. It will be saved on the issue before its first receive so tare remains authoritative.
+                                </p>
+                                <Select
+                                    value={legacyConeTypeId}
+                                    onChange={(event) => setLegacyConeTypeId(event.target.value)}
+                                    options={(db.cone_types || []).map((entry) => ({ id: entry.id, name: entry.name }))}
+                                    labelKey="name"
+                                    valueKey="id"
+                                    placeholder="Select Cone Type"
+                                    clearable
+                                />
+                            </div>
+                        )}
                         <ResizableIssueSummary
                             idPrefix="receive-summary-coning"
                             warning={isReceivedOverIssued ? { excessKg: excessReceivedWeight } : null}

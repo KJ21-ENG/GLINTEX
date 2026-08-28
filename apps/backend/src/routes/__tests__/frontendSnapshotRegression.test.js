@@ -176,6 +176,16 @@ test('targeted issue balances win until a newer mutation balance arrives', async
   }
 });
 
+test('Coning issue and legacy first-receive flows preserve authoritative cone tare metadata', async () => {
+  const issueForm = await readFile(join(frontendSource, 'components/issue/IssueToConing.jsx'), 'utf8');
+  const receiveForm = await readFile(join(frontendSource, 'components/receive/ConingReceiveForm.jsx'), 'utf8');
+  assert.match(issueForm, /if \(!form\.coneTypeId\) \{ alert\('Select cone type'\); return; \}/);
+  assert.match(issueForm, /disabled=\{submitting \|\| crates\.length === 0 \|\| !form\.coneTypeId\}/);
+  assert.match(receiveForm, /Cone Type required for this legacy issue/);
+  assert.match(receiveForm, /coneTypeId: issueConeTypeId \|\| null/);
+  assert.match(receiveForm, /issueToConingMachine\?\.receivedRowRefs/);
+});
+
 test('no operational frontend screen loads the deprecated process module', async () => {
   const files = await listSourceFiles(frontendSource);
   const offenders = [];

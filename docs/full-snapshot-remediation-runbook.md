@@ -77,7 +77,7 @@ Production deployment requires fresh explicit authorization. Before the window, 
 Sequence:
 
 1. Build the backend and frontend images from the exact release SHA.
-2. Run `docker compose --profile migration run --rm migrate` while the prior application remains live. This applies ordinary Prisma migrations first, then the idempotent `prisma/manual/apply_process_pagination_indexes.sql` file with PostgreSQL `CONCURRENTLY` outside Prisma's transaction.
+2. Run `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile migration run --rm migrate` while the prior application remains live. This applies ordinary Prisma migrations first, then the idempotent `prisma/manual/apply_process_pagination_indexes.sql` file with PostgreSQL `CONCURRENTLY` outside Prisma's transaction.
 3. Deploy the backward-compatible backend and require its container health check to pass.
 4. Run targeted API probes against the healthy backend.
 5. Deploy the frontend only after those probes pass.

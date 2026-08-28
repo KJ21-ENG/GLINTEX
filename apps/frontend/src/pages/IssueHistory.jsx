@@ -2535,7 +2535,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         labelKey="name"
                         valueKey="id"
                         placeholder="Select Cone Type"
-                        clearable
                         disabled={editingIssue.hasReceives}
                       />
                     </div>

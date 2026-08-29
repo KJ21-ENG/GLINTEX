@@ -10085,15 +10085,10 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
           code: 'availability_changed',
         });
       }
-      const balances = await computeIssueBalancesBatch(tx, 'holo', [lockedIssue]);
-      const balance = balances.get(issueId);
-      if (!balance || netWeight > Number(balance.pendingWeight || 0) + TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('Issue availability changed. Rescan before receiving.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: balance || null,
-        });
-      }
+      // Holo production can legitimately yield more net weight than the input
+      // issue. Preserve the historical over-receive behavior: serialize the
+      // mutation for barcode/totals correctness, then report the authoritative
+      // balance (received may exceed net issued and pending clamps to zero).
 
       const existingCrates = await tx.receiveFromHoloMachineRow.count({ where: { issueId } });
       const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex: existingCrates + 1 });
@@ -10353,15 +10348,8 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
       if (!lockedIssue) {
         throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
       }
-      const freshBalance = (await computeIssueBalancesBatch(tx, 'holo', [lockedIssue])).get(lockedIssue.id);
-      const allowedWeight = Number(freshBalance?.pendingWeight || 0) + prevNetWeight;
-      if (netWeight > allowedWeight + TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('Issue availability changed. Reload before editing.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: freshBalance || null,
-        });
-      }
+      // Editing a Holo receive follows the same historical yield rule as
+      // creation: over-received weight remains valid and visible as a warning.
       if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
         throw Object.assign(new Error('Cannot edit row: already dispatched'), { statusCode: 409 });
       }
@@ -11725,14 +11713,10 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       if (!issueSeriesNumber) {
         throw Object.assign(new Error('Invalid issue barcode format. Cannot derive Coning receive series.'), { statusCode: 400 });
       }
-      const balance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(issueId);
-      if (!balance || netWeight > Number(balance.pendingWeight || 0) + TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('Issue availability changed. Rescan before receiving.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: balance || null,
-        });
-      }
+      // Coning production can legitimately yield more net weight than the
+      // issue. Keep the issue lock for sequencing and consistency, but do not
+      // reject an over-receive; the returned balance drives the existing
+      // over-received warning and leaves pending at zero.
       const existingCount = await tx.receiveFromConingMachineRow.count({ where: { issueId } });
       const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex: existingCount + 1 });
       const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, lockedIssue, netWeight);
@@ -12127,15 +12111,8 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${lockedRow.issueId} FOR UPDATE`;
       const lockedIssue = await tx.issueToConingMachine.findFirst({ where: { id: lockedRow.issueId, isDeleted: false } });
       if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      const freshBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(lockedIssue.id);
-      const allowedWeight = Number(freshBalance?.pendingWeight || 0) + prevNetWeight;
-      if (netWeight > allowedWeight + TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('Issue availability changed. Reload before editing.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: freshBalance || null,
-        });
-      }
+      // Preserve the historical Coning yield rule for edits as well: a valid
+      // receive may remain above the issue weight and is reported, not blocked.
       if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
         throw Object.assign(new Error('Cannot edit row: already dispatched'), { statusCode: 409 });
       }

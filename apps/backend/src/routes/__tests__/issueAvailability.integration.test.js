@@ -379,7 +379,7 @@ if (!TEST_DB) {
     assert.equal(response.body.crates[0].availableWeight, 5);
   });
 
-  test('two Holo receives cannot exceed one issue balance', async () => {
+  test('concurrent Holo receives preserve historical over-receive behavior', async () => {
     const suffix = `${Date.now()}-holo-receive`;
     const issueSeries = 2_000_000 + Number(String(Date.now()).slice(-6));
     const auth = await adminAuth(suffix);
@@ -419,12 +419,20 @@ if (!TEST_DB) {
       request(app).post('/api/receive_from_holo_machine/manual').set('Authorization', auth).send(body),
       request(app).post('/api/receive_from_holo_machine/manual').set('Authorization', auth).send(body),
     ]);
-    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
-    assert.equal(responses.find((response) => response.status === 409)?.body.outcome, 'availability_changed');
-    assert.equal(await prisma.receiveFromHoloMachineRow.count({ where: { issueId: issue.id, isDeleted: false } }), 1);
-    assert.equal(responses.find((response) => response.status === 200)?.body.row.rollCount, 20);
-    assert.equal(responses.find((response) => response.status === 200)?.body.issueBalance.originalWeight, 13);
-    assert.equal(responses.find((response) => response.status === 200)?.body.issueBalance.receivedWeight, 12);
+    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 200]);
+    assert.equal(await prisma.receiveFromHoloMachineRow.count({ where: { issueId: issue.id, isDeleted: false } }), 2);
+    assert.equal(new Set(responses.map((response) => response.body.row.barcode)).size, 2);
+    assert.equal(Math.max(...responses.map((response) => response.body.issueBalance.originalWeight)), 13);
+    assert.equal(Math.max(...responses.map((response) => response.body.issueBalance.receivedWeight)), 24);
+    assert.equal(responses.find((response) => response.body.issueBalance.receivedWeight === 24)?.body.issueBalance.pendingWeight, 0);
+
+    const edited = await request(app)
+      .put(`/api/receive_from_holo_machine/rows/${responses[0].body.row.id}`)
+      .set('Authorization', auth)
+      .send({ grossWeight: 20 });
+    assert.equal(edited.status, 200, edited.text);
+    assert.equal(edited.body.issueBalance.receivedWeight, 29);
+    assert.equal(edited.body.issueBalance.pendingWeight, 0);
   });
 
   test('Holo receive revalidates source-piece lineage after locking the issue', async () => {
@@ -540,7 +548,7 @@ if (!TEST_DB) {
     assert.equal(updatedSecond.issuedBobbinWeight, 5);
   });
 
-  test('two Coning receives cannot exceed one issue balance', async () => {
+  test('concurrent Coning receives preserve historical over-receive behavior', async () => {
     const suffix = `${Date.now()}-coning-receive`;
     const issueSeries = 3_000_000 + Number(String(Date.now()).slice(-6));
     const auth = await adminAuth(suffix);
@@ -573,9 +581,19 @@ if (!TEST_DB) {
       request(app).post('/api/receive_from_coning_machine/manual').set('Authorization', auth).send(body),
       request(app).post('/api/receive_from_coning_machine/manual').set('Authorization', auth).send(body),
     ]);
-    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
-    assert.equal(responses.find((response) => response.status === 409)?.body.outcome, 'availability_changed');
-    assert.equal(await prisma.receiveFromConingMachineRow.count({ where: { issueId: issue.id, isDeleted: false } }), 1);
+    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 200]);
+    assert.equal(await prisma.receiveFromConingMachineRow.count({ where: { issueId: issue.id, isDeleted: false } }), 2);
+    assert.equal(new Set(responses.map((response) => response.body.row.barcode)).size, 2);
+    assert.equal(Math.max(...responses.map((response) => response.body.issueBalance.receivedWeight)), 17);
+    assert.equal(responses.find((response) => response.body.issueBalance.receivedWeight === 17)?.body.issueBalance.pendingWeight, 0);
+
+    const edited = await request(app)
+      .put(`/api/receive_from_coning_machine/rows/${responses[0].body.row.id}`)
+      .set('Authorization', auth)
+      .send({ grossWeight: 20 });
+    assert.equal(edited.status, 200, edited.text);
+    assert.equal(edited.body.issueBalance.receivedWeight, 27);
+    assert.equal(edited.body.issueBalance.pendingWeight, 0);
   });
 
   test('Coning receive derives tare from the cone type on the locked issue', async () => {

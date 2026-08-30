@@ -13,17 +13,17 @@ import { exportHistoryToExcel } from '../services';
 import { useSubmitLock } from '../hooks/useSubmitLock';
 import { UserBadge } from '../components/common/UserBadge';
 import { SheetColumnFilter } from '../components/common/SheetColumnFilters';
-import { CellText, ListState, SortToggle, TableResultCount, TableStateRow } from '../components/data-table';
+import { CellText, ListState, SortToggle, TablePagination, TableResultCount, TableStateRow } from '../components/data-table';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useV2CursorList } from '../hooks/useV2CursorList';
+import { useV2PagedList } from '../hooks/useV2PagedList';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import * as v2 from '../api/v2';
-import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
 
 const EMPTY_TOTALS = { qty: 0, weight: 0, metallicBobbins: 0, metallicBobbinsWeight: 0, yarnKg: 0, rollsProducedEstimate: 0, rollsIssued: 0, takenBackWeight: 0, netIssuedWeight: 0 };
 
 export function IssueHistory({ db, canEdit = false, canDelete = false }) {
-  const { process, patchIssueRecord, reverseIssueTakeBack, emitInvalidation, subscribeInvalidation } = useInventory();
+  const { process, refreshProcessData, reverseIssueTakeBack, emitInvalidation, subscribeInvalidation } = useInventory();
   const [deletingId, setDeletingId] = useState(null);
   const [reversingTakeBackId, setReversingTakeBackId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,17 +34,36 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const [openFilterId, setOpenFilterId] = useState(null);
   const [editingIssue, setEditingIssue] = useState(null);
   const [issueDraft, setIssueDraft] = useState(null);
-  const [issueSourcePieces, setIssueSourcePieces] = useState([]);
   const [issueScanInput, setIssueScanInput] = useState('');
   const [issueScanLoading, setIssueScanLoading] = useState(false);
   const scrollRootRef = useRef(null);
   const takeBackScrollRef = useRef(null);
-  const issueDetailRequestRef = useRef(0);
-  const issueScanRequestRef = useRef({ generation: 0, controller: null });
   const [savingIssue, setSavingIssue] = useState(false);
   const [revertTarget, setRevertTarget] = useState(null);
   const [revertBusy, setRevertBusy] = useState(false);
-  const coningTraceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const [issueActionLoadingId, setIssueActionLoadingId] = useState(null);
+  const issueActionBusyRef = useRef(false);
+  const issueDetailCacheRef = useRef(new Map());
+  const issueDetailInflightRef = useRef(new Map());
+  const issueEditorGenerationRef = useRef(0);
+  const issueEditorStageRef = useRef(process);
+  issueEditorStageRef.current = process;
+  const isCurrentIssueEditorRequest = (generation, stage) => (
+    issueEditorGenerationRef.current === generation && issueEditorStageRef.current === stage
+  );
+  useEffect(() => {
+    issueEditorGenerationRef.current += 1;
+    issueActionBusyRef.current = false;
+    setIssueActionLoadingId(null);
+    setEditingIssue(null);
+    setIssueDraft(null);
+    setIssueScanInput('');
+    setIssueScanLoading(false);
+  }, [process]);
+  useEffect(() => () => {
+    issueEditorGenerationRef.current += 1;
+    issueActionBusyRef.current = false;
+  }, []);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
   const formatInputDate = (value) => (value ? String(value).slice(0, 10) : '');
   const parseIssuePieceIds = (row) => (
@@ -62,6 +81,32 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return [];
     }
   };
+  const getIssueDetailCacheKey = (row) => `${process}:${row?.id || row?.barcode || ''}`;
+  const loadExactIssueDetail = async (row, { force = false } = {}) => {
+    if (!row) throw new Error('Issue details are unavailable');
+    if (process === 'cutter') return row;
+    if (!row.barcode) throw new Error('Issue barcode is missing');
+
+    const key = getIssueDetailCacheKey(row);
+    if (!force && issueDetailCacheRef.current.has(key)) return issueDetailCacheRef.current.get(key);
+    if (!force && issueDetailInflightRef.current.has(key)) return await issueDetailInflightRef.current.get(key);
+
+    const pending = (process === 'holo'
+      ? api.getIssueByHoloBarcode(row.barcode)
+      : api.getIssueByConingBarcode(row.barcode))
+      .then((detail) => {
+        issueDetailCacheRef.current.set(key, detail);
+        return detail;
+      })
+      .finally(() => issueDetailInflightRef.current.delete(key));
+    issueDetailInflightRef.current.set(key, pending);
+    return await pending;
+  };
+  const issueSources = (detail) => (
+    Array.isArray(detail?.sources)
+      ? detail.sources
+      : (Array.isArray(detail?.crates) ? detail.crates : [])
+  );
   const formatMixedLotLabel = (lotNos = []) => {
     const uniqueLots = Array.from(new Set((lotNos || []).map((lot) => String(lot || '').trim()).filter(Boolean)));
     if (uniqueLots.length === 0) return '';
@@ -70,28 +115,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       ? `Mixed (${uniqueLots.join(', ')})`
       : `Mixed (${uniqueLots.length})`;
   };
-  const resolveCutNameFromHoloIssue = (holoIssue) => {
-    if (!holoIssue) return '';
-    const directCut = holoIssue.cut?.name
-      || (holoIssue.cutId ? db.cuts?.find(c => c.id === holoIssue.cutId)?.name || '' : '');
-    return directCut || '';
-  };
   const resolveConingSourceMeta = (sourceRow) => {
     if (!sourceRow) return { lotNo: '', itemId: '', cut: '' };
-    let lotNo = sourceRow.issue?.lotNo || '';
-    let itemId = sourceRow.issue?.itemId || '';
-    let cut = sourceRow.issue?.cut?.name
+    const lotNo = sourceRow.lotNo || sourceRow.trace?.lotNo || sourceRow.issue?.lotNo || '';
+    const itemId = sourceRow.itemId || sourceRow.trace?.itemId || sourceRow.issue?.itemId || '';
+    const cut = sourceRow.cutName || sourceRow.trace?.cutName || sourceRow.issue?.cut?.name
       || (sourceRow.issue?.cutId ? db.cuts?.find(c => c.id === sourceRow.issue.cutId)?.name || '' : '');
-
-    if (sourceRow.issueId) {
-      const holoIssue = db.issue_to_holo_machine?.find(i => i.id === sourceRow.issueId);
-      if (holoIssue) {
-        lotNo = holoIssue.lotNo || lotNo;
-        itemId = holoIssue.itemId || itemId;
-        if (!cut) cut = resolveCutNameFromHoloIssue(holoIssue);
-      }
-    }
-
     return { lotNo, itemId, cut };
   };
   const toTimeMs = (value) => {
@@ -250,69 +279,22 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           return assignedIssue?.issueId === row.id;
         });
     }
-    if (process === 'holo') {
-      return (db.receive_from_holo_machine_rows || [])
-        .some(r => !r.isDeleted && r.issueId === row.id);
-    }
-    return (db.receive_from_coning_machine_rows || [])
-      .some(r => !r.isDeleted && r.issueId === row.id);
+    // Holo and Coning must use the authoritative issue-scoped lookup. Their
+    // process snapshots are intentionally not loaded on this page.
+    return false;
   };
 
-  const cancelIssueScanRequest = () => {
-    const active = issueScanRequestRef.current;
-    active.controller?.abort();
-    issueScanRequestRef.current = { generation: active.generation + 1, controller: null };
-    setIssueScanLoading(false);
-  };
+  const openIssueEditor = async (row) => {
+    if (!row) return;
 
-  const beginIssueScanRequest = () => {
-    const active = issueScanRequestRef.current;
-    active.controller?.abort();
-    const controller = new AbortController();
-    const generation = active.generation + 1;
-    issueScanRequestRef.current = { generation, controller };
-    setIssueScanLoading(true);
-    return { generation, controller };
-  };
-
-  const isCurrentIssueScanRequest = (generation) => (
-    issueScanRequestRef.current.generation === generation
-      && !issueScanRequestRef.current.controller?.signal.aborted
-  );
-
-  const finishIssueScanRequest = (generation) => {
-    if (issueScanRequestRef.current.generation !== generation) return;
-    issueScanRequestRef.current = { generation, controller: null };
-    setIssueScanLoading(false);
-  };
-
-  useEffect(() => () => {
-    issueScanRequestRef.current.controller?.abort();
-  }, []);
-
-  const openIssueEditor = async (initialRow) => {
-    if (!initialRow) return;
-    cancelIssueScanRequest();
-    const requestGeneration = issueDetailRequestRef.current + 1;
-    issueDetailRequestRef.current = requestGeneration;
-    let detail;
-    try {
-      detail = await v2.getV2IssueActionDetail(process, initialRow.id);
-    } catch (err) {
-      if (issueDetailRequestRef.current !== requestGeneration) return;
-      alert(err.message || 'Failed to load issue details');
-      return;
-    }
-    if (issueDetailRequestRef.current !== requestGeneration) return;
-    const row = detail?.issue || initialRow;
-    const sourceRows = Array.isArray(detail?.sourceRows) ? detail.sourceRows : [];
-    const sourcePieces = Array.isArray(detail?.sourcePieces) ? detail.sourcePieces : [];
-    setIssueSourcePieces(sourcePieces);
-    const hasReceives = Number(detail?.meta?.receiveRowCount || 0) > 0;
-    setEditingIssue({ ...row, hasReceives });
-    setIssueScanInput('');
+    const requestGeneration = issueEditorGenerationRef.current + 1;
+    const requestStage = process;
 
     if (process === 'cutter') {
+      issueEditorGenerationRef.current = requestGeneration;
+      const hasReceives = getIssueHasReceives(row);
+      setEditingIssue({ ...row, hasReceives });
+      setIssueScanInput('');
       setIssueDraft({
         date: formatInputDate(row.date),
         machineId: row.machineId || '',
@@ -325,87 +307,116 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return;
     }
 
-    if (process === 'holo') {
-      const refs = parseIssueRefs(row);
-      const crates = refs.map((ref) => {
-        const cutterRow = sourceRows.find(r => r.id === ref.rowId);
-        const pieceId = cutterRow?.pieceId || ref.pieceId || '';
-        const piece = sourcePieces.find(p => p.id === pieceId);
-        const bobbinQty = Number(cutterRow?.bobbinQuantity || 0);
-        const unitWeight = bobbinQty > 0 ? Number(cutterRow?.netWt || 0) / bobbinQty : null;
+    if (issueActionBusyRef.current) return;
+    issueEditorGenerationRef.current = requestGeneration;
+    issueActionBusyRef.current = true;
+    setIssueActionLoadingId(row.id);
+    try {
+      const detail = await loadExactIssueDetail(row);
+      if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
+      const hydrated = { ...row, ...detail };
+      const hasReceives = typeof detail?.hasReceives === 'boolean'
+        ? detail.hasReceives
+        : (Array.isArray(detail?.receives) && detail.receives.length > 0);
+      setEditingIssue({ ...hydrated, hasReceives });
+      setIssueScanInput('');
+
+      const refs = parseIssueRefs(hydrated);
+      const sources = issueSources(detail);
+      const sourceById = new Map(sources.map((source) => [String(source?.rowId || source?.id || ''), source]));
+      const orderedRefs = refs.length > 0
+        ? refs
+        : sources.map((source) => ({ rowId: source?.rowId || source?.id, ...source }));
+
+      if (process === 'holo') {
+        const crates = orderedRefs.map((ref) => {
+          const source = sourceById.get(String(ref?.rowId || '')) || {};
+          const combined = { ...source, ...ref };
+          const bobbinQty = Number(source?.bobbinQuantity || 0);
+          const netWeight = Number(source?.netWeight ?? source?.netWt ?? 0);
+          const unitWeight = Number(source?.unitWeight)
+            || (bobbinQty > 0 ? netWeight / bobbinQty : null);
+          return {
+            rowId: combined.rowId || source.id,
+            barcode: source.barcode || source.vchNo || combined.barcode || '',
+            pieceId: source.pieceId || combined.pieceId || '',
+            itemId: source.itemId || combined.itemId || '',
+            lotNo: source.lotNo || combined.lotNo || '',
+            issuedBobbins: Number(combined.issuedBobbins || 0),
+            issuedBobbinWeight: Number(combined.issuedBobbinWeight || 0),
+            unitWeight,
+          };
+        });
+
+        setIssueDraft({
+          date: formatInputDate(hydrated.date),
+          machineId: hydrated.machineId || '',
+          operatorId: hydrated.operatorId || '',
+          shift: hydrated.shift || '',
+          yarnId: hydrated.yarnId || '',
+          twistId: hydrated.twistId || '',
+          yarnKg: hydrated.yarnKg ?? '',
+          rollsProducedEstimate: hydrated.rollsProducedEstimate ?? '',
+          note: hydrated.note || '',
+          crates,
+          cratesTouched: false,
+        });
+        return;
+      }
+
+      const crates = orderedRefs.map((ref) => {
+        const source = sourceById.get(String(ref?.rowId || '')) || {};
+        const combined = { ...source, ...ref };
+        const baseRolls = Number(source?.rollCount ?? source?.coneCount ?? 0);
+        const baseWeight = Number(source?.rollWeight ?? source?.coneWeight ?? source?.netWeight ?? 0);
+        const unitWeight = Number(source?.unitWeight)
+          || (baseRolls > 0 ? baseWeight / baseRolls : 0);
+        const { lotNo, itemId, cut } = resolveConingSourceMeta(source);
         return {
-          rowId: ref.rowId,
-          barcode: cutterRow?.barcode || '',
-          pieceId,
-          itemId: piece?.itemId || '',
-          lotNo: piece?.lotNo || '',
-          issuedBobbins: Number(ref.issuedBobbins || 0),
-          issuedBobbinWeight: Number(ref.issuedBobbinWeight || 0),
+          rowId: combined.rowId || source.id,
+          barcode: source.barcode || combined.barcode || '',
+          issueRolls: Number(combined.issueRolls || 0),
+          issueWeight: Number(combined.issueWeight || 0),
           unitWeight,
+          lotNo,
+          itemId,
+          cut,
         };
       });
+      const firstRef = orderedRefs[0] || {};
 
       setIssueDraft({
-        date: formatInputDate(row.date),
-        machineId: row.machineId || '',
-        operatorId: row.operatorId || '',
-        shift: row.shift || '',
-        yarnId: row.yarnId || '',
-        twistId: row.twistId || '',
-        yarnKg: row.yarnKg ?? '',
-        rollsProducedEstimate: row.rollsProducedEstimate ?? '',
-        note: row.note || '',
+        date: formatInputDate(hydrated.date),
+        machineId: hydrated.machineId || '',
+        operatorId: hydrated.operatorId || '',
+        shift: hydrated.shift || '',
+        note: hydrated.note || '',
+        requiredPerConeNetWeight: hydrated.requiredPerConeNetWeight ?? '',
+        coneTypeId: firstRef.coneTypeId || '',
+        wrapperId: firstRef.wrapperId || '',
+        boxId: firstRef.boxId || '',
         crates,
         cratesTouched: false,
+        metaTouched: false,
       });
-      return;
+    } catch (err) {
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err?.message || 'Failed to load issue details');
+      }
+    } finally {
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        issueActionBusyRef.current = false;
+        setIssueActionLoadingId(null);
+      }
     }
-
-    const refs = parseIssueRefs(row);
-    const crates = refs.map((ref) => {
-      const holoRow = sourceRows.find(r => r.id === ref.rowId && r.rollCount != null);
-      const coningRow = sourceRows.find(r => r.id === ref.rowId && r.coneCount != null);
-      const sourceRow = holoRow || coningRow;
-      const baseRolls = sourceRow?.rollCount ?? sourceRow?.coneCount ?? 0;
-      const baseWeight = sourceRow?.rollWeight ?? sourceRow?.coneWeight ?? 0;
-      const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
-      const { lotNo, itemId, cut } = resolveConingSourceMeta(sourceRow);
-      return {
-        rowId: ref.rowId,
-        barcode: ref.barcode || sourceRow?.barcode || '',
-        issueRolls: Number(ref.issueRolls || 0),
-        issueWeight: Number(ref.issueWeight || 0),
-        unitWeight,
-        lotNo,
-        itemId,
-        cut,
-      };
-    });
-    const firstRef = refs[0] || {};
-
-    setIssueDraft({
-      date: formatInputDate(row.date),
-      machineId: row.machineId || '',
-      operatorId: row.operatorId || '',
-      shift: row.shift || '',
-      note: row.note || '',
-      requiredPerConeNetWeight: row.requiredPerConeNetWeight ?? '',
-      coneTypeId: firstRef.coneTypeId || '',
-      wrapperId: firstRef.wrapperId || '',
-      boxId: firstRef.boxId || '',
-      crates,
-      cratesTouched: false,
-      metaTouched: false,
-    });
   };
 
   const closeIssueEditor = () => {
-    issueDetailRequestRef.current += 1;
-    cancelIssueScanRequest();
+    issueEditorGenerationRef.current += 1;
     setEditingIssue(null);
     setIssueDraft(null);
-    setIssueSourcePieces([]);
     setIssueScanInput('');
+    setIssueScanLoading(false);
   };
 
   const updateIssueDraftField = (field, value) => {
@@ -419,31 +430,22 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     });
   };
 
-  const handleAddPiece = async () => {
+  const handleAddPiece = () => {
     if (!issueDraft) return;
     const raw = issueScanInput.trim();
     if (!raw) return;
     const normalized = raw.toUpperCase();
-    let result;
-    const { generation, controller } = beginIssueScanRequest();
-    try {
-      result = await api.getV2IssueSourceRow('cutter', normalized, { signal: controller.signal });
-    } catch (err) {
-      if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
-      alert(err.message || 'Piece not found');
+    const piece = (db.inbound_items || []).find(p => p.id === raw || p.id === normalized || (p.barcode || '').toUpperCase() === normalized);
+    if (!piece) {
+      alert('Piece not found');
       return;
-    } finally {
-      finishIssueScanRequest(generation);
     }
-    if (!isCurrentIssueScanRequest(generation)) return;
-    if (result?.outcome !== 'found' || !result?.row) return;
-    const piece = result.row;
     if (issueDraft.pieceIds.includes(piece.id)) {
       alert('Piece already added');
       return;
     }
     const existingPieces = (issueDraft.pieceIds || [])
-      .map((id) => issueSourcePieces.find(p => p.id === id))
+      .map((id) => (db.inbound_items || []).find(p => p.id === id))
       .filter(Boolean);
     const itemId = existingPieces[0]?.itemId;
     const lotNo = existingPieces[0]?.lotNo;
@@ -459,12 +461,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       alert('Piece is not available');
       return;
     }
-    setIssueDraft((prev) => prev ? ({
+    setIssueDraft((prev) => ({
       ...prev,
       pieceIds: [...prev.pieceIds, piece.id],
       piecesTouched: true,
-    }) : prev);
-    setIssueSourcePieces((prev) => [piece, ...prev.filter((entry) => entry.id !== piece.id)]);
+    }));
     setIssueScanInput('');
   };
 
@@ -480,66 +481,73 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!issueDraft) return;
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
+    const requestGeneration = issueEditorGenerationRef.current;
+    const requestStage = process;
+
     let result;
-    const { generation, controller } = beginIssueScanRequest();
+    setIssueScanLoading(true);
     try {
-      result = await api.getV2IssueSourceRow('holo', normalized, { signal: controller.signal });
+      result = await api.lookupHoloSourceRowByBarcode(normalized);
     } catch (err) {
-      if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
-      alert(err.message || 'Barcode not found in Cutter Receive rows');
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err?.message || 'Barcode not found in Cutter Receive rows');
+      }
       return;
     } finally {
-      finishIssueScanRequest(generation);
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        setIssueScanLoading(false);
+      }
     }
-    if (!isCurrentIssueScanRequest(generation)) return;
+    if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
     if (result?.outcome !== 'found' || !result?.row) {
-      alert(result?.error || 'Barcode not found in Cutter Receive rows');
+      alert(result?.error || 'Barcode is not available for Holo issue');
       return;
     }
+
     const row = result.row;
     if (issueDraft.crates.some(c => c.rowId === row.id)) {
       alert('Crate already added');
       return;
     }
 
-    const piece = {
-      id: row.pieceId,
-      itemId: result.trace?.itemId || row.itemId,
-      lotNo: result.trace?.lotNo || row.lotNo,
-    };
-    if (!piece.itemId || !piece.lotNo) {
+    const piece = result.piece || {};
+    const itemId = piece.itemId || row.itemId || result.trace?.itemId || '';
+    const lotNo = piece.lotNo || row.lotNo || result.trace?.lotNo || '';
+    if (!itemId || !lotNo) {
       alert('Inbound piece not found for this crate');
       return;
     }
 
     const currentItemId = issueDraft.crates[0]?.itemId;
-    if (currentItemId && piece.itemId !== currentItemId) {
+    if (currentItemId && itemId !== currentItemId) {
       alert('Mixed items not allowed');
       return;
     }
 
     const bobbinQty = Number(row.bobbinQuantity || 0);
-    const availCount = Number(result.availability?.availableCount ?? row.availableBobbins ?? 0);
-    const availWt = Number(result.availability?.availableWeight ?? row.availableWeight ?? 0);
-    const unitWeight = bobbinQty > 0 ? Number(row.netWt || 0) / bobbinQty : null;
+    const availability = result.availability || {};
+    const availCount = Number(availability.availableBobbins ?? row.availableBobbins ?? 0);
+    const availWt = Number(availability.availableWeight ?? row.availableWeight ?? 0);
+    const unitWeight = Number(row.unitWeight)
+      || (bobbinQty > 0 ? Number(row.netWt ?? row.netWeight ?? 0) / bobbinQty : null);
 
-    setIssueDraft((prev) => prev ? ({
+    setIssueDraft((prev) => prev && ({
       ...prev,
       crates: [
-        ...prev.crates,
+        ...(prev.crates || []),
         {
           rowId: row.id,
           barcode: row.barcode,
           pieceId: row.pieceId,
-          itemId: piece.itemId,
-          lotNo: piece.lotNo,
+          itemId,
+          lotNo,
           issuedBobbins: availCount,
           issuedBobbinWeight: availWt,
           unitWeight,
         },
       ],
       cratesTouched: true,
-    }) : prev);
+    }));
     setIssueScanInput('');
   };
 
@@ -571,30 +579,34 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!issueDraft) return;
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
+    const requestGeneration = issueEditorGenerationRef.current;
+    const requestStage = process;
 
     let row = null;
     let availability = null;
-    const { generation, controller } = beginIssueScanRequest();
+    setIssueScanLoading(true);
     try {
-      try {
-        const result = await api.getV2IssueSourceRow('coning', normalized, { signal: controller.signal });
-        if (result?.outcome !== 'found') {
+      const result = await api.lookupConingSourceRowByBarcode(normalized);
+      if (result?.outcome !== 'found') {
+        if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
           alert(result?.error || 'Barcode not found in receive rows');
-          return;
         }
-        row = result.row;
-        availability = result.availability || null;
-      } catch (err) {
-        if (err?.name === 'AbortError' || !isCurrentIssueScanRequest(generation)) return;
-        alert(err.message || 'Barcode not found in receive rows');
         return;
       }
+      row = result.row;
+      availability = result.availability || null;
+    } catch (err) {
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err.message || 'Barcode not found in receive rows');
+      }
+      return;
     } finally {
-      finishIssueScanRequest(generation);
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        setIssueScanLoading(false);
+      }
     }
 
-    if (!isCurrentIssueScanRequest(generation)) return;
-
+    if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
     if (!row) return;
     if (issueDraft.crates.some(c => c.rowId === row.id)) {
       alert('Crate already added');
@@ -627,10 +639,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const baseWeight = availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0;
     const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
 
-    setIssueDraft((prev) => prev ? ({
+    setIssueDraft((prev) => prev && ({
       ...prev,
       crates: [
-        ...prev.crates,
+        ...(prev.crates || []),
         {
           rowId: row.id,
           barcode: row.barcode,
@@ -643,7 +655,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         },
       ],
       cratesTouched: true,
-    }) : prev);
+    }));
     setIssueScanInput('');
   };
 
@@ -680,7 +692,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
     setSavingIssue(true);
     try {
-      let updatedIssue = null;
       if (process === 'cutter') {
         const payload = {
           date: issueDraft.date,
@@ -692,8 +703,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         if (!editingIssue.hasReceives && issueDraft.piecesTouched) {
           payload.pieceIds = issueDraft.pieceIds;
         }
-        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
-        updatedIssue = res?.issueToCutterMachine || res?.issueToMachine || null;
+        await api.updateIssueToMachine(editingIssue.id, process, payload);
       } else if (process === 'holo') {
         const payload = {
           date: issueDraft.date,
@@ -715,8 +725,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             }));
           }
         }
-        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
-        updatedIssue = res?.issueToHoloMachine || null;
+        await api.updateIssueToMachine(editingIssue.id, process, payload);
       } else {
         const payload = {
           date: issueDraft.date,
@@ -746,18 +755,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             }));
           }
         }
-        const res = await api.updateIssueToMachine(editingIssue.id, process, payload);
-        updatedIssue = res?.issueToConingMachine || null;
+        await api.updateIssueToMachine(editingIssue.id, process, payload);
       }
-      if (updatedIssue) {
-        patchIssueRecord(process, updatedIssue);
+      if (process === 'cutter') {
+        await refreshProcessData(process);
+      } else {
+        issueDetailCacheRef.current.delete(getIssueDetailCacheKey(editingIssue));
       }
-      // Refresh the v2 list so the edited row's flattened values update immediately.
-      v2List.refresh();
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
         INVENTORY_INVALIDATION_KEYS.issueHistory(process),
-        INVENTORY_INVALIDATION_KEYS.stock(process),
       ], { source: 'updateIssueToMachine', issueId: editingIssue.id });
       closeIssueEditor();
       alert('Issue record updated.');
@@ -768,14 +775,22 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
   });
 
-  const handleReprint = async (initialRow) => {
+  const handleReprint = async (row) => {
+    if (!row) return;
+    const requestStage = process;
+    let requestGeneration = null;
+    if (process !== 'cutter') {
+      if (issueActionBusyRef.current) return;
+      requestGeneration = issueEditorGenerationRef.current + 1;
+      issueEditorGenerationRef.current = requestGeneration;
+      issueActionBusyRef.current = true;
+      setIssueActionLoadingId(row.id);
+    }
     try {
-      const detail = await v2.getV2IssueActionDetail(process, initialRow.id);
-      const row = detail?.issue || initialRow;
-      const sourceRows = Array.isArray(detail?.sourceRows) ? detail.sourceRows : [];
-      const sourcePieces = Array.isArray(detail?.sourcePieces) ? detail.sourcePieces : [];
       let stageKey, data;
-      const lotLabel = lotLabelFor(row);
+      const exactRow = process === 'cutter' ? row : { ...row, ...(await loadExactIssueDetail(row)) };
+      if (process !== 'cutter' && !isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
+      const lotLabel = lotLabelFor(exactRow);
 
       if (process === 'cutter') {
         stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE;
@@ -786,7 +801,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
         // Get inbound date from first piece
         const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
-        const firstPiece = sourcePieces.find(p => p.id === pieceList[0]);
+        const firstPiece = db.inbound_items?.find(p => p.id === pieceList[0]);
         const lot = db.lots?.find(l => l.lotNo === row.lotNo);
         const inboundDate = lot?.date || firstPiece?.date || '';
 
@@ -806,156 +821,72 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         };
       } else if (process === 'holo') {
         stageKey = LABEL_STAGE_KEYS.HOLO_ISSUE;
-        const names = resolveIssueNames(row);
-        const itemName = names.itemName === '—' ? (row.itemName || '') : names.itemName;
-        const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
-        const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
-        const yarnName = names.yarnName === '—' ? (row.yarnName || '') : names.yarnName;
-        const twistName = names.twistName === '—' ? (row.twistName || '') : names.twistName;
-
-        // Get bobbin info and cut from receivedRowRefs
-        let bobbinType = '';
-        let bobbinQty = 0;
-        let cut = '';
-        let totalRolls = row.metallicBobbins || 0;
-        let totalWeight = row.metallicBobbinsWeight || 0;
-        let issuedWeight = 0;
-
-        try {
-          const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
-          if (Array.isArray(refs) && refs.length > 0) {
-            // Sum up bobbins from all refs
-            refs.forEach(ref => {
-              bobbinQty += Number(ref.issuedBobbins || 0);
-              issuedWeight += Number(ref.issuedBobbinWeight || 0);
-            });
-
-            // Get names - resolveIssueNames handles v2 flattening and trace fallback
-            const names = resolveIssueNames(row);
-            cut = names.cutName === '—' ? '' : names.cutName;
-
-            // Still need bobbin info from first ref
-            const firstRef = refs[0];
-            const cutterRow = sourceRows.find(r => !r.isDeleted && r.id === firstRef.rowId);
-            if (cutterRow) {
-              bobbinType = cutterRow.bobbin?.name || db.bobbins?.find(b => b.id === cutterRow.bobbinId)?.name || '';
-            }
-          }
-        } catch (e) { console.error('Error parsing receivedRowRefs', e); }
-
-        // Fallback: if local process cache does not have source cutter rows, use server lookup.
-        if (!bobbinType && row?.barcode) {
-          try {
-            const lookup = await api.getIssueByHoloBarcode(row.barcode);
-            if (lookup?.crates?.length) {
-              bobbinType = lookup.crates[0]?.bobbinName || bobbinType;
-            }
-          } catch (_) {
-            // Keep best-effort local value.
-          }
-        }
-
-        const resolvedBobbinQty = bobbinQty || row.metallicBobbins || 0;
+        const names = resolveIssueNames(exactRow);
+        const sources = issueSources(exactRow);
+        const refs = parseIssueRefs(exactRow);
+        const allocations = refs.length > 0 ? refs : sources;
+        const bobbinQty = allocations.reduce((sum, ref) => sum + Number(ref?.issuedBobbins || 0), 0);
+        const issuedWeight = allocations.reduce((sum, ref) => sum + Number(ref?.issuedBobbinWeight || 0), 0);
+        const bobbinType = sources[0]?.bobbinName || sources[0]?.bobbin?.name || '';
+        const cut = exactRow.trace?.cutName || (names.cutName === '—' ? '' : names.cutName);
+        const totalRolls = exactRow.metallicBobbins || 0;
+        const totalWeight = exactRow.metallicBobbinsWeight || 0;
+        const resolvedBobbinQty = bobbinQty || exactRow.metallicBobbins || 0;
         const resolvedNetWeight = issuedWeight || totalWeight || 0;
 
         data = {
           lotNo: lotLabel,
-          itemName,
-          machineName,
-          operatorName,
-          yarnName,
-          twistName,
+          itemName: names.itemName === '—' ? (exactRow.itemName || '') : names.itemName,
+          machineName: exactRow.machineName || db.machines?.find(m => m.id === exactRow.machineId)?.name || '',
+          operatorName: exactRow.operatorName || db.operators?.find(o => o.id === exactRow.operatorId)?.name || '',
+          yarnName: names.yarnName === '—' ? (exactRow.yarnName || '') : names.yarnName,
+          twistName: names.twistName === '—' ? (exactRow.twistName || '') : names.twistName,
           bobbinType,
           bobbinQty: resolvedBobbinQty,
           totalRolls,
           totalWeight,
           netWeight: resolvedNetWeight,
-          metallicBobbins: row.metallicBobbins,
-          metallicBobbinsWeight: row.metallicBobbinsWeight,
-          yarnKg: row.yarnKg,
+          metallicBobbins: exactRow.metallicBobbins,
+          metallicBobbinsWeight: exactRow.metallicBobbinsWeight,
+          yarnKg: exactRow.yarnKg,
           cut,
-          shift: row.shift,
-          date: row.date,
-          barcode: row.barcode,
+          shift: exactRow.shift,
+          date: exactRow.date,
+          barcode: exactRow.barcode,
         };
       } else if (process === 'coning') {
         stageKey = LABEL_STAGE_KEYS.CONING_ISSUE;
-        const names = resolveIssueNames(row);
-        const itemName = names.itemName === '—' ? '' : names.itemName;
-        const machineName = row.machineName || db.machines?.find(m => m.id === row.machineId)?.name || '';
-        const operatorName = row.operatorName || db.operators?.find(o => o.id === row.operatorId)?.name || '';
-
-        // Get coneType, wrapperName, and trace back to get cut, yarnName, rollType
-        let coneType = '';
-        let wrapperName = '';
-        let cut = '';
-        let yarnName = '';
-        let rollType = '';
-        let twist = '';
-        let twistName = '';
-        let rollCount = 0;
-        let totalRolls = 0;
-        let totalWeight = 0;
-        let netWeight = 0;
-        let grossWeight = null;
-        let tareWeight = null;
-
-        try {
-          const refs = typeof row.receivedRowRefs === 'string' ? JSON.parse(row.receivedRowRefs) : row.receivedRowRefs;
-          if (Array.isArray(refs) && refs.length > 0) {
-            const firstRef = refs[0];
-
-            // Get cone type and wrapper from refs or form data stored in issue
-            if (firstRef.coneTypeId) coneType = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
-            if (firstRef.wrapperId) wrapperName = db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '';
-
-            // Sum up rolls
-            refs.forEach(ref => {
-              rollCount += Number(ref.issueRolls || 0);
-              totalRolls += Number(ref.issueRolls || 0);
-              totalWeight += Number(ref.issueWeight || 0);
-            });
-            netWeight = totalWeight;
-            grossWeight = null;
-            tareWeight = null;
-
-            const names = resolveIssueNames(row);
-            cut = names.cutName === '—' ? '' : names.cutName;
-            yarnName = names.yarnName === '—' ? '' : names.yarnName;
-            twistName = names.twistName === '—' ? '' : names.twistName;
-            twist = twistName;
-
-            const trace = resolveConingTrace(row, coningTraceContext);
-            rollType = row.rollTypeName
-              || row.rollType
-              || sourceRows.find((sourceRow) => sourceRow.rollType?.name)?.rollType?.name
-              || (trace.rollTypeName === '—' ? '' : trace.rollTypeName);
-          }
-        } catch (e) { console.error('Error parsing receivedRowRefs', e); }
+        const names = resolveIssueNames(exactRow);
+        const refs = parseIssueRefs(exactRow);
+        const firstRef = refs[0] || {};
+        const trace = exactRow.trace || {};
+        const rollCount = refs.reduce((sum, ref) => sum + Number(ref?.issueRolls || 0), 0);
+        const totalWeight = refs.reduce((sum, ref) => sum + Number(ref?.issueWeight || 0), 0);
+        const twistName = trace.twistName || (names.twistName === '—' ? '' : names.twistName);
 
         data = {
           lotNo: lotLabel,
-          itemName,
-          machineName,
-          operatorName,
-          cut,
-          yarnName,
-          rollType,
-          coneType,
-          wrapperName,
-          twist: twist || '',
-          twistName: twistName || '',
+          itemName: names.itemName === '—' ? (exactRow.itemName || '') : names.itemName,
+          machineName: exactRow.machineName || db.machines?.find(m => m.id === exactRow.machineId)?.name || '',
+          operatorName: exactRow.operatorName || db.operators?.find(o => o.id === exactRow.operatorId)?.name || '',
+          cut: trace.cutName || (names.cutName === '—' ? '' : names.cutName),
+          yarnName: trace.yarnName || (names.yarnName === '—' ? '' : names.yarnName),
+          rollType: trace.rollTypeName || exactRow.rollTypeName || exactRow.rollType || '',
+          coneType: exactRow.coneTypeName || (firstRef.coneTypeId ? db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '' : ''),
+          wrapperName: exactRow.wrapperName || (firstRef.wrapperId ? db.wrappers?.find(w => w.id === firstRef.wrapperId)?.name || '' : ''),
+          twist: twistName,
+          twistName,
           rollCount,
-          totalRolls,
+          totalRolls: rollCount,
           totalWeight,
-          grossWeight,
-          tareWeight,
-          netWeight,
-          expectedCones: row.expectedCones,
-          perConeTargetG: row.requiredPerConeNetWeight,
-          shift: row.shift,
-          date: row.date,
-          barcode: row.barcode,
+          grossWeight: null,
+          tareWeight: null,
+          netWeight: totalWeight,
+          expectedCones: exactRow.expectedCones,
+          perConeTargetG: exactRow.requiredPerConeNetWeight,
+          shift: exactRow.shift,
+          date: exactRow.date,
+          barcode: exactRow.barcode,
         };
       }
 
@@ -966,6 +897,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
 
       const template = await loadTemplate(stageKey);
+      if (process !== 'cutter' && !isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       if (!template) {
         alert('No sticker template found for this stage. Please configure it in Label Designer.');
         return;
@@ -974,7 +906,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       await printStageTemplate(stageKey, data, { template });
       // Silent success - printer handles feedback
     } catch (err) {
-      alert(err.message || 'Failed to reprint sticker');
+      if (process === 'cutter' || isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err.message || 'Failed to reprint sticker');
+      }
+    } finally {
+      if (process !== 'cutter' && isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        issueActionBusyRef.current = false;
+        setIssueActionLoadingId(null);
+      }
     }
   };
 
@@ -1000,8 +939,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
       // Get inbound date from first piece
       const pieceList = Array.isArray(row.pieceIds) ? row.pieceIds : (row.pieceIds || '').split(',').map(s => s.trim()).filter(Boolean);
-      const detail = await v2.getV2IssueActionDetail('cutter', row.id);
-      const firstPiece = (detail?.sourcePieces || []).find(p => p.id === pieceList[0]);
+      const firstPiece = db.inbound_items?.find(p => p.id === pieceList[0]);
       const lot = db.lots?.find(l => l.lotNo === row.lotNo);
       const inboundDate = lot?.date || firstPiece?.date || '';
 
@@ -1147,7 +1085,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         note: 'Reversed from Issue History',
         stage: process,
       });
-      emitInvalidation([INVENTORY_INVALIDATION_KEYS.issueHistory(process)], { source: 'reverseTakeBack', id: takeBack.id });
     } catch (err) {
       alert(err.message || 'Failed to reverse take-back');
     } finally {
@@ -1227,19 +1164,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     return out;
   }, [sheetFilters]);
 
-  const v2List = useV2CursorList({
+  const v2List = useV2PagedList({
     enabled: true,
     scopeKey: `issue-history:${process}`,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, filters, order, signal }) => (
+    fetchPage: ({ limit, page, search, dateFrom, dateTo, filters, order }) => (
       v2.getV2IssueTracking(process, {
         limit,
-        cursor,
+        page,
         search,
         dateFrom,
         dateTo,
         filters: JSON.stringify(filters || []),
         order,
-      }, { signal })
+      })
     ),
     limit: 50,
     search: debouncedSearchTerm,
@@ -1252,14 +1189,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const v2TakeBackList = useV2CursorList({
     enabled: true,
     scopeKey: `take-back-history:${process}`,
-    fetchPage: ({ limit, cursor, search, dateFrom, dateTo, signal }) => (
+    fetchPage: ({ limit, cursor, search, dateFrom, dateTo }) => (
       v2.getV2TakeBackHistory(process, {
         limit,
         cursor,
         search,
         dateFrom,
         dateTo,
-      }, { signal })
+      })
     ),
     limit: 50,
     search: debouncedSearchTerm,
@@ -1270,6 +1207,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   useEffect(() => {
     const key = INVENTORY_INVALIDATION_KEYS.issueHistory(process);
     return subscribeInvalidation(key, () => {
+      issueDetailCacheRef.current.clear();
+      issueDetailInflightRef.current.clear();
       v2List.refresh();
       v2TakeBackList.refresh();
     });
@@ -1314,29 +1253,65 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   });
 
   const [v2FacetsById, setV2FacetsById] = useState({});
-  const v2FacetRequestRef = useRef(null);
-
-  useEffect(() => {
-    setV2FacetsById({});
-    v2FacetRequestRef.current = null;
-  }, [process]);
 
   useEffect(() => {
     if (!openFilterId) return;
     const col = filterColumns.find(c => c.id === openFilterId);
     if (!col || col.kind !== 'values') return;
-    if (Array.isArray(v2FacetsById?.[openFilterId])) return;
-    if (v2FacetRequestRef.current?.process === process) return;
-    const request = v2.getV2IssueTrackingFacets(process);
-    v2FacetRequestRef.current = { process, request };
-    request.then((res) => {
-      if (v2FacetRequestRef.current?.request === request && res?.facets) {
-        setV2FacetsById((prev) => ({ ...(prev || {}), ...res.facets }));
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await v2.getV2IssueTrackingFacets(process, {
+          search: debouncedSearchTerm,
+          dateFrom: v2DateFrom,
+          dateTo: v2DateTo,
+          filters: JSON.stringify(v2Filters || []),
+          excludeField: openFilterId,
+        });
+        const next = res?.facets?.[openFilterId];
+        if (!cancelled && Array.isArray(next)) {
+          setV2FacetsById((prev) => ({ ...(prev || {}), [openFilterId]: next }));
+        }
+      } catch (_) {
+        // Ignore facet failures; filter still works via server-side filtering.
       }
-    }).catch(() => {
-      if (v2FacetRequestRef.current?.request === request) v2FacetRequestRef.current = null;
-    });
-  }, [openFilterId, process, filterColumns, v2FacetsById]);
+    })();
+    return () => { cancelled = true; };
+  }, [openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+
+  // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
+  useEffect(() => {
+    let cancelled = false;
+    const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'operator'] : ['item', 'cut', 'yarn', 'twist', 'machine', 'operator', 'shift'];
+    (async () => {
+      try {
+        const res = await Promise.all(fields.map(async (field) => {
+          if (Array.isArray(v2FacetsById?.[field])) return null;
+          const col = filterColumns.find(c => c.id === field);
+          if (!col || col.kind !== 'values') return null;
+          const out = await v2.getV2IssueTrackingFacets(process, {
+            search: debouncedSearchTerm,
+            dateFrom: v2DateFrom,
+            dateTo: v2DateTo,
+            filters: JSON.stringify(v2Filters || []),
+            excludeField: field,
+          });
+          return { field, values: out?.facets?.[field] };
+        }));
+        if (cancelled) return;
+        const patch = {};
+        for (const item of res) {
+          if (!item) continue;
+          if (Array.isArray(item.values)) patch[item.field] = item.values;
+        }
+        if (Object.keys(patch).length) {
+          setV2FacetsById((prev) => ({ ...(prev || {}), ...patch }));
+        }
+      } catch (_) { }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
 
   const columnFor = (id) => {
     const col = filterColumns.find(c => c.id === id);
@@ -1347,18 +1322,24 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   };
 
   const getActions = (row) => {
+    const isLoadingExactDetail = Boolean(issueActionLoadingId);
+    const isLoadingThisRow = issueActionLoadingId === row.id;
     const actions = [
       {
         label: 'Edit',
-        icon: <Edit2 className="w-4 h-4" />,
+        icon: isLoadingThisRow ? <Loader2 className="w-4 h-4 animate-spin" /> : <Edit2 className="w-4 h-4" />,
         onClick: () => openIssueEditor(row),
-        disabled: !canEdit,
-        disabledReason: 'You do not have permission to edit issue records.',
+        disabled: !canEdit || isLoadingExactDetail,
+        disabledReason: !canEdit
+          ? 'You do not have permission to edit issue records.'
+          : 'Loading exact issue details.',
       },
       {
         label: 'Reprint',
         icon: <Printer className="w-4 h-4" />,
         onClick: () => handleReprint(row),
+        disabled: isLoadingExactDetail,
+        disabledReason: 'Loading exact issue details.',
       },
     ];
 
@@ -1407,12 +1388,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     try {
       await api.revertCutterWastage({ pieceId: revertTarget.pieceId, reason, note });
       setRevertTarget(null);
-      emitInvalidation([
-        INVENTORY_INVALIDATION_KEYS.issueHistory('cutter'),
-        INVENTORY_INVALIDATION_KEYS.issueOnMachine('cutter'),
-        INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
-        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-      ], { source: 'revertCutterWastage', pieceId: revertTarget.pieceId });
+      await refreshProcessData('cutter');
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), { source: 'revertCutterWastage', pieceId: revertTarget.pieceId });
     } catch (err) {
       alert(err.message || 'Failed to revert wastage');
     } finally {
@@ -1562,7 +1539,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const cutterEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'cutter') return null;
     const pieces = (issueDraft.pieceIds || [])
-      .map(id => issueSourcePieces.find(p => p.id === id))
+      .map(id => (db.inbound_items || []).find(p => p.id === id))
       .filter(Boolean);
     const itemId = pieces[0]?.itemId || '';
     const lotNo = pieces[0]?.lotNo || '';
@@ -1573,7 +1550,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       itemName: itemNameById.get(itemId) || '',
       lotNo,
     };
-  }, [issueDraft, process, issueSourcePieces, itemNameById]);
+  }, [issueDraft, process, db.inbound_items, itemNameById]);
 
   const holoEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'holo') return null;
@@ -1629,8 +1606,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         </div>
         <TableResultCount
           shown={issues.length}
-          total={v2List.summary?.totalCount}
-          rangeStart={issues.length ? 1 : 0}
+          total={v2List.totalCount}
+          rangeStart={v2List.rangeStart}
           isLoading={v2List.isLoading}
           className="self-center"
         />
@@ -2060,7 +2037,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           </TableBody>
         </Table>
       </div>
-      {v2List.summary && <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+      <div className="hidden sm:flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
         <span className="text-sm font-semibold">Grand Total (filtered)</span>
         <div className="flex flex-wrap items-center justify-end gap-4 text-xs sm:text-sm">
           {process === 'cutter' && (
@@ -2089,7 +2066,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             </>
           )}
         </div>
-      </div>}
+      </div>
+      <TablePagination
+        page={v2List.page}
+        totalPages={v2List.totalPages}
+        hasMore={v2List.hasMore}
+        onPageChange={v2List.setPage}
+        isLoading={v2List.isLoading}
+        className="hidden sm:flex"
+      />
+
       {/* Mobile Card View */}
       <div className="block sm:hidden space-y-3">
         {issues.length === 0 ? (
@@ -2140,20 +2126,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           })
         )}
       </div>
-      {v2List.hasMore && (
-        <div className="flex justify-center py-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={v2List.isLoading}
-            onClick={v2List.loadMore}
-          >
-            {v2List.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {v2Filters.length > 0 ? 'Load more matches' : 'Load more issues'}
-          </Button>
-        </div>
-      )}
+      <TablePagination
+        page={v2List.page}
+        totalPages={v2List.totalPages}
+        hasMore={v2List.hasMore}
+        onPageChange={v2List.setPage}
+        isLoading={v2List.isLoading}
+        className="sm:hidden"
+      />
 
       <div className="rounded-md border">
         <div className="px-3 py-2 border-b bg-muted/30 text-sm font-semibold">Take-Back Ledger</div>
@@ -2450,6 +2430,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   </div>
 
                   <div className="space-y-2">
+                    {editingIssue.sourcesTruncated ? (
+                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        This issue has more than 200 source rows. Source allocation editing is disabled, but issue details can still be updated safely.
+                      </div>
+                    ) : null}
                     <div className="flex items-end gap-2">
                       <div className="flex-1 space-y-1">
                         <label className="text-xs font-medium text-muted-foreground uppercase">Add Crate</label>
@@ -2457,16 +2442,16 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           value={issueScanInput}
                           onChange={(e) => setIssueScanInput(e.target.value)}
                           placeholder="Scan Cutter Receive Barcode"
-                          disabled={editingIssue.hasReceives}
+                          disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
                         />
                       </div>
                       <Button
                         onClick={handleAddHoloCrate}
-                        disabled={editingIssue.hasReceives}
+                        disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
                         className="h-9"
                       >
                         <Plus className="w-4 h-4 mr-1" />
-                        Add
+                        {issueScanLoading ? 'Adding...' : 'Add'}
                       </Button>
                     </div>
                     <div className="text-xs text-muted-foreground">
@@ -2489,7 +2474,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issuedBobbins}
                                   onChange={(e) => updateHoloCrate(crate.rowId, 'issuedBobbins', e.target.value)}
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                 />
                               </div>
                               <div className="space-y-1">
@@ -2498,7 +2483,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issuedBobbinWeight}
                                   readOnly
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                   className="bg-muted"
                                 />
                               </div>
@@ -2507,7 +2492,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => handleRemoveHoloCrate(crate.rowId)}
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                 >
                                   Remove
                                 </Button>
@@ -2576,6 +2561,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         labelKey="name"
                         valueKey="id"
                         placeholder="Select Cone Type"
+                        clearable
                         disabled={editingIssue.hasReceives}
                       />
                     </div>
@@ -2625,6 +2611,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                   </div>
 
                   <div className="space-y-2">
+                    {editingIssue.sourcesTruncated ? (
+                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        This issue has more than 200 source rows. Source allocation editing is disabled, but issue details can still be updated safely.
+                      </div>
+                    ) : null}
                     <div className="flex items-end gap-2">
                       <div className="flex-1 space-y-1">
                         <label className="text-xs font-medium text-muted-foreground uppercase">Add Crate</label>
@@ -2632,12 +2623,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           value={issueScanInput}
                           onChange={(e) => setIssueScanInput(e.target.value)}
                           placeholder="Scan Holo/Coning Receive Barcode"
-                          disabled={editingIssue.hasReceives || issueScanLoading}
+                          disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
                         />
                       </div>
                       <Button
                         onClick={handleAddConingCrate}
-                        disabled={editingIssue.hasReceives || issueScanLoading}
+                        disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
                         className="h-9"
                       >
                         <Plus className="w-4 h-4 mr-1" />
@@ -2663,7 +2654,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issueRolls}
                                   onChange={(e) => updateConingCrate(crate.rowId, 'issueRolls', e.target.value)}
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                 />
                               </div>
                               <div className="space-y-1">
@@ -2672,7 +2663,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issueWeight}
                                   onChange={(e) => updateConingCrate(crate.rowId, 'issueWeight', e.target.value)}
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                 />
                               </div>
                               <div className="flex items-end">
@@ -2680,7 +2671,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => handleRemoveConingCrate(crate.rowId)}
-                                  disabled={editingIssue.hasReceives}
+                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
                                 >
                                   Remove
                                 </Button>

@@ -1,4 +1,20 @@
-import { API_BASE as BASE } from './base';
+// Auto-detect API base URL based on current host
+const getApiBase = () => {
+  // If explicitly set in env, use that
+  if (import.meta.env.VITE_API_BASE) {
+    return import.meta.env.VITE_API_BASE;
+  }
+
+  // Auto-detect from current window location
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.hostname}:4000`;
+  }
+
+  // Fallback for SSR or when window is not available
+  return 'http://localhost:4000';
+};
+
+const BASE = getApiBase();
 
 async function request(path, { method = 'GET', body, headers } = {}) {
   const res = await fetch(BASE + path, {
@@ -130,6 +146,9 @@ export async function createCutterPurchaseInbound(payload) {
 }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function lookupHoloSourceRowByBarcode(barcode) {
+  return await request(`/api/issue_to_holo_machine/source-row/lookup?barcode=${encodeURIComponent(barcode)}`);
+}
 export async function lookupConingSourceRowByBarcode(barcode) {
   return await request(`/api/issue_to_coning_machine/source-row/lookup?barcode=${encodeURIComponent(barcode)}`);
 }

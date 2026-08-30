@@ -1,7 +1,7 @@
 import { utils, write } from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { formatDateDDMMYYYY } from '../utils/formatting.js';
+import { formatDateDDMMYYYY } from '../utils/formatting';
 
 function hexToRgb(hex) {
   const str = String(hex || '').trim();

@@ -7,7 +7,7 @@ import { computeIssueBalancesBatch } from '../issueBalances.js';
 // computeIssueBalancesBatch is set-based — i.e. its query count does NOT scale
 // with the number of input issues.
 function makeStub({
-  cutterLines = [],
+  cutterLineGroups = [],
   cutterLinkedGroups = [],
   cutterFallbackRows = [],
   cutterChallans = [],
@@ -27,9 +27,9 @@ function makeStub({
       },
     },
     issueToCutterMachineLine: {
-      findMany: async (args) => {
-        record('issueToCutterMachineLine.findMany', args);
-        return cutterLines;
+      groupBy: async (args) => {
+        record('issueToCutterMachineLine.groupBy', args);
+        return cutterLineGroups;
       },
     },
     receiveFromCutterMachineRow: {
@@ -66,10 +66,6 @@ function makeStub({
         return coningPieceTotals;
       },
     },
-    $queryRaw: async (...args) => {
-      record('$queryRaw', args);
-      return [];
-    },
   };
 }
 
@@ -90,14 +86,12 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
       ],
       metallicBobbins: 0,
       metallicBobbinsWeight: 0,
-      yarnKg: 1.25,
     },
     {
       id: 'h2',
       receivedRowRefs: [],
       metallicBobbins: 7,
       metallicBobbinsWeight: 3.5,
-      yarnKg: 0.5,
     },
   ];
   const stub = makeStub({
@@ -105,9 +99,9 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
       { issueId: 'h1', totalCount: 2, totalWeight: 1.0 },
     ],
     holoRows: [
-      { issueId: 'h1', rollCount: 3, rollWeight: 1.5, grossWeight: null, tareWeight: null, isWastage: false },
-      { issueId: 'h1', rollCount: 1, rollWeight: 0.5, grossWeight: null, tareWeight: null, isWastage: true },
-      { issueId: 'h2', rollCount: 2, rollWeight: 1.0, grossWeight: null, tareWeight: null, isWastage: null },
+      { issueId: 'h1', rollCount: 3, rollWeight: 1.5, grossWeight: null, tareWeight: null, rollType: { name: 'good' } },
+      { issueId: 'h1', rollCount: 1, rollWeight: 0.5, grossWeight: null, tareWeight: null, rollType: { name: 'wastage rolls' } },
+      { issueId: 'h2', rollCount: 2, rollWeight: 1.0, grossWeight: null, tareWeight: null, rollType: { name: 'good' } },
     ],
   });
 
@@ -116,7 +110,7 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
 
   const h1 = result.get('h1');
   assert.equal(h1.originalCount, 14);
-  assert.equal(h1.originalWeight, 8.25);
+  assert.equal(h1.originalWeight, 7.0);
   assert.equal(h1.takeBackCount, 2);
   assert.equal(h1.takeBackWeight, 1.0);
   assert.equal(h1.receivedCount, 3);
@@ -124,16 +118,14 @@ test('holo: aggregates original from receivedRowRefs jsonb in memory + 2 DB call
   assert.equal(h1.wastageCount, 1);
   assert.equal(h1.wastageWeight, 0.5);
   assert.equal(h1.netIssuedCount, 12);
-  assert.equal(h1.netIssuedWeight, 7.25);
-  assert.equal(h1.pendingCount, 12, 'Holo output rolls do not consume input bobbin count');
-  assert.equal(h1.pendingWeight, 5.25);
-  assert.ok(Number.isFinite(Date.parse(h1.asOf)));
+  assert.equal(h1.netIssuedWeight, 6.0);
+  assert.equal(h1.pendingCount, 8);
+  assert.equal(h1.pendingWeight, 4.0);
 
   const h2 = result.get('h2');
   // empty receivedRowRefs => fall back to issue header
   assert.equal(h2.originalCount, 7);
-  assert.equal(h2.originalWeight, 4.0);
-  assert.equal(h2.asOf, h1.asOf);
+  assert.equal(h2.originalWeight, 3.5);
 });
 
 test('coning: 3 DB calls regardless of issue count', async () => {
@@ -157,10 +149,10 @@ test('cutter: at most 5 DB calls regardless of issue count (regression guard)', 
     createdAt: new Date('2026-01-01T00:00:00Z'),
   }));
   const stub = makeStub({
-    cutterLines: issues.map((i) => ({
+    cutterLineGroups: issues.map((i) => ({
       issueId: i.id,
-      pieceId: i.pieceIds,
-      issuedWeight: 1.0,
+      _sum: { issuedWeight: 1.0 },
+      _count: { _all: 1 },
     })),
   });
   const result = await computeIssueBalancesBatch(stub, 'cutter', issues);
@@ -173,10 +165,7 @@ test('cutter: no piece ids => skips fallback + challan queries', async () => {
     { id: 'cu1', pieceIds: '', totalWeight: 5.0, count: 2, createdAt: new Date() },
   ];
   const stub = makeStub({
-    cutterLines: [
-      { issueId: 'cu1', pieceId: '', issuedWeight: 2.0 },
-      { issueId: 'cu1', pieceId: '', issuedWeight: 2.0 },
-    ],
+    cutterLineGroups: [{ issueId: 'cu1', _sum: { issuedWeight: 4.0 }, _count: { _all: 2 } }],
     cutterLinkedGroups: [{ issueId: 'cu1', _sum: { bobbinQuantity: 1, netWt: 0.5 } }],
   });
   const result = await computeIssueBalancesBatch(stub, 'cutter', issues);

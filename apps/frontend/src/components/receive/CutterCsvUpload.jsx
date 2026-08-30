@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../utils';
 import * as api from '../../api';
@@ -149,7 +149,7 @@ function SummaryCard({ title, summary, actions }) {
 }
 
 export function CutterCsvUpload() {
-  const { db, emitInvalidation } = useInventory();
+  const { db, refreshProcessData, emitInvalidation } = useInventory();
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewData, setPreviewData] = useState(null);
@@ -161,29 +161,23 @@ export function CutterCsvUpload() {
   const [actionError, setActionError] = useState('');
   const [actionIssues, setActionIssues] = useState([]);
   const [dragActive, setDragActive] = useState(false);
-  const [dashboard, setDashboard] = useState({ uploads: [], rows: [], summary: {} });
 
-  const loadDashboard = async () => {
-    try {
-      const result = await api.getV2CutterCsvDashboard();
-      setDashboard({
-        uploads: Array.isArray(result?.uploads) ? result.uploads : [],
-        rows: Array.isArray(result?.rows) ? result.rows : [],
-        summary: result?.summary || {},
-      });
-    } catch (err) {
-      setActionError(err.message || 'Failed to load Cutter receive status');
-    }
-  };
+  const recentUploads = useMemo(() => {
+    const uploads = (db.receive_from_cutter_machine_uploads || []).slice();
+    uploads.sort((a, b) => (b.uploadedAt || '').localeCompare(a.uploadedAt || ''));
+    return uploads.slice(0, 25);
+  }, [db.receive_from_cutter_machine_uploads]);
 
-  useEffect(() => {
-    loadDashboard();
-  }, []);
+  const latestRows = useMemo(() => {
+    const rows = (db.receive_from_cutter_machine_rows || []).filter(row => !row.isDeleted);
+    rows.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    return rows.slice(0, 50);
+  }, [db.receive_from_cutter_machine_rows]);
 
-  const recentUploads = dashboard.uploads;
-  const latestRows = dashboard.rows;
-  const piecesWithReceipts = Number(dashboard.summary?.piecesWithReceipts || 0);
-  const totalReceivedWeight = Number(dashboard.summary?.totalReceivedWeight || 0);
+  const receiveTotals = useMemo(() => (db.receive_from_cutter_machine_piece_totals || []).slice(), [db.receive_from_cutter_machine_piece_totals]);
+
+  const piecesWithReceipts = receiveTotals.length;
+  const totalReceivedWeight = receiveTotals.reduce((sum, entry) => sum + Number(entry.totalNetWeight || 0), 0);
 
   const clearSelection = () => {
     setSelectedFile(null);
@@ -258,14 +252,12 @@ export function CutterCsvUpload() {
       setImportResult(result || null);
       setPreviewData(null);
       clearSelection();
-      emitInvalidation([
-        INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
-        INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-      ], {
+      // CSV import affects cutter receives; refresh only the cutter process module.
+      await refreshProcessData('cutter');
+      emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
         source: 'importReceiveFromMachine',
         uploadId: result?.upload?.id || null,
       });
-      await loadDashboard();
     } catch (err) {
       const issues = Array.isArray(err.details?.issues) ? err.details.issues : [];
       const duplicates = Array.isArray(err.details?.duplicates) ? err.details.duplicates : [];

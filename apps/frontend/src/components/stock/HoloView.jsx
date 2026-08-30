@@ -1,15 +1,13 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, Button } from '../ui';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
 import { formatKg, formatDateDDMMYYYY, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight, Flame, FlameKindling, Printer } from 'lucide-react';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { TableStateRow, ListState } from '../data-table';
 import { LotPopover } from './LotPopover';
-import { LotRowsLoadMore } from './LotRowsLoadMore';
 import { cn } from '../../lib/utils';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { buildHoloReceiveLabelData } from '../../utils/receiveLabelData';
-import { getV2ReceiveActionDetail } from '../../api/v2';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -24,14 +22,10 @@ const normalizeLotKeyIdentity = (rawKey) => {
     const decoded = JSON.parse(window.atob(String(rawKey || '')));
     if (!decoded || typeof decoded !== 'object') return null;
     if (decoded.process !== 'holo') return null;
-    const exactLotNos = Array.isArray(decoded.lotNos)
-      ? [...decoded.lotNos].map(String).sort().join('\u001f')
-      : '';
     return [
       decoded.process || '',
       decoded.lotLabel || '',
       decoded.lotNoRaw || '',
-      exactLotNos,
       decoded.itemId || '',
       decoded.yarnId || '',
       decoded.twistId || '',
@@ -100,7 +94,7 @@ function BoilerRowPill({ label, compact = false }) {
   );
 }
 
-export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null, canReprint = false }) {
+export function HoloView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, ensureProcessData = null, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
@@ -129,6 +123,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
     return set;
   }, [barcodeHitKeys]);
 
+  const findById = (rows, id) => (rows || []).find((row) => String(row?.id ?? '') === String(id ?? ''));
   const hasActiveRollAvailability = (row) => {
     const rolls = Number(row?.availableRolls || 0);
     const weight = Number(row?.availableWeight || 0);
@@ -243,7 +238,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
-    if (v2 && filteredLots.some((lot) => lot.groupKey && Array.isArray(lot.lots))) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
       const key = buildGroupKey(lot);
@@ -295,7 +289,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
         boilerMachineNamesStr: Array.from(boilerMachineNames).sort((a, b) => String(a).localeCompare(String(b))).join(', '),
       };
     });
-  }, [filteredLots, groupBy, v2]);
+  }, [filteredLots, groupBy]);
 
   // Bubble up data for export (pass displayed data which respects groupBy)
   useEffect(() => {
@@ -305,30 +299,32 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
   const tableColumnCount = groupBy ? 10 : 11;
 
   // Grand Totals
-  const loadedGrandTotals = useMemo(() => {
+  const grandTotals = useMemo(() => {
     return displayLots.reduce((acc, lot) => ({
       totalRolls: acc.totalRolls + (lot.totalRolls || 0),
       totalWeight: acc.totalWeight + (lot.totalWeight || 0),
       steamedRolls: acc.steamedRolls + (lot.steamedRolls || 0),
     }), { totalRolls: 0, totalWeight: 0, steamedRolls: 0 });
   }, [displayLots]);
-  const grandTotals = v2?.summary ? { ...loadedGrandTotals, ...v2.summary } : loadedGrandTotals;
 
   const handleReprintRow = async (r) => {
     if (reprintingId) return;
     setReprintingId(r.id);
     try {
-      const detail = await getV2ReceiveActionDetail('holo', r.id);
-      const fullRow = {
-        ...(detail?.row || {}),
-        ...(detail?.trace || {}),
-        issue: detail?.issue || detail?.row?.issue,
-      };
-      const sourceDb = {
-        ...db,
-        issue_to_holo_machine: detail?.issue ? [detail.issue] : [],
-        receive_from_holo_machine_rows: [fullRow],
-      };
+      let sourceDb = db;
+      let fullRow = findById(sourceDb.receive_from_holo_machine_rows, r.id) || null;
+
+      if (!fullRow) {
+        const loadedDb = typeof ensureProcessData === 'function'
+          ? await ensureProcessData()
+          : null;
+        if (loadedDb) {
+          sourceDb = loadedDb;
+          fullRow = findById(sourceDb.receive_from_holo_machine_rows, r.id) || null;
+        }
+      }
+
+      if (!fullRow) throw new Error('Original receive row not found for reprint');
 
       const data = buildHoloReceiveLabelData({ db: sourceDb, row: fullRow });
       const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
@@ -491,9 +487,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                                       </TableCell>
                                       <TableCell className="text-xs text-muted-foreground"><HighlightMatch text={r.notes || '—'} query={search} /></TableCell>
                                       <TableCell className="p-1">
-                                        {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                        <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                           <Printer className="w-3.5 h-3.5" />
-                                        </button>}
+                                        </button>
                                       </TableCell>
                                     </TableRow>
                                   );
@@ -501,10 +497,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                               </TableBody>
                             </Table>
                           </div>
-                          <LotRowsLoadMore
-                            pageState={v2?.rowPagesByKey?.[l.lotKey]}
-                            onLoadMore={() => v2?.loadMoreLotRows?.(l.lotKey)}
-                          />
                         </TableCell>
                       </TableRow>
                     )}
@@ -513,7 +505,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
               })
             )}
             {/* Grand Total Row */}
-            {displayLots.length > 0 && v2?.summary && (
+            {displayLots.length > 0 && (
               <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">Grand Total</TableCell>
@@ -624,9 +616,9 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                             <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
                             <span className="flex items-center gap-1.5">
                               <span>{formatKg(r.availableWeight)}</span>
-                              {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                              <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                 <Printer className="w-3 h-3" />
-                              </button>}
+                              </button>
                             </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
@@ -640,10 +632,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
                         </div>
                       );
                     })}
-                    <LotRowsLoadMore
-                      pageState={v2?.rowPagesByKey?.[l.lotKey]}
-                      onLoadMore={() => v2?.loadMoreLotRows?.(l.lotKey)}
-                    />
                   </div>
                 )}
               </div>
@@ -651,7 +639,7 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           })
         )}
         {/* Mobile Grand Total Card */}
-        {displayLots.length > 0 && v2?.summary && (
+        {displayLots.length > 0 && (
           <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
             <div className="flex justify-between items-center">
               <span className="font-bold text-primary">Grand Total</span>
@@ -663,16 +651,6 @@ export function HoloView({ db, filters, search = '', groupBy = false, onApplyFil
           </div>
         )}
       </div>
-      {v2?.summaryLoading && displayLots.length > 0 && (
-        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Calculating totals…</div>
-      )}
-      {v2?.lotsHasMore && (
-        <div className="flex justify-center pt-3">
-          <Button variant="outline" onClick={v2.loadMoreLots} disabled={v2.lotsLoadingMore}>
-            {v2.lotsLoadingMore ? 'Loading...' : 'Load more lots'}
-          </Button>
-        </div>
-      )}
     </>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import { IssueToCutter } from '../components/issue';
 import { IssueToHolo } from '../components/issue';
@@ -25,7 +25,7 @@ function formatDateDisplay(dateStr) {
 }
 
 export function IssueToMachine() {
-  const { process, db } = useInventory();
+  const { process, db, ensureModuleData } = useInventory();
   const stage = process === 'holo' ? 'holo' : process === 'coning' ? 'coning' : 'cutter';
   const { canRead, canWrite, canEdit, canDelete } = useStagePermission('issue', stage);
   const readOnly = canRead && !canWrite;
@@ -44,6 +44,14 @@ export function IssueToMachine() {
   const [summaryDateTo, setSummaryDateTo] = useState(getYesterdayISO);
   const [summaryFromShifts, setSummaryFromShifts] = useState(['Day', 'Night']);
   const [summaryToShifts, setSummaryToShifts] = useState(['Day', 'Night']);
+
+  useEffect(() => {
+    if (canRead && stage === 'cutter') {
+      // Cutter still has operational flows that depend on the complete process slice.
+      // Holo and Coning use their paginated v2 lists plus bounded source lookups.
+      ensureModuleData('process', { process: 'cutter', full: true });
+    }
+  }, [canRead, ensureModuleData, stage]);
 
   const handleSendSummary = async () => {
     if (sendingSum || downloadingSum) return;

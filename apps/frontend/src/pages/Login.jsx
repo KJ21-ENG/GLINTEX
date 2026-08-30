@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
-import { API_BASE } from '../api/base';
 
 export function Login() {
   const { loading, user, needsBootstrap, error: authError, login } = useAuth();
@@ -24,7 +23,8 @@ export function Login() {
   useEffect(() => {
     async function loadPublicBranding() {
       try {
-        const res = await fetch(`${API_BASE}/api/public/branding`);
+        const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:4001';
+        const res = await fetch(`${apiBase}/api/public/branding`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.faviconDataUrl) {
@@ -86,3 +86,4 @@ export function Login() {
     </div>
   );
 }
+

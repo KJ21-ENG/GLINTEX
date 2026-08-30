@@ -1,17 +1,14 @@
 services:
   db:
-    ports: !override []
+    ports: []
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
   backend:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
-    ports: !override
-      - "127.0.0.1:4002:4000"
+    ports:
+      - "4002:4000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       SHADOW_DATABASE_URL: ${SHADOW_DATABASE_URL}
@@ -20,37 +17,6 @@ services:
       GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID}
       GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET}
       GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI}
-      WWEBJS_WEB_CACHE_PATH: ${WWEBJS_WEB_CACHE_PATH:-/app/apps/backend/.wwebjs_cache}
-      PERF_LOG: "1"
-      PERF_LOG_QUERIES: "0"
-      PERF_SLOW_QUERY_MS: ${PERF_SLOW_QUERY_MS:-100}
-      PERF_SLOW_REQUEST_MS: "5000"
-      PERF_LOG_MAX_BYTES: ${PERF_LOG_MAX_BYTES:-52428800}
-      PERF_LOG_RETAIN_FILES: ${PERF_LOG_RETAIN_FILES:-5}
-    volumes: !override
-      - ./apps/backend/.wwebjs_auth:/app/apps/backend/.wwebjs_auth
-      - ./apps/backend/.wwebjs_cache:/app/apps/backend/.wwebjs_cache
-      - ./apps/backend/backups:/app/apps/backend/backups
-      - ./apps/backend/logs:/app/apps/backend/logs
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  migrate:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
-      target: migrate
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-    depends_on:
-      db:
-        condition: service_healthy
-    profiles: ["migration"]
-    restart: "no"
 
   agent-api:
     ports: !override
@@ -66,24 +32,10 @@ services:
       GLINTEX_OWNER_AGENT_CONFIRMATION_SECRET: ${GLINTEX_OWNER_AGENT_CONFIRMATION_SECRET}
       GLINTEX_OWNER_AGENT_SCOPES: ${GLINTEX_OWNER_AGENT_SCOPES}
       GLINTEX_AGENT_ACTION_TTL_SECONDS: ${GLINTEX_AGENT_ACTION_TTL_SECONDS:-600}
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
 
   frontend:
     build:
       args:
         VITE_API_BASE: ${VITE_API_BASE}
-    ports: !override
-      - "127.0.0.1:4173:80"
-    depends_on:
-      backend:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
+    ports:
+      - "4174:80"

@@ -3,4 +3,3 @@
  */
 
 export * from './client.js';
-export * from './v2.js';

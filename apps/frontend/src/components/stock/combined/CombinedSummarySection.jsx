@@ -18,30 +18,25 @@ export function CombinedSummarySection({
   getRowKey = null,
   renderMobileRow = null,
   isLoading = false,
-  summaryLoading = false,
-  summaryError = null,
-  isLoadingMore = false,
-  hasMore = false,
   error = null,
   onRetry = null,
-  onLoadMore = null,
   emptyMessage = 'No stock found.',
   expanded = false,
   onToggle,
 }) {
   const rowKeyFor = (row, idx) => (getRowKey ? (getRowKey(row) || idx) : idx);
-  const loaded = !summaryLoading && !summaryError;
+  const loaded = !isLoading && !error;
 
-  const statusSlot = summaryLoading ? (
+  const statusSlot = isLoading ? (
     <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
       <Loader2 className="w-4 h-4 animate-spin" />
-      Calculating totals…
+      Loading…
     </span>
-  ) : summaryError ? (
+  ) : error ? (
     <span className="inline-flex items-center gap-2">
       <span className="inline-flex items-center gap-1.5 text-sm text-destructive">
         <AlertTriangle className="w-4 h-4" />
-        Totals unavailable
+        Failed to load
       </span>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); onRetry(); }}>
@@ -71,7 +66,7 @@ export function CombinedSummarySection({
               ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 self-center" />
               : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 self-center" />}
             <span className="font-semibold whitespace-nowrap">{label}</span>
-            {loaded && rows.length > 0 && (
+            {loaded && (
               <span className="text-xs text-muted-foreground whitespace-nowrap">
                 {rows.length} {rows.length === 1 ? 'lot' : 'lots'}
               </span>
@@ -149,13 +144,6 @@ export function CombinedSummarySection({
               ))
             )}
           </div>
-          {hasMore && (
-            <div className="border-t p-3 flex justify-center">
-              <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
-                {isLoadingMore ? 'Loading…' : 'Load more lots'}
-              </Button>
-            </div>
-          )}
         </>
       )}
     </Card>

@@ -52,6 +52,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+const ISSUE_LOOKUP_RECEIVE_LIMIT = 200;
 const PERM_READ = ACCESS_LEVELS.READ;
 const PERM_WRITE = ACCESS_LEVELS.WRITE;
 const TAKE_BACK_EPSILON = 1e-6;
@@ -138,7 +139,7 @@ function dropDuplicateLegacyBarcodes(items = []) {
   });
 }
 
-async function resolveHoloIssuePieceIds(issue, client = prisma) {
+async function resolveHoloIssuePieceIds(issue) {
   if (!issue) return [];
   let refs = issue.receivedRowRefs;
   if (typeof refs === 'string') {
@@ -148,7 +149,7 @@ async function resolveHoloIssuePieceIds(issue, client = prisma) {
 
   const rowIds = refs.map(ref => (typeof ref?.rowId === 'string' ? ref.rowId : null)).filter(Boolean);
   const rows = rowIds.length > 0
-    ? await client.receiveFromCutterMachineRow.findMany({
+    ? await prisma.receiveFromCutterMachineRow.findMany({
       where: { id: { in: rowIds }, isDeleted: false },
       select: { pieceId: true },
     })
@@ -157,7 +158,7 @@ async function resolveHoloIssuePieceIds(issue, client = prisma) {
   if (pieceIds.length > 0) return pieceIds;
 
   if (!issue.lotNo) return [];
-  const inboundPieces = await client.inboundItem.findMany({
+  const inboundPieces = await prisma.inboundItem.findMany({
     where: { lotNo: issue.lotNo },
     select: { id: true },
   });
@@ -165,34 +166,16 @@ async function resolveHoloIssuePieceIds(issue, client = prisma) {
   return [];
 }
 
-async function isHoloRowReferencedByConing({ rowId, barcode }, client = prisma) {
+async function isHoloRowReferencedByConing({ rowId, barcode }) {
   const rowIdArray = rowId ? [rowId] : ['__none__'];
   const barcodeArray = barcode ? [String(barcode)] : ['__none__'];
-  const coningUsage = await client.$queryRaw`
+  const coningUsage = await prisma.$queryRaw`
     SELECT id FROM "IssueToConingMachine"
     WHERE "isDeleted" = false
       AND EXISTS (
       SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
       WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
          OR elem->>'barcode' = ANY (${barcodeArray}::text[])
-    )
-  `;
-  return Array.isArray(coningUsage) && coningUsage.length > 0;
-}
-
-async function isConingRowReferencedByConing({ rowId, barcode }, client = prisma) {
-  const rowIdArray = rowId ? [rowId] : ['__none__'];
-  const barcodeArray = barcode ? [String(barcode)] : ['__none__'];
-  const coningUsage = await client.$queryRaw`
-    SELECT id FROM "IssueToConingMachine"
-    WHERE "isDeleted" = false
-      AND EXISTS (
-      SELECT 1 FROM jsonb_array_elements("receivedRowRefs") AS elem
-      WHERE elem->>'rowId' = ANY (${rowIdArray}::text[])
-         OR (
-           elem->>'stage' = 'coning'
-           AND elem->>'barcode' = ANY (${barcodeArray}::text[])
-         )
     )
   `;
   return Array.isArray(coningUsage) && coningUsage.length > 0;
@@ -494,8 +477,7 @@ async function getIssueOriginalIssued(client, stage, issue) {
       totalWeight += weight;
     });
     totalCount = totalCount > 0 ? totalCount : Number(issue.metallicBobbins || 0);
-    const metallicWeight = totalWeight > 0 ? totalWeight : Number(issue.metallicBobbinsWeight || 0);
-    totalWeight = metallicWeight + Number(issue.yarnKg || 0);
+    totalWeight = totalWeight > 0 ? totalWeight : Number(issue.metallicBobbinsWeight || 0);
     return {
       totalCount: clampZero(totalCount),
       totalWeight: clampZero(totalWeight),
@@ -652,7 +634,7 @@ async function getIssueReceivedAndWastage(client, stage, issue) {
         rollWeight: true,
         grossWeight: true,
         tareWeight: true,
-        isWastage: true,
+        rollType: { select: { name: true } },
       },
     });
 
@@ -661,7 +643,7 @@ async function getIssueReceivedAndWastage(client, stage, issue) {
       const weight = Number.isFinite(Number(row.rollWeight))
         ? Number(row.rollWeight)
         : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
-      const isWastage = row.isWastage === true;
+      const isWastage = String(row.rollType?.name || '').toLowerCase().includes('wastage');
       if (isWastage) {
         wastageCount += count;
         wastageWeight += weight;
@@ -726,12 +708,7 @@ async function getIssuePending(client, stage, issue) {
 
   const netIssuedCount = clampZero(original.totalCount - takeBack.activeCount);
   const netIssuedWeight = clampZero(original.totalWeight - takeBack.activeWeight);
-  // Holo transforms input bobbins into output rolls, so those counts are not
-  // arithmetically comparable. Holo count availability is used only for
-  // bobbin take-backs; receive capacity is conserved by weight.
-  const accountedCount = stage === 'holo'
-    ? 0
-    : clampZero(received.receivedCount + received.wastageCount);
+  const accountedCount = clampZero(received.receivedCount + received.wastageCount);
   const accountedWeight = clampZero(received.receivedWeight + received.wastageWeight);
 
   return {
@@ -793,11 +770,69 @@ function buildTakeBackConsumedBySource(stage, pending) {
     return consumedBySource;
   }
 
-  // Holo and Coning receives transform their inputs and do not preserve a
-  // trustworthy physical source assignment for issue-level production. Let the
-  // operator choose any source that is still issued, while the issue-level
-  // pending count/weight checks remain the authoritative aggregate guard.
-  if (stage === 'holo' || stage === 'coning') return consumedBySource;
+  // Coning uses free source selection — per-source consumed deduction is skipped.
+  // The issue-level pendingWeight check is the authoritative guard for coning take-backs.
+  if (stage === 'coning') return consumedBySource;
+
+  // Holo receives are tracked issue-level (not source-row-level). Allocate consumed
+  // issue quantity to source rows deterministically so per-source take-back validation
+  // cannot exceed net remaining on any source row.
+  const originalMap = pending.original?.sourceMap || new Map();
+  const takeBackBySource = pending.takeBack?.activeBySource || new Map();
+  // Prefer actual persisted per-source consumption if available (coning upgrade path).
+  // Any leftover issue-level consumption (e.g. wastage without refs) is allocated FIFO as a fallback.
+  let remainingCountToAllocate = clampZero(Number(pending.received?.receivedCount || 0) + Number(pending.received?.wastageCount || 0));
+  let remainingWeightToAllocate = clampZero(Number(pending.received?.receivedWeight || 0) + Number(pending.received?.wastageWeight || 0));
+
+  for (const [sourceId, received] of receivedBySource.entries()) {
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.count += Number(received?.count || 0);
+    current.weight += Number(received?.weight || 0);
+    consumedBySource.set(sourceId, current);
+    remainingCountToAllocate = clampZero(remainingCountToAllocate - Number(received?.count || 0));
+    remainingWeightToAllocate = clampZero(remainingWeightToAllocate - Number(received?.weight || 0));
+  }
+
+  const orderedSourceIds = Array.from(originalMap.keys());
+
+  // Allocate counts and weights independently so mixed source ratios cannot
+  // over-consume one dimension on a source when only the other dimension is used.
+  for (const sourceId of orderedSourceIds) {
+    if (remainingCountToAllocate <= TAKE_BACK_EPSILON) break;
+    const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
+    const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
+    const alreadyConsumed = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetCount = clampZero(
+      Number(originalLine?.count || 0)
+      - Number(takenBackLine?.count || 0)
+      - Number(alreadyConsumed.count || 0),
+    );
+    if (sourceNetCount <= TAKE_BACK_EPSILON) continue;
+    const allocatedCount = Math.min(sourceNetCount, remainingCountToAllocate);
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.count = clampZero(Number(current.count || 0) + allocatedCount);
+    consumedBySource.set(sourceId, current);
+    remainingCountToAllocate = clampZero(remainingCountToAllocate - allocatedCount);
+  }
+
+  for (const sourceId of orderedSourceIds) {
+    if (remainingWeightToAllocate <= TAKE_BACK_EPSILON) break;
+    const originalLine = originalMap.get(sourceId) || { count: 0, weight: 0 };
+    const takenBackLine = takeBackBySource.get(sourceId) || { count: 0, weight: 0 };
+    const alreadyConsumed = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    const sourceNetWeight = clampZero(
+      Number(originalLine?.weight || 0)
+      - Number(takenBackLine?.weight || 0)
+      - Number(alreadyConsumed.weight || 0),
+    );
+    if (sourceNetWeight <= TAKE_BACK_EPSILON) continue;
+    const allocatedWeight = Math.min(sourceNetWeight, remainingWeightToAllocate);
+    const current = consumedBySource.get(sourceId) || { count: 0, weight: 0 };
+    current.weight = clampZero(Number(current.weight || 0) + allocatedWeight);
+    consumedBySource.set(sourceId, current);
+    remainingWeightToAllocate = clampZero(remainingWeightToAllocate - allocatedWeight);
+  }
+
   return consumedBySource;
 }
 
@@ -956,76 +991,6 @@ function calcAvailableCountFromWeight({ totalCount, issuedCount, dispatchedCount
   if (!Number.isFinite(ratio) || ratio <= 0) return 0;
   const weightBased = Math.floor((ratio * total) + 1e-6);
   return Math.max(0, Math.min(countBased, weightBased));
-}
-
-async function lockInventorySourceRows(tx, stage, ids) {
-  const sourceIds = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))).sort();
-  if (sourceIds.length === 0) return;
-  if (stage === 'inbound') {
-    await tx.$queryRaw`SELECT id FROM "InboundItem" WHERE id = ANY (${sourceIds}::text[]) ORDER BY id FOR UPDATE`;
-    return;
-  }
-  if (stage === 'cutter') {
-    await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineRow" WHERE id = ANY (${sourceIds}::text[]) ORDER BY id FOR UPDATE`;
-    return;
-  }
-  if (stage === 'holo') {
-    await tx.$queryRaw`SELECT id FROM "ReceiveFromHoloMachineRow" WHERE id = ANY (${sourceIds}::text[]) ORDER BY id FOR UPDATE`;
-    return;
-  }
-  if (stage === 'coning') {
-    await tx.$queryRaw`SELECT id FROM "ReceiveFromConingMachineRow" WHERE id = ANY (${sourceIds}::text[]) ORDER BY id FOR UPDATE`;
-    return;
-  }
-  throw new Error(`Unsupported inventory stage: ${stage}`);
-}
-
-async function lockIssueRow(tx, stage, issueId) {
-  if (stage === 'cutter') {
-    await tx.$queryRaw`SELECT id FROM "IssueToCutterMachine" WHERE id = ${issueId} FOR UPDATE`;
-  } else if (stage === 'holo') {
-    await tx.$queryRaw`SELECT id FROM "IssueToHoloMachine" WHERE id = ${issueId} FOR UPDATE`;
-  } else if (stage === 'coning') {
-    await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issueId} FOR UPDATE`;
-  } else {
-    throw new Error(`Unsupported issue stage: ${stage}`);
-  }
-}
-
-function isRetriableInventoryError(err) {
-  const code = String(err?.code || err?.meta?.code || '').toUpperCase();
-  const message = String(err?.message || '').toLowerCase();
-  return ['P2034', '40001', '40P01', '55P03', '57014'].includes(code)
-    || message.includes('deadlock')
-    || message.includes('lock timeout')
-    || message.includes('could not serialize');
-}
-
-function sendInventoryMutationError(res, err, fallbackMessage) {
-  if (err?.statusCode === 409) {
-    return res.status(409).json({
-      outcome: err.code || 'availability_changed',
-      error: err.message,
-      ...(err.availability ? { availability: err.availability } : {}),
-      ...(Array.isArray(err.crates) ? { crates: err.crates } : {}),
-    });
-  }
-  if (isRetriableInventoryError(err)) {
-    return res.status(409).json({
-      outcome: 'retry_required',
-      error: 'Inventory changed while saving. Please rescan and try again.',
-    });
-  }
-  const statusCode = Number(err?.statusCode);
-  if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500) {
-    return res.status(statusCode).json({
-      ...(err?.code ? { outcome: err.code } : {}),
-      error: err?.message || fallbackMessage,
-      ...(err?.availability ? { availability: err.availability } : {}),
-      ...(Array.isArray(err?.crates) ? { crates: err.crates } : {}),
-    });
-  }
-  return res.status(500).json({ error: err?.message || fallbackMessage });
 }
 
 function parseRefs(raw) {
@@ -1326,12 +1291,12 @@ async function resolveLotNoFromPieceId(pieceId) {
   return parts[0] || null;
 }
 
-async function findHoloIssuesReferencingCutterRows({ rowIds = [], barcodes = [] }, client = prisma) {
+async function findHoloIssuesReferencingCutterRows({ rowIds = [], barcodes = [] }) {
   const uniqueRowIds = Array.from(new Set((rowIds || []).filter(Boolean)));
   const uniqueBarcodes = Array.from(new Set((barcodes || []).filter(Boolean)));
   const rowIdArray = uniqueRowIds.length > 0 ? uniqueRowIds : ['__none__'];
   const barcodeArray = uniqueBarcodes.length > 0 ? uniqueBarcodes : ['__none__'];
-  const holoUsage = await client.$queryRaw`
+  const holoUsage = await prisma.$queryRaw`
     SELECT id, barcode, date
     FROM "IssueToHoloMachine"
     WHERE "isDeleted" = false
@@ -1345,11 +1310,11 @@ async function findHoloIssuesReferencingCutterRows({ rowIds = [], barcodes = [] 
   return Array.isArray(holoUsage) ? holoUsage : [];
 }
 
-async function findCutterBoxTransfersForRows({ rowIds = [], barcodes = [] }, client = prisma) {
+async function findCutterBoxTransfersForRows({ rowIds = [], barcodes = [] }) {
   const uniqueRowIds = Array.from(new Set((rowIds || []).filter(Boolean)));
   const uniqueBarcodes = Array.from(new Set((barcodes || []).filter(Boolean)));
   if (uniqueRowIds.length === 0 && uniqueBarcodes.length === 0) return [];
-  return await client.boxTransfer.findMany({
+  return await prisma.boxTransfer.findMany({
     where: {
       stage: 'cutter',
       isReversed: false,
@@ -1361,106 +1326,6 @@ async function findCutterBoxTransfersForRows({ rowIds = [], barcodes = [] }, cli
     select: { id: true, date: true, fromItemId: true, toItemId: true },
     take: 10,
   });
-}
-
-async function assertCutterReceiveRowsMutable(tx, rows, action = 'change') {
-  const activeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
-  const rowIds = activeRows.map((row) => row.id).filter(Boolean);
-  const barcodes = activeRows.map((row) => row.barcode).filter(Boolean);
-  if (activeRows.some((row) => Number(row.issuedBobbins || 0) > TAKE_BACK_EPSILON
-    || Number(row.issuedBobbinWeight || 0) > TAKE_BACK_EPSILON
-    || Number(row.dispatchedCount || 0) > TAKE_BACK_EPSILON
-    || Number(row.dispatchedWeight || 0) > TAKE_BACK_EPSILON)) {
-    throw Object.assign(new Error(`Cannot ${action} Cutter receive rows that were already issued or dispatched.`), {
-      statusCode: 409,
-      code: 'dependency_exists',
-    });
-  }
-  if (rowIds.length === 0) return;
-  await assertProductionRowsEditable(tx, 'cutter', rowIds);
-  const [holoIssues, boxTransfers] = await Promise.all([
-    findHoloIssuesReferencingCutterRows({ rowIds, barcodes }, tx),
-    findCutterBoxTransfersForRows({ rowIds, barcodes }, tx),
-  ]);
-  if (holoIssues.length > 0) {
-    throw Object.assign(new Error(`Cannot ${action} Cutter receive rows already used in a Holo issue.`), {
-      statusCode: 409,
-      code: 'dependency_exists',
-      details: { holoIssueIds: holoIssues.map((issue) => issue.id) },
-    });
-  }
-  if (boxTransfers.length > 0) {
-    throw Object.assign(new Error(`Cannot ${action} Cutter receive rows referenced by an active box transfer.`), {
-      statusCode: 409,
-      code: 'dependency_exists',
-      details: { boxTransferIds: boxTransfers.map((transfer) => transfer.id) },
-    });
-  }
-}
-
-async function loadActiveCutterIssueIdsForPiece(client, pieceId, rowIssueIds = []) {
-  const pieceKey = String(pieceId || '').trim();
-  if (!pieceKey) return Array.from(new Set((rowIssueIds || []).filter(Boolean))).sort();
-  const issues = await client.$queryRaw`
-    SELECT DISTINCT candidate.issue_id AS "issueId"
-    FROM (
-      SELECT line."issueId" AS issue_id
-      FROM "IssueToCutterMachineLine" line
-      JOIN "IssueToCutterMachine" issue ON issue.id = line."issueId"
-      WHERE line."pieceId" = ${pieceKey}
-        AND issue."isDeleted" = false
-      UNION ALL
-      SELECT issue.id AS issue_id
-      FROM "IssueToCutterMachine" issue
-      CROSS JOIN LATERAL regexp_split_to_table(
-        COALESCE(issue."pieceIds", ''),
-        '\\s*,\\s*'
-      ) AS header_piece(piece_id)
-      WHERE issue."isDeleted" = false
-        AND trim(header_piece.piece_id) = ${pieceKey}
-    ) candidate
-  `;
-  return Array.from(new Set([
-    ...(issues || []).map((issue) => issue.issueId),
-    ...(rowIssueIds || []),
-  ].filter(Boolean))).sort();
-}
-
-async function lockCutterIssueRows(tx, issueIds) {
-  const ids = Array.from(new Set((issueIds || []).filter(Boolean))).sort();
-  if (ids.length > 0) {
-    await tx.$queryRaw`SELECT id FROM "IssueToCutterMachine" WHERE id = ANY (${ids}::text[]) ORDER BY id FOR UPDATE`;
-  }
-  return ids;
-}
-
-async function loadCutterIssueBalances(tx, issueIds) {
-  if (!Array.isArray(issueIds) || issueIds.length === 0) return {};
-  const issues = await tx.issueToCutterMachine.findMany({
-    where: { id: { in: issueIds }, isDeleted: false },
-  });
-  return buildIssueBalancesByStage(tx, 'cutter', issues);
-}
-
-function assertCutterIssueAccountingNotWorsened(beforeBalances, afterBalances) {
-  for (const [issueId, after] of Object.entries(afterBalances || {})) {
-    const before = beforeBalances?.[issueId] || {};
-    const beforeAccounted = Number(before.receivedWeight || 0) + Number(before.wastageWeight || 0);
-    const afterAccounted = Number(after.receivedWeight || 0) + Number(after.wastageWeight || 0);
-    const issued = Number(after.netIssuedWeight || 0);
-    if (afterAccounted - issued > TAKE_BACK_EPSILON && afterAccounted - beforeAccounted > TAKE_BACK_EPSILON) {
-      throw Object.assign(new Error('Cutter receive change exceeds the linked issue allocation.'), {
-        statusCode: 409,
-        code: 'availability_changed',
-        availability: {
-          issueId,
-          issuedWeight: issued,
-          accountedWeight: afterAccounted,
-          pendingWeight: Number(after.pendingWeight || 0),
-        },
-      });
-    }
-  }
 }
 
 function buildOpeningGroupKey(stage, {
@@ -1512,8 +1377,8 @@ async function allocateCutterPurchaseLot(tx, actorUserId) {
 async function ensureHoloIssueSequence(tx, actorUserId) {
   const rows = await tx.$queryRaw`
     SELECT GREATEST(
-      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS BIGINT)) FROM "IssueToHoloMachine" WHERE barcode ~ '^IHO-[0-9]+' AND CAST(split_part(barcode, '-', 2) AS NUMERIC) <= 2147483646), 0),
-      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS BIGINT)) FROM "ReceiveFromHoloMachineRow" WHERE barcode ~ '^RHO-[0-9]+' AND CAST(split_part(barcode, '-', 2) AS NUMERIC) <= 2147483646), 0)
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "IssueToHoloMachine" WHERE barcode ~ '^IHO-[0-9]+'), 0),
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ReceiveFromHoloMachineRow" WHERE barcode ~ '^RHO-[0-9]+'), 0)
     ) AS max_series
   `;
   const maxSeries = Number(rows?.[0]?.max_series || 0);
@@ -1539,8 +1404,8 @@ async function ensureHoloIssueSequence(tx, actorUserId) {
 async function ensureConingIssueSequence(tx, actorUserId) {
   const rows = await tx.$queryRaw`
     SELECT GREATEST(
-      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS BIGINT)) FROM "IssueToConingMachine" WHERE barcode ~ '^ICO-[0-9]+' AND CAST(split_part(barcode, '-', 2) AS NUMERIC) <= 2147483646), 0),
-      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS BIGINT)) FROM "ReceiveFromConingMachineRow" WHERE barcode ~ '^RCO-[0-9]+' AND CAST(split_part(barcode, '-', 2) AS NUMERIC) <= 2147483646), 0)
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "IssueToConingMachine" WHERE barcode ~ '^ICO-[0-9]+'), 0),
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ReceiveFromConingMachineRow" WHERE barcode ~ '^RCO-[0-9]+'), 0)
     ) AS max_series
   `;
   const maxSeries = Number(rows?.[0]?.max_series || 0);
@@ -2096,13 +1961,7 @@ router.post('/api/auth/bootstrap', async (req, res) => {
 });
 
 router.get('/api/health', async (req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, database: 'ready' });
-  } catch (err) {
-    console.error('Health check database probe failed', err);
-    res.status(503).json({ ok: false, database: 'unavailable' });
-  }
+  res.json({ ok: true });
 });
 
 // Weight scale capture audit (scale/manual)
@@ -2542,9 +2401,10 @@ function hasAnyReadPermission(req, keys = []) {
 }
 
 function requireAnyReadPermission(keys = []) {
-  return (req, res, next) => {
-    if (hasAnyReadPermission(req, keys)) return next();
-    return res.status(403).json({ error: 'Insufficient permissions' });
+  return function requireAnyReadPermissionMiddleware(req, res, next) {
+    if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+    if (!hasAnyReadPermission(req, keys)) return res.status(403).json({ error: 'forbidden' });
+    return next();
   };
 }
 
@@ -2658,15 +2518,19 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
   if (uniqueIds.length === 0) return new Map();
   const [rows, takeBackRows] = await Promise.all([
     client.$queryRaw`
+    WITH target_rows AS (
+      SELECT DISTINCT row_id
+      FROM unnest(${uniqueIds}::text[]) AS ids(row_id)
+    )
     SELECT
-      elem->>'rowId' AS row_id,
+      target_rows.row_id,
       SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
       SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
-    FROM "IssueToConingMachine" i,
-      jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem
+    FROM "IssueToConingMachine" i
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem
+    JOIN target_rows ON target_rows.row_id = elem->>'rowId'
     WHERE i."isDeleted" = false
-      AND elem->>'rowId' = ANY (${uniqueIds}::text[])
-    GROUP BY row_id
+    GROUP BY target_rows.row_id
   `,
     client.issueTakeBackLine.findMany({
       where: {
@@ -2730,46 +2594,172 @@ function getHoloRowNetWeight(row) {
   return Math.max(0, gross - tare);
 }
 
-async function buildConingSourceLookupPayload(row) {
+async function buildHoloSourceLookupPayload(row) {
   if (!row) return null;
 
+  const piece = row.pieceId
+    ? await prisma.inboundItem.findUnique({ where: { id: row.pieceId } })
+    : null;
+  const itemId = piece?.itemId || null;
+  const item = itemId
+    ? await prisma.item.findUnique({ where: { id: itemId }, select: { id: true, name: true } })
+    : null;
+  const totalBobbins = Number(row.bobbinQuantity || 0);
+  const totalWeight = Number(row.netWt || 0);
+  const issuedBobbins = Number(row.issuedBobbins || 0);
+  const issuedWeight = Number(row.issuedBobbinWeight || 0);
+  const dispatchedCount = Number(row.dispatchedCount || 0);
+  const dispatchedWeight = Number(row.dispatchedWeight || 0);
+  // Keep this identical to the authoritative Issue-to-Holo POST guard.
+  const availableBobbins = Math.max(0, totalBobbins - issuedBobbins - dispatchedCount);
+  const availableWeight = Math.max(0, totalWeight - issuedWeight - dispatchedWeight);
+  const outcome = availableBobbins > 0 && availableWeight > TAKE_BACK_EPSILON
+    ? 'found'
+    : 'unavailable';
+  const cutName = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : '') || '';
+  const lotNo = piece?.lotNo || '';
+  const itemName = item?.name || row.itemName || '';
+
+  return {
+    outcome,
+    ...(outcome === 'unavailable'
+      ? { error: 'No bobbins available for issue (may have been dispatched or already issued).' }
+      : {}),
+    row: {
+      id: row.id,
+      rowId: row.id,
+      date: row.date,
+      pieceId: row.pieceId,
+      lotNo,
+      itemId,
+      itemName,
+      vchNo: row.vchNo,
+      barcode: row.barcode,
+      legacyBarcode: row.notes || null,
+      notes: row.notes || '',
+      bobbinId: row.bobbinId || null,
+      bobbinName: row.bobbin?.name || '',
+      bobbinWeight: Number(row.bobbin?.weight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      cutId: row.cutId || null,
+      cutName,
+      bobbinQuantity: totalBobbins,
+      netWeight: roundTo3Decimals(totalWeight),
+      netWt: roundTo3Decimals(totalWeight),
+      grossWeight: Number(row.grossWt || 0),
+      grossWt: Number(row.grossWt || 0),
+      tareWeight: Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0),
+      tareWt: Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0),
+      issuedBobbins,
+      issuedBobbinWeight: roundTo3Decimals(issuedWeight),
+      dispatchedCount,
+      dispatchedWeight: roundTo3Decimals(dispatchedWeight),
+      availableBobbins,
+      availableWeight: roundTo3Decimals(availableWeight),
+    },
+    piece: piece ? {
+      id: piece.id,
+      lotNo: piece.lotNo,
+      itemId: piece.itemId,
+      weight: Number(piece.weight || 0),
+      status: piece.status,
+      seq: piece.seq,
+      barcode: piece.barcode,
+    } : null,
+    item,
+    trace: {
+      pieceId: row.pieceId || null,
+      lotNo,
+      itemId,
+      itemName,
+      cutId: row.cutId || null,
+      cutName,
+    },
+    pieceIds: row.pieceId ? [row.pieceId] : [],
+    availability: {
+      totalBobbins,
+      totalWeight: roundTo3Decimals(totalWeight),
+      issuedBobbins,
+      issuedWeight: roundTo3Decimals(issuedWeight),
+      dispatchedCount,
+      dispatchedWeight: roundTo3Decimals(dispatchedWeight),
+      availableBobbins,
+      availableWeight: roundTo3Decimals(availableWeight),
+    },
+  };
+}
+
+async function buildConingSourceLookupPayload(row, sourceStage = 'holo') {
+  if (!row) return null;
+
+  const normalizedSourceStage = sourceStage === 'coning' ? 'coning' : 'holo';
+  const isConingSource = normalizedSourceStage === 'coning';
   const issue = row.issue || null;
-  const totalWeight = getHoloRowNetWeight(row);
-  const totalRolls = Number(row.rollCount || 0);
+  const totalWeight = isConingSource
+    ? Number(row.netWeight ?? row.coneWeight ?? 0)
+    : getHoloRowNetWeight(row);
+  const totalRolls = Number(isConingSource ? row.coneCount : row.rollCount) || 0;
   const dispatchedCount = Number(row.dispatchedCount || 0);
   const dispatchedWeight = Number(row.dispatchedWeight || 0);
   const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [row.id]);
   const issuedToConing = issuedToConingMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
   const availableWeight = Math.max(0, totalWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
-  const availableRolls = calcAvailableCountFromWeight({
-    totalCount: totalRolls,
-    issuedCount: issuedToConing.issuedRolls || 0,
-    dispatchedCount,
-    totalWeight,
-    availableWeight,
-  }) || 0;
-  const trace = await resolveHoloIssueDetails(issue, createTraceCaches());
-  const pieceIds = await resolveHoloIssuePieceIds(issue);
+  // Match the POST guard exactly: count and weight are independent inventory
+  // dimensions. A low remaining weight must not silently reduce the count
+  // balance because the submitted issue weight is validated separately.
+  const availableRolls = Math.max(
+    0,
+    totalRolls - dispatchedCount - Number(issuedToConing.issuedRolls || 0),
+  );
+  const trace = isConingSource
+    ? await resolveConingTraceDetails(issue)
+    : await resolveHoloIssueDetails(issue, createTraceCaches());
+  // Holo receives usually carry their direct piece. Re-coning rows retain the
+  // same lot/item/trace metadata, and the UI already falls back to the lot label
+  // when no direct piece id exists.
+  const pieceIds = isConingSource ? [] : await resolveHoloIssuePieceIds(issue);
   const item = issue?.itemId
     ? await prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
     : null;
   const crateIndex = parseReceiveCrateIndex(row.barcode);
-  const legacyBarcode = buildLegacyReceiveBarcode('RHO', issue?.lotNo, crateIndex);
+  const legacyBarcode = buildLegacyReceiveBarcode(isConingSource ? 'RCO' : 'RHO', issue?.lotNo, crateIndex);
+  const rollTypeId = isConingSource ? null : (row.rollTypeId || null);
+  const rollTypeName = isConingSource ? (trace.rollTypeName || '') : (row.rollType?.name || '');
+  const rollTypeWeight = isConingSource ? 0 : Number(row.rollType?.weight || 0);
 
-  const outcome = (availableRolls > 0 && availableWeight > TAKE_BACK_EPSILON) ? 'found' : 'exhausted';
+  const outcome = (availableRolls > 0 && availableWeight > TAKE_BACK_EPSILON) ? 'found' : 'unavailable';
 
   return {
     outcome,
-    ...(outcome === 'exhausted' ? { error: 'No rolls available for issue (may have been dispatched or already issued).' } : {}),
+    ...(outcome === 'unavailable' ? { error: 'No rolls available for issue (may have been dispatched or already issued).' } : {}),
     row: {
       id: row.id,
+      rowId: row.id,
+      sourceStage: normalizedSourceStage,
       date: row.date,
       issueId: row.issueId,
       pieceId: row.pieceId,
+      lotNo: issue?.lotNo || '',
+      itemId: issue?.itemId || null,
+      itemName: item?.name || '',
       rollCount: totalRolls,
+      coneCount: isConingSource ? totalRolls : undefined,
       rollWeight: totalWeight,
+      coneWeight: isConingSource ? Number(row.coneWeight || 0) : undefined,
+      netWeight: roundTo3Decimals(totalWeight),
       grossWeight: Number(row.grossWeight || 0),
       tareWeight: Number(row.tareWeight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      rollTypeId,
+      rollTypeName,
+      rollTypeWeight,
+      cutName: trace.cutName || issue?.cut?.name || '',
+      yarnName: trace.yarnName || issue?.yarn?.name || '',
+      twistName: trace.twistName || issue?.twist?.name || '',
       barcode: row.barcode,
       legacyBarcode,
       notes: row.notes || '',
@@ -2780,7 +2770,6 @@ async function buildConingSourceLookupPayload(row) {
       availableRolls,
       availableWeight: roundTo3Decimals(availableWeight),
       computedPieceIds: pieceIds,
-      rollType: row.rollType || null,
       issue: issue ? {
         id: issue.id,
         lotNo: issue.lotNo,
@@ -2800,7 +2789,19 @@ async function buildConingSourceLookupPayload(row) {
       twistId: issue.twistId,
       cutId: issue.cutId,
     } : null,
-    trace,
+    trace: {
+      ...trace,
+      sourceStage: normalizedSourceStage,
+      lotNo: issue?.lotNo || '',
+      itemId: issue?.itemId || null,
+      itemName: item?.name || '',
+      rollTypeId,
+      rollTypeName,
+      rollTypeWeight,
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+    },
     pieceIds,
     availability: {
       totalRolls,
@@ -2815,134 +2816,383 @@ async function buildConingSourceLookupPayload(row) {
   };
 }
 
-async function buildReConingSourceLookupPayload(row) {
-  if (!row) return null;
-  const issue = row.issue || null;
-  const totalRolls = Number(row.coneCount || 0);
-  const rawTotalWeight = row.netWeight ?? row.coneWeight ?? (Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
-  const totalWeight = Number(rawTotalWeight || 0);
-  const dispatchedCount = Number(row.dispatchedCount || 0);
-  const dispatchedWeight = Number(row.dispatchedWeight || 0);
-  const issuedMap = await buildHoloIssuedToConingMap(prisma, [row.id]);
-  const issued = issuedMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
-  const availableWeight = Math.max(0, totalWeight - dispatchedWeight - Number(issued.issuedWeight || 0));
-  const availableRolls = calcAvailableCountFromWeight({
-    totalCount: totalRolls,
-    issuedCount: issued.issuedRolls || 0,
-    dispatchedCount,
-    totalWeight,
-    availableWeight,
-  }) || 0;
-  const trace = await resolveConingTraceDetails(issue);
-  const item = issue?.itemId
-    ? await prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
-    : null;
-  const outcome = availableRolls > 0 && availableWeight > TAKE_BACK_EPSILON ? 'found' : 'exhausted';
-  return {
-    outcome,
-    ...(outcome === 'exhausted' ? { error: 'No cones/weight available for re-coning.' } : {}),
-    row: {
+async function buildHoloIssueLookupPayload(issue) {
+  const refs = parseJsonArraySafe(issue?.receivedRowRefs);
+  const allSourceIds = Array.from(new Set(
+    refs.map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : '')).filter(Boolean),
+  ));
+  // This is already scoped to one exact issue. Keep every referenced source so
+  // edit, take-back, receive, and label actions never operate on partial metadata.
+  const sourceIds = allSourceIds;
+
+  const [sourceRows, item, balances, receivesPlusOne, trace] = await Promise.all([
+    sourceIds.length
+      ? prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          bobbin: { select: { id: true, name: true, weight: true } },
+          box: { select: { id: true, name: true, weight: true } },
+          cutMaster: { select: { id: true, name: true } },
+        },
+      })
+      : [],
+    issue?.itemId
+      ? prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
+      : null,
+    computeIssueBalancesBatch(prisma, 'holo', [issue]),
+    prisma.receiveFromHoloMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: ISSUE_LOOKUP_RECEIVE_LIMIT + 1,
+      include: {
+        rollType: { select: { id: true, name: true, weight: true } },
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+      },
+    }),
+    resolveHoloIssueDetails(issue, createTraceCaches()),
+  ]);
+
+  const sourceRowById = new Map(sourceRows.map((row) => [row.id, row]));
+  let pieceIds = Array.from(new Set(sourceRows.map((row) => row.pieceId).filter(Boolean)));
+  if (pieceIds.length === 0) pieceIds = await resolveHoloIssuePieceIds(issue);
+  const [pieces, pieceTotals] = await Promise.all([
+    pieceIds.length
+      ? prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
+      : [],
+    pieceIds.length
+      ? prisma.receiveFromHoloMachinePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } })
+      : [],
+  ]);
+  const pieceById = new Map(pieces.map((piece) => [piece.id, piece]));
+  const refByRowId = new Map(refs.map((ref) => [ref?.rowId, ref]));
+  const crates = sourceIds.map((rowId) => {
+    const row = sourceRowById.get(rowId);
+    if (!row) return null;
+    const ref = refByRowId.get(rowId) || {};
+    const piece = pieceById.get(row.pieceId);
+    const crateTare = Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0);
+    return {
       id: row.id,
+      rowId: row.id,
       date: row.date,
-      issueId: row.issueId,
-      coneCount: totalRolls,
-      coneWeight: totalWeight,
-      netWeight: totalWeight,
-      barcode: row.barcode,
-      notes: row.notes || '',
-      dispatchedCount,
-      dispatchedWeight,
-      availableRolls,
-      availableWeight: roundTo3Decimals(availableWeight),
-      issue,
-    },
-    issue: issue ? { ...issue, itemName: item?.name || '' } : null,
-    trace,
-    pieceIds: [],
-    availability: {
-      totalRolls,
-      totalWeight: roundTo3Decimals(totalWeight),
-      dispatchedCount,
-      dispatchedWeight,
-      issuedToConingRolls: issued.issuedRolls || 0,
-      issuedToConingWeight: issued.issuedWeight || 0,
-      availableRolls,
-      availableWeight: roundTo3Decimals(availableWeight),
+      barcode: row.barcode || ref.barcode || null,
+      vchNo: row.vchNo,
+      pieceId: row.pieceId,
+      lotNo: piece?.lotNo || issue.lotNo || '',
+      itemId: piece?.itemId || issue.itemId || null,
+      itemName: item?.name || row.itemName || '',
+      bobbinId: row.bobbinId || null,
+      bobbinName: row.bobbin?.name || '',
+      bobbinWeight: Number(row.bobbin?.weight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      cutId: row.cutId || issue.cutId || null,
+      cutName: row.cutMaster?.name || trace.cutName || '',
+      bobbinQuantity: Number(row.bobbinQuantity || 0),
+      netWeight: roundTo3Decimals(Number(row.netWt || 0)),
+      netWt: roundTo3Decimals(Number(row.netWt || 0)),
+      grossWeight: Number(row.grossWt || 0),
+      grossWt: Number(row.grossWt || 0),
+      tareWeight: crateTare,
+      tareWt: crateTare,
+      crateTare,
+      issuedBobbins: Number(ref.issuedBobbins ?? row.bobbinQuantity ?? 0),
+      issuedBobbinWeight: roundTo3Decimals(Number(ref.issuedBobbinWeight ?? row.netWt ?? 0)),
+      sourceIssuedBobbins: Number(row.issuedBobbins || 0),
+      sourceIssuedBobbinWeight: roundTo3Decimals(Number(row.issuedBobbinWeight || 0)),
+      dispatchedCount: Number(row.dispatchedCount || 0),
+      dispatchedWeight: roundTo3Decimals(Number(row.dispatchedWeight || 0)),
+    };
+  }).filter(Boolean);
+  const receivesTruncated = receivesPlusOne.length > ISSUE_LOOKUP_RECEIVE_LIMIT;
+  const receives = receivesPlusOne.slice(0, ISSUE_LOOKUP_RECEIVE_LIMIT);
+  const itemName = item?.name || '';
+  const machineName = issue.machine?.name || '';
+  const operatorName = issue.operator?.name || '';
+  const lotNos = Array.from(new Set(crates.map((crate) => crate.lotNo).filter(Boolean)));
+  if (lotNos.length === 0 && issue.lotNo) lotNos.push(issue.lotNo);
+  const lotLabel = lotNos.length <= 1
+    ? (lotNos[0] || issue.lotNo || '')
+    : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+
+  return {
+    ...issue,
+    itemName,
+    machineName,
+    operatorName,
+    cutName: trace.cutName || issue.cut?.name || '',
+    yarnName: trace.yarnName || issue.yarn?.name || '',
+    twistName: trace.twistName || issue.twist?.name || '',
+    lotLabel,
+    lotNos,
+    pieceIds,
+    pieces,
+    crates,
+    sources: crates,
+    sourcesTruncated: false,
+    issueBalance: balances.get(issue.id) || null,
+    hasReceives: receives.length > 0,
+    receives,
+    receivesTruncated,
+    pieceTotals,
+    trace: {
+      ...trace,
+      lotNo: issue.lotNo || '',
+      lotNos,
+      lotLabel,
+      itemId: issue.itemId || null,
+      itemName,
+      pieceIds,
     },
   };
 }
 
-async function buildHoloSourceLookupPayload(row) {
-  if (!row) return null;
+async function buildConingIssueLookupPayload(issue) {
+  const refs = parseJsonArraySafe(issue?.receivedRowRefs);
+  const allSourceIds = Array.from(new Set(
+    refs.map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : '')).filter(Boolean),
+  ));
+  // This is already scoped to one exact issue. Keep every referenced source so
+  // edit, take-back, receive, and label actions never operate on partial metadata.
+  const sourceIds = allSourceIds;
+  const coneTypeIds = Array.from(new Set(refs.map((ref) => ref?.coneTypeId).filter(Boolean)));
+  const wrapperIds = Array.from(new Set(refs.map((ref) => ref?.wrapperId).filter(Boolean)));
+  const issueBoxIds = Array.from(new Set(refs.map((ref) => ref?.boxId).filter(Boolean)));
 
-  const piece = row.pieceId
-    ? await prisma.inboundItem.findUnique({ where: { id: row.pieceId } })
-    : null;
-  const item = piece?.itemId
-    ? await prisma.item.findUnique({ where: { id: piece.itemId }, select: { id: true, name: true } })
-    : null;
-  const totalCount = Number(row.bobbinQuantity || 0);
-  const totalWeight = Number(row.netWt ?? row.totalKg ?? row.yarnWt ?? 0);
-  const issuedCount = Number(row.issuedBobbins || 0);
-  const issuedWeight = Number(row.issuedBobbinWeight || 0);
-  const dispatchedCount = Number(row.dispatchedCount || 0);
-  const dispatchedWeight = Number(row.dispatchedWeight || 0);
-  const availableWeight = Math.max(0, totalWeight - issuedWeight - dispatchedWeight);
-  const availableCount = calcAvailableCountFromWeight({
-    totalCount,
-    issuedCount,
-    dispatchedCount,
-    totalWeight,
-    availableWeight,
-  }) || 0;
-  const cutName = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : '') || '';
-  const outcome = availableCount > 0 && availableWeight > TAKE_BACK_EPSILON ? 'found' : 'exhausted';
+  const [holoRows, coningRows, item, balances, receivesPlusOne, pieceTotal, trace, coneTypes, wrappers, issueBoxes] = await Promise.all([
+    sourceIds.length
+      ? prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          issue: {
+            include: {
+              cut: { select: { id: true, name: true } },
+              yarn: { select: { id: true, name: true } },
+              twist: { select: { id: true, name: true } },
+            },
+          },
+          rollType: { select: { id: true, name: true, weight: true } },
+          box: { select: { id: true, name: true, weight: true } },
+        },
+      })
+      : [],
+    sourceIds.length
+      ? prisma.receiveFromConingMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          issue: {
+            include: {
+              cut: { select: { id: true, name: true } },
+              yarn: { select: { id: true, name: true } },
+              twist: { select: { id: true, name: true } },
+            },
+          },
+          box: { select: { id: true, name: true, weight: true } },
+        },
+      })
+      : [],
+    issue?.itemId
+      ? prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
+      : null,
+    computeIssueBalancesBatch(prisma, 'coning', [issue]),
+    prisma.receiveFromConingMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: ISSUE_LOOKUP_RECEIVE_LIMIT + 1,
+      include: {
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issue.id } }),
+    resolveConingTraceDetails(issue),
+    coneTypeIds.length
+      ? prisma.coneType.findMany({ where: { id: { in: coneTypeIds } }, select: { id: true, name: true, weight: true } })
+      : [],
+    wrapperIds.length
+      ? prisma.wrapper.findMany({ where: { id: { in: wrapperIds } }, select: { id: true, name: true } })
+      : [],
+    issueBoxIds.length
+      ? prisma.box.findMany({ where: { id: { in: issueBoxIds } }, select: { id: true, name: true, weight: true } })
+      : [],
+  ]);
+
+  const holoRowById = new Map(holoRows.map((row) => [row.id, row]));
+  const coningRowById = new Map(coningRows.map((row) => [row.id, row]));
+  const coneTypeById = new Map(coneTypes.map((row) => [row.id, row]));
+  const wrapperById = new Map(wrappers.map((row) => [row.id, row]));
+  const issueBoxById = new Map(issueBoxes.map((row) => [row.id, row]));
+  const refByRowId = new Map(refs.map((ref) => [ref?.rowId, ref]));
+
+  const cutterSourceIds = Array.from(new Set(holoRows.flatMap((row) => (
+    parseJsonArraySafe(row.issue?.receivedRowRefs)
+      .map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : ''))
+      .filter(Boolean)
+  ))));
+  const cutterSources = cutterSourceIds.length
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: cutterSourceIds }, isDeleted: false },
+      select: { id: true, pieceId: true },
+    })
+    : [];
+  let pieceIds = Array.from(new Set([
+    ...holoRows.map((row) => row.pieceId).filter(Boolean),
+    ...cutterSources.map((row) => row.pieceId).filter(Boolean),
+  ]));
+  if (pieceIds.length === 0 && issue.lotNo) {
+    const lotPieces = await prisma.inboundItem.findMany({
+      where: { lotNo: issue.lotNo },
+      select: { id: true },
+      take: 2,
+    });
+    if (lotPieces.length === 1) pieceIds = [lotPieces[0].id];
+  }
+  const pieces = pieceIds.length
+    ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
+    : [];
+  const itemName = item?.name || '';
+  const sources = sourceIds.map((rowId) => {
+    const ref = refByRowId.get(rowId) || {};
+    const coneType = coneTypeById.get(ref.coneTypeId);
+    const wrapper = wrapperById.get(ref.wrapperId);
+    const issueBox = issueBoxById.get(ref.boxId);
+    const holoRow = holoRowById.get(rowId);
+    if (holoRow) {
+      return {
+        id: holoRow.id,
+        rowId: holoRow.id,
+        sourceStage: 'holo',
+        date: holoRow.date,
+        barcode: ref.barcode || holoRow.barcode,
+        pieceId: holoRow.pieceId || null,
+        lotNo: holoRow.issue?.lotNo || issue.lotNo || '',
+        itemId: holoRow.issue?.itemId || issue.itemId || null,
+        itemName,
+        cutId: holoRow.issue?.cutId || issue.cutId || null,
+        cutName: holoRow.issue?.cut?.name || trace.cutName || '',
+        yarnId: holoRow.issue?.yarnId || issue.yarnId || null,
+        yarnName: holoRow.issue?.yarn?.name || trace.yarnName || '',
+        twistId: holoRow.issue?.twistId || issue.twistId || null,
+        twistName: holoRow.issue?.twist?.name || trace.twistName || '',
+        rollTypeId: holoRow.rollTypeId || null,
+        rollTypeName: holoRow.rollType?.name || '',
+        rollTypeWeight: Number(holoRow.rollType?.weight || 0),
+        rollCount: Number(holoRow.rollCount || 0),
+        rollWeight: roundTo3Decimals(getHoloRowNetWeight(holoRow)),
+        netWeight: roundTo3Decimals(getHoloRowNetWeight(holoRow)),
+        grossWeight: Number(holoRow.grossWeight || 0),
+        tareWeight: Number(holoRow.tareWeight || 0),
+        sourceBoxId: holoRow.boxId || null,
+        sourceBoxName: holoRow.box?.name || '',
+        sourceBoxWeight: Number(holoRow.box?.weight || 0),
+        dispatchedCount: Number(holoRow.dispatchedCount || 0),
+        dispatchedWeight: roundTo3Decimals(Number(holoRow.dispatchedWeight || 0)),
+        issueRolls: Number(ref.issueRolls || 0),
+        issueWeight: roundTo3Decimals(Number(ref.issueWeight || 0)),
+        coneTypeId: ref.coneTypeId || null,
+        coneTypeName: coneType?.name || '',
+        coneTypeWeight: Number(coneType?.weight || 0),
+        wrapperId: ref.wrapperId || null,
+        wrapperName: wrapper?.name || '',
+        boxId: ref.boxId || null,
+        boxName: issueBox?.name || '',
+        boxWeight: Number(issueBox?.weight || 0),
+      };
+    }
+
+    const coningRow = coningRowById.get(rowId);
+    if (!coningRow) return null;
+    return {
+      id: coningRow.id,
+      rowId: coningRow.id,
+      sourceStage: 'coning',
+      date: coningRow.date,
+      barcode: ref.barcode || coningRow.barcode,
+      lotNo: coningRow.issue?.lotNo || issue.lotNo || '',
+      itemId: coningRow.issue?.itemId || issue.itemId || null,
+      itemName,
+      cutId: coningRow.issue?.cutId || issue.cutId || null,
+      cutName: coningRow.issue?.cut?.name || trace.cutName || '',
+      yarnId: coningRow.issue?.yarnId || issue.yarnId || null,
+      yarnName: coningRow.issue?.yarn?.name || trace.yarnName || '',
+      twistId: coningRow.issue?.twistId || issue.twistId || null,
+      twistName: coningRow.issue?.twist?.name || trace.twistName || '',
+      coneCount: Number(coningRow.coneCount || 0),
+      netWeight: roundTo3Decimals(Number(coningRow.netWeight || 0)),
+      grossWeight: Number(coningRow.grossWeight || 0),
+      tareWeight: Number(coningRow.tareWeight || 0),
+      sourceBoxId: coningRow.boxId || null,
+      sourceBoxName: coningRow.box?.name || '',
+      sourceBoxWeight: Number(coningRow.box?.weight || 0),
+      dispatchedCount: Number(coningRow.dispatchedCount || 0),
+      dispatchedWeight: roundTo3Decimals(Number(coningRow.dispatchedWeight || 0)),
+      issueRolls: Number(ref.issueRolls || 0),
+      issueWeight: roundTo3Decimals(Number(ref.issueWeight || 0)),
+      coneTypeId: ref.coneTypeId || null,
+      coneTypeName: coneType?.name || '',
+      coneTypeWeight: Number(coneType?.weight || 0),
+      wrapperId: ref.wrapperId || null,
+      wrapperName: wrapper?.name || '',
+      boxId: ref.boxId || null,
+      boxName: issueBox?.name || '',
+      boxWeight: Number(issueBox?.weight || 0),
+    };
+  }).filter(Boolean);
+
+  const firstRef = refs[0] || {};
+  const firstConeType = coneTypeById.get(firstRef.coneTypeId);
+  const firstWrapper = wrapperById.get(firstRef.wrapperId);
+  const firstIssueBox = issueBoxById.get(firstRef.boxId);
+  const receivesTruncated = receivesPlusOne.length > ISSUE_LOOKUP_RECEIVE_LIMIT;
+  const receives = receivesPlusOne.slice(0, ISSUE_LOOKUP_RECEIVE_LIMIT);
 
   return {
-    outcome,
-    ...(outcome === 'exhausted' ? { error: 'No bobbins available for issue (may have been dispatched or already issued).' } : {}),
-    row: {
-      id: row.id,
-      date: row.date,
-      pieceId: row.pieceId,
-      barcode: row.barcode,
-      lotNo: piece?.lotNo || '',
-      itemId: piece?.itemId || '',
-      itemName: item?.name || row.itemName || '',
-      cutId: row.cutId || null,
-      cut: cutName,
-      cutMaster: row.cutMaster || null,
-      bobbinId: row.bobbinId || null,
-      bobbin: row.bobbin || null,
-      pcsTypeName: row.pcsTypeName || '',
-      bobbinQuantity: totalCount,
-      netWt: totalWeight,
-      issuedBobbins: issuedCount,
-      issuedBobbinWeight: issuedWeight,
-      dispatchedCount,
-      dispatchedWeight,
-      availableBobbins: availableCount,
-      availableWeight: roundTo3Decimals(availableWeight),
-      updatedAt: row.updatedAt,
-    },
-    issue: row.issue || null,
+    ...issue,
+    itemName,
+    machineName: issue.machine?.name || '',
+    operatorName: issue.operator?.name || '',
+    cutName: trace.cutName || issue.cut?.name || '',
+    yarnName: trace.yarnName || issue.yarn?.name || '',
+    twistName: trace.twistName || issue.twist?.name || '',
+    rollTypeName: trace.rollTypeName || sources[0]?.rollTypeName || '',
+    coneTypeId: firstRef.coneTypeId || null,
+    coneTypeName: firstConeType?.name || '',
+    coneTypeWeight: Number(firstConeType?.weight || 0),
+    wrapperId: firstRef.wrapperId || null,
+    wrapperName: firstWrapper?.name || '',
+    boxId: firstRef.boxId || null,
+    boxName: firstIssueBox?.name || '',
+    boxWeight: Number(firstIssueBox?.weight || 0),
+    lotLabel: issue.lotNo || '',
+    lotNos: issue.lotNo ? [issue.lotNo] : [],
+    pieceIds,
+    pieces,
+    sources,
+    crates: sources,
+    sourcesTruncated: false,
+    issueBalance: balances.get(issue.id) || null,
+    hasReceives: receives.length > 0,
+    receives,
+    receivesTruncated,
+    pieceTotal,
     trace: {
-      lotNo: piece?.lotNo || '',
-      itemId: piece?.itemId || '',
-      itemName: item?.name || row.itemName || '',
-      cutId: row.cutId || null,
-      cutName,
-    },
-    pieceIds: row.pieceId ? [row.pieceId] : [],
-    availability: {
-      totalCount,
-      totalWeight: roundTo3Decimals(totalWeight),
-      issuedCount,
-      issuedWeight: roundTo3Decimals(issuedWeight),
-      dispatchedCount,
-      dispatchedWeight: roundTo3Decimals(dispatchedWeight),
-      availableCount,
-      availableWeight: roundTo3Decimals(availableWeight),
+      ...trace,
+      lotNo: issue.lotNo || '',
+      itemId: issue.itemId || null,
+      itemName,
+      pieceIds,
+      coneTypeId: firstRef.coneTypeId || null,
+      coneTypeName: firstConeType?.name || '',
+      coneTypeWeight: Number(firstConeType?.weight || 0),
+      wrapperId: firstRef.wrapperId || null,
+      wrapperName: firstWrapper?.name || '',
+      boxId: firstRef.boxId || null,
+      boxName: firstIssueBox?.name || '',
+      boxWeight: Number(firstIssueBox?.weight || 0),
     },
   };
 }
@@ -3233,44 +3483,14 @@ async function buildProcessData(process, options = {}) {
 }
 
 async function buildOpeningStockData() {
-  const [inboundRaw, cutterRaw, holoRaw, coningRaw] = await Promise.all([
-    prisma.inboundItem.findMany({
-      where: { isOpeningStock: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: RECEIVE_ROWS_FETCH_LIMIT,
-    }),
-    prisma.receiveFromCutterMachineRow.findMany({
-      where: { isDeleted: false, pieceId: { startsWith: 'OP-' } },
-      include: { bobbin: true, box: true, cutMaster: true, operator: true, helper: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: RECEIVE_ROWS_FETCH_LIMIT,
-    }),
-    prisma.receiveFromHoloMachineRow.findMany({
-      where: { isDeleted: false, issue: { lotNo: { startsWith: 'OP-' }, isDeleted: false } },
-      include: { issue: true, rollType: true, box: true, operator: true, helper: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: RECEIVE_ROWS_FETCH_LIMIT,
-    }),
-    prisma.receiveFromConingMachineRow.findMany({
-      where: { isDeleted: false, issue: { lotNo: { startsWith: 'OP-' }, isDeleted: false } },
-      include: { issue: true, box: true, operator: true, helper: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: RECEIVE_ROWS_FETCH_LIMIT,
-    }),
-  ]);
-  const [inbound_items, receive_from_cutter_machine_rows, receive_from_holo_machine_rows, receive_from_coning_machine_rows] = await Promise.all([
-    resolveUserFields(inboundRaw),
-    resolveUserFields(cutterRaw),
-    resolveUserFields(holoRaw),
-    resolveUserFields(coningRaw),
-  ]);
+  const processData = await buildProcessData('coning');
   return {
-    inbound_items,
-    issue_to_holo_machine: receive_from_holo_machine_rows.map((row) => row.issue).filter(Boolean),
-    issue_to_coning_machine: receive_from_coning_machine_rows.map((row) => row.issue).filter(Boolean),
-    receive_from_cutter_machine_rows,
-    receive_from_holo_machine_rows,
-    receive_from_coning_machine_rows,
+    inbound_items: processData.inbound_items,
+    issue_to_holo_machine: processData.issue_to_holo_machine,
+    issue_to_coning_machine: processData.issue_to_coning_machine,
+    receive_from_cutter_machine_rows: processData.receive_from_cutter_machine_rows,
+    receive_from_holo_machine_rows: processData.receive_from_holo_machine_rows,
+    receive_from_coning_machine_rows: processData.receive_from_coning_machine_rows,
   };
 }
 
@@ -3412,18 +3632,6 @@ router.get('/api/module/process/:process', async (req, res) => {
 
     const fullFlag = String(req.query?.full || '').toLowerCase();
     const includeAll = fullFlag === '1' || fullFlag === 'true' || fullFlag === 'yes';
-    res.setHeader('Deprecation', 'true');
-    res.setHeader('Warning', '299 - "Legacy process snapshot endpoint is deprecated"');
-    res.setHeader('Link', `</api/v2/stock/${process}/lot-groups>; rel="successor-version"`);
-    if (includeAll) {
-      console.warn('Deprecated full process snapshot requested', {
-        process,
-        requestId: res.getHeader('X-Request-Id') || null,
-        referer: req.get('referer') || null,
-        userAgent: req.get('user-agent') || null,
-        userId: req.user?.id || null,
-      });
-    }
     const data = await buildProcessData(process, { includeAll });
     res.json(data);
   } catch (err) {
@@ -3512,27 +3720,14 @@ router.get('/api/inbound_items/barcode/:code', requirePermission('inbound', PERM
   }
 });
 
-router.get('/api/issue_to_cutter_machine/lookup', requireAnyReadPermission(['issue.cutter', 'receive.cutter']), async (req, res) => {
+router.get('/api/issue_to_cutter_machine/lookup', requirePermission('issue.cutter', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToCutterMachine.findFirst({
-      where: { barcode, isDeleted: false },
-      include: { lines: true },
-    });
+    const issue = await prisma.issueToCutterMachine.findFirst({ where: { barcode, isDeleted: false } });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     const pieceIds = issue.pieceIds ? issue.pieceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const [pieces, balances, receiveRows] = await Promise.all([
-      pieceIds.length ? prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } }) : Promise.resolve([]),
-      computeIssueBalancesBatch(prisma, 'cutter', [issue]),
-      prisma.receiveFromCutterMachineRow.findMany({
-        where: { issueId: issue.id, isDeleted: false },
-        include: { bobbin: true, box: true, cutMaster: true, operator: true, helper: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: 100,
-      }),
-    ]);
-    res.json({ ...issue, pieceIds, pieces, receiveRows, issueBalance: balances.get(issue.id) || null });
+    res.json({ ...issue, pieceIds });
   } catch (err) {
     console.error('Failed to lookup issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
@@ -3543,71 +3738,18 @@ router.get('/api/issue_to_holo_machine/lookup', requireAnyReadPermission(['issue
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToHoloMachine.findFirst({ where: { barcode, isDeleted: false } });
-    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
-    const receivedRefs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
-    const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
-    const rows = rowIds.length > 0
-      ? await prisma.receiveFromCutterMachineRow.findMany({
-        where: { id: { in: rowIds }, isDeleted: false },
-        select: {
-          id: true,
-          bobbinId: true,
-          pieceId: true,
-          barcode: true,
-          netWt: true,
-          tareWt: true,
-          pktBoxWt: true,
-          pcsBoxWt: true,
-          grossWt: true,
-          bobbinQuantity: true,
-        },
-      })
-      : [];
-    const bobbinIds = Array.from(new Set(rows.map((r) => r.bobbinId).filter(Boolean)));
-    const bobbins = bobbinIds.length > 0
-      ? await prisma.bobbin.findMany({
-        where: { id: { in: bobbinIds } },
-        select: { id: true, name: true },
-      })
-      : [];
-    const bobbinNameById = new Map(bobbins.map((b) => [b.id, b.name || '']));
-    const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
-    if (pieceIds.length === 0 && issue?.lotNo) {
-      pieceIds.push(`${issue.lotNo}-1`);
-    }
-    const pieces = pieceIds.length
-      ? await prisma.inboundItem.findMany({
-        where: { id: { in: pieceIds } },
-        select: { id: true, lotNo: true, itemId: true, seq: true },
-      })
-      : [];
-    const pieceMap = new Map(pieces.map((p) => [p.id, p]));
-    const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
-    const crates = rows.map((row) => {
-      const meta = refMap.get(row.id) || {};
-      const piece = pieceMap.get(row.pieceId);
-      const crateTare = row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0;
-      return {
-        rowId: row.id,
-        bobbinId: row.bobbinId || null,
-        bobbinName: row.bobbinId ? (bobbinNameById.get(row.bobbinId) || null) : null,
-        pieceId: row.pieceId,
-        lotNo: piece?.lotNo || meta.lotNo || null,
-        itemId: piece?.itemId || meta.itemId || null,
-        barcode: row.barcode || meta.barcode || null,
-        netWeight: row.netWt ?? null,
-        grossWeight: row.grossWt ?? null,
-        crateTare,
-        issuedBobbins: meta.issuedBobbins ?? row.bobbinQuantity ?? null,
-      };
+    const issue = await prisma.issueToHoloMachine.findFirst({
+      where: { barcode, isDeleted: false },
+      include: {
+        machine: { select: { id: true, name: true } },
+        operator: { select: { id: true, name: true } },
+        cut: { select: { id: true, name: true } },
+        yarn: { select: { id: true, name: true } },
+        twist: { select: { id: true, name: true } },
+      },
     });
-    const lotNos = Array.from(new Set(crates.map((c) => c.lotNo).filter(Boolean)));
-    const lotLabel = lotNos.length <= 1
-      ? (lotNos[0] || issue.lotNo || '')
-      : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
-    const balances = await computeIssueBalancesBatch(prisma, 'holo', [issue]);
-    res.json({ ...issue, pieceIds, pieces, lotNos, lotLabel, crates, issueBalance: balances.get(issue.id) || null });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    res.json(await buildHoloIssueLookupPayload(issue));
   } catch (err) {
     console.error('Failed to lookup holo issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
@@ -3618,10 +3760,18 @@ router.get('/api/issue_to_coning_machine/lookup', requireAnyReadPermission(['iss
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToConingMachine.findFirst({ where: { barcode, isDeleted: false } });
+    const issue = await prisma.issueToConingMachine.findFirst({
+      where: { barcode, isDeleted: false },
+      include: {
+        machine: { select: { id: true, name: true } },
+        operator: { select: { id: true, name: true } },
+        cut: { select: { id: true, name: true } },
+        yarn: { select: { id: true, name: true } },
+        twist: { select: { id: true, name: true } },
+      },
+    });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
-    const balances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
-    res.json({ ...issue, issueBalance: balances.get(issue.id) || null });
+    res.json(await buildConingIssueLookupPayload(issue));
   } catch (err) {
     console.error('Failed to lookup coning issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
@@ -3671,7 +3821,6 @@ async function loadIssueForTakeBack(client, stage, issueId) {
 }
 
 async function applyCutterTakeBackReturn(tx, lines, actorUserId, multiplier = -1) {
-  await lockInventorySourceRows(tx, 'inbound', lines.map((line) => line.sourceId));
   for (const line of lines) {
     const piece = await tx.inboundItem.findUnique({
       where: { id: line.sourceId },
@@ -3679,17 +3828,6 @@ async function applyCutterTakeBackReturn(tx, lines, actorUserId, multiplier = -1
     });
     if (!piece) {
       throw new Error(`Inbound piece ${line.sourceId} not found`);
-    }
-
-    if (multiplier > 0 && Number(piece.dispatchedWeight || 0) > TAKE_BACK_EPSILON) {
-      throw Object.assign(
-        new Error(`Piece ${line.sourceId} has been partially dispatched and cannot be issued to Cutter`),
-        {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: { availableCount: 0, availableWeight: 0 },
-        },
-      );
     }
 
     const currentIssued = Number(piece.issuedToCutterWeight || 0);
@@ -3717,7 +3855,6 @@ async function applyCutterTakeBackReturn(tx, lines, actorUserId, multiplier = -1
 }
 
 async function applyHoloTakeBackReturn(tx, lines, actorUserId, multiplier = -1) {
-  await lockInventorySourceRows(tx, 'cutter', lines.map((line) => line.sourceId));
   for (const line of lines) {
     const sourceRow = await tx.receiveFromCutterMachineRow.findUnique({
       where: { id: line.sourceId },
@@ -3763,34 +3900,23 @@ async function applyHoloTakeBackReturn(tx, lines, actorUserId, multiplier = -1) 
 async function ensureConingTakeBackReverseCapacity(tx, lines) {
   const sourceIds = Array.from(new Set(lines.map((line) => line.sourceId).filter(Boolean)));
   if (sourceIds.length === 0) return;
-  await lockInventorySourceRows(tx, 'holo', sourceIds);
-  await lockInventorySourceRows(tx, 'coning', sourceIds);
-  const [holoRows, coningRows] = await Promise.all([
-    tx.receiveFromHoloMachineRow.findMany({
-      where: { id: { in: sourceIds }, isDeleted: false },
-      select: { id: true, rollCount: true, rollWeight: true, grossWeight: true, tareWeight: true, dispatchedCount: true, dispatchedWeight: true },
-    }),
-    tx.receiveFromConingMachineRow.findMany({
-      where: { id: { in: sourceIds }, isDeleted: false },
-      select: { id: true, coneCount: true, netWeight: true, coneWeight: true, grossWeight: true, tareWeight: true, dispatchedCount: true, dispatchedWeight: true },
-    }),
-  ]);
-  const sourceMap = new Map([...holoRows, ...coningRows].map((row) => [row.id, row]));
+  const sourceRows = await tx.receiveFromHoloMachineRow.findMany({
+    where: { id: { in: sourceIds }, isDeleted: false },
+    select: { id: true, rollCount: true, rollWeight: true, grossWeight: true, tareWeight: true, dispatchedCount: true, dispatchedWeight: true },
+  });
+  const sourceMap = new Map(sourceRows.map((row) => [row.id, row]));
   const issuedMap = await buildHoloIssuedToConingMap(tx, sourceIds);
 
   for (const line of lines) {
     const row = sourceMap.get(line.sourceId);
     if (!row) {
-      throw new Error(`Source row ${line.sourceId} not found`);
+      throw new Error(`Source holo row ${line.sourceId} not found`);
     }
     const issued = issuedMap.get(line.sourceId) || { issuedRolls: 0, issuedWeight: 0 };
-    const isConingRow = Object.prototype.hasOwnProperty.call(row, 'coneCount');
-    const netWeight = isConingRow
-      ? Number(row.netWeight ?? row.coneWeight ?? (Number(row.grossWeight || 0) - Number(row.tareWeight || 0)))
-      : (Number.isFinite(Number(row.rollWeight))
-        ? Number(row.rollWeight)
-        : Number(row.grossWeight || 0) - Number(row.tareWeight || 0));
-    const maxCount = Math.max(0, Number(isConingRow ? row.coneCount : row.rollCount || 0) - Number(row.dispatchedCount || 0));
+    const netWeight = Number.isFinite(Number(row.rollWeight))
+      ? Number(row.rollWeight)
+      : Number(row.grossWeight || 0) - Number(row.tareWeight || 0);
+    const maxCount = Math.max(0, Number(row.rollCount || 0) - Number(row.dispatchedCount || 0));
     const maxWeight = Math.max(0, netWeight - Number(row.dispatchedWeight || 0));
     const nextCount = Number(issued.issuedRolls || 0) + Number(line.count || 0);
     const nextWeight = Number(issued.issuedWeight || 0) + Number(line.weight || 0);
@@ -3825,7 +3951,6 @@ async function createIssueTakeBackForStage(req, res, stage) {
     }
 
     const txResult = await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, stage, issueId);
       const issue = await loadIssueForTakeBack(tx, stage, issueId);
       if (!issue) {
         throw new Error('Issue not found');
@@ -3847,13 +3972,13 @@ async function createIssueTakeBackForStage(req, res, stage) {
         const takenBackLine = activeTakeBackBySource.get(line.sourceId) || { count: 0, weight: 0 };
         const consumedLine = consumedBySource.get(line.sourceId) || { count: 0, weight: 0 };
 
-        // Holo and Coning use free physical-source selection because transformed
-        // receives do not identify one authoritative input source. Cutter keeps
-        // its exact per-source receive/wastage deduction.
-        const lineRemainingWeight = stage === 'holo' || stage === 'coning'
+        // For coning: skip FIFO-consumed deduction. The user selects source freely;
+        // the issue-level pendingWeight check below is the authoritative guard.
+        // For cutter/holo: keep existing per-source consumed deduction.
+        const lineRemainingWeight = stage === 'coning'
           ? clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0))
           : clampZero(Number(originalLine.weight || 0) - Number(takenBackLine.weight || 0) - Number(consumedLine.weight || 0));
-        const lineRemainingCount = stage === 'holo' || stage === 'coning'
+        const lineRemainingCount = stage === 'coning'
           ? clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0))
           : clampZero(Number(originalLine.count || 0) - Number(takenBackLine.count || 0) - Number(consumedLine.count || 0));
 
@@ -3978,7 +4103,6 @@ async function reverseIssueTakeBack(req, res) {
     }
 
     const txResult = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "IssueTakeBack" WHERE id = ${takeBackId} FOR UPDATE`;
       const original = await tx.issueTakeBack.findUnique({
         where: { id: takeBackId },
         include: { lines: true },
@@ -3987,22 +4111,8 @@ async function reverseIssueTakeBack(req, res) {
       if (original.isReverse) throw new Error('Reverse records cannot be reversed');
       if (original.isReversed) throw new Error('Take-back is already reversed');
 
-      await lockIssueRow(tx, stage, original.issueId);
       const issue = await loadIssueForTakeBack(tx, stage, original.issueId);
       if (!issue) throw new Error('Issue not found');
-      const latestActive = await tx.issueTakeBack.findFirst({
-        where: {
-          stage,
-          issueId: original.issueId,
-          isReverse: false,
-          isReversed: false,
-        },
-        select: { id: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      });
-      if (!latestActive || latestActive.id !== original.id) {
-        throw new Error('Only the latest active take-back can be reversed');
-      }
 
       const lines = (original.lines || []).map((line) => ({
         sourceId: line.sourceId,
@@ -4765,7 +4875,6 @@ router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock'
             helperId: row.helperId || null,
             notes: row.notes || null,
             createdBy: 'opening',
-            isWastage: false,
             barcode,
             ...actorCreateFields(actorUserId),
           },
@@ -6077,7 +6186,6 @@ async function processOpeningHoloUpload(rows, { date, itemId, firmId, supplierId
           date,
           rollCount: crate.rollCount, rollWeight: crate.netWeight,
           rollTypeId: crate.rollTypeId,
-          isWastage: false,
           createdBy: 'opening_bulk', barcode: makeHoloReceiveBarcode({ series: seriesNumber, crateIndex }),
           notes: crate.notes, ...actorCreateFields(actorUserId),
         }
@@ -6605,8 +6713,6 @@ router.get('/api/whatsapp/events', requirePermission('settings', PERM_READ), (re
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-  res.write(': connected\n\n');
   const emitter = whatsapp.getEmitter();
   const onStatus = (data) => res.write(`event: status\ndata: ${JSON.stringify(data)}\n\n`);
   const onQr = (data) => res.write(`event: qr\ndata: ${JSON.stringify(data)}\n\n`);
@@ -7317,48 +7423,6 @@ router.put(
       }, 0);
 
       const updated = await prisma.$transaction(async (tx) => {
-        const lockedRowIds = existingRows.map((row) => row.id).sort();
-        if (lockedRowIds.length > 0) {
-          await tx.$queryRaw`
-            SELECT id FROM "ReceiveFromCutterMachineRow"
-            WHERE id = ANY (${lockedRowIds}::text[])
-            ORDER BY id
-            FOR UPDATE
-          `;
-        }
-        await tx.$queryRaw`SELECT id FROM "InboundItem" WHERE id = ${piece.id} FOR UPDATE`;
-        await tx.$queryRaw`SELECT id FROM "Lot" WHERE "lotNo" = ${lotNo} FOR UPDATE`;
-        await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineChallan" WHERE id = ${challan.id} FOR UPDATE`;
-
-        const [lockedPiece, lockedRows] = await Promise.all([
-          tx.inboundItem.findUnique({ where: { id: piece.id } }),
-          tx.receiveFromCutterMachineRow.findMany({ where: { pieceId: piece.id }, orderBy: { createdAt: 'asc' } }),
-        ]);
-        if (!lockedPiece || lockedRows.length !== existingRows.length) {
-          throw Object.assign(new Error('Cutter purchase changed while it was being edited.'), { statusCode: 409, code: 'availability_changed' });
-        }
-        if (lockedRows.some((row) => row.createdBy !== 'cutter_purchase')) {
-          throw Object.assign(new Error('Lot contains non-purchase cutter receive rows. Cannot edit safely.'), { statusCode: 409 });
-        }
-        if (lockedRows.some((row) => Number(row.issuedBobbins || 0) > 0
-          || Number(row.issuedBobbinWeight || 0) > 0
-          || Number(row.dispatchedCount || 0) > 0
-          || Number(row.dispatchedWeight || 0) > 0)) {
-          throw Object.assign(new Error('Cannot edit cutter purchase: one or more crates were already issued or dispatched.'), { statusCode: 409 });
-        }
-        const currentRowIds = lockedRows.map((row) => row.id);
-        const currentBarcodes = lockedRows.map((row) => row.barcode).filter(Boolean);
-        const [currentHoloIssues, currentTransfers] = await Promise.all([
-          findHoloIssuesReferencingCutterRows({ rowIds: currentRowIds, barcodes: currentBarcodes }, tx),
-          findCutterBoxTransfersForRows({ rowIds: currentRowIds, barcodes: currentBarcodes }, tx),
-        ]);
-        if (currentHoloIssues.length > 0) {
-          throw Object.assign(new Error('Cannot edit cutter purchase: already used in Holo issue.'), { statusCode: 409 });
-        }
-        if (currentTransfers.length > 0) {
-          throw Object.assign(new Error('Cannot edit cutter purchase: box transfer exists for one or more crates.'), { statusCode: 409 });
-        }
-
         await tx.lot.update({
           where: { lotNo },
           data: {
@@ -7530,10 +7594,7 @@ router.put(
       res.json({ ok: true, lotNo, pieceId: piece.id, ...updated, totalNetWeight, totalBobbins });
     } catch (err) {
       console.error('Failed to update cutter purchase inbound', err);
-      res.status(err?.statusCode || 400).json({
-        error: err.message || 'Failed to update cutter purchase inbound',
-        ...(err?.code ? { outcome: err.code } : {}),
-      });
+      res.status(400).json({ error: err.message || 'Failed to update cutter purchase inbound' });
     }
   },
 );
@@ -7613,71 +7674,19 @@ router.delete(
         select: { id: true, challanNo: true },
       });
       const challanIds = challans.map(c => c.id);
+      const uploadIds = Array.from(new Set(allRows.map(r => r.uploadId).filter(Boolean)));
 
-      const deletedState = await prisma.$transaction(async (tx) => {
-        const expectedRowIds = [...rowIds].sort();
-        if (expectedRowIds.length > 0) {
-          await tx.$queryRaw`
-            SELECT id FROM "ReceiveFromCutterMachineRow"
-            WHERE id = ANY (${expectedRowIds}::text[])
-            ORDER BY id
-            FOR UPDATE
-          `;
-        }
-        await tx.$queryRaw`SELECT id FROM "InboundItem" WHERE id = ${piece.id} FOR UPDATE`;
-        await tx.$queryRaw`SELECT "lotNo" FROM "Lot" WHERE "lotNo" = ${lotNo} FOR UPDATE`;
-        if (challanIds.length > 0) {
-          await tx.$queryRaw`
-            SELECT id FROM "ReceiveFromCutterMachineChallan"
-            WHERE id = ANY (${[...challanIds].sort()}::text[])
-            ORDER BY id
-            FOR UPDATE
-          `;
-        }
-
-        const [lockedLot, lockedPiece, lockedRows, lockedChallans, activeIssueLineCount] = await Promise.all([
-          tx.lot.findUnique({ where: { lotNo } }),
-          tx.inboundItem.findUnique({ where: { id: piece.id } }),
-          tx.receiveFromCutterMachineRow.findMany({ where: { pieceId: piece.id }, orderBy: { id: 'asc' } }),
-          tx.receiveFromCutterMachineChallan.findMany({ where: { lotNo, pieceId: piece.id }, orderBy: { id: 'asc' } }),
-          tx.issueToCutterMachineLine.count({ where: { pieceId: piece.id, issue: { isDeleted: false } } }),
-        ]);
-        const currentRowIds = lockedRows.map((row) => row.id).sort();
-        const currentChallanIds = lockedChallans.map((row) => row.id).sort();
-        if (!lockedLot || !lockedPiece
-          || currentRowIds.length !== expectedRowIds.length
-          || currentRowIds.some((id, index) => id !== expectedRowIds[index])
-          || currentChallanIds.length !== challanIds.length
-          || currentChallanIds.some((id, index) => id !== [...challanIds].sort()[index])) {
-          throw Object.assign(new Error('Cutter purchase changed while it was being deleted.'), {
-            statusCode: 409,
-            code: 'availability_changed',
-          });
-        }
-        if (lockedRows.some((row) => row.createdBy !== 'cutter_purchase')) {
-          throw Object.assign(new Error('Lot contains non-purchase cutter receive rows. Cannot delete safely.'), { statusCode: 409 });
-        }
-        if (Number(lockedPiece.issuedToCutterWeight || 0) > TAKE_BACK_EPSILON
-          || Number(lockedPiece.dispatchedWeight || 0) > TAKE_BACK_EPSILON
-          || activeIssueLineCount > 0) {
-          throw Object.assign(new Error('Cannot delete cutter purchase: its inbound piece was already issued or dispatched.'), {
-            statusCode: 409,
-            code: 'dependency_exists',
-          });
-        }
-        await assertCutterReceiveRowsMutable(tx, lockedRows, 'delete cutter purchase');
-
-        if (lockedRows.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        if (allRows.length > 0) {
           await tx.receiveFromCutterMachineRow.deleteMany({ where: { pieceId: piece.id } });
         }
-        if (currentChallanIds.length > 0) {
-          await tx.receiveFromCutterMachineChallan.deleteMany({ where: { id: { in: currentChallanIds } } });
+        if (challanIds.length > 0) {
+          await tx.receiveFromCutterMachineChallan.deleteMany({ where: { id: { in: challanIds } } });
         }
         await tx.receiveFromCutterMachinePieceTotal.deleteMany({ where: { pieceId: piece.id } });
 
-        const currentUploadIds = Array.from(new Set(lockedRows.map((row) => row.uploadId).filter(Boolean)));
-        if (currentUploadIds.length > 0) {
-          for (const uploadId of currentUploadIds) {
+        if (uploadIds.length > 0) {
+          for (const uploadId of uploadIds) {
             const remaining = await tx.receiveFromCutterMachineRow.count({ where: { uploadId } });
             if (remaining === 0) {
               await tx.receiveFromCutterMachineUpload.delete({ where: { id: uploadId } });
@@ -7687,10 +7696,6 @@ router.delete(
 
         await tx.inboundItem.deleteMany({ where: { lotNo } });
         await tx.lot.delete({ where: { lotNo } });
-        return {
-          challanNos: lockedChallans.map((row) => row.challanNo),
-          totalRows: lockedRows.length,
-        };
       });
 
       await logCrudWithActor(req, {
@@ -7700,18 +7705,13 @@ router.delete(
         payload: {
           lotNo,
           pieceId: piece.id,
-          challanNos: deletedState.challanNos,
-          totalRows: deletedState.totalRows,
+          challanNos: challans.map(c => c.challanNo),
+          totalRows: allRows.length,
         },
       });
 
       res.json({ ok: true });
     } catch (err) {
-      if (err?.statusCode) return res.status(err.statusCode).json({
-        error: err.message,
-        ...(err?.code ? { outcome: err.code } : {}),
-        ...(err?.details ? { details: err.details } : {}),
-      });
       console.error('Failed to delete cutter purchase inbound', err);
       res.status(500).json({ error: err.message || 'Failed to delete cutter purchase inbound' });
     }
@@ -7889,11 +7889,7 @@ router.post('/api/issue_to_cutter_machine', requirePermission('issue.cutter', PE
     } catch (e) { console.error('notify issue_to_cutter_machine error', e); }
   } catch (err) {
     console.error('Failed to record issue_to_cutter_machine', err);
-    res.status(err?.statusCode || 400).json({
-      error: err.message || 'Failed to record issue_to_cutter_machine',
-      ...(err?.code ? { outcome: err.code } : {}),
-      ...(err?.availability ? { availability: err.availability } : {}),
-    });
+    res.status(400).json({ error: err.message || 'Failed to record issue_to_cutter_machine' });
   }
 });
 
@@ -8293,7 +8289,6 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
       helperId: typeof entry.helperId === 'string' ? entry.helperId.trim() : '',
       cutId: typeof entry.cutId === 'string' ? entry.cutId.trim() : '',
       shift: typeof entry.shift === 'string' ? entry.shift.trim() : '',
-      issueId: typeof entry.issueId === 'string' ? entry.issueId.trim() : '',
     }));
 
     const pieceIds = new Set(normalizedEntries.map(e => e.pieceId).filter(Boolean));
@@ -8496,62 +8491,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
       pendingRemaining = 0;
     }
 
-    const created = await timedTransaction('receive_from_cutter_machine.bulk', rowsToCreate.length, async (tx) => {
-      await lockInventorySourceRows(tx, 'inbound', [pieceId]);
-      const requestedIssueIds = Array.from(new Set(normalizedEntries.map((entry) => entry.issueId).filter(Boolean)));
-      if (requestedIssueIds.length > 1) {
-        throw Object.assign(new Error('Entries must belong to one Cutter issue.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      const candidateIssueIds = requestedIssueIds.length > 0
-        ? requestedIssueIds
-        : issueAllocations.map((entry) => entry.issueId).filter(Boolean);
-      if (candidateIssueIds.length > 0) {
-        const lockIds = Array.from(new Set(candidateIssueIds)).sort();
-        await tx.$queryRaw`SELECT id FROM "IssueToCutterMachine" WHERE id = ANY (${lockIds}::text[]) ORDER BY id FOR UPDATE`;
-      }
-      let freshAllocations = (await listOpenCutterIssueAllocationsForPiece(tx, pieceId))
-        .filter((entry) => requestedIssueIds.length === 0 || requestedIssueIds.includes(entry.issueId))
-        .map((entry) => ({ ...entry }));
-      let freshPending = roundTo3Decimals(freshAllocations.reduce((sum, entry) => sum + Number(entry.remainingWeight || 0), 0));
-      if (freshPending <= TAKE_BACK_EPSILON && requestedIssueIds.length === 0) {
-        const currentTotals = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
-        freshPending = Math.max(0, inboundWeight - Number(currentTotals?.totalNetWeight || 0) - Number(currentTotals?.wastageNetWeight || 0));
-      }
-      if (totalNetWeight > freshPending + TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('Piece availability changed. Rescan before receiving.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: { pendingWeight: freshPending },
-        });
-      }
-      wastageToMark = wastageEntries.length > 0 ? roundTo3Decimals(freshPending - totalNetWeight) : 0;
-      wastageNote = wastageToMark > 0
-        ? (userWastageNote
-          ? `Wastage marked: ${wastageToMark.toFixed(3)} kg — ${userWastageNote}`
-          : `Wastage marked: ${wastageToMark.toFixed(3)} kg`)
-        : null;
-
-      const currentRows = await tx.receiveFromCutterMachineRow.findMany({
-        where: { pieceId, isDeleted: false },
-        select: { barcode: true },
-      });
-      let authoritativeCrateIndex = currentRows.reduce((max, row) => {
-        const parsed = parseReceiveCrateIndex(row.barcode);
-        return parsed != null ? Math.max(max, parsed) : max;
-      }, 0);
-      for (const row of rowsToCreate) {
-        const allocation = freshAllocations.find((entry) => Number(entry.remainingWeight || 0) + TAKE_BACK_EPSILON >= Number(row.netWt || 0));
-        if (freshAllocations.length > 0 && !allocation) {
-          throw Object.assign(new Error('Issue availability changed. Rescan before receiving.'), { statusCode: 409, code: 'availability_changed' });
-        }
-        if (allocation) {
-          row.issueId = allocation.issueId;
-          allocation.remainingWeight = clampZero(Number(allocation.remainingWeight || 0) - Number(row.netWt || 0));
-        }
-        authoritativeCrateIndex += 1;
-        row.barcode = makeReceiveBarcode({ lotNo: piece.lotNo, seq: piece.seq, crateIndex: authoritativeCrateIndex });
-      }
-
+    const created = await prisma.$transaction(async (tx) => {
       const upload = await tx.receiveFromCutterMachineUpload.create({
         data: {
           originalFilename: 'manual-challan',
@@ -8634,11 +8574,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
         });
       }
 
-      const pieceTotal = await tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId } });
-      const issueBalances = candidateIssueIds.length > 0
-        ? await buildIssueBalancesByStage(tx, 'cutter', await tx.issueToCutterMachine.findMany({ where: { id: { in: candidateIssueIds }, isDeleted: false } }))
-        : {};
-      return { challan, upload, rows: createdRows, wastageEvent, pieceTotal, issueBalances, wastageToMark };
+      return { challan, upload, rows: createdRows, wastageEvent };
     });
 
     if (wastageToMark > 0) {
@@ -8669,11 +8605,8 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
     res.json({
       ok: true,
       challan: created.challan,
-      rows: created.rows,
       rowsCreated: created.rows.length,
-      pieceTotal: created.pieceTotal,
-      issueBalances: created.issueBalances,
-      wastageMarked: created.wastageToMark,
+      wastageMarked: wastageToMark,
     });
 
     // Notify receive_from_cutter_machine created
@@ -8696,7 +8629,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
     } catch (e) { console.error('notify receive_from_cutter_machine bulk error', e); }
   } catch (err) {
     console.error('Failed to record bulk receive', err);
-    sendInventoryMutationError(res, err, 'Failed to record bulk receive');
+    res.status(500).json({ error: err.message || 'Failed to record bulk receive' });
   }
 });
 
@@ -9028,11 +8961,6 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
       where: { challanId, isDeleted: false },
     });
-    const candidateIssueIds = await loadActiveCutterIssueIdsForPiece(
-      prisma,
-      challan.pieceId,
-      rows.map((row) => row.issueId),
-    );
     const rowMap = new Map(rows.map(r => [r.id, r]));
 
     const removedRowIds = Array.from(new Set(removedRaw.map(id => String(id || '').trim()).filter(Boolean)));
@@ -9200,32 +9128,12 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
     };
 
     const updated = await prisma.$transaction(async (tx) => {
-      await lockCutterIssueRows(tx, candidateIssueIds);
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineChallan" WHERE id = ${challanId} FOR UPDATE`;
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineRow" WHERE "challanId" = ${challanId} ORDER BY id FOR UPDATE`;
-      await tx.$queryRaw`SELECT "pieceId" FROM "ReceiveFromCutterMachinePieceTotal" WHERE "pieceId" = ${challan.pieceId} FOR UPDATE`;
-      const [lockedChallan, lockedRows, lockedTotals] = await Promise.all([
-        tx.receiveFromCutterMachineChallan.findUnique({ where: { id: challanId } }),
-        tx.receiveFromCutterMachineRow.findMany({ where: { challanId, isDeleted: false }, orderBy: { id: 'asc' } }),
-        tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: challan.pieceId } }),
+      // Rows already paid in a contractor settlement cannot be edited/removed
+      // here; the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'cutter', [
+        ...updatesToApply.map((u) => u.id),
+        ...removedRowIds,
       ]);
-      const snapshotRows = [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-      const rowsChanged = lockedRows.length !== snapshotRows.length || lockedRows.some((row, index) => (
-        row.id !== snapshotRows[index]?.id
-        || new Date(row.updatedAt).getTime() !== new Date(snapshotRows[index]?.updatedAt).getTime()
-      ));
-      if (!lockedChallan || lockedChallan.isDeleted || rowsChanged
-        || new Date(lockedChallan.updatedAt).getTime() !== new Date(challan.updatedAt).getTime()
-        || new Date(lockedTotals?.updatedAt || 0).getTime() !== new Date(pieceTotals?.updatedAt || 0).getTime()) {
-        throw Object.assign(new Error('Challan changed. Reload before editing.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      const touchedIds = new Set([...updatesToApply.map((update) => update.id), ...removedRowIds]);
-      await assertCutterReceiveRowsMutable(
-        tx,
-        lockedRows.filter((row) => touchedIds.has(row.id)),
-        'edit',
-      );
-      const beforeIssueBalances = await loadCutterIssueBalances(tx, candidateIssueIds);
       for (const update of updatesToApply) {
         await tx.receiveFromCutterMachineRow.update({
           where: { id: update.id },
@@ -9291,14 +9199,12 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
         }
       }
 
-      const issueBalances = await loadCutterIssueBalances(tx, candidateIssueIds);
-      assertCutterIssueAccountingNotWorsened(beforeIssueBalances, issueBalances);
-      return { challan: updatedChallan, issueBalances };
+      return updatedChallan;
     });
 
     await logCrudWithActor(req, {
       entityType: 'receive_challan',
-      entityId: updated.challan.id,
+      entityId: updated.id,
       action: 'update',
       payload: {
         deltaNetWeight,
@@ -9314,19 +9220,13 @@ router.put('/api/receive_from_cutter_machine/challans/:id', requireEditPermissio
 
     res.json({
       ok: true,
-      challan: updated.challan,
-      issueBalances: updated.issueBalances,
+      challan: updated,
       pendingAfter: pendingAfterFinal,
       affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
       wastageReset: shouldResetWastage,
     });
   } catch (err) {
-    if (err?.statusCode) return res.status(err.statusCode).json({
-      error: err.message,
-      ...(err?.code ? { outcome: err.code } : {}),
-      ...(err?.availability ? { availability: err.availability } : {}),
-      ...(err?.details ? { details: err.details } : {}),
-    });
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update challan', err);
     res.status(500).json({ error: err.message || 'Failed to update challan' });
   }
@@ -9345,11 +9245,6 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
     const rows = await prisma.receiveFromCutterMachineRow.findMany({
       where: { challanId, isDeleted: false },
     });
-    const candidateIssueIds = await loadActiveCutterIssueIdsForPiece(
-      prisma,
-      challan.pieceId,
-      rows.map((row) => row.issueId),
-    );
     const totalNetWeight = roundTo3Decimals(rows.reduce((sum, row) => sum + Number(row.netWt || 0), 0));
     const totalBobbinQty = rows.reduce((sum, row) => sum + Number(row.bobbinQuantity || 0), 0);
 
@@ -9411,26 +9306,9 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
     };
 
     const deleted = await prisma.$transaction(async (tx) => {
-      await lockCutterIssueRows(tx, candidateIssueIds);
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineChallan" WHERE id = ${challanId} FOR UPDATE`;
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromCutterMachineRow" WHERE "challanId" = ${challanId} ORDER BY id FOR UPDATE`;
-      await tx.$queryRaw`SELECT "pieceId" FROM "ReceiveFromCutterMachinePieceTotal" WHERE "pieceId" = ${challan.pieceId} FOR UPDATE`;
-      const [lockedChallan, lockedRows, lockedTotals] = await Promise.all([
-        tx.receiveFromCutterMachineChallan.findUnique({ where: { id: challanId } }),
-        tx.receiveFromCutterMachineRow.findMany({ where: { challanId, isDeleted: false }, orderBy: { id: 'asc' } }),
-        tx.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: challan.pieceId } }),
-      ]);
-      const snapshotRows = [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-      const rowsChanged = lockedRows.length !== snapshotRows.length || lockedRows.some((row, index) => (
-        row.id !== snapshotRows[index]?.id
-        || new Date(row.updatedAt).getTime() !== new Date(snapshotRows[index]?.updatedAt).getTime()
-      ));
-      if (!lockedChallan || lockedChallan.isDeleted || rowsChanged
-        || new Date(lockedChallan.updatedAt).getTime() !== new Date(challan.updatedAt).getTime()
-        || new Date(lockedTotals?.updatedAt || 0).getTime() !== new Date(pieceTotals?.updatedAt || 0).getTime()) {
-        throw Object.assign(new Error('Challan changed. Reload before deleting.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      await assertCutterReceiveRowsMutable(tx, lockedRows, 'delete');
+      // Rows already paid in a contractor settlement cannot be deleted here;
+      // the lock also serializes against an in-flight Mark Paid.
+      await assertProductionRowsEditable(tx, 'cutter', rows.map((r) => r.id));
       if (rows.length > 0) {
         await tx.receiveFromCutterMachineRow.updateMany({
           where: { challanId, isDeleted: false },
@@ -9488,13 +9366,12 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
         }
       }
 
-      const issueBalances = await loadCutterIssueBalances(tx, candidateIssueIds);
-      return { challan: updatedChallan, issueBalances };
+      return updatedChallan;
     });
 
     await logCrudWithActor(req, {
       entityType: 'receive_challan',
-      entityId: deleted.challan.id,
+      entityId: deleted.id,
       action: 'delete',
       payload: {
         totalNetWeight,
@@ -9509,18 +9386,13 @@ router.delete('/api/receive_from_cutter_machine/challans/:id', requireDeletePerm
 
     res.json({
       ok: true,
-      challan: deleted.challan,
-      issueBalances: deleted.issueBalances,
+      challan: deleted,
       pendingAfter: pendingAfterFinal,
       affectedChallans: affectedChallans.map(c => ({ id: c.id, challanNo: c.challanNo })),
       wastageReset: shouldResetWastage,
     });
   } catch (err) {
-    if (err?.statusCode) return res.status(err.statusCode).json({
-      error: err.message,
-      ...(err?.code ? { outcome: err.code } : {}),
-      ...(err?.details ? { details: err.details } : {}),
-    });
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete challan', err);
     res.status(500).json({ error: err.message || 'Failed to delete challan' });
   }
@@ -9603,7 +9475,6 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
         id: true,
         pieceId: true,
         cutId: true,
-        cut: true,
         bobbinQuantity: true,
         netWt: true,
         issuedBobbins: true,
@@ -9690,13 +9561,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       const issuedWeight = Number(sourceRow.issuedBobbinWeight || 0);
       const dispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
       const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
-      const availableCount = calcAvailableCountFromWeight({
-        totalCount,
-        issuedCount,
-        dispatchedCount,
-        totalWeight: netWeight,
-        availableWeight,
-      }) || 0;
+      const availableCount = Math.max(0, totalCount - issuedCount - dispatchedCount);
 
       const requestedCount = Number(crate.issuedBobbins || 0);
       const requestedWeightExact = deriveHoloIssuedWeightFromCount({
@@ -9731,8 +9596,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     }
 
     if (overIssuedCrates.length > 0) {
-      return res.status(409).json({
-        outcome: 'availability_changed',
+      return res.status(400).json({
         error: 'Insufficient bobbins/weight available for one or more crates (may have been dispatched).',
         crates: overIssuedCrates,
       });
@@ -9745,131 +9609,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
     const totalWeight = computedCrates.reduce((sum, crate) => sum + (Number(crate.issuedBobbinWeight) || 0), 0);
     const normalizedYarnKg = Number(yarnKg || 0);
 
-    const transactionResult = await timedTransaction('issue_to_holo_machine.create', computedCrates.length, async (tx) => {
-      const lockIds = [...rowIds].sort();
-      await tx.$queryRaw`
-        SELECT id
-        FROM "ReceiveFromCutterMachineRow"
-        WHERE id = ANY (${lockIds}::text[])
-        ORDER BY id
-        FOR UPDATE
-      `;
-      const lockedRows = await tx.receiveFromCutterMachineRow.findMany({
-        where: { id: { in: lockIds }, isDeleted: false },
-        select: {
-          id: true,
-          pieceId: true,
-          cutId: true,
-          cut: true,
-          bobbinQuantity: true,
-          netWt: true,
-          issuedBobbins: true,
-          issuedBobbinWeight: true,
-          dispatchedCount: true,
-          dispatchedWeight: true,
-          updatedAt: true,
-        },
-      });
-      if (lockedRows.length !== lockIds.length) {
-        throw Object.assign(new Error('One or more source rows are no longer available.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: [],
-        });
-      }
-
-      const lockedPieceIds = Array.from(new Set(lockedRows.map((row) => row.pieceId).filter(Boolean))).sort();
-      if (lockedPieceIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id FROM "InboundItem"
-          WHERE id = ANY (${lockedPieceIds}::text[])
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
-      const lockedPieces = lockedPieceIds.length > 0
-        ? await tx.inboundItem.findMany({ where: { id: { in: lockedPieceIds } } })
-        : [];
-      if (lockedPieces.length !== lockedPieceIds.length) {
-        throw Object.assign(new Error('One or more source pieces are no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      const lockedLotSet = new Set(lockedPieces.map((piece) => piece.lotNo).filter(Boolean));
-      const lockedItemSet = new Set(lockedPieces.map((piece) => piece.itemId).filter(Boolean));
-      const lockedCutIds = new Set(lockedRows.map((row) => row.cutId).filter(Boolean));
-      if (lockedItemSet.size !== 1 || lockedLotSet.size === 0 || lockedCutIds.size > 1) {
-        throw Object.assign(new Error('Source lineage changed. Rescan the selected crates.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      let lockedCutId = lockedCutIds.size === 1 ? Array.from(lockedCutIds)[0] : null;
-      if (!lockedCutId) {
-        const lockedCutNames = Array.from(new Set(lockedRows.map((row) => String(row.cut || '').trim()).filter(Boolean)));
-        if (lockedCutNames.length > 1) {
-          throw Object.assign(new Error('Source cut changed. Rescan the selected crates.'), { statusCode: 409, code: 'availability_changed' });
-        }
-        if (lockedCutNames.length === 1) {
-          lockedCutId = (await tx.cut.findUnique({ where: { name: lockedCutNames[0] }, select: { id: true } }))?.id || null;
-        }
-      }
-      const lockedItemId = Array.from(lockedItemSet)[0];
-      const lockedLotNos = Array.from(lockedLotSet);
-      const lockedLotNo = lockedLotNos.length === 1 ? lockedLotNos[0] : 'MIXED';
-
-      const lockedRowMap = new Map(lockedRows.map((row) => [row.id, row]));
-      const lockedCrates = [];
-      const availabilityConflicts = [];
-      for (const crate of normalizedCrates) {
-        const sourceRow = lockedRowMap.get(crate.rowId);
-        const totalCount = Number(sourceRow?.bobbinQuantity || 0);
-        const issuedCount = Number(sourceRow?.issuedBobbins || 0);
-        const dispatchedCount = Number(sourceRow?.dispatchedCount || 0);
-        const netWeight = Number(sourceRow?.netWt || 0);
-        const issuedWeight = Number(sourceRow?.issuedBobbinWeight || 0);
-        const dispatchedWeight = Number(sourceRow?.dispatchedWeight || 0);
-        const availableWeight = Math.max(0, netWeight - issuedWeight - dispatchedWeight);
-        const availableCount = calcAvailableCountFromWeight({
-          totalCount,
-          issuedCount,
-          dispatchedCount,
-          totalWeight: netWeight,
-          availableWeight,
-        }) || 0;
-        const requestedCount = Number(crate.issuedBobbins || 0);
-        const requestedWeightExact = deriveHoloIssuedWeightFromCount({
-          bobbinQuantity: sourceRow?.bobbinQuantity,
-          netWeight: sourceRow?.netWt,
-          issuedBobbins: requestedCount,
-        });
-        const { takingAllRemainingBobbins, issuedWeight: requestedWeight } = resolveHoloIssuedWeight({
-          requestedCount,
-          availableCount,
-          availableWeight,
-          requestedWeight: requestedWeightExact,
-        });
-        if (requestedCount > availableCount || (!takingAllRemainingBobbins && requestedWeightExact > availableWeight + TAKE_BACK_EPSILON)) {
-          availabilityConflicts.push({
-            rowId: crate.rowId,
-            requestedCount,
-            availableCount,
-            requestedWeight: roundTo3Decimals(requestedWeightExact),
-            availableWeight: roundTo3Decimals(availableWeight),
-            updatedAt: sourceRow?.updatedAt,
-          });
-        }
-        lockedCrates.push({
-          rowId: crate.rowId,
-          issuedBobbins: requestedCount,
-          issuedBobbinWeight: requestedWeight,
-        });
-      }
-      if (availabilityConflicts.length > 0) {
-        throw Object.assign(new Error('Source availability changed. Rescan the affected crate.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: availabilityConflicts,
-        });
-      }
-
-      const lockedTotalBobbins = lockedCrates.reduce((sum, crate) => sum + Number(crate.issuedBobbins || 0), 0);
-      const lockedTotalWeight = lockedCrates.reduce((sum, crate) => sum + Number(crate.issuedBobbinWeight || 0), 0);
+    const created = await timedTransaction('issue_to_holo_machine.create', computedCrates.length, async (tx) => {
       await ensureHoloIssueSequence(tx, actorUserId);
       // Get next Holo issue series number
       const holoSeq = await tx.holoIssueSequence.upsert({
@@ -9882,61 +9622,41 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       const issue = await tx.issueToHoloMachine.create({
         data: {
           date,
-          itemId: lockedItemId,
-          lotNo: lockedLotNo,
+          itemId,
+          lotNo,
           yarnId: yarnRecord ? yarnRecord.id : null,
           twistId: twistRecord.id,
-          cutId: lockedCutId,
+          cutId: resolvedCutId,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeHoloIssueBarcode({ series: seriesNumber }),
           note: note || null,
           shift: shift || null,
-          metallicBobbins: lockedTotalBobbins,
-          metallicBobbinsWeight: lockedTotalWeight,
+          metallicBobbins: totalBobbins,
+          metallicBobbinsWeight: totalWeight,
           yarnKg: Number.isFinite(normalizedYarnKg) ? normalizedYarnKg : 0,
-          receivedRowRefs: lockedCrates,
+          receivedRowRefs: computedCrates,
           rollsProducedEstimate: rollsProducedEstimate == null ? null : Number(rollsProducedEstimate),
           ...actorCreateFields(actorUserId),
         },
       });
 
-      const sourceUpdates = [];
-      for (const crate of lockedCrates) {
-        const updated = await tx.receiveFromCutterMachineRow.update({
+      for (const crate of computedCrates) {
+        const sourceRow = rowMap.get(crate.rowId);
+        const existingQty = Number(sourceRow?.issuedBobbins || 0);
+        const existingWeight = Number(sourceRow?.issuedBobbinWeight || 0);
+        await tx.receiveFromCutterMachineRow.update({
           where: { id: crate.rowId },
           data: {
-            issuedBobbins: { increment: Number(crate.issuedBobbins) || 0 },
-            issuedBobbinWeight: { increment: Number(crate.issuedBobbinWeight) || 0 },
+            issuedBobbins: existingQty + (Number(crate.issuedBobbins) || 0),
+            issuedBobbinWeight: existingWeight + (Number(crate.issuedBobbinWeight) || 0),
             ...actorUpdateFields(actorUserId),
           },
-          select: {
-            id: true,
-            bobbinQuantity: true,
-            netWt: true,
-            issuedBobbins: true,
-            issuedBobbinWeight: true,
-            dispatchedCount: true,
-            dispatchedWeight: true,
-            updatedAt: true,
-          },
-        });
-        sourceUpdates.push({
-          ...updated,
-          availableCount: calcAvailableCountFromWeight({
-            totalCount: updated.bobbinQuantity,
-            issuedCount: updated.issuedBobbins,
-            dispatchedCount: updated.dispatchedCount,
-            totalWeight: updated.netWt,
-            availableWeight: Math.max(0, Number(updated.netWt || 0) - Number(updated.issuedBobbinWeight || 0) - Number(updated.dispatchedWeight || 0)),
-          }) || 0,
-          availableWeight: roundTo3Decimals(Math.max(0, Number(updated.netWt || 0) - Number(updated.issuedBobbinWeight || 0) - Number(updated.dispatchedWeight || 0))),
         });
       }
 
-      return { issue, sourceUpdates };
+      return issue;
     });
-    const created = transactionResult.issue;
 
     await logCrudWithActor(req, {
       entityType: 'issue_to_holo_machine',
@@ -9953,7 +9673,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       },
     });
 
-    res.json({ ok: true, issueToHoloMachine: created, sourceUpdates: transactionResult.sourceUpdates });
+    res.json({ ok: true, issueToHoloMachine: created });
 
     // Notify issue_to_holo_machine created
     try {
@@ -9980,13 +9700,6 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
       });
     } catch (e) { console.error('notify issue_to_holo_machine error', e); }
   } catch (err) {
-    if (err?.statusCode) {
-      return res.status(err.statusCode).json({
-        outcome: err.code || 'availability_changed',
-        error: err.message,
-        ...(Array.isArray(err.crates) ? { crates: err.crates } : {}),
-      });
-    }
     console.error('Failed to issue to holo machine', err);
     res.status(500).json({ error: err.message || 'Failed to issue to holo' });
   }
@@ -10002,6 +9715,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
       // rollWeight, // No longer accepted for calculation
       rollTypeId,
       grossWeight,
+      crateTareWeight,
       boxId,
       date,
       machineNo,
@@ -10014,18 +9728,26 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
     const rollCountNum = Number(rollCount);
     const grossNum = Number(grossWeight);
 
-    if (!issueId || !pieceId || !Number.isInteger(rollCountNum) || rollCountNum <= 0 || !Number.isFinite(grossNum) || grossNum <= 0) {
+    if (!issueId || !pieceId || !Number.isFinite(rollCountNum) || rollCountNum <= 0 || !Number.isFinite(grossNum) || grossNum <= 0) {
       return res.status(400).json({ error: 'Missing required roll count or gross weight data' });
-    }
-    if (!rollTypeId || !boxId) {
-      return res.status(400).json({ error: 'Roll type and box are required to calculate tare weight' });
     }
 
     const rollType = rollTypeId ? await prisma.rollType.findUnique({ where: { id: rollTypeId } }) : null;
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
     const issue = await prisma.issueToHoloMachine.findFirst({
       where: { id: issueId, isDeleted: false },
-      select: { lotNo: true, barcode: true, itemId: true, receivedRowRefs: true, cutId: true, twistId: true, yarnId: true },
+      select: {
+        id: true,
+        lotNo: true,
+        barcode: true,
+        itemId: true,
+        receivedRowRefs: true,
+        metallicBobbins: true,
+        metallicBobbinsWeight: true,
+        cutId: true,
+        twistId: true,
+        yarnId: true,
+      },
     });
     if (!issue) {
       return res.status(404).json({ error: 'Issue not found' });
@@ -10054,100 +9776,85 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
       return res.status(400).json({ error: 'Selected piece is not part of this issue' });
     }
 
-    const rollTypeWeight = rollType?.weight == null ? NaN : Number(rollType.weight);
-    const boxWeight = box?.weight == null ? NaN : Number(box.weight);
-    if (!rollType || !Number.isFinite(rollTypeWeight) || rollTypeWeight < 0) {
-      return res.status(400).json({ error: 'Selected roll type has no valid tare weight' });
-    }
-    if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
-      return res.status(400).json({ error: 'Selected box has no valid tare weight' });
-    }
+    const rollTypeWeight = rollType && Number.isFinite(rollType.weight) ? Number(rollType.weight) : null;
+    const boxWeight = box && Number.isFinite(box.weight) ? Number(box.weight) : null;
+    const crateTare = crateTareWeight == null ? null : Number(crateTareWeight);
 
-    const tareWeight = roundTo3Decimals((rollCountNum * rollTypeWeight) + boxWeight);
+    const tareWeight = (() => {
+      const base = rollTypeWeight != null ? rollCountNum * rollTypeWeight : null;
+      if (base == null && crateTare == null && boxWeight == null) return null;
+      return (base || 0) + (crateTare || 0) + (boxWeight || 0);
+    })();
+
+    if (tareWeight == null) {
+      return res.status(400).json({ error: 'Unable to calculate tare weight (missing roll type, box, or crate tare)' });
+    }
 
     const netWeight = grossNum - tareWeight;
     if (!Number.isFinite(netWeight) || netWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
 
+    // Extract series from issue barcode and count existing crates
     const issueSeriesNumber = parseHoloSeries(issue?.barcode);
     if (!issueSeriesNumber) {
       return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Holo receive series.' });
     }
-    const txResult = await timedTransaction('receive_from_holo_machine.create', 1, async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "IssueToHoloMachine" WHERE id = ${issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToHoloMachine.findFirst({ where: { id: issueId, isDeleted: false } });
-      if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      const lockedPieceIds = await resolveHoloIssuePieceIds(lockedIssue, tx);
-      if (lockedPieceIds.length > 0 && !lockedPieceIds.includes(pieceId)) {
-        throw Object.assign(new Error('Issue source changed. Rescan before receiving.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-        });
-      }
-      // Holo production can legitimately yield more net weight than the input
-      // issue. Preserve the historical over-receive behavior: serialize the
-      // mutation for barcode/totals correctness, then report the authoritative
-      // balance (received may exceed net issued and pending clamps to zero).
+    const existingCrates = await prisma.receiveFromHoloMachineRow.count({ where: { issueId } });
+    const crateIndex = existingCrates + 1;
+    const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
-      const existingCrates = await tx.receiveFromHoloMachineRow.count({ where: { issueId } });
-      const barcode = makeHoloReceiveBarcode({ series: issueSeriesNumber, crateIndex: existingCrates + 1 });
-      const isWastageRow = String(rollType?.name || '').toLowerCase().includes('wastage');
-      const createdRow = await tx.receiveFromHoloMachineRow.create({
-        data: {
-          issueId,
-          pieceId,
-          date: date || null,
-          machineNo: machineNo || null,
-          operatorId: operatorId || null,
-          helperId: helperId || null,
-          rollTypeId: rollTypeId || null,
-          rollCount: rollCountNum,
-          rollWeight: Number(netWeight),
-          grossWeight: grossNum,
-          tareWeight,
-          barcode,
-          boxId: boxId || null,
-          notes: notes || null,
-          createdBy: createdBy || 'manual',
-          isWastage: isWastageRow,
-          ...actorCreateFields(actorUserId),
-        },
-      });
-      const pieceTotal = await tx.receiveFromHoloMachinePieceTotal.upsert({
-        where: { pieceId },
-        update: {
-          totalRolls: { increment: rollCountNum },
-          ...(isWastageRow
-            ? { wastageNetWeight: { increment: Number(netWeight) } }
-            : { totalNetWeight: { increment: Number(netWeight) } }),
-          ...actorUpdateFields(actorUserId),
-        },
-        create: {
-          pieceId,
-          totalRolls: rollCountNum,
-          totalNetWeight: isWastageRow ? 0 : Number(netWeight),
-          wastageNetWeight: isWastageRow ? Number(netWeight) : 0,
-          ...actorCreateFields(actorUserId),
-        },
-      });
-      const updatedBalance = (await computeIssueBalancesBatch(tx, 'holo', [lockedIssue])).get(issueId) || null;
-      return { createdRow, pieceTotal, issueBalance: updatedBalance };
+    const createdRow = await prisma.receiveFromHoloMachineRow.create({
+      data: {
+        issueId,
+        pieceId,
+        date: date || null,
+        machineNo: machineNo || null,
+        operatorId: operatorId || null,
+        helperId: helperId || null,
+        rollTypeId: rollTypeId || null,
+        rollCount: rollCountNum,
+        rollWeight: Number(netWeight), // Derived net weight
+        grossWeight: grossNum,
+        tareWeight,
+        barcode,
+        boxId: boxId || null,
+        notes: notes || null,
+        createdBy: createdBy || 'manual',
+        ...actorCreateFields(actorUserId),
+      },
     });
-    const { createdRow, pieceTotal, issueBalance } = txResult;
-    const barcode = createdRow.barcode;
+
+    const netIncrement = Number(netWeight);
+    const pieceTotal = await prisma.receiveFromHoloMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalRolls: { increment: rollCountNum },
+        totalNetWeight: { increment: netIncrement },
+        ...actorUpdateFields(actorUserId),
+      },
+      create: {
+        pieceId,
+        totalRolls: rollCountNum,
+        totalNetWeight: netIncrement,
+        wastageNetWeight: 0,
+        ...actorCreateFields(actorUserId),
+      },
+    });
+    let issueBalance = null;
+    try {
+      const issueBalances = await computeIssueBalancesBatch(prisma, 'holo', [issue]);
+      issueBalance = issueBalances.get(issue.id) || null;
+    } catch (balanceErr) {
+      // The receive and piece-total writes have already committed. Never turn a
+      // successful write into a retryable 500 just because response enrichment failed.
+      console.error('Failed to enrich Holo receive response balance', balanceErr);
+    }
     res.json({
       ok: true,
       row: createdRow,
-      pieceTotal,
       issueBalance,
-      sourceUpdates: [{
-        pieceId,
-        totalRolls: pieceTotal.totalRolls,
-        totalNetWeight: pieceTotal.totalNetWeight,
-        wastageNetWeight: pieceTotal.wastageNetWeight,
-        updatedAt: pieceTotal.updatedAt,
-      }],
+      pieceTotal,
     });
 
     // Notify receive_from_holo_machine created
@@ -10177,7 +9884,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
     } catch (e) { console.error('notify receive_from_holo_machine manual error', e); }
   } catch (err) {
     console.error('Failed to receive from holo machine', err);
-    sendInventoryMutationError(res, err, 'Failed to record holo receive');
+    res.status(500).json({ error: err.message || 'Failed to record holo receive' });
   }
 });
 
@@ -10189,7 +9896,7 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
 
     const row = await prisma.receiveFromHoloMachineRow.findUnique({
       where: { id },
-      include: { issue: true, rollType: true, box: true },
+      include: { issue: true },
     });
     if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
     if (!row.issue) return res.status(404).json({ error: 'Receive issue not found' });
@@ -10215,78 +9922,38 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
 
     const rollCount = toInt(req.body?.rollCount ?? row.rollCount);
     const grossWeight = toNumber(req.body?.grossWeight ?? row.grossWeight);
-    const rollTypeId = typeof req.body?.rollTypeId === 'string'
-      ? (req.body.rollTypeId.trim() || null)
-      : row.rollTypeId;
-    const boxId = typeof req.body?.boxId === 'string'
-      ? (req.body.boxId.trim() || null)
-      : row.boxId;
+    const rollTypeId = typeof req.body?.rollTypeId === 'string' ? req.body.rollTypeId : row.rollTypeId;
+    const boxId = typeof req.body?.boxId === 'string' ? req.body.boxId : row.boxId;
     const date = toOptionalString(req.body?.date ?? row.date);
     const machineNo = toOptionalString(req.body?.machineNo ?? row.machineNo);
     const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId : row.operatorId;
     const helperId = typeof req.body?.helperId === 'string' ? req.body.helperId : row.helperId;
     const notes = toOptionalString(req.body?.notes ?? row.notes);
-    if (!Number.isInteger(Number(req.body?.rollCount ?? row.rollCount)) || !Number.isFinite(rollCount) || rollCount <= 0) {
+    const crateTareWeight = toNumber(req.body?.crateTareWeight) || 0;
+
+    if (!Number.isFinite(rollCount) || rollCount <= 0) {
       return res.status(400).json({ error: 'Roll count must be a positive number' });
     }
     if (!Number.isFinite(grossWeight) || grossWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
     }
-    const tareInputsChanged = rollCount !== Number(row.rollCount || 0)
-      || String(rollTypeId || '') !== String(row.rollTypeId || '')
-      || String(boxId || '') !== String(row.boxId || '');
-    const storedTareWeight = Number(row.tareWeight);
-    const preserveStoredTare = !tareInputsChanged
-      && Number.isFinite(storedTareWeight)
-      && storedTareWeight >= 0;
+    if (!rollTypeId) return res.status(400).json({ error: 'Roll type is required' });
+    if (!boxId) return res.status(400).json({ error: 'Box type is required' });
 
-    let rollType = row.rollType || null;
-    let box = row.box || null;
-    let tareWeight;
-    if (preserveStoredTare) {
-      // Legacy Holo rows persisted only the aggregate tare. Keeping it intact
-      // prevents a metadata or gross-weight edit from silently dropping a
-      // historical crate-tare component or applying changed master weights.
-      tareWeight = roundTo3Decimals(storedTareWeight);
-    } else {
-      if (!rollTypeId) return res.status(400).json({ error: 'Roll type is required' });
-      if (!boxId) return res.status(400).json({ error: 'Box type is required' });
-      [rollType, box] = await Promise.all([
-        prisma.rollType.findUnique({ where: { id: rollTypeId } }),
-        prisma.box.findUnique({ where: { id: boxId } }),
-      ]);
-      const rollTypeWeight = Number(rollType?.weight);
-      const boxWeight = Number(box?.weight);
-      if (!rollType || !Number.isFinite(rollTypeWeight) || rollTypeWeight < 0) {
-        return res.status(400).json({ error: 'Roll type weight missing. Update roll type first.' });
-      }
-      if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
-        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
-      }
-      const previousRollTypeWeight = Number(row.rollType?.weight);
-      const previousBoxWeight = Number(row.box?.weight);
-      if (
-        Number.isFinite(storedTareWeight)
-        && storedTareWeight >= 0
-        && (!row.rollType || !Number.isFinite(previousRollTypeWeight) || !row.box || !Number.isFinite(previousBoxWeight))
-      ) {
-        return res.status(409).json({
-          error: 'Legacy tare components cannot be safely recalculated. Keep roll count, roll type, and box unchanged.',
-        });
-      }
-      const previousBaseTare = Number.isFinite(storedTareWeight)
-        ? (previousRollTypeWeight * Number(row.rollCount || 0)) + previousBoxWeight
-        : 0;
-      const preservedTareResidual = Number.isFinite(storedTareWeight)
-        ? storedTareWeight - previousBaseTare
-        : 0;
-      tareWeight = roundTo3Decimals((rollTypeWeight * rollCount) + boxWeight + preservedTareResidual);
-      if (!Number.isFinite(tareWeight) || tareWeight < 0) {
-        return res.status(409).json({
-          error: 'The requested change would make the preserved historical tare invalid.',
-        });
-      }
+    const [rollType, box] = await Promise.all([
+      prisma.rollType.findUnique({ where: { id: rollTypeId } }),
+      prisma.box.findUnique({ where: { id: boxId } }),
+    ]);
+    const rollTypeWeight = Number(rollType?.weight);
+    const boxWeight = Number(box?.weight);
+    if (!rollType || !Number.isFinite(rollTypeWeight) || rollTypeWeight <= 0) {
+      return res.status(400).json({ error: 'Roll type weight missing. Update roll type first.' });
     }
+    if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
+      return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+    }
+
+    const tareWeight = roundTo3Decimals(rollTypeWeight * rollCount + boxWeight + crateTareWeight);
     const netWeight = roundTo3Decimals(grossWeight - tareWeight);
     if (!Number.isFinite(netWeight) || netWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
@@ -10328,58 +9995,17 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
     const deltaNetWeight = roundTo3Decimals(netWeight - prevNetWeight);
     const deltaRolls = rollCount - prevRollCount;
 
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromHoloMachineRow" WHERE id = ${id} FOR UPDATE`;
-      const lockedRow = await tx.receiveFromHoloMachineRow.findUnique({
-        where: { id },
-        include: { issue: true, rollType: true, box: true },
-      });
-      if (!lockedRow || lockedRow.isDeleted) {
-        throw Object.assign(new Error('Receive row is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      if (new Date(lockedRow.updatedAt).getTime() !== new Date(row.updatedAt).getTime()) {
-        throw Object.assign(new Error('Receive row changed. Reload before editing.'), { statusCode: 409, code: 'availability_changed' });
-      }
+    const updated = await prisma.$transaction(async (tx) => {
       // Rows already paid in a contractor settlement cannot be edited here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'holo', [id]);
-      await tx.$queryRaw`SELECT id FROM "IssueToHoloMachine" WHERE id = ${lockedRow.issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToHoloMachine.findFirst({ where: { id: lockedRow.issueId, isDeleted: false } });
-      if (!lockedIssue) {
-        throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      // Editing a Holo receive follows the same historical yield rule as
-      // creation: over-received weight remains valid and visible as a warning.
-      if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
-        throw Object.assign(new Error('Cannot edit row: already dispatched'), { statusCode: 409 });
-      }
-      if (await isHoloRowReferencedByConing({ rowId: lockedRow.id, barcode: lockedRow.barcode }, tx)) {
-        throw Object.assign(new Error('Cannot edit row: already issued to coning'), { statusCode: 409 });
-      }
-      await tx.$queryRaw`SELECT "pieceId" FROM "ReceiveFromHoloMachinePieceTotal" WHERE "pieceId" = ${pieceId} FOR UPDATE`;
       const totals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
       }
-      // NULL is the deliberate legacy value: those rows were accumulated in
-      // totalNetWeight regardless of their roll-type label.
-      const oldIsWastage = lockedRow.isWastage === true;
-      const rollTypeChanged = String(rollTypeId || '') !== String(lockedRow.rollTypeId || '');
-      const newIsWastage = rollTypeChanged
-        ? String(rollType?.name || '').toLowerCase().includes('wastage')
-        : oldIsWastage;
-      const nextTotalNet = roundTo3Decimals(
-        Number(totals.totalNetWeight || 0)
-        - (oldIsWastage ? 0 : prevNetWeight)
-        + (newIsWastage ? 0 : netWeight),
-      );
-      const nextWastageNet = roundTo3Decimals(
-        Number(totals.wastageNetWeight || 0)
-        - (oldIsWastage ? prevNetWeight : 0)
-        + (newIsWastage ? netWeight : 0),
-      );
+      const nextTotalNet = roundTo3Decimals(Number(totals.totalNetWeight || 0) + deltaNetWeight);
       const nextTotalRolls = Number(totals.totalRolls || 0) + deltaRolls;
-      if (nextTotalNet < -1e-6 || nextWastageNet < -1e-6 || nextTotalRolls < 0) {
+      if (nextTotalNet < -1e-6 || nextTotalRolls < 0) {
         throw new Error('Invalid totals after update');
       }
 
@@ -10398,24 +10024,23 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
           tareWeight,
           boxId,
           notes,
-          isWastage: newIsWastage,
           ...actorUpdateFields(actorUserId),
         },
       });
 
-      const pieceTotal = await tx.receiveFromHoloMachinePieceTotal.update({
-        where: { pieceId },
-        data: {
-          totalNetWeight: nextTotalNet,
-          wastageNetWeight: nextWastageNet,
-          totalRolls: nextTotalRolls,
-          ...actorUpdateFields(actorUserId),
-        },
-      });
-      const issueBalance = (await computeIssueBalancesBatch(tx, 'holo', [lockedIssue])).get(lockedIssue.id) || null;
-      return { updatedRow, pieceTotal, issueBalance };
+      if (deltaNetWeight !== 0 || deltaRolls !== 0) {
+        await tx.receiveFromHoloMachinePieceTotal.update({
+          where: { pieceId },
+          data: {
+            ...(deltaNetWeight !== 0 ? { totalNetWeight: { increment: deltaNetWeight } } : {}),
+            ...(deltaRolls !== 0 ? { totalRolls: { increment: deltaRolls } } : {}),
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+      }
+
+      return updatedRow;
     });
-    const { updatedRow: updated, pieceTotal, issueBalance } = result;
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_holo_machine_row',
@@ -10431,9 +10056,9 @@ router.put('/api/receive_from_holo_machine/rows/:id', requireEditPermission('rec
       },
     });
 
-    res.json({ ok: true, row: updated, pieceTotal, issueBalance });
+    res.json({ ok: true, row: updated });
   } catch (err) {
-    if (err?.statusCode) return sendInventoryMutationError(res, err, err.message);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update holo receive row', err);
     res.status(500).json({ error: err.message || 'Failed to update holo receive row' });
   }
@@ -10507,37 +10132,17 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
     const deltaNetWeight = roundTo3Decimals(-prevNetWeight);
     const deltaRolls = -prevRollCount;
 
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromHoloMachineRow" WHERE id = ${id} FOR UPDATE`;
-      const lockedRow = await tx.receiveFromHoloMachineRow.findUnique({ where: { id }, include: { issue: true, rollType: true } });
-      if (!lockedRow || lockedRow.isDeleted) {
-        throw Object.assign(new Error('Receive row is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
+    const deleted = await prisma.$transaction(async (tx) => {
       // Rows already paid in a contractor settlement cannot be deleted here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'holo', [id]);
-      await tx.$queryRaw`SELECT id FROM "IssueToHoloMachine" WHERE id = ${lockedRow.issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToHoloMachine.findFirst({ where: { id: lockedRow.issueId, isDeleted: false } });
-      if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
-        throw Object.assign(new Error('Cannot delete row: already dispatched'), { statusCode: 409 });
-      }
-      if (await isHoloRowReferencedByConing({ rowId: lockedRow.id, barcode: lockedRow.barcode }, tx)) {
-        throw Object.assign(new Error('Cannot delete row: already issued to coning'), { statusCode: 409 });
-      }
-      if (new Date(lockedRow.updatedAt).getTime() !== new Date(row.updatedAt).getTime()) {
-        throw Object.assign(new Error('Receive row changed. Reload before deleting.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      await tx.$queryRaw`SELECT "pieceId" FROM "ReceiveFromHoloMachinePieceTotal" WHERE "pieceId" = ${pieceId} FOR UPDATE`;
       const totals = await tx.receiveFromHoloMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this piece');
       }
-      const oldIsWastage = lockedRow.isWastage === true;
-      const nextTotalNet = roundTo3Decimals(Number(totals.totalNetWeight || 0) - (oldIsWastage ? 0 : prevNetWeight));
-      const nextWastageNet = roundTo3Decimals(Number(totals.wastageNetWeight || 0) - (oldIsWastage ? prevNetWeight : 0));
+      const nextTotalNet = roundTo3Decimals(Number(totals.totalNetWeight || 0) + deltaNetWeight);
       const nextTotalRolls = Number(totals.totalRolls || 0) + deltaRolls;
-      if (nextTotalNet < -1e-6 || nextWastageNet < -1e-6 || nextTotalRolls < 0) {
+      if (nextTotalNet < -1e-6 || nextTotalRolls < 0) {
         throw new Error('Invalid totals after delete');
       }
 
@@ -10552,19 +10157,17 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
         },
       });
 
-      const pieceTotal = await tx.receiveFromHoloMachinePieceTotal.update({
+      await tx.receiveFromHoloMachinePieceTotal.update({
         where: { pieceId },
         data: {
-          totalNetWeight: nextTotalNet,
-          wastageNetWeight: nextWastageNet,
-          totalRolls: nextTotalRolls,
+          totalNetWeight: { increment: deltaNetWeight },
+          totalRolls: { increment: deltaRolls },
           ...actorUpdateFields(actorUserId),
         },
       });
-      const issueBalance = (await computeIssueBalancesBatch(tx, 'holo', [lockedIssue])).get(lockedIssue.id) || null;
-      return { updatedRow, pieceTotal, issueBalance };
+
+      return updatedRow;
     });
-    const { updatedRow: deleted, pieceTotal, issueBalance } = result;
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_holo_machine_row',
@@ -10576,16 +10179,16 @@ router.delete('/api/receive_from_holo_machine/rows/:id', requireDeletePermission
       },
     });
 
-    res.json({ ok: true, row: deleted, pieceTotal, issueBalance });
+    res.json({ ok: true });
   } catch (err) {
-    if (err?.statusCode) return sendInventoryMutationError(res, err, err.message);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete holo receive row', err);
     res.status(500).json({ error: err.message || 'Failed to delete holo receive row' });
   }
 });
 
-// Revert (soft-delete) a Holo row explicitly recorded in the wastage bucket.
-// Legacy NULL rows stay in their historical ordinary-receive bucket. Records a WastageEvent
+// Revert (soft-delete) a holo wastage receive row. Only allowed when the row's RollType
+// is a wastage type and no downstream consumption has occurred. Records a WastageEvent
 // so the action shows up in the audit trail.
 router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermission('receive.holo', PERM_WRITE), async (req, res) => {
   try {
@@ -10605,7 +10208,8 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
     if (!row || row.isDeleted) return res.status(404).json({ error: 'Receive row not found' });
     if (!row.issue) return res.status(404).json({ error: 'Receive issue not found' });
 
-    if (row.isWastage !== true) {
+    const rollTypeName = String(row.rollType?.name || '').toLowerCase();
+    if (!rollTypeName.includes('wastage')) {
       return res.status(400).json({ error: 'Row is not a wastage row' });
     }
 
@@ -10662,7 +10266,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
             await tx.receiveFromHoloMachinePieceTotal.update({
               where: { pieceId },
               data: {
-                wastageNetWeight: { increment: deltaNetWeight },
+                totalNetWeight: { increment: deltaNetWeight },
                 totalRolls: { increment: deltaRolls },
                 ...actorUpdateFields(actorUserId),
               },
@@ -10715,7 +10319,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
   }
 });
 
-async function handleConingSourceRowLookup(req, res) {
+router.get('/api/issue_to_holo_machine/source-row/lookup', requirePermission('issue.holo', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query?.barcode);
     if (!barcode) {
@@ -10723,7 +10327,83 @@ async function handleConingSourceRowLookup(req, res) {
     }
 
     const include = {
-      rollType: true,
+      bobbin: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+      cutMaster: { select: { id: true, name: true } },
+    };
+    const barcodeRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: {
+        barcode: { equals: barcode, mode: 'insensitive' },
+        isDeleted: false,
+      },
+      include,
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+    });
+    if (barcodeRows.length > 0) {
+      if (barcodeRows.length === 1) {
+        const payload = await buildHoloSourceLookupPayload(barcodeRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      return res.status(409).json({
+        outcome: 'duplicate_barcode_match',
+        error: 'Multiple active rows match this barcode. Please contact an administrator.',
+      });
+    }
+    const deletedBarcodeRow = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: { barcode: { equals: barcode, mode: 'insensitive' }, isDeleted: true },
+      select: { id: true },
+    });
+    if (deletedBarcodeRow) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Cutter Receive row' });
+    }
+
+    // Legacy imports stored the scanned receive barcode in notes. Only consult
+    // this fallback when no modern barcode matched so stale notes cannot shadow it.
+    const noteRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: {
+        notes: { equals: barcode, mode: 'insensitive' },
+        isDeleted: false,
+      },
+      include,
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+    });
+    if (noteRows.length > 0) {
+      if (noteRows.length === 1) {
+        const payload = await buildHoloSourceLookupPayload(noteRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      return res.status(409).json({
+        outcome: 'duplicate_legacy_match',
+        error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+      });
+    }
+    const deletedNoteRow = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: { notes: { equals: barcode, mode: 'insensitive' }, isDeleted: true },
+      select: { id: true },
+    });
+    if (deletedNoteRow) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Cutter Receive row' });
+    }
+
+    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Cutter Receive rows' });
+  } catch (err) {
+    console.error('Failed to lookup holo source row', err);
+    res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
+  }
+});
+
+router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query?.barcode);
+    if (!barcode) {
+      return res.status(400).json({ outcome: 'not_found', error: 'barcode query parameter is required' });
+    }
+
+    const holoInclude = {
       issue: {
         include: {
           cut: { select: { name: true } },
@@ -10731,271 +10411,144 @@ async function handleConingSourceRowLookup(req, res) {
           twist: { select: { name: true } },
         },
       },
+      rollType: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+    };
+    const coningInclude = {
+      issue: {
+        include: {
+          cut: { select: { name: true } },
+          yarn: { select: { name: true } },
+          twist: { select: { name: true } },
+        },
+      },
+      box: { select: { id: true, name: true, weight: true } },
     };
 
-    const [barcodeRows, reConingRows] = await Promise.all([
+    const [holoBarcodeRows, coningBarcodeRows] = await Promise.all([
       prisma.receiveFromHoloMachineRow.findMany({
-        where: { barcode: { equals: barcode, mode: 'insensitive' } },
-        include,
+        where: {
+          barcode: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: holoInclude,
         orderBy: { createdAt: 'desc' },
+        take: 2,
       }),
       prisma.receiveFromConingMachineRow.findMany({
-        where: { barcode: { equals: barcode, mode: 'insensitive' } },
-        include: { issue: { include: { cut: true, yarn: true, twist: true } }, box: true },
+        where: {
+          barcode: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: coningInclude,
         orderBy: { createdAt: 'desc' },
+        take: 2,
       }),
     ]);
-    if (barcodeRows.length > 0 || reConingRows.length > 0) {
-      const activeRows = [
-        ...barcodeRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted).map((row) => ({ stage: 'holo', row })),
-        ...reConingRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted).map((row) => ({ stage: 'coning', row })),
-      ];
-      if (activeRows.length === 1) {
-        const source = activeRows[0];
-        const payload = source.stage === 'coning'
-          ? await buildReConingSourceLookupPayload(source.row)
-          : await buildConingSourceLookupPayload(source.row);
+    const barcodeRows = [
+      ...holoBarcodeRows.map((row) => ({ row, sourceStage: 'holo' })),
+      ...coningBarcodeRows.map((row) => ({ row, sourceStage: 'coning' })),
+    ];
+    if (barcodeRows.length > 0) {
+      if (barcodeRows.length === 1) {
+        const match = barcodeRows[0];
+        const payload = await buildConingSourceLookupPayload(match.row, match.sourceStage);
         const status = payload.outcome === 'found' ? 200 : 409;
         return res.status(status).json(payload);
       }
-      if (activeRows.length > 1) {
-        return res.status(409).json({
-          outcome: 'duplicate_legacy_match',
-          error: 'Multiple rows match this barcode. Please use the new barcode instead.',
-        });
-      }
+      return res.status(409).json({
+        outcome: 'duplicate_barcode_match',
+        error: 'Multiple active rows match this barcode. Please contact an administrator.',
+      });
+    }
+    const deletedBarcodeRows = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findFirst({
+        where: { barcode: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+      prisma.receiveFromConingMachineRow.findFirst({
+        where: { barcode: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
+    if (deletedBarcodeRows.some(Boolean)) {
       return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted receive row' });
     }
 
-    const noteRows = await prisma.receiveFromHoloMachineRow.findMany({
-      where: { notes: { equals: barcode, mode: 'insensitive' } },
-      include,
-      orderBy: { createdAt: 'desc' },
-    });
+    const [holoNoteRows, coningNoteRows] = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findMany({
+        where: {
+          notes: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: holoInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+      prisma.receiveFromConingMachineRow.findMany({
+        where: {
+          notes: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: coningInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+    ]);
+    const noteRows = [
+      ...holoNoteRows.map((row) => ({ row, sourceStage: 'holo' })),
+      ...coningNoteRows.map((row) => ({ row, sourceStage: 'coning' })),
+    ];
     if (noteRows.length > 0) {
-      const activeRows = noteRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
-      if (activeRows.length === 1) {
-        const payload = await buildConingSourceLookupPayload(activeRows[0]);
+      if (noteRows.length === 1) {
+        const match = noteRows[0];
+        const payload = await buildConingSourceLookupPayload(match.row, match.sourceStage);
         const status = payload.outcome === 'found' ? 200 : 409;
         return res.status(status).json(payload);
       }
-      if (activeRows.length > 1) {
-        return res.status(409).json({
-          outcome: 'duplicate_legacy_match',
-          error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
-        });
-      }
-      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Holo Receive row' });
+      return res.status(409).json({
+        outcome: 'duplicate_legacy_match',
+        error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+      });
+    }
+    const deletedNoteRows = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findFirst({
+        where: { notes: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+      prisma.receiveFromConingMachineRow.findFirst({
+        where: { notes: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
+    if (deletedNoteRows.some(Boolean)) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted receive row' });
     }
 
-    const legacyResolved = await resolveLegacyReceiveRow(barcode, { include });
-    if (legacyResolved?.stage === 'holo' && legacyResolved.row) {
-      const payload = await buildConingSourceLookupPayload(legacyResolved.row);
+    const parsedLegacyBarcode = parseLegacyReceiveBarcode(barcode);
+    const legacyResolved = await resolveLegacyReceiveRow(barcode, {
+      include: parsedLegacyBarcode?.stage === 'coning' ? coningInclude : holoInclude,
+    });
+    if ((legacyResolved?.stage === 'holo' || legacyResolved?.stage === 'coning') && legacyResolved.row) {
+      const payload = await buildConingSourceLookupPayload(legacyResolved.row, legacyResolved.stage);
       const status = payload.outcome === 'found' ? 200 : 409;
       return res.status(status).json(payload);
     }
-    if (legacyResolved?.stage === 'holo' && legacyResolved.error === 'ambiguous') {
+    if ((legacyResolved?.stage === 'holo' || legacyResolved?.stage === 'coning') && legacyResolved.error === 'ambiguous') {
       return res.status(409).json({
         outcome: 'duplicate_legacy_match',
         error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
       });
     }
 
-    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Holo Receive rows' });
+    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Holo or Coning Receive rows' });
   } catch (err) {
     console.error('Failed to lookup coning source row', err);
     res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
-  }
-}
-
-async function handleHoloSourceRowLookup(req, res) {
-  try {
-    const barcode = normalizeBarcodeInput(req.query?.barcode);
-    if (!barcode) {
-      return res.status(400).json({ outcome: 'not_found', error: 'barcode query parameter is required' });
-    }
-
-    const rows = await prisma.receiveFromCutterMachineRow.findMany({
-      where: { barcode: { equals: barcode, mode: 'insensitive' } },
-      include: {
-        bobbin: true,
-        box: true,
-        cutMaster: true,
-        issue: true,
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    });
-
-    if (rows.length === 0) {
-      return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Cutter Receive rows' });
-    }
-
-    const activeRows = rows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
-    if (activeRows.length > 1) {
-      return res.status(409).json({
-        outcome: 'duplicate_legacy_match',
-        error: 'Multiple active Cutter Receive rows match this barcode.',
-      });
-    }
-    if (activeRows.length === 0) {
-      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Cutter Receive row' });
-    }
-
-    const payload = await buildHoloSourceLookupPayload(activeRows[0]);
-    return res.status(payload.outcome === 'found' ? 200 : 409).json(payload);
-  } catch (err) {
-    console.error('Failed to lookup holo source row', err);
-    return res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
-  }
-}
-
-router.get(
-  '/api/issue_to_coning_machine/source-row/lookup',
-  requirePermission('issue.coning', PERM_WRITE),
-  handleConingSourceRowLookup,
-);
-
-router.get('/api/v2/issue/:process/source-row', requireAuth, async (req, res) => {
-  const process = String(req.params.process || '').trim().toLowerCase();
-  if (!['cutter', 'holo', 'coning'].includes(process)) {
-    return res.status(400).json({ outcome: 'not_found', error: 'Invalid process' });
-  }
-  if (!hasPermissionLevel(req, `issue.${process}`, PERM_READ)) {
-    return res.status(403).json({ outcome: 'not_found', error: 'Forbidden' });
-  }
-  if (process === 'cutter') {
-    try {
-      const barcode = normalizeBarcodeInput(req.query?.barcode);
-      if (!barcode) return res.status(400).json({ outcome: 'not_found', error: 'Barcode is required' });
-      const rows = await prisma.inboundItem.findMany({
-        where: {
-          OR: [
-            { id: { equals: barcode, mode: 'insensitive' } },
-            { barcode: { equals: barcode, mode: 'insensitive' } },
-          ],
-        },
-        take: 2,
-      });
-      if (rows.length === 0) return res.status(404).json({ outcome: 'not_found', error: 'Piece not found' });
-      if (rows.length > 1) return res.status(409).json({ outcome: 'duplicate_legacy_match', error: 'Barcode matches multiple pieces' });
-      const row = rows[0];
-      const hasDispatch = Number(row.dispatchedWeight || 0) > TAKE_BACK_EPSILON;
-      const availableWeight = roundTo3Decimals(Math.max(
-        0,
-        Number(row.weight || 0) - Number(row.issuedToCutterWeight || 0) - Number(row.dispatchedWeight || 0),
-      ));
-      if (hasDispatch || String(row.status || '').toLowerCase() !== 'available' || availableWeight <= TAKE_BACK_EPSILON) {
-        return res.status(409).json({
-          outcome: 'exhausted',
-          error: hasDispatch
-            ? 'Piece has been partially dispatched and cannot be issued to Cutter'
-            : 'Piece is not available',
-          availability: { availableCount: 0, availableWeight: hasDispatch ? 0 : availableWeight },
-        });
-      }
-      return res.json({
-        outcome: 'found',
-        row,
-        trace: { itemId: row.itemId, lotNo: row.lotNo },
-        availability: { availableCount: 1, availableWeight },
-      });
-    } catch (err) {
-      console.error('Failed to lookup cutter source row', err);
-      return res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
-    }
-  }
-  if (process === 'holo') return handleHoloSourceRowLookup(req, res);
-  return handleConingSourceRowLookup(req, res);
-});
-
-// Bounded non-scanner source selection for Cutter Issue. The bootstrap payload no
-// longer contains all lots and pieces, so the ordinary Item -> Lot -> Piece flow
-// must use the same authoritative availability calculation as barcode lookup.
-router.get('/api/v2/issue/cutter/source-candidates', requireAuth, async (req, res) => {
-  if (!hasPermissionLevel(req, 'issue.cutter', PERM_READ)) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  const itemId = String(req.query?.itemId || '').trim();
-  const lotNo = String(req.query?.lotNo || '').trim();
-  const requestedLimit = Number(req.query?.limit);
-  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
-    ? Math.min(100, Math.floor(requestedLimit))
-    : 100;
-  let cursor = null;
-  if (req.query?.cursor) {
-    try {
-      cursor = JSON.parse(Buffer.from(String(req.query.cursor), 'base64').toString('utf8'));
-    } catch (_) {
-      return res.status(400).json({ error: 'Invalid cursor' });
-    }
-  }
-  if (!itemId) return res.status(400).json({ error: 'itemId is required' });
-
-  try {
-    if (!lotNo) {
-      const cursorCreatedAt = cursor?.kind === 'lots' && cursor?.createdAt
-        ? String(cursor.createdAt)
-        : '9999-12-31T23:59:59.999999';
-      const cursorLotNo = cursor?.kind === 'lots' ? String(cursor.lotNo || '') : '';
-      const lots = await prisma.$queryRaw`
-        WITH available_lots AS (
-          SELECT
-            ii."lotNo" AS "lotNo",
-            MAX(COALESCE(l.date, to_char(ii."createdAt", 'YYYY-MM-DD'))) AS date,
-            MAX(ii."createdAt") AS "lastCreatedAt",
-            to_char(MAX(ii."createdAt"), 'YYYY-MM-DD"T"HH24:MI:SS.US') AS "cursorCreatedAt",
-            COUNT(*)::int AS "availablePieces",
-            SUM(GREATEST(0, ii.weight - ii."issuedToCutterWeight" - ii."dispatchedWeight"))::float8 AS "availableWeight"
-          FROM "InboundItem" ii
-          LEFT JOIN "Lot" l ON l."lotNo" = ii."lotNo"
-          WHERE ii."itemId" = ${itemId}
-            AND lower(COALESCE(ii.status, '')) = 'available'
-            AND COALESCE(ii."dispatchedWeight", 0) <= ${TAKE_BACK_EPSILON}
-            AND (ii.weight - ii."issuedToCutterWeight" - ii."dispatchedWeight") > ${TAKE_BACK_EPSILON}
-          GROUP BY ii."lotNo"
-        )
-        SELECT *
-        FROM available_lots
-        WHERE ("cursorCreatedAt" < ${cursorCreatedAt}
-          OR ("cursorCreatedAt" = ${cursorCreatedAt} AND "lotNo" > ${cursorLotNo}))
-        ORDER BY "cursorCreatedAt" DESC, "lotNo" ASC
-        LIMIT ${limit + 1}
-      `;
-      const hasMore = lots.length > limit;
-      const items = lots.slice(0, limit);
-      const last = items[items.length - 1];
-      const nextCursor = hasMore && last
-        ? Buffer.from(JSON.stringify({ kind: 'lots', createdAt: last.cursorCreatedAt, lotNo: last.lotNo }), 'utf8').toString('base64')
-        : null;
-      return res.json({ items, hasMore, nextCursor });
-    }
-
-    const cursorSeq = cursor?.kind === 'pieces' && Number.isFinite(Number(cursor?.seq)) ? Number(cursor.seq) : -2147483648;
-    const cursorId = cursor?.kind === 'pieces' ? String(cursor.id || '') : '';
-    const rows = await prisma.$queryRaw`
-      SELECT
-        ii.*,
-        ROUND(GREATEST(0, ii.weight - ii."issuedToCutterWeight" - ii."dispatchedWeight")::numeric, 3)::float8 AS "issueableWeight"
-      FROM "InboundItem" ii
-      WHERE ii."itemId" = ${itemId}
-        AND ii."lotNo" = ${lotNo}
-        AND lower(COALESCE(ii.status, '')) = 'available'
-        AND COALESCE(ii."dispatchedWeight", 0) <= ${TAKE_BACK_EPSILON}
-        AND (ii.weight - ii."issuedToCutterWeight" - ii."dispatchedWeight") > ${TAKE_BACK_EPSILON}
-        AND (ii.seq > ${cursorSeq} OR (ii.seq = ${cursorSeq} AND ii.id > ${cursorId}))
-      ORDER BY ii.seq ASC, ii.id ASC
-      LIMIT ${limit + 1}
-    `;
-    const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit);
-    const last = items[items.length - 1];
-    const nextCursor = hasMore && last
-      ? Buffer.from(JSON.stringify({ kind: 'pieces', seq: last.seq, id: last.id }), 'utf8').toString('base64')
-      : null;
-    return res.json({ items, hasMore, nextCursor });
-  } catch (err) {
-    console.error('Failed to load Cutter issue source candidates', err);
-    return res.status(500).json({ error: err.message || 'Failed to load source candidates' });
   }
 });
 
@@ -11031,7 +10584,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     const coningRows = rowIds.length
       ? await prisma.receiveFromConingMachineRow.findMany({
         where: { id: { in: rowIds }, isDeleted: false },
-        include: { issue: { select: { id: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true } } },
+        include: { issue: { select: { id: true, lotNo: true, itemId: true } } },
       })
       : [];
 
@@ -11117,9 +10670,9 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         baseRolls: typeof found?.coneCount === 'number'
           ? found.coneCount
           : (typeof found?.rollCount === 'number' ? found.rollCount : 0),
-        baseWeight: typeof found?.coneCount === 'number'
-          ? Number(found.netWeight ?? found.coneWeight ?? (Number(found.grossWeight || 0) - Number(found.tareWeight || 0)))
-          : getHoloRowNetWeight(found),
+        baseWeight: typeof found?.coneWeight === 'number'
+          ? found.coneWeight
+          : (typeof found?.rollWeight === 'number' ? found.rollWeight : 0),
         dispatchedCount: Number(found?.dispatchedCount || 0),
         dispatchedWeight: Number(found?.dispatchedWeight || 0),
       };
@@ -11140,15 +10693,35 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     }
     const lotNo = lotNos.length === 1 ? lotNos[0] : 'MIXED';
     const itemId = Array.from(itemSet)[0];
+    const sourceIssueMap = new Map((holoRows || []).map(r => [r.issue?.id, r.issue]));
+    const sourceCutIds = new Set();
+    const sourceYarnIds = new Set();
+    const sourceTwistIds = new Set();
+    resolvedCrates.forEach((c) => {
+      if (!c.sourceIssueId) return;
+      const issue = sourceIssueMap.get(c.sourceIssueId);
+      if (issue?.cutId) sourceCutIds.add(issue.cutId);
+      if (issue?.yarnId) sourceYarnIds.add(issue.yarnId);
+      if (issue?.twistId) sourceTwistIds.add(issue.twistId);
+    });
+    if (sourceCutIds.size > 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single cut' });
+    }
+    const resolvedCutId = sourceCutIds.size === 1 ? Array.from(sourceCutIds)[0] : null;
+    if (sourceYarnIds.size > 1) {
+      return res.status(400).json({ error: 'Crates must belong to a single yarn' });
+    }
+    const resolvedYarnId = sourceYarnIds.size === 1 ? Array.from(sourceYarnIds)[0] : null;
+    const resolvedTwistId = sourceTwistIds.size === 1 ? Array.from(sourceTwistIds)[0] : null;
+
     // Validate masters if provided
     const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
     const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
     const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
-    if (coneTypeIds.length !== 1 || resolvedCrates.some((crate) => !crate.coneTypeId)) {
-      return res.status(400).json({ error: 'Select one cone type for the complete Coning issue' });
+    if (coneTypeIds.length) {
+      const ctCount = await prisma.coneType.count({ where: { id: { in: coneTypeIds } } });
+      if (ctCount !== coneTypeIds.length) return res.status(400).json({ error: 'One or more cone types not found' });
     }
-    const ctCount = await prisma.coneType.count({ where: { id: { in: coneTypeIds } } });
-    if (ctCount !== coneTypeIds.length) return res.status(400).json({ error: 'One or more cone types not found' });
     if (coneTypeIds.length > 1) {
       return res.status(400).json({ error: 'Crates must use a single cone type for coning issues' });
     }
@@ -11176,7 +10749,6 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         : Number((perRoll * rolls).toFixed(3));
       return {
         rowId: c.rowId,
-        stage: matchedConingRowIds.has(c.rowId) ? 'coning' : 'holo',
         barcode: c.barcode,
         lotNo: c.lotNo,
         itemId: c.itemId,
@@ -11266,30 +10838,30 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       const baseWeight = Number(crate.baseWeight) || 0;
       const dispatchedCount = Number(crate.dispatchedCount || 0);
       const dispatchedWeight = Number(crate.dispatchedWeight || 0);
+      const availableWeight = Math.max(0, baseWeight - dispatchedWeight);
+      const baseAvailableRolls = Math.max(0, baseRolls - dispatchedCount);
+
       const existingIssued = Math.max(0, previouslyIssuedByRowId.get(rid) || 0);
       const alreadyPlanned = issueTracker.get(rid) || 0;
+      const totalAfterRequest = existingIssued + alreadyPlanned + (Number(crate.issueRolls) || 0);
+
       const existingIssuedWeight = Math.max(0, previouslyIssuedWeightByRowId.get(rid) || 0);
       const alreadyPlannedWeight = issueWeightTracker.get(rid) || 0;
-      const availableWeight = Math.max(0, baseWeight - dispatchedWeight - existingIssuedWeight - alreadyPlannedWeight);
-      const availableRolls = calcAvailableCountFromWeight({
-        totalCount: baseRolls,
-        issuedCount: existingIssued + alreadyPlanned,
-        dispatchedCount,
-        totalWeight: baseWeight,
-        availableWeight,
-      }) || 0;
+      const totalWeightAfter = existingIssuedWeight + alreadyPlannedWeight + (Number(crate.issueWeight) || 0);
 
-      const exceedsRolls = Number(crate.issueRolls || 0) > availableRolls;
-      const exceedsWeight = Number(crate.issueWeight || 0) > availableWeight + 1e-6;
+      const exceedsRolls = totalAfterRequest > baseAvailableRolls;
+      const exceedsWeight = availableWeight <= 0
+        ? (Number(crate.issueWeight) || 0) > 0
+        : totalWeightAfter > availableWeight + 1e-6;
 
       if (exceedsRolls || exceedsWeight) {
         overIssuedCrates.push({
           rowId: rid,
           barcode: crate.barcode,
           requestedRolls: crate.issueRolls,
-          availableRolls,
+          availableRolls: Math.max(baseAvailableRolls - existingIssued - alreadyPlanned, 0),
           requestedWeight: roundTo3Decimals(crate.issueWeight),
-          availableWeight: roundTo3Decimals(availableWeight),
+          availableWeight: roundTo3Decimals(Math.max(availableWeight - existingIssuedWeight - alreadyPlannedWeight, 0)),
         });
       }
 
@@ -11298,8 +10870,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     }
 
     if (overIssuedCrates.length) {
-      return res.status(409).json({
-        outcome: 'availability_changed',
+      return res.status(400).json({
         error: 'One or more crates do not have enough rolls/weight available (may have been dispatched).',
         crates: overIssuedCrates,
       });
@@ -11311,223 +10882,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
       : 0;
 
-    const transactionResult = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
-      const requestedConeTypeId = coneTypeIds[0];
-      const coningSourceIds = preparedCrates.map((crate) => crate.rowId).filter((id) => matchedConingRowIds.has(id)).sort();
-      const holoSourceIds = preparedCrates.map((crate) => crate.rowId).filter((id) => !matchedConingRowIds.has(id)).sort();
-      if (holoSourceIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "ReceiveFromHoloMachineRow"
-          WHERE id = ANY (${holoSourceIds}::text[])
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
-      if (coningSourceIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "ReceiveFromConingMachineRow"
-          WHERE id = ANY (${coningSourceIds}::text[])
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
-      await tx.$queryRaw`SELECT id FROM "ConeType" WHERE id = ${requestedConeTypeId} FOR KEY SHARE`;
-      const lockedConeType = await tx.coneType.findUnique({
-        where: { id: requestedConeTypeId },
-        select: { weight: true },
-      });
-      if (!lockedConeType || lockedConeType.weight == null || !Number.isFinite(Number(lockedConeType.weight)) || Number(lockedConeType.weight) < 0) {
-        throw Object.assign(new Error('Selected cone type has no valid tare weight'), { statusCode: 409, code: 'availability_changed' });
-      }
-
-      const [initialLockedConingRows, initialLockedHoloRows] = await Promise.all([
-        coningSourceIds.length > 0
-          ? tx.receiveFromConingMachineRow.findMany({ where: { id: { in: coningSourceIds }, isDeleted: false } })
-          : Promise.resolve([]),
-        holoSourceIds.length > 0
-          ? tx.receiveFromHoloMachineRow.findMany({ where: { id: { in: holoSourceIds }, isDeleted: false } })
-          : Promise.resolve([]),
-      ]);
-      if (initialLockedConingRows.length + initialLockedHoloRows.length !== coningSourceIds.length + holoSourceIds.length) {
-        throw Object.assign(new Error('One or more source rows are no longer available.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: [],
-        });
-      }
-
-      // Source issue metadata is part of the inventory lineage stamped on the
-      // new Coning issue. Lock and reload it after the source rows so a Holo or
-      // re-Coning issue edit cannot race this create with stale Cut/Yarn/Twist.
-      const holoParentIssueIds = Array.from(new Set(initialLockedHoloRows.map((row) => row.issueId).filter(Boolean))).sort();
-      const coningParentIssueIds = Array.from(new Set(initialLockedConingRows.map((row) => row.issueId).filter(Boolean))).sort();
-      if (holoParentIssueIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "IssueToHoloMachine"
-          WHERE id = ANY (${holoParentIssueIds}::text[])
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
-      if (coningParentIssueIds.length > 0) {
-        await tx.$queryRaw`
-          SELECT id
-          FROM "IssueToConingMachine"
-          WHERE id = ANY (${coningParentIssueIds}::text[])
-          ORDER BY id
-          FOR UPDATE
-        `;
-      }
-      const [lockedConingRows, lockedHoloRows] = await Promise.all([
-        coningSourceIds.length > 0
-          ? tx.receiveFromConingMachineRow.findMany({
-            where: { id: { in: coningSourceIds }, isDeleted: false },
-            include: { issue: { select: { id: true, isDeleted: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true } } },
-          })
-          : Promise.resolve([]),
-        holoSourceIds.length > 0
-          ? tx.receiveFromHoloMachineRow.findMany({
-            where: { id: { in: holoSourceIds }, isDeleted: false },
-            include: { issue: { select: { id: true, isDeleted: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true } } },
-          })
-          : Promise.resolve([]),
-      ]);
-      if ([...lockedConingRows, ...lockedHoloRows].some((row) => !row.issue || row.issue.isDeleted)) {
-        throw Object.assign(new Error('Source lineage changed. Rescan the affected crate.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: [],
-        });
-      }
-
-      const lockedParentIssues = [...lockedConingRows, ...lockedHoloRows].map((row) => row.issue);
-      const lockedItemIds = new Set(lockedParentIssues.map((parent) => parent.itemId).filter(Boolean));
-      const lockedLotNos = Array.from(new Set(lockedParentIssues.map((parent) => parent.lotNo).filter(Boolean)));
-      const tracedConingRows = coningParentIssueIds.length > 0
-        ? await tx.$queryRaw`
-          WITH RECURSIVE lineage AS (
-            SELECT ic.id AS root_issue_id, ic.id AS issue_id, ARRAY[ic.id]::text[] AS path, 0 AS depth
-            FROM "IssueToConingMachine" ic
-            WHERE ic.id = ANY (${coningParentIssueIds}::text[]) AND ic."isDeleted" = false
-            UNION ALL
-            SELECT l.root_issue_id, parent.id, l.path || parent.id, l.depth + 1
-            FROM lineage l
-            JOIN "IssueToConingMachine" current_issue ON current_issue.id = l.issue_id
-            JOIN LATERAL jsonb_array_elements(COALESCE(current_issue."receivedRowRefs", '[]'::jsonb)) elem ON true
-            JOIN "ReceiveFromConingMachineRow" parent_row
-              ON parent_row.id = elem->>'rowId' AND parent_row."isDeleted" = false
-            JOIN "IssueToConingMachine" parent
-              ON parent.id = parent_row."issueId" AND parent."isDeleted" = false
-            WHERE l.depth < 20 AND NOT parent.id = ANY(l.path)
-          )
-          SELECT
-            l.root_issue_id,
-            array_remove(array_agg(DISTINCT hi."cutId"), NULL) AS cut_ids,
-            array_remove(array_agg(DISTINCT hi."yarnId"), NULL) AS yarn_ids,
-            array_remove(array_agg(DISTINCT hi."twistId"), NULL) AS twist_ids
-          FROM lineage l
-          JOIN "IssueToConingMachine" ci ON ci.id = l.issue_id
-          JOIN LATERAL jsonb_array_elements(COALESCE(ci."receivedRowRefs", '[]'::jsonb)) elem ON true
-          JOIN "ReceiveFromHoloMachineRow" hr
-            ON hr.id = elem->>'rowId' AND hr."isDeleted" = false
-          JOIN "IssueToHoloMachine" hi
-            ON hi.id = hr."issueId" AND hi."isDeleted" = false
-          GROUP BY l.root_issue_id
-        `
-        : [];
-      const traceByConingIssueId = new Map((tracedConingRows || []).map((trace) => [trace.root_issue_id, trace]));
-      const lockedCutIds = new Set();
-      const lockedYarnIds = new Set();
-      const lockedTwistIds = new Set();
-      const addLineageIds = (target, tracedIds, fallbackId) => {
-        const ids = Array.isArray(tracedIds) ? tracedIds.filter(Boolean) : [];
-        if (ids.length > 0) ids.forEach((id) => target.add(id));
-        else if (fallbackId) target.add(fallbackId);
-      };
-      lockedHoloRows.forEach((row) => {
-        addLineageIds(lockedCutIds, [], row.issue?.cutId);
-        addLineageIds(lockedYarnIds, [], row.issue?.yarnId);
-        addLineageIds(lockedTwistIds, [], row.issue?.twistId);
-      });
-      lockedConingRows.forEach((row) => {
-        const trace = traceByConingIssueId.get(row.issueId);
-        addLineageIds(lockedCutIds, trace?.cut_ids, row.issue?.cutId);
-        addLineageIds(lockedYarnIds, trace?.yarn_ids, row.issue?.yarnId);
-        addLineageIds(lockedTwistIds, trace?.twist_ids, row.issue?.twistId);
-      });
-      if (lockedItemIds.size !== 1 || lockedLotNos.length === 0 || lockedCutIds.size > 1 || lockedYarnIds.size > 1 || lockedTwistIds.size > 1) {
-        throw Object.assign(new Error('Source lineage changed. Rescan the affected crate.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: [],
-        });
-      }
-      const lockedItemId = Array.from(lockedItemIds)[0];
-      const lockedLotNo = lockedLotNos.length === 1 ? lockedLotNos[0] : 'MIXED';
-      const lockedCutId = lockedCutIds.size === 1 ? Array.from(lockedCutIds)[0] : null;
-      const lockedYarnId = lockedYarnIds.size === 1 ? Array.from(lockedYarnIds)[0] : null;
-      const lockedTwistId = lockedTwistIds.size === 1 ? Array.from(lockedTwistIds)[0] : null;
-
-      const lockedSourceMap = new Map([...lockedConingRows, ...lockedHoloRows].map((row) => [row.id, row]));
-      const issuedMap = await buildHoloIssuedToConingMap(tx, preparedCrates.map((crate) => crate.rowId));
-      const plannedCountByRowId = new Map();
-      const plannedWeightByRowId = new Map();
-      const availabilityConflicts = [];
-      const lockedPreparedCrates = preparedCrates.map((crate) => {
-        const source = lockedSourceMap.get(crate.rowId);
-        const baseRolls = typeof source?.coneCount === 'number'
-          ? Number(source.coneCount || 0)
-          : Number(source?.rollCount || 0);
-        const baseWeight = typeof source?.coneCount === 'number'
-          ? Number(source.netWeight ?? source.coneWeight ?? (Number(source.grossWeight || 0) - Number(source.tareWeight || 0)))
-          : getHoloRowNetWeight(source);
-        const dispatchedCount = Number(source?.dispatchedCount || 0);
-        const dispatchedWeight = Number(source?.dispatchedWeight || 0);
-        const alreadyIssued = issuedMap.get(crate.rowId) || { issuedRolls: 0, issuedWeight: 0 };
-        const alreadyPlannedCount = Number(plannedCountByRowId.get(crate.rowId) || 0);
-        const alreadyPlannedWeight = Number(plannedWeightByRowId.get(crate.rowId) || 0);
-        const availableWeight = Math.max(0, baseWeight - dispatchedWeight - Number(alreadyIssued.issuedWeight || 0) - alreadyPlannedWeight);
-        const availableRolls = calcAvailableCountFromWeight({
-          totalCount: baseRolls,
-          issuedCount: Number(alreadyIssued.issuedRolls || 0) + alreadyPlannedCount,
-          dispatchedCount,
-          totalWeight: baseWeight,
-          availableWeight,
-        }) || 0;
-        if (Number(crate.issueRolls || 0) > availableRolls || Number(crate.issueWeight || 0) > availableWeight + TAKE_BACK_EPSILON) {
-          availabilityConflicts.push({
-            rowId: crate.rowId,
-            barcode: crate.barcode,
-            requestedRolls: Number(crate.issueRolls || 0),
-            availableRolls,
-            requestedWeight: roundTo3Decimals(crate.issueWeight),
-            availableWeight: roundTo3Decimals(availableWeight),
-            updatedAt: source?.updatedAt,
-          });
-        }
-        plannedCountByRowId.set(crate.rowId, alreadyPlannedCount + Number(crate.issueRolls || 0));
-        plannedWeightByRowId.set(crate.rowId, alreadyPlannedWeight + Number(crate.issueWeight || 0));
-        return {
-          ...crate,
-          lotNo: source?.issue?.lotNo || null,
-          itemId: source?.issue?.itemId || null,
-          baseRolls,
-          baseWeight,
-          dispatchedCount,
-          dispatchedWeight,
-        };
-      });
-      if (availabilityConflicts.length > 0) {
-        throw Object.assign(new Error('Source availability changed. Rescan the affected crate.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-          crates: availabilityConflicts,
-        });
-      }
-
+    const created = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
       await ensureConingIssueSequence(tx, actorUserId);
       // Get next Coning issue series number
       const coningSeq = await tx.coningIssueSequence.upsert({
@@ -11537,14 +10892,14 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       });
       const seriesNumber = coningSeq.nextValue - 1; // Use value before increment
 
-      const issue = await tx.issueToConingMachine.create({
+      return tx.issueToConingMachine.create({
         data: {
           date,
-          itemId: lockedItemId,
-          lotNo: lockedLotNo,
-          cutId: lockedCutId,
-          yarnId: lockedYarnId,
-          twistId: lockedTwistId,
+          itemId,
+          lotNo,
+          cutId: resolvedCutId,
+          yarnId: resolvedYarnId,
+          twistId: resolvedTwistId,
           machineId: machineId || null,
           operatorId: operatorId || null,
           barcode: makeConingIssueBarcode({ series: seriesNumber }),
@@ -11553,37 +10908,11 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
           rollsIssued: Number(totalRolls || 0),
           requiredPerConeNetWeight,
           expectedCones,
-          receivedRowRefs: lockedPreparedCrates,
+          receivedRowRefs: preparedCrates,
           ...actorCreateFields(actorUserId),
         },
       });
-      return {
-        issue,
-        sourceUpdates: lockedPreparedCrates.map((crate) => {
-          const issued = issuedMap.get(crate.rowId) || { issuedRolls: 0, issuedWeight: 0 };
-          const remainingWeight = Math.max(
-            0,
-            Number(crate.baseWeight || 0)
-              - Number(crate.dispatchedWeight || 0)
-              - Number(issued.issuedWeight || 0)
-              - Number(plannedWeightByRowId.get(crate.rowId) || 0),
-          );
-          return {
-            rowId: crate.rowId,
-            barcode: crate.barcode,
-            availableRolls: calcAvailableCountFromWeight({
-              totalCount: Number(crate.baseRolls || 0),
-              issuedCount: Number(issued.issuedRolls || 0) + Number(plannedCountByRowId.get(crate.rowId) || 0),
-              dispatchedCount: Number(crate.dispatchedCount || 0),
-              totalWeight: Number(crate.baseWeight || 0),
-              availableWeight: remainingWeight,
-            }) || 0,
-            availableWeight: roundTo3Decimals(remainingWeight),
-          };
-        }),
-      };
     });
-    const created = transactionResult.issue;
 
     await logCrudWithActor(req, {
       entityType: 'issue_to_coning_machine',
@@ -11597,7 +10926,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         operatorId: created.operatorId,
       },
     });
-    res.json({ ok: true, issueToConingMachine: created, sourceUpdates: transactionResult.sourceUpdates });
+    res.json({ ok: true, issueToConingMachine: created });
 
     // Notify issue_to_coning_machine created
     try {
@@ -11625,13 +10954,6 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       });
     } catch (e) { console.error('notify issue_to_coning_machine error', e); }
   } catch (err) {
-    if (err?.statusCode) {
-      return res.status(err.statusCode).json({
-        outcome: err.code || 'availability_changed',
-        error: err.message,
-        ...(Array.isArray(err.crates) ? { crates: err.crates } : {}),
-      });
-    }
     console.error('Failed to issue to coning machine', err);
     res.status(500).json({ error: err.message || 'Failed to issue to coning' });
   }
@@ -11652,127 +10974,94 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       helperId,
       notes,
       createdBy,
-      coneTypeId: requestedConeTypeId,
     } = req.body || {};
     const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
-    if (!issueId || !pieceId || !Number.isInteger(coneCount) || coneCount <= 0 || !boxId || !Number.isFinite(providedGross) || Number(providedGross) <= 0) {
+    if (!issueId || !pieceId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
       return res.status(400).json({ error: 'Missing required cone or gross weight data' });
     }
     const issue = await prisma.issueToConingMachine.findFirst({
       where: { id: issueId, isDeleted: false },
     });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    let boxWeight = null;
+    if (boxId) {
+      const box = await prisma.box.findUnique({ where: { id: boxId }, select: { weight: true } });
+      boxWeight = box?.weight ?? null;
+    }
+    const coneTypeId = Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length
+      ? issue.receivedRowRefs[0].coneTypeId
+      : null;
+    let coneWeightPerPiece = null;
+    if (coneTypeId) {
+      const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
+      coneWeightPerPiece = coneType?.weight ?? null;
+    }
+    const tareWeight = (boxWeight || 0) + (coneWeightPerPiece || 0) * coneCount;
     const grossWeight = Number(providedGross);
-    const txResult = await timedTransaction('receive_from_coning_machine.create', 1, async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToConingMachine.findFirst({ where: { id: issueId, isDeleted: false } });
-      if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      const box = await tx.box.findUnique({ where: { id: boxId }, select: { weight: true } });
-      const boxWeight = box?.weight == null ? NaN : Number(box.weight);
-      if (!box || !Number.isFinite(boxWeight) || boxWeight <= 0) {
-        throw Object.assign(new Error('Selected box has no valid tare weight'), { statusCode: 400 });
-      }
-      let lockedRefs = parseJsonArraySafe(lockedIssue.receivedRowRefs);
-      let coneTypeId = lockedRefs[0]?.coneTypeId || null;
-      if (!coneTypeId && requestedConeTypeId) {
-        if (lockedRefs.length === 0) {
-          throw Object.assign(new Error('Issue source lineage is missing; repair the issue before receiving'), { statusCode: 409 });
-        }
-        // This is a one-time metadata repair. Existing receive rows retain
-        // their stored gross/tare/net values and aggregate totals exactly as
-        // recorded; the selected cone master applies only to this and future
-        // receives for the issue.
-        coneTypeId = String(requestedConeTypeId);
-        const repairedRefs = lockedRefs.map((ref) => ({ ...ref, coneTypeId }));
-        await tx.issueToConingMachine.update({
-          where: { id: issueId },
-          data: { receivedRowRefs: repairedRefs, ...actorUpdateFields(actorUserId) },
-        });
-        lockedRefs = repairedRefs;
-        lockedIssue.receivedRowRefs = repairedRefs;
-      } else if (coneTypeId && requestedConeTypeId && String(requestedConeTypeId) !== coneTypeId) {
-        throw Object.assign(new Error('Issue cone type changed. Rescan before receiving.'), {
-          statusCode: 409,
-          code: 'availability_changed',
-        });
-      }
-      if (!coneTypeId) {
-        throw Object.assign(new Error('Select a cone type to repair this legacy issue before receiving'), { statusCode: 400 });
-      }
-      const coneType = await tx.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
-      const coneWeightPerPiece = coneType?.weight == null ? NaN : Number(coneType.weight);
-      if (!coneType || !Number.isFinite(coneWeightPerPiece) || coneWeightPerPiece < 0) {
-        throw Object.assign(new Error('Issue cone type has no valid tare weight'), { statusCode: 400 });
-      }
-      const tareWeight = roundTo3Decimals(boxWeight + coneWeightPerPiece * coneCount);
-      const netWeight = grossWeight - tareWeight;
-      if (!Number.isFinite(netWeight) || netWeight <= 0) {
-        throw Object.assign(new Error('Gross weight must be greater than tare weight'), { statusCode: 400 });
-      }
-      const issueSeriesNumber = parseConingSeries(lockedIssue.barcode);
-      if (!issueSeriesNumber) {
-        throw Object.assign(new Error('Invalid issue barcode format. Cannot derive Coning receive series.'), { statusCode: 400 });
-      }
-      // Coning production can legitimately yield more net weight than the
-      // issue. Keep the issue lock for sequencing and consistency, but do not
-      // reject an over-receive; the returned balance drives the existing
-      // over-received warning and leaves pending at zero.
-      const existingCount = await tx.receiveFromConingMachineRow.count({ where: { issueId } });
-      const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex: existingCount + 1 });
-      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, lockedIssue, netWeight);
-      const createdRow = await tx.receiveFromConingMachineRow.create({
-        data: {
-          issueId,
-          coneCount,
-          barcode,
-          coneWeight: Number(netWeight),
-          netWeight: Number(netWeight),
-          tareWeight: Number(tareWeight),
-          grossWeight: Number(grossWeight),
-          sourceRowRefs,
-          boxId: boxId || null,
-          machineNo: machineNo || null,
-          operatorId: operatorId || lockedIssue.operatorId || null,
-          helperId: helperId || null,
-          notes: notes || null,
-          date: date || lockedIssue.date,
-          createdBy: createdBy || 'manual',
-          ...actorCreateFields(actorUserId),
-        },
-      });
-      const pieceTotal = await tx.receiveFromConingMachinePieceTotal.upsert({
-        where: { pieceId },
-        update: {
-          totalCones: { increment: coneCount },
-          totalNetWeight: { increment: netWeight || 0 },
-          ...actorUpdateFields(actorUserId),
-        },
-        create: {
-          pieceId,
-          totalCones: coneCount,
-          totalNetWeight: netWeight || 0,
-          wastageNetWeight: 0,
-          ...actorCreateFields(actorUserId),
-        },
-      });
-      const issueBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(issueId) || null;
-      return { createdRow, pieceTotal, issueBalance, issueToConingMachine: lockedIssue, grossWeight, tareWeight, netWeight };
+    const netWeight = grossWeight - tareWeight;
+    if (!Number.isFinite(netWeight) || netWeight < 0) {
+      return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
+    }
+
+    const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
+    const crateIndex = existingCount + 1;
+    const issueSeriesNumber = parseConingSeries(issue.barcode);
+    if (!issueSeriesNumber) {
+      return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Coning receive series.' });
+    }
+    const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
+
+    const sourceRowRefs = await computeConingReceiveSourceRowRefs(prisma, issue, netWeight);
+    const createdRow = await prisma.receiveFromConingMachineRow.create({
+      data: {
+        issueId,
+        coneCount,
+        barcode,
+        coneWeight: Number(netWeight),
+        netWeight: Number(netWeight),
+        tareWeight: Number(tareWeight),
+        grossWeight: Number(grossWeight),
+        sourceRowRefs,
+        boxId: boxId || null,
+        machineNo: machineNo || null,
+        operatorId: operatorId || issue.operatorId || null,
+        helperId: helperId || null,
+        notes: notes || null,
+        date: date || issue.date,
+        createdBy: createdBy || 'manual',
+        ...actorCreateFields(actorUserId),
+      },
     });
-    const { createdRow, pieceTotal, issueBalance, issueToConingMachine, tareWeight, netWeight } = txResult;
-    const barcode = createdRow.barcode;
+    const pieceTotal = await prisma.receiveFromConingMachinePieceTotal.upsert({
+      where: { pieceId },
+      update: {
+        totalCones: { increment: coneCount },
+        totalNetWeight: { increment: netWeight || 0 },
+        ...actorUpdateFields(actorUserId),
+      },
+      create: {
+        pieceId,
+        totalCones: coneCount,
+        totalNetWeight: netWeight || 0,
+        wastageNetWeight: 0,
+        ...actorCreateFields(actorUserId),
+      },
+    });
+    let issueBalance = null;
+    try {
+      const issueBalances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
+      issueBalance = issueBalances.get(issue.id) || null;
+    } catch (balanceErr) {
+      // The receive and piece-total writes have already committed. Never turn a
+      // successful write into a retryable 500 just because response enrichment failed.
+      console.error('Failed to enrich Coning receive response balance', balanceErr);
+    }
     res.json({
       ok: true,
       row: createdRow,
-      pieceTotal,
       issueBalance,
-      issueToConingMachine,
-      sourceUpdates: [{
-        pieceId,
-        totalCones: pieceTotal.totalCones,
-        totalNetWeight: pieceTotal.totalNetWeight,
-        wastageNetWeight: pieceTotal.wastageNetWeight,
-        updatedAt: pieceTotal.updatedAt,
-      }],
+      pieceTotal,
     });
 
     // Notify receive_from_coning_machine created
@@ -11808,7 +11097,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
     } catch (e) { console.error('notify receive_from_coning_machine manual error', e); }
   } catch (err) {
     console.error('Failed to receive from coning machine', err);
-    sendInventoryMutationError(res, err, 'Failed to record coning receive');
+    res.status(500).json({ error: err.message || 'Failed to record coning receive' });
   }
 });
 
@@ -11822,42 +11111,67 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       return res.status(400).json({ error: 'Missing issueId' });
     }
 
-    const { issue, beforeTotal, updated, event, remaining, issueBalance } = await timedTransaction(
-      'receive_from_coning_machine.mark_wastage',
-      1,
-      async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToConingMachine.findUnique({ where: { id: issueId } });
-      if (!lockedIssue) throw Object.assign(new Error('Coning issue not found'), { statusCode: 404 });
-      if (lockedIssue.isDeleted) throw Object.assign(new Error('Issue has been deleted'), { statusCode: 409 });
-      await tx.$queryRaw`SELECT "pieceId" FROM "ReceiveFromConingMachinePieceTotal" WHERE "pieceId" = ${issueId} FOR UPDATE`;
-      const currentTotal = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
-      const balance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(issueId);
-      const pending = roundTo3Decimals(Math.max(0, Number(balance?.pendingWeight || 0)));
-      if (pending <= TAKE_BACK_EPSILON) {
-        throw Object.assign(new Error('No remaining pending weight to mark as wastage'), { statusCode: 409, code: 'availability_changed' });
+    // 1. Fetch coning issue
+    const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
+    if (!issue) return res.status(404).json({ error: 'Coning issue not found' });
+    if (issue.isDeleted) return res.status(400).json({ error: 'Issue has been deleted' });
+
+    // 2. Calculate total issued weight from receivedRowRefs
+    let issuedWeight = 0;
+    try {
+      const refs = typeof issue.receivedRowRefs === 'string'
+        ? JSON.parse(issue.receivedRowRefs)
+        : issue.receivedRowRefs;
+      if (Array.isArray(refs)) {
+        issuedWeight = refs.reduce((sum, ref) => {
+          // Prefer stamped issueWeight, fallback to lookup
+          if (ref.issueWeight) return sum + Number(ref.issueWeight);
+          return sum;
+        }, 0);
       }
+    } catch (e) {
+      console.error('Error parsing receivedRowRefs for coning wastage', e);
+    }
+
+    if (issuedWeight <= 0) {
+      return res.status(400).json({ error: 'Unable to determine issued weight for this issue' });
+    }
+
+    // 3. Fetch current received and wastage totals
+    const currentTotal = await prisma.receiveFromConingMachinePieceTotal.findUnique({
+      where: { pieceId: issueId }
+    });
+    const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
+    const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
+
+    // 4. Calculate remaining pending weight
+    const remaining = roundTo3Decimals(Math.max(0, issuedWeight - received - existingWastage));
+    if (remaining <= 0) {
+      return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
+    }
+
+    // 5. Upsert wastage + record event inside transaction
+    const { updated, event } = await prisma.$transaction(async (tx) => {
       await tx.receiveFromConingMachinePieceTotal.upsert({
         where: { pieceId: issueId },
         update: {
-          wastageNetWeight: { increment: pending },
+          wastageNetWeight: { increment: remaining },
           ...actorUpdateFields(actorUserId)
         },
         create: {
           pieceId: issueId,
           totalCones: 0,
           totalNetWeight: 0,
-          wastageNetWeight: pending,
+          wastageNetWeight: remaining,
           ...actorCreateFields(actorUserId)
         },
       });
-      const eventRow = await insertWastageMarkEvent(tx, req, { stage: 'coning', pieceId: issueId, weight: pending, note });
+      const eventRow = await insertWastageMarkEvent(tx, req, { stage: 'coning', pieceId: issueId, weight: remaining, note });
       const after = await tx.receiveFromConingMachinePieceTotal.update({
         where: { pieceId: issueId },
         data: { lastWastageEventId: eventRow.id },
       });
-      const freshBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(issueId) || null;
-      return { issue: lockedIssue, beforeTotal: currentTotal, updated: after, event: eventRow, remaining: pending, issueBalance: freshBalance };
+      return { updated: after, event: eventRow };
     });
 
     // 6. Send WhatsApp notification
@@ -11865,7 +11179,6 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       const itemRec = issue.itemId ? await prisma.item.findUnique({ where: { id: issue.itemId } }) : null;
       const itemName = itemRec ? itemRec.name || '' : '';
       const wastageFormatted = Number(remaining).toFixed(3);
-      const issuedWeight = Number(issueBalance?.originalWeight || 0);
       const wastagePercent = issuedWeight > 0 ? ((remaining / issuedWeight) * 100).toFixed(2) : '0.00';
       sendNotification('piece_wastage_marked_coning', {
         pieceId: issueId,
@@ -11885,14 +11198,13 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       entityType: 'receive_coning_piece_total',
       entityId: issueId,
       action: 'update',
-      before: beforeTotal,
+      before: currentTotal,
       after: updated,
       payload: { action: 'mark_wastage', marked: remaining, note, eventId: event.id },
     });
 
-    res.json({ ok: true, issueId, marked: remaining, note, updated, eventId: event.id, issueBalance });
+    res.json({ ok: true, issueId, marked: remaining, note, updated, eventId: event.id });
   } catch (err) {
-    if (err?.statusCode) return sendInventoryMutationError(res, err, err.message);
     console.error('Failed to mark coning wastage', err);
     res.status(500).json({ error: err.message || 'Failed to mark coning wastage' });
   }
@@ -12017,9 +11329,6 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
     if (dispatchedWeight > 0 || dispatchedCount > 0) {
       return res.status(400).json({ error: 'Cannot edit row: already dispatched' });
     }
-    if (await isConingRowReferencedByConing({ rowId: row.id, barcode: row.barcode })) {
-      return res.status(400).json({ error: 'Cannot edit row: already issued to coning' });
-    }
     const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'coning',
@@ -12031,94 +11340,66 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       return res.status(400).json({ error: 'Cannot edit row: box transfer exists' });
     }
 
-    const prevConeCount = Number(row.coneCount || 0);
-    const prevTareWeight = Number(row.tareWeight || 0);
-    const prevNetWeight = Number.isFinite(row.netWeight)
-      ? Number(row.netWeight)
-      : roundTo3Decimals((Number(row.grossWeight || 0) - prevTareWeight));
-    const storedGrossWeight = Number.isFinite(row.grossWeight)
-      ? Number(row.grossWeight)
-      : roundTo3Decimals(prevNetWeight + prevTareWeight);
-    const coneCount = toInt(req.body?.coneCount ?? prevConeCount);
-    const grossWeight = toNumber(req.body?.grossWeight ?? storedGrossWeight);
-    const boxId = typeof req.body?.boxId === 'string'
-      ? (req.body.boxId.trim() || null)
-      : (row.boxId || null);
+    const coneCount = toInt(req.body?.coneCount ?? row.coneCount);
+    const grossWeight = toNumber(req.body?.grossWeight ?? row.grossWeight);
+    const boxId = typeof req.body?.boxId === 'string' ? req.body.boxId : row.boxId;
     const date = toOptionalString(req.body?.date ?? row.date);
     const machineNo = toOptionalString(req.body?.machineNo ?? row.machineNo);
     const operatorId = typeof req.body?.operatorId === 'string' ? req.body.operatorId : row.operatorId;
     const helperId = typeof req.body?.helperId === 'string' ? req.body.helperId : row.helperId;
     const notes = toOptionalString(req.body?.notes ?? row.notes);
 
-    if (!Number.isInteger(Number(req.body?.coneCount ?? row.coneCount)) || !Number.isFinite(coneCount) || coneCount <= 0) {
+    if (!Number.isFinite(coneCount) || coneCount <= 0) {
       return res.status(400).json({ error: 'Cone count must be a positive number' });
     }
     if (!Number.isFinite(grossWeight) || grossWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be a positive number' });
     }
 
-    const physicalInputsChanged = coneCount !== prevConeCount
-      || Math.abs(grossWeight - storedGrossWeight) > TAKE_BACK_EPSILON
-      || (boxId || null) !== (row.boxId || null);
-    let tareWeight = prevTareWeight;
-    let netWeight = prevNetWeight;
-    if (physicalInputsChanged) {
-      if (!boxId) return res.status(400).json({ error: 'Box type is required' });
-      const box = await prisma.box.findUnique({ where: { id: boxId } });
-      if (!box || !Number.isFinite(box.weight) || Number(box.weight) <= 0) {
-        return res.status(400).json({ error: 'Box weight missing. Update box first.' });
-      }
+    const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
+    if (boxId && (!box || !Number.isFinite(box.weight) || Number(box.weight) <= 0)) {
+      return res.status(400).json({ error: 'Box weight missing. Update box first.' });
+    }
 
-      let coneTypeId = null;
-      try {
-        let refs = row.issue?.receivedRowRefs;
-        if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
-        if (Array.isArray(refs) && refs.length > 0) {
-          coneTypeId = refs[0]?.coneTypeId || null;
-        }
-      } catch (e) {
-        coneTypeId = null;
+    let coneTypeId = null;
+    try {
+      let refs = row.issue?.receivedRowRefs;
+      if (typeof refs === 'string') refs = JSON.parse(refs || '[]');
+      if (Array.isArray(refs) && refs.length > 0) {
+        coneTypeId = refs[0]?.coneTypeId || null;
       }
+    } catch (e) {
+      coneTypeId = null;
+    }
 
-      if (!coneTypeId) return res.status(400).json({ error: 'Issue has no cone type for tare calculation' });
+    let coneWeightPerPiece = 0;
+    if (coneTypeId) {
       const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId } });
-      if (!coneType || !Number.isFinite(coneType.weight) || Number(coneType.weight) < 0) {
+      if (!coneType || !Number.isFinite(coneType.weight) || Number(coneType.weight) <= 0) {
         return res.status(400).json({ error: 'Cone type weight missing. Update cone type first.' });
       }
-      const coneWeightPerPiece = Number(coneType.weight);
-      tareWeight = roundTo3Decimals(Number(box.weight) + coneWeightPerPiece * coneCount);
-      netWeight = roundTo3Decimals(grossWeight - tareWeight);
+      coneWeightPerPiece = Number(coneType.weight);
     }
+
+    const boxWeight = box ? Number(box.weight) : 0;
+    const tareWeight = roundTo3Decimals(boxWeight + coneWeightPerPiece * coneCount);
+    const netWeight = roundTo3Decimals(grossWeight - tareWeight);
     if (!Number.isFinite(netWeight) || netWeight <= 0) {
       return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
     }
+
+    const prevNetWeight = Number.isFinite(row.netWeight)
+      ? Number(row.netWeight)
+      : roundTo3Decimals((Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
+    const prevConeCount = Number(row.coneCount || 0);
     const deltaNetWeight = roundTo3Decimals(netWeight - prevNetWeight);
     const deltaCones = coneCount - prevConeCount;
 
     const pieceId = row.issueId;
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromConingMachineRow" WHERE id = ${id} FOR UPDATE`;
-      const lockedRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id }, include: { issue: true } });
-      if (!lockedRow || lockedRow.isDeleted) {
-        throw Object.assign(new Error('Receive row is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
-      if (new Date(lockedRow.updatedAt).getTime() !== new Date(row.updatedAt).getTime()) {
-        throw Object.assign(new Error('Receive row changed. Reload before editing.'), { statusCode: 409, code: 'availability_changed' });
-      }
+    const updated = await prisma.$transaction(async (tx) => {
       // Rows already paid in a contractor settlement cannot be edited here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
-      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${lockedRow.issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToConingMachine.findFirst({ where: { id: lockedRow.issueId, isDeleted: false } });
-      if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      // Preserve the historical Coning yield rule for edits as well: a valid
-      // receive may remain above the issue weight and is reported, not blocked.
-      if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
-        throw Object.assign(new Error('Cannot edit row: already dispatched'), { statusCode: 409 });
-      }
-      if (await isConingRowReferencedByConing({ rowId: lockedRow.id, barcode: lockedRow.barcode }, tx)) {
-        throw Object.assign(new Error('Cannot edit row: already issued to coning'), { statusCode: 409 });
-      }
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -12129,9 +11410,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
         throw new Error('Invalid totals after update');
       }
 
-      const sourceRowRefs = physicalInputsChanged
-        ? await computeConingReceiveSourceRowRefs(tx, lockedIssue, netWeight, id)
-        : lockedRow.sourceRowRefs;
+      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, row.issue, netWeight, id);
       const updatedRow = await tx.receiveFromConingMachineRow.update({
         where: { id },
         data: {
@@ -12151,18 +11430,19 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
         },
       });
 
-      const pieceTotal = await tx.receiveFromConingMachinePieceTotal.update({
-        where: { pieceId },
-        data: {
-          totalNetWeight: nextTotalNet,
-          totalCones: nextTotalCones,
-          ...actorUpdateFields(actorUserId),
-        },
-      });
-      const issueBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(lockedIssue.id) || null;
-      return { updatedRow, pieceTotal, issueBalance };
+      if (deltaNetWeight !== 0 || deltaCones !== 0) {
+        await tx.receiveFromConingMachinePieceTotal.update({
+          where: { pieceId },
+          data: {
+            ...(deltaNetWeight !== 0 ? { totalNetWeight: { increment: deltaNetWeight } } : {}),
+            ...(deltaCones !== 0 ? { totalCones: { increment: deltaCones } } : {}),
+            ...actorUpdateFields(actorUserId),
+          },
+        });
+      }
+
+      return updatedRow;
     });
-    const { updatedRow: updated, pieceTotal, issueBalance } = result;
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_coning_machine_row',
@@ -12178,9 +11458,9 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       },
     });
 
-    res.json({ ok: true, row: updated, pieceTotal, issueBalance });
+    res.json({ ok: true, row: updated });
   } catch (err) {
-    if (err?.statusCode) return sendInventoryMutationError(res, err, err.message);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update coning receive row', err);
     res.status(500).json({ error: err.message || 'Failed to update coning receive row' });
   }
@@ -12204,9 +11484,6 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
     if (dispatchedWeight > 0 || dispatchedCount > 0) {
       return res.status(400).json({ error: 'Cannot delete row: already dispatched' });
     }
-    if (await isConingRowReferencedByConing({ rowId: row.id, barcode: row.barcode })) {
-      return res.status(400).json({ error: 'Cannot delete row: already issued to coning' });
-    }
     const transfer = await prisma.boxTransfer.findFirst({
       where: {
         stage: 'coning',
@@ -12218,31 +11495,18 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
       return res.status(400).json({ error: 'Cannot delete row: box transfer exists' });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "ReceiveFromConingMachineRow" WHERE id = ${id} FOR UPDATE`;
-      const lockedRow = await tx.receiveFromConingMachineRow.findUnique({ where: { id }, include: { issue: true } });
-      if (!lockedRow || lockedRow.isDeleted) {
-        throw Object.assign(new Error('Receive row is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      }
+    const prevNetWeight = Number.isFinite(row.netWeight)
+      ? Number(row.netWeight)
+      : roundTo3Decimals((Number(row.grossWeight || 0) - Number(row.tareWeight || 0)));
+    const prevConeCount = Number(row.coneCount || 0);
+    const deltaNetWeight = roundTo3Decimals(-prevNetWeight);
+    const deltaCones = -prevConeCount;
+
+    const pieceId = row.issueId;
+    const deleted = await prisma.$transaction(async (tx) => {
       // Rows already paid in a contractor settlement cannot be deleted here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
-      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${lockedRow.issueId} FOR UPDATE`;
-      const lockedIssue = await tx.issueToConingMachine.findFirst({ where: { id: lockedRow.issueId, isDeleted: false } });
-      if (!lockedIssue) throw Object.assign(new Error('Issue is no longer available.'), { statusCode: 409, code: 'availability_changed' });
-      if (Number(lockedRow.dispatchedWeight || 0) > 0 || Number(lockedRow.dispatchedCount || 0) > 0) {
-        throw Object.assign(new Error('Cannot delete row: already dispatched'), { statusCode: 409 });
-      }
-      if (await isConingRowReferencedByConing({ rowId: lockedRow.id, barcode: lockedRow.barcode }, tx)) {
-        throw Object.assign(new Error('Cannot delete row: already issued to coning'), { statusCode: 409 });
-      }
-      const prevNetWeight = Number.isFinite(lockedRow.netWeight)
-        ? Number(lockedRow.netWeight)
-        : roundTo3Decimals(Number(lockedRow.grossWeight || 0) - Number(lockedRow.tareWeight || 0));
-      const prevConeCount = Number(lockedRow.coneCount || 0);
-      const deltaNetWeight = roundTo3Decimals(-prevNetWeight);
-      const deltaCones = -prevConeCount;
-      const pieceId = lockedRow.issueId;
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -12257,25 +11521,24 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
         where: { id },
         data: {
           isDeleted: true,
-          ...(lockedRow.barcode ? { barcode: `${lockedRow.barcode}-deleted-${id.slice(0, 8)}` } : {}),
+          ...(row.barcode ? { barcode: `${row.barcode}-deleted-${id.slice(0, 8)}` } : {}),
           deletedAt: new Date(),
           deletedByUserId: actorUserId || null,
           ...actorUpdateFields(actorUserId),
         },
       });
 
-      const pieceTotal = await tx.receiveFromConingMachinePieceTotal.update({
+      await tx.receiveFromConingMachinePieceTotal.update({
         where: { pieceId },
         data: {
-          totalNetWeight: nextTotalNet,
-          totalCones: nextTotalCones,
+          totalNetWeight: { increment: deltaNetWeight },
+          totalCones: { increment: deltaCones },
           ...actorUpdateFields(actorUserId),
         },
       });
-      const issueBalance = (await computeIssueBalancesBatch(tx, 'coning', [lockedIssue])).get(lockedIssue.id) || null;
-      return { updatedRow, pieceTotal, issueBalance, prevNetWeight, prevConeCount };
+
+      return updatedRow;
     });
-    const { updatedRow: deleted, pieceTotal, issueBalance, prevNetWeight, prevConeCount } = result;
 
     await logCrudWithActor(req, {
       entityType: 'receive_from_coning_machine_row',
@@ -12287,9 +11550,9 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
       },
     });
 
-    res.json({ ok: true, row: deleted, pieceTotal, issueBalance });
+    res.json({ ok: true });
   } catch (err) {
-    if (err?.statusCode) return sendInventoryMutationError(res, err, err.message);
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to delete coning receive row', err);
     res.status(500).json({ error: err.message || 'Failed to delete coning receive row' });
   }
@@ -13819,18 +13082,18 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
       pieceIds: rawPieceIds,
     } = req.body || {};
 
-    let issueRecord = await prisma.issueToCutterMachine.findFirst({
+    const issueRecord = await prisma.issueToCutterMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to machine record not found' });
     }
 
-    let existingIssueLines = await prisma.issueToCutterMachineLine.findMany({
+    const existingIssueLines = await prisma.issueToCutterMachineLine.findMany({
       where: { issueId: id },
       select: { pieceId: true, issuedWeight: true },
     });
-    let existingPieceIds = Array.from(new Set(existingIssueLines.map((line) => line.pieceId).filter(Boolean)));
+    const existingPieceIds = Array.from(new Set(existingIssueLines.map((line) => line.pieceId).filter(Boolean)));
     const receiveCount = await prisma.receiveFromCutterMachineRow.count({
       where: {
         isDeleted: false,
@@ -13861,30 +13124,6 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'cutter', id);
-      issueRecord = await tx.issueToCutterMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to machine record not found'), { statusCode: 404 });
-      existingIssueLines = await tx.issueToCutterMachineLine.findMany({
-        where: { issueId: id },
-        select: { pieceId: true, issuedWeight: true },
-      });
-      existingPieceIds = Array.from(new Set(existingIssueLines.map((line) => line.pieceId).filter(Boolean)));
-      if (wantsQuantityEdit) {
-        const [freshTakeBackCount, freshReceiveCount] = await Promise.all([
-          tx.issueTakeBack.count({ where: { stage: 'cutter', issueId: id, isReverse: false, isReversed: false } }),
-          tx.receiveFromCutterMachineRow.count({
-            where: {
-              isDeleted: false,
-              OR: [
-                { issueId: id },
-                ...(existingPieceIds.length > 0 ? [{ issueId: null, pieceId: { in: existingPieceIds }, createdAt: { gte: issueRecord.createdAt } }] : []),
-              ],
-            },
-          }),
-        ]);
-        if (freshTakeBackCount > 0) throw new Error('Cannot edit issue quantities while active take-backs exist');
-        if (freshReceiveCount > 0) throw new Error('Cannot change issue quantities: receive records exist for this issue');
-      }
       // Frozen once any dependent receive row is paid (incl. downstream
       // coning lineage); corrections go through the paid-edit workflow.
       await assertIssueEditable(tx, 'cutter', id);
@@ -13925,18 +13164,15 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
         }
 
         const uniquePieceIds = Array.from(new Set(normalizedInputLines.map((line) => line.pieceId)));
-        const allPieceIdsToAdjust = Array.from(new Set([...existingPieceIds, ...uniquePieceIds])).sort();
-        await lockInventorySourceRows(tx, 'inbound', allPieceIdsToAdjust);
-        const lockedPieces = await tx.inboundItem.findMany({
-          where: { id: { in: allPieceIdsToAdjust } },
+        const pieces = await tx.inboundItem.findMany({
+          where: { id: { in: uniquePieceIds } },
           orderBy: { seq: 'asc' },
         });
-        if (lockedPieces.length !== allPieceIdsToAdjust.length) {
+        if (pieces.length !== uniquePieceIds.length) {
           throw new Error('One or more pieces do not exist');
         }
 
-        const pieceMap = new Map(lockedPieces.map((piece) => [piece.id, piece]));
-        const pieces = uniquePieceIds.map((pieceId) => pieceMap.get(pieceId));
+        const pieceMap = new Map(pieces.map((piece) => [piece.id, piece]));
         const oldAllocationMap = new Map();
         existingIssueLines.forEach((line) => {
           const prev = oldAllocationMap.get(line.pieceId) || 0;
@@ -13948,12 +13184,6 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
           if (!piece) throw new Error(`Piece ${line.pieceId} not found`);
           const oldAlloc = Number(oldAllocationMap.get(line.pieceId) || 0);
           const baseIssued = Math.max(0, Number(piece.issuedToCutterWeight || 0) - oldAlloc);
-          if (Number(piece.dispatchedWeight || 0) > TAKE_BACK_EPSILON) {
-            throw Object.assign(
-              new Error(`Piece ${line.pieceId} has been partially dispatched and cannot be issued to Cutter`),
-              { statusCode: 409, code: 'availability_changed' },
-            );
-          }
           const maxIssueable = Math.max(0, Number(piece.weight || 0) - Number(piece.dispatchedWeight || 0));
           const availableForThisIssue = Math.max(0, maxIssueable - baseIssued);
           const requestedWeight = line.issuedWeight == null ? availableForThisIssue : Number(line.issuedWeight);
@@ -13975,6 +13205,7 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
         if (itemIds.size !== 1) throw new Error('Pieces must belong to a single item');
         if (lotNos.size !== 1) throw new Error('Pieces must belong to a single lot');
 
+        const allPieceIdsToAdjust = Array.from(new Set([...existingPieceIds, ...uniquePieceIds]));
         const nextWeightByPiece = new Map();
         nextLines.forEach((line) => {
           const prev = nextWeightByPiece.get(line.pieceId) || 0;
@@ -13982,7 +13213,10 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
         });
 
         for (const pieceId of allPieceIdsToAdjust) {
-          const piece = pieceMap.get(pieceId);
+          const piece = pieceMap.get(pieceId) || await tx.inboundItem.findUnique({
+            where: { id: pieceId },
+            select: { id: true, weight: true, dispatchedWeight: true, issuedToCutterWeight: true },
+          });
           if (!piece) continue;
 
           const oldAlloc = Number(oldAllocationMap.get(pieceId) || 0);
@@ -14049,10 +13283,7 @@ router.put('/api/issue_to_cutter_machine/:id', requireEditPermission('issue.cutt
 
     res.json({ ok: true, issueToCutterMachine: updatedIssue, issueToMachine: updatedIssue });
   } catch (err) {
-    if (err?.statusCode) return res.status(err.statusCode).json({
-      error: err.message,
-      ...(err?.code ? { outcome: err.code } : {}),
-    });
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to update issue_to_cutter_machine', err);
     res.status(400).json({ error: err.message || 'Failed to update issue_to_cutter_machine' });
   }
@@ -14077,7 +13308,7 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
       cutId,
     } = req.body || {};
 
-    let issueRecord = await prisma.issueToHoloMachine.findFirst({
+    const issueRecord = await prisma.issueToHoloMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
@@ -14109,17 +13340,6 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'holo', id);
-      issueRecord = await tx.issueToHoloMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to Holo machine record not found'), { statusCode: 404 });
-      const [freshReceiveCount, freshTakeBackCount] = await Promise.all([
-        tx.receiveFromHoloMachineRow.count({ where: { issueId: id, isDeleted: false } }),
-        wantsCrateUpdate
-          ? tx.issueTakeBack.count({ where: { stage: 'holo', issueId: id, isReverse: false, isReversed: false } })
-          : Promise.resolve(0),
-      ]);
-      if (freshReceiveCount > 0 && wantsCrateUpdate) throw new Error('Cannot change crates: receive records exist for this issue');
-      if (wantsCrateUpdate && freshTakeBackCount > 0) throw new Error('Cannot change issue quantities while active take-backs exist');
       // Frozen once any dependent receive row is paid (incl. downstream
       // coning lineage); corrections go through the paid-edit workflow.
       await assertIssueEditable(tx, 'holo', id);
@@ -14136,7 +13356,7 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
       if (shift !== undefined) data.shift = shift || null;
       if (cutId !== undefined) data.cutId = cutId || null;
 
-      if (freshReceiveCount === 0) {
+      if (!hasReceives) {
         if (yarnId !== undefined) data.yarnId = yarnId || null;
         if (twistId !== undefined) data.twistId = twistId || null;
         if (rollsProducedEstimate !== undefined) {
@@ -14168,8 +13388,6 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
         if (uniqueRowIds.size !== rowIds.length) {
           throw new Error('Duplicate crates were scanned. Remove duplicates and try again.');
         }
-
-        await lockInventorySourceRows(tx, 'cutter', rowIds);
 
         const receiveRows = await tx.receiveFromCutterMachineRow.findMany({
           where: { id: { in: rowIds }, isDeleted: false },
@@ -14401,7 +13619,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       boxId,
     } = req.body || {};
 
-    let issueRecord = await prisma.issueToConingMachine.findFirst({
+    const issueRecord = await prisma.issueToConingMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
@@ -14428,12 +13646,6 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     if (hasReceives && (wantsCrateUpdate || reqPerConeWt !== undefined)) {
       return res.status(400).json({ error: 'Cannot change issue quantities: receive records exist for this issue' });
     }
-    if (hasReceives && wantsMetaUpdate) {
-      return res.status(400).json({ error: 'Cannot change issue cone, wrapper, or box metadata after receiving has started' });
-    }
-    if (coneTypeId !== undefined && !coneTypeId) {
-      return res.status(400).json({ error: 'Cone type is required' });
-    }
     if (wantsQuantityUpdate && activeTakeBackCount > 0) {
       return res.status(400).json({ error: 'Cannot change issue quantities while active take-backs exist' });
     }
@@ -14441,18 +13653,6 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     let updatedIssue = issueRecord;
 
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'coning', id);
-      issueRecord = await tx.issueToConingMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to Coning machine record not found'), { statusCode: 404 });
-      const [freshReceiveCount, freshTakeBackCount] = await Promise.all([
-        tx.receiveFromConingMachineRow.count({ where: { issueId: id, isDeleted: false } }),
-        wantsQuantityUpdate
-          ? tx.issueTakeBack.count({ where: { stage: 'coning', issueId: id, isReverse: false, isReversed: false } })
-          : Promise.resolve(0),
-      ]);
-      if (freshReceiveCount > 0 && wantsQuantityUpdate) throw new Error('Cannot change issue quantities: receive records exist for this issue');
-      if (freshReceiveCount > 0 && wantsMetaUpdate) throw new Error('Cannot change issue cone, wrapper, or box metadata after receiving has started');
-      if (wantsQuantityUpdate && freshTakeBackCount > 0) throw new Error('Cannot change issue quantities while active take-backs exist');
       // Frozen once any dependent receive row is paid (incl. re-coning
       // children); corrections go through the paid-edit workflow.
       await assertIssueEditable(tx, 'coning', id);
@@ -14493,11 +13693,6 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
 
         const rowIds = normalizedCrates.map((c) => c.rowId).filter(Boolean);
         const barcodes = normalizedCrates.map((c) => c.barcode).filter(Boolean);
-
-        if (rowIds.length > 0) {
-          await lockInventorySourceRows(tx, 'holo', rowIds);
-          await lockInventorySourceRows(tx, 'coning', rowIds);
-        }
 
         const coningRows = rowIds.length
           ? await tx.receiveFromConingMachineRow.findMany({
@@ -14631,11 +13826,10 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
         const coneTypeIds = Array.from(new Set(resolvedCrates.map((c) => c.coneTypeId).filter(Boolean)));
         const wrapperIds = Array.from(new Set(resolvedCrates.map((c) => c.wrapperId).filter(Boolean)));
         const boxIds = Array.from(new Set(resolvedCrates.map((c) => c.boxId).filter(Boolean)));
-        if (coneTypeIds.length !== 1 || resolvedCrates.some((crate) => !crate.coneTypeId)) {
-          throw new Error('Select one cone type for the complete Coning issue');
+        if (coneTypeIds.length) {
+          const ctCount = await tx.coneType.count({ where: { id: { in: coneTypeIds } } });
+          if (ctCount !== coneTypeIds.length) throw new Error('One or more cone types not found');
         }
-        const ctCount = await tx.coneType.count({ where: { id: { in: coneTypeIds } } });
-        if (ctCount !== coneTypeIds.length) throw new Error('One or more cone types not found');
         if (coneTypeIds.length > 1) {
           throw new Error('Crates must use a single cone type for coning issues');
         }
@@ -14792,7 +13986,7 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
         data.requiredPerConeNetWeight = resolvedPerCone;
         data.expectedCones = expectedCones;
         data.receivedRowRefs = preparedCrates;
-      } else if (freshReceiveCount === 0 && reqPerConeWt !== undefined) {
+      } else if (!hasReceives && reqPerConeWt !== undefined) {
         const requiredPerConeNetWeight = toNumber(reqPerConeWt);
         if (!Number.isFinite(requiredPerConeNetWeight) || requiredPerConeNetWeight <= 0) {
           throw new Error('Enter required per-cone net weight (grams)');
@@ -14811,12 +14005,6 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
       }
 
       if (!hasReceives && !wantsCrateUpdate && wantsMetaUpdate) {
-        if (coneTypeId !== undefined) {
-          const selectedConeType = await tx.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
-          if (!selectedConeType || selectedConeType.weight == null || !Number.isFinite(Number(selectedConeType.weight)) || Number(selectedConeType.weight) < 0) {
-            throw new Error('Selected cone type has no valid tare weight');
-          }
-        }
         const refsRaw = issueRecord.receivedRowRefs;
         let refs = Array.isArray(refsRaw) ? refsRaw : [];
         if (typeof refsRaw === 'string') {
@@ -14866,7 +14054,7 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
     const { id } = req.params;
 
     // Find the issue_to_cutter_machine record
-    let issueRecord = await prisma.issueToCutterMachine.findFirst({
+    const issueRecord = await prisma.issueToCutterMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
@@ -14880,11 +14068,11 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
       return res.status(400).json({ error: 'Cannot delete issue: take-back records exist for this issue' });
     }
 
-    let issueLines = await prisma.issueToCutterMachineLine.findMany({
+    const issueLines = await prisma.issueToCutterMachineLine.findMany({
       where: { issueId: id },
       select: { pieceId: true, issuedWeight: true },
     });
-    let cleanPieceIds = Array.from(new Set(issueLines.map((line) => line.pieceId).filter(Boolean)));
+    const cleanPieceIds = Array.from(new Set(issueLines.map((line) => line.pieceId).filter(Boolean)));
     const receiveCount = await prisma.receiveFromCutterMachineRow.count({
       where: {
         isDeleted: false,
@@ -14900,27 +14088,6 @@ router.delete('/api/issue_to_cutter_machine/:id', requireDeletePermission('issue
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'cutter', id);
-      issueRecord = await tx.issueToCutterMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to machine record not found'), { statusCode: 404 });
-      issueLines = await tx.issueToCutterMachineLine.findMany({
-        where: { issueId: id }, select: { pieceId: true, issuedWeight: true },
-      });
-      cleanPieceIds = Array.from(new Set(issueLines.map((line) => line.pieceId).filter(Boolean)));
-      const [freshTakeBackCount, freshReceiveCount] = await Promise.all([
-        tx.issueTakeBack.count({ where: { stage: 'cutter', issueId: id, isReverse: false } }),
-        tx.receiveFromCutterMachineRow.count({
-          where: {
-            isDeleted: false,
-            OR: [
-              { issueId: id },
-              ...(cleanPieceIds.length > 0 ? [{ issueId: null, pieceId: { in: cleanPieceIds }, createdAt: { gte: issueRecord.createdAt } }] : []),
-            ],
-          },
-        }),
-      ]);
-      if (freshTakeBackCount > 0) throw new Error('Cannot delete issue: take-back records exist for this issue');
-      if (freshReceiveCount > 0) throw new Error('Cannot delete issue: receive records exist for this issue');
       // Frozen once any dependent receive row is paid; use paid-edit instead.
       await assertIssueEditable(tx, 'cutter', id);
       // Soft delete the issue_to_cutter_machine record
@@ -14982,7 +14149,7 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
     const { id } = req.params;
 
     // Find the issue record
-    let issueRecord = await prisma.issueToHoloMachine.findFirst({
+    const issueRecord = await prisma.issueToHoloMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
@@ -15015,21 +14182,6 @@ router.delete('/api/issue_to_holo_machine/:id', requireDeletePermission('issue.h
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'holo', id);
-      issueRecord = await tx.issueToHoloMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to Holo machine record not found'), { statusCode: 404 });
-      const [freshTakeBackCount, freshReceiveCount] = await Promise.all([
-        tx.issueTakeBack.count({ where: { stage: 'holo', issueId: id, isReverse: false } }),
-        tx.receiveFromHoloMachineRow.count({ where: { issueId: id, isDeleted: false } }),
-      ]);
-      if (freshTakeBackCount > 0) throw new Error('Cannot delete issue: take-back records exist for this issue');
-      if (freshReceiveCount > 0) throw new Error('Cannot delete issue: receive records exist for this issue');
-      const freshRefsRaw = issueRecord.receivedRowRefs;
-      try {
-        refs = typeof freshRefsRaw === 'string' ? JSON.parse(freshRefsRaw) : freshRefsRaw;
-        if (!Array.isArray(refs)) refs = [];
-      } catch (_) { refs = []; }
-      await lockInventorySourceRows(tx, 'cutter', refs.map((ref) => ref?.rowId));
       // Frozen once any dependent receive row is paid (incl. downstream
       // coning lineage); use paid-edit instead.
       await assertIssueEditable(tx, 'holo', id);
@@ -15104,7 +14256,7 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
     const { id } = req.params;
 
     // Find the issue record
-    let issueRecord = await prisma.issueToConingMachine.findFirst({
+    const issueRecord = await prisma.issueToConingMachine.findFirst({
       where: { id, isDeleted: false },
     });
     if (!issueRecord) {
@@ -15126,15 +14278,6 @@ router.delete('/api/issue_to_coning_machine/:id', requireDeletePermission('issue
 
     // Use transaction to ensure atomicity
     await prisma.$transaction(async (tx) => {
-      await lockIssueRow(tx, 'coning', id);
-      issueRecord = await tx.issueToConingMachine.findFirst({ where: { id, isDeleted: false } });
-      if (!issueRecord) throw Object.assign(new Error('Issue to Coning machine record not found'), { statusCode: 404 });
-      const [freshTakeBackCount, freshReceiveCount] = await Promise.all([
-        tx.issueTakeBack.count({ where: { stage: 'coning', issueId: id, isReverse: false } }),
-        tx.receiveFromConingMachineRow.count({ where: { issueId: id, isDeleted: false } }),
-      ]);
-      if (freshTakeBackCount > 0) throw new Error('Cannot delete issue: take-back records exist for this issue');
-      if (freshReceiveCount > 0) throw new Error('Cannot delete issue: receive records exist for this issue');
       // Frozen once any dependent receive row is paid (incl. re-coning
       // children); use paid-edit instead.
       await assertIssueEditable(tx, 'coning', id);
@@ -16402,7 +15545,6 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
         include: { issue: true },
         orderBy: { createdAt: 'desc' },
       });
-      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, coningRows.map(row => row.id));
       items = coningRows
         .map(row => {
           const crateIndex = parseReceiveCrateIndex(row.barcode);
@@ -16410,11 +15552,10 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
           const netWeight = row.netWeight || 0;
           const totalCount = row.coneCount || 0;
           const dispatchedCount = row.dispatchedCount || 0;
-          const issuedToConing = issuedToConingMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
-          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0));
+          const availableWeight = Math.max(0, netWeight - (row.dispatchedWeight || 0));
           const availableCount = calcAvailableCountFromWeight({
             totalCount,
-            issuedCount: issuedToConing.issuedRolls || 0,
+            issuedCount: 0,
             dispatchedCount,
             totalWeight: netWeight,
             availableWeight,
@@ -16430,7 +15571,6 @@ router.get('/api/dispatch/available/:stage', requirePermission('dispatch', PERM_
             notes: row.notes || null,
             weight: netWeight,
             dispatchedWeight: row.dispatchedWeight || 0,
-            issuedToConingWeight: issuedToConing.issuedWeight || 0,
             availableWeight: availableWeight,
             stage: 'coning',
             coneCount: totalCount,
@@ -16556,12 +15696,10 @@ async function getDispatchSourceAvailability(tx, stage, stageItemId) {
     const sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
     if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
     const totalWeight = Number(sourceItem.netWeight || 0);
-    const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
-    const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
-    const availableWeight = Math.max(0, totalWeight - Number(sourceItem.dispatchedWeight || 0) - Number(issuedToConing.issuedWeight || 0));
+    const availableWeight = Math.max(0, totalWeight - Number(sourceItem.dispatchedWeight || 0));
     const availableCount = calcAvailableCountFromWeight({
       totalCount: Number(sourceItem.coneCount || 0),
-      issuedCount: Number(issuedToConing.issuedRolls || 0),
+      issuedCount: 0,
       dispatchedCount: Number(sourceItem.dispatchedCount || 0),
       totalWeight,
       availableWeight,
@@ -16607,10 +15745,8 @@ router.put('/api/dispatch/:id', requireEditPermission('dispatch'), async (req, r
     if (!id) return res.status(400).json({ error: 'Dispatch id is required' });
 
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Dispatch" WHERE id = ${id} FOR UPDATE`;
       const existing = await tx.dispatch.findUnique({ where: { id } });
       if (!existing) throw new Error('Dispatch not found');
-      await lockInventorySourceRows(tx, existing.stage, [existing.stageItemId]);
 
       if (req.body?.stage !== undefined && String(req.body.stage) !== String(existing.stage)) {
         throw new Error('Dispatch stage cannot be changed');
@@ -16703,22 +15839,12 @@ router.put('/api/dispatch/challan/:challanNo', requireEditPermission('dispatch')
     if (payloadRows.length === 0) return res.status(400).json({ error: 'rows must be a non-empty array' });
 
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Dispatch" WHERE "challanNo" = ${challanNo} ORDER BY id FOR UPDATE`;
       const existingRows = await tx.dispatch.findMany({
         where: { challanNo },
         include: { customer: true },
         orderBy: { createdAt: 'asc' },
       });
       if (!existingRows.length) throw new Error('Challan not found');
-      const sourceIdsByStage = new Map();
-      existingRows.forEach((row) => {
-        const ids = sourceIdsByStage.get(row.stage) || [];
-        ids.push(row.stageItemId);
-        sourceIdsByStage.set(row.stage, ids);
-      });
-      for (const [stage, sourceIds] of sourceIdsByStage.entries()) {
-        await lockInventorySourceRows(tx, stage, sourceIds);
-      }
 
       const existingById = new Map(existingRows.map((r) => [r.id, r]));
       if (payloadRows.length !== existingRows.length) {
@@ -16869,7 +15995,6 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
     // IMPORTANT: All source item validation and updates must be inside transaction
     // to prevent race conditions where two concurrent requests could over-dispatch
     const dispatch = await prisma.$transaction(async (tx) => {
-      await lockInventorySourceRows(tx, stage, [stageItemId]);
       let sourceItem;
       let stageBarcode = '';
       let availableWeight = 0;
@@ -16928,15 +16053,13 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
         if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
         stageBarcode = sourceItem.barcode || '';
         const totalWeight = sourceItem.netWeight || 0;
-        const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
-        const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
-        availableWeight = Math.max(0, (totalWeight || 0) - (sourceItem.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0));
+        availableWeight = Math.max(0, (totalWeight || 0) - (sourceItem.dispatchedWeight || 0));
 
         const totalCount = sourceItem.coneCount || 0;
         const dispatchedCount = sourceItem.dispatchedCount || 0;
         availableCount = calcAvailableCountFromWeight({
           totalCount,
-          issuedCount: issuedToConing.issuedRolls || 0,
+          issuedCount: 0,
           dispatchedCount,
           totalWeight,
           availableWeight,
@@ -16950,11 +16073,7 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
           throw new Error('Count dispatch not supported for inbound items');
         }
         if (count > availableCount) {
-          throw Object.assign(new Error(`Dispatch count (${count}) exceeds available count (${availableCount})`), {
-            statusCode: 409,
-            code: 'availability_changed',
-            availability: { availableCount, availableWeight },
-          });
+          throw new Error(`Dispatch count (${count}) exceeds available count (${availableCount})`);
         }
 
         // Auto-calculate weight if not provided
@@ -16969,11 +16088,7 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
 
       // Validate weight INSIDE transaction to prevent race condition
       if (finalWeight > availableWeight + 0.001) {
-        throw Object.assign(new Error(`Dispatch weight (${finalWeight}) exceeds available weight (${availableWeight.toFixed(3)})`), {
-          statusCode: 409,
-          code: 'availability_changed',
-          availability: { availableCount, availableWeight },
-        });
+        throw new Error(`Dispatch weight (${finalWeight}) exceeds available weight (${availableWeight.toFixed(3)})`);
       }
 
       const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
@@ -17038,7 +16153,7 @@ router.post('/api/dispatch', requirePermission('dispatch', PERM_WRITE), async (r
     res.json({ dispatch });
   } catch (err) {
     console.error('Failed to create dispatch', err);
-    sendInventoryMutationError(res, err, 'Failed to create dispatch');
+    res.status(500).json({ error: err.message || 'Failed to create dispatch' });
   }
 });
 
@@ -17063,13 +16178,9 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
     if (!customer) return res.status(400).json({ error: 'Customer not found' });
 
     const result = await prisma.$transaction(async (tx) => {
-      await lockInventorySourceRows(tx, stage, items.map((item) => item?.stageItemId));
       const challanNo = await allocateDispatchChallanNumber(tx, dispatchDate);
       const adjustments = new Map();
       const created = [];
-      const issuedToConingMap = stage === 'holo' || stage === 'coning'
-        ? await buildHoloIssuedToConingMap(tx, items.map((item) => item?.stageItemId))
-        : new Map();
 
       for (const item of items) {
         const stageItemId = item?.stageItemId;
@@ -17103,19 +16214,14 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
           const totalCount = sourceItem.bobbinQuantity || 0;
           const dispatchedCount = sourceItem.dispatchedCount || 0;
           const issuedCount = sourceItem.issuedBobbins || 0;
-          availableCount = calcAvailableCountFromWeight({
-            totalCount,
-            issuedCount,
-            dispatchedCount,
-            totalWeight: sourceItem.netWt || 0,
-            availableWeight,
-          }) || 0;
+          availableCount = Math.max(0, totalCount - dispatchedCount - issuedCount);
           avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
         } else if (stage === 'holo') {
           sourceItem = await tx.receiveFromHoloMachineRow.findUnique({ where: { id: stageItemId } });
           if (!sourceItem || sourceItem.isDeleted) throw new Error('Holo receive row not found');
           stageBarcode = sourceItem.barcode || '';
           const netWeight = sourceItem.rollWeight ? sourceItem.rollWeight : (sourceItem.grossWeight || 0) - (sourceItem.tareWeight || 0);
+          const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceItem.id]);
           const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
           availableWeight = netWeight - (sourceItem.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0);
           const totalCount = sourceItem.rollCount || 0;
@@ -17132,17 +16238,10 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
           sourceItem = await tx.receiveFromConingMachineRow.findUnique({ where: { id: stageItemId } });
           if (!sourceItem || sourceItem.isDeleted) throw new Error('Coning receive row not found');
           stageBarcode = sourceItem.barcode || '';
-          const issuedToConing = issuedToConingMap.get(sourceItem.id) || { issuedRolls: 0, issuedWeight: 0 };
-          availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0) - (issuedToConing.issuedWeight || 0);
+          availableWeight = (sourceItem.netWeight || 0) - (sourceItem.dispatchedWeight || 0);
           const totalCount = sourceItem.coneCount || 0;
           const dispatchedCount = sourceItem.dispatchedCount || 0;
-          availableCount = calcAvailableCountFromWeight({
-            totalCount,
-            issuedCount: issuedToConing.issuedRolls || 0,
-            dispatchedCount,
-            totalWeight: sourceItem.netWeight || 0,
-            availableWeight,
-          }) || 0;
+          availableCount = Math.max(0, totalCount - dispatchedCount);
           avgWeight = availableCount > 0 ? (availableWeight / availableCount) : 0;
         }
 
@@ -17238,7 +16337,7 @@ router.post('/api/dispatch/bulk', requirePermission('dispatch', PERM_WRITE), asy
     res.json(result);
   } catch (err) {
     console.error('Failed to create bulk dispatch', err);
-    sendInventoryMutationError(res, err, 'Failed to create bulk dispatch');
+    res.status(500).json({ error: err.message || 'Failed to create bulk dispatch' });
   }
 });
 
@@ -17248,16 +16347,15 @@ router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (r
     const actor = getActor(req);
     const { id } = req.params;
 
+    const existing = await prisma.dispatch.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
+
     // Delete dispatch and restore weight in transaction
-    const existing = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Dispatch" WHERE id = ${id} FOR UPDATE`;
-      const lockedDispatch = await tx.dispatch.findUnique({ where: { id } });
-      if (!lockedDispatch) return null;
-      await lockInventorySourceRows(tx, lockedDispatch.stage, [lockedDispatch.stageItemId]);
+    await prisma.$transaction(async (tx) => {
       await tx.dispatch.delete({ where: { id } });
 
       // Restore dispatchedWeight on source item
-      const { stage, stageItemId, weight, count } = lockedDispatch;
+      const { stage, stageItemId, weight, count } = existing;
 
       const updateData = {
         dispatchedWeight: { decrement: weight }
@@ -17288,9 +16386,7 @@ router.delete('/api/dispatch/:id', requireDeletePermission('dispatch'), async (r
           data: updateData,
         });
       }
-      return lockedDispatch;
     });
-    if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -17313,20 +16409,11 @@ router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispa
     const { challanNo } = req.params;
     if (!challanNo) return res.status(400).json({ error: 'Challan number is required' });
 
-    const rows = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Dispatch" WHERE "challanNo" = ${challanNo} ORDER BY id FOR UPDATE`;
-      const lockedRows = await tx.dispatch.findMany({ where: { challanNo }, orderBy: { id: 'asc' } });
-      if (lockedRows.length === 0) return [];
-      const sourceIdsByStage = new Map();
-      lockedRows.forEach((row) => {
-        const ids = sourceIdsByStage.get(row.stage) || [];
-        ids.push(row.stageItemId);
-        sourceIdsByStage.set(row.stage, ids);
-      });
-      for (const [stage, ids] of sourceIdsByStage.entries()) {
-        await lockInventorySourceRows(tx, stage, ids);
-      }
-      for (const row of lockedRows) {
+    const rows = await prisma.dispatch.findMany({ where: { challanNo } });
+    if (rows.length === 0) return res.status(404).json({ error: 'Challan not found' });
+
+    await prisma.$transaction(async (tx) => {
+      for (const row of rows) {
         const { stage, stageItemId, weight, count } = row;
         const updateData = {
           dispatchedWeight: { decrement: weight }
@@ -17360,9 +16447,7 @@ router.delete('/api/dispatch/challan/:challanNo', requireDeletePermission('dispa
       }
 
       await tx.dispatch.deleteMany({ where: { challanNo } });
-      return lockedRows;
     });
-    if (rows.length === 0) return res.status(404).json({ error: 'Challan not found' });
 
     await logCrudWithActor(req, {
       entityType: 'dispatch',
@@ -19992,12 +19077,10 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
         if (coningRow && !coningRow.isDeleted) {
           const totalNetWeight = Number(coningRow.netWeight || 0);
           const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-          const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [coningRow.id]);
-          const issuedToConing = issuedToConingMap.get(coningRow.id) || { issuedRolls: 0, issuedWeight: 0 };
-          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+          const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
           const availableCones = calcAvailableCountFromWeight({
             totalCount: coningRow.coneCount || 0,
-            issuedCount: issuedToConing.issuedRolls || 0,
+            issuedCount: 0,
             dispatchedCount: coningRow.dispatchedCount || 0,
             totalWeight: totalNetWeight,
             availableWeight,
@@ -20080,12 +19163,10 @@ router.post('/api/box-transfer/lookup', requirePermission('box_transfer', PERM_R
     if (coningRow && !coningRow.isDeleted) {
       const totalNetWeight = Number(coningRow.netWeight || 0);
       const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [coningRow.id]);
-      const issuedToConing = issuedToConingMap.get(coningRow.id) || { issuedRolls: 0, issuedWeight: 0 };
-      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
       const availableCones = calcAvailableCountFromWeight({
         totalCount: coningRow.coneCount || 0,
-        issuedCount: issuedToConing.issuedRolls || 0,
+        issuedCount: 0,
         dispatchedCount: coningRow.dispatchedCount || 0,
         totalWeight: totalNetWeight,
         availableWeight,
@@ -20294,12 +19375,10 @@ router.post('/api/box-transfer', requirePermission('box_transfer', PERM_WRITE), 
         // Re-validate availability inside transaction to prevent race condition
         const srcTotalNetWeight = Number(sourceRow.netWeight || 0);
         const srcDispatchedWeight = Number(sourceRow.dispatchedWeight || 0);
-        const issuedToConingMap = await buildHoloIssuedToConingMap(tx, [sourceRow.id]);
-        const issuedToConing = issuedToConingMap.get(sourceRow.id) || { issuedRolls: 0, issuedWeight: 0 };
-        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+        const srcAvailableWeight = Math.max(0, srcTotalNetWeight - srcDispatchedWeight);
         const srcAvailableCones = calcAvailableCountFromWeight({
           totalCount: sourceRow.coneCount || 0,
-          issuedCount: issuedToConing.issuedRolls || 0,
+          issuedCount: 0,
           dispatchedCount: sourceRow.dispatchedCount || 0,
           totalWeight: srcTotalNetWeight,
           availableWeight: srcAvailableWeight,
@@ -20721,12 +19800,10 @@ async function lookupBarcodeForTransfer(barcode) {
       const coningRow = legacyResolved.row;
       const totalNetWeight = Number(coningRow.netWeight || 0);
       const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-      const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [coningRow.id]);
-      const issuedToConing = issuedToConingMap.get(coningRow.id) || { issuedRolls: 0, issuedWeight: 0 };
-      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+      const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
       const availableCones = calcAvailableCountFromWeight({
         totalCount: coningRow.coneCount || 0,
-        issuedCount: issuedToConing.issuedRolls || 0,
+        issuedCount: 0,
         dispatchedCount: coningRow.dispatchedCount || 0,
         totalWeight: totalNetWeight,
         availableWeight,
@@ -20769,12 +19846,10 @@ async function lookupBarcodeForTransfer(barcode) {
   if (coningRow) {
     const totalNetWeight = Number(coningRow.netWeight || 0);
     const dispatchedWeight = Number(coningRow.dispatchedWeight || 0);
-    const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [coningRow.id]);
-    const issuedToConing = issuedToConingMap.get(coningRow.id) || { issuedRolls: 0, issuedWeight: 0 };
-    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
+    const availableWeight = Math.max(0, totalNetWeight - dispatchedWeight);
     const availableCones = calcAvailableCountFromWeight({
       totalCount: coningRow.coneCount || 0,
-      issuedCount: issuedToConing.issuedRolls || 0,
+      issuedCount: 0,
       dispatchedCount: coningRow.dispatchedCount || 0,
       totalWeight: totalNetWeight,
       availableWeight,

@@ -217,7 +217,7 @@ model IssueToHoloMachine {
   cut                   Cut?                        @relation(fields: [cutId], references: [id])
   receiveRows           ReceiveFromHoloMachineRow[] @relation("IssueHoloRelation")
 
-  @@index([isDeleted, createdAt, id])
+  @@index([isDeleted, createdAt])
 }
 
 model ReceiveFromHoloMachineRow {
@@ -237,10 +237,6 @@ model ReceiveFromHoloMachineRow {
   helperId         String?
   notes            String?
   createdBy        String?
-  // Null identifies a row created before row-level Holo wastage classification.
-  // Legacy rows were historically counted in totalNetWeight, even if their
-  // roll-type label contained "wastage".
-  isWastage        Boolean?
   isDeleted        Boolean            @default(false)
   deletedAt        DateTime?
   deletedByUserId  String?
@@ -257,7 +253,6 @@ model ReceiveFromHoloMachineRow {
   helper           Operator?          @relation("HelperHoloReceive", fields: [helperId], references: [id])
 
   @@index([issueId, isDeleted])
-  @@index([isDeleted, createdAt, id])
 }
 
 model ReceiveFromHoloMachinePieceTotal {
@@ -399,7 +394,7 @@ model IssueToConingMachine {
   cut                      Cut?                          @relation(fields: [cutId], references: [id])
   receiveRows              ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
 
-  @@index([isDeleted, createdAt, id])
+  @@index([isDeleted, createdAt])
 }
 
 model ReceiveFromConingMachineRow {
@@ -435,7 +430,6 @@ model ReceiveFromConingMachineRow {
   dispatchedCount  Int                  @default(0)
 
   @@index([issueId, isDeleted])
-  @@index([isDeleted, createdAt, id])
 }
 
 model ReceiveFromConingMachinePieceTotal {
@@ -476,8 +470,6 @@ model IssueToCutterMachine {
   operator        Operator?                     @relation(fields: [operatorId], references: [id])
   lines           IssueToCutterMachineLine[]
   receiveRows     ReceiveFromCutterMachineRow[]
-
-  @@index([isDeleted, createdAt, id])
 }
 
 model IssueToCutterMachineLine {
@@ -569,7 +561,6 @@ model ReceiveFromCutterMachineRow {
 
   @@index([issueId, isDeleted])
   @@index([pieceId, isDeleted])
-  @@index([isDeleted, createdAt, id])
 }
 
 model ReceiveFromCutterMachineChallan {
@@ -910,7 +901,6 @@ model IssueTakeBack {
   @@index([stage])
   @@index([issueId])
   @@index([stage, issueId])
-  @@index([stage, issueId, isReverse, isReversed])
 }
 
 model IssueTakeBackLine {
@@ -948,7 +938,6 @@ model BoilerSteamLog {
 
   @@index([boilerMachineId])
   @@index([holoReceiveRowId])
-  @@index([holoReceiveRowId, steamedAt(sort: Desc), id(sort: Desc)])
 }
 
 // ========== WASTAGE EVENTS (mark/revert audit trail with notes) ==========

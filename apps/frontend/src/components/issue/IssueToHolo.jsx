@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
-import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge } from '../ui';
+import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
@@ -89,6 +89,58 @@ export function IssueToHolo() {
 
     // --- Handlers ---
 
+    function normalizeSourceLookup(result) {
+        if (!result || result.outcome !== 'found') {
+            return { error: result?.error || 'Barcode not found in Cutter Receive rows' };
+        }
+
+        const row = result.row || {};
+        const issue = result.issue || row.issue || null;
+        const piece = result.piece || row.piece || {};
+        const item = result.item || row.item || {};
+        const trace = result.trace || {};
+        const availability = result.availability || {};
+        const totalBobbins = Number(availability.totalBobbins ?? row.totalBobbins ?? row.bobbinQuantity ?? 0);
+        const totalWeight = Number(availability.totalWeight ?? row.totalWeight ?? row.netWt ?? row.netWeight ?? 0);
+        const issuedBobbins = Number(availability.issuedBobbins ?? row.issuedBobbins ?? 0);
+        const issuedWeight = Number(availability.issuedWeight ?? row.issuedWeight ?? row.issuedBobbinWeight ?? 0);
+        const dispatchedCount = Number(availability.dispatchedCount ?? row.dispatchedCount ?? 0);
+        const dispatchedWeight = Number(availability.dispatchedWeight ?? row.dispatchedWeight ?? 0);
+
+        return {
+            row,
+            issue,
+            piece,
+            item,
+            trace,
+            availability,
+            rowId: row.id,
+            barcode: row.barcode,
+            pieceId: piece.id || row.pieceId || trace.pieceId,
+            lotNo: piece.lotNo || row.lotNo || trace.lotNo || issue?.lotNo,
+            itemId: piece.itemId || item.id || row.itemId || trace.itemId || issue?.itemId,
+            itemName: item.name || row.itemName || trace.itemName || '',
+            cutId: row.cutId || trace.cutId || issue?.cutId || null,
+            cutName: row.cutName || row.cut?.name || row.cutMaster?.name || trace.cutName || '',
+            bobbinId: row.bobbinId || row.bobbin?.id || null,
+            bobbinName: row.bobbinName || row.bobbin?.name || row.pcsTypeName || '',
+            bobbinWeight: Number(row.bobbinWeight ?? row.bobbin?.weight ?? 0),
+            boxId: row.boxId || row.box?.id || null,
+            boxName: row.boxName || row.box?.name || '',
+            boxWeight: Number(row.boxWeight ?? row.box?.weight ?? 0),
+            grossWeight: Number(row.grossWt ?? row.grossWeight ?? 0),
+            tareWeight: Number(row.tareWt ?? row.tareWeight ?? 0),
+            totalBobbins,
+            totalWeight,
+            issuedBobbins,
+            issuedWeight,
+            dispatchedCount,
+            dispatchedWeight,
+            availableBobbins: Number(availability.availableBobbins ?? row.availableBobbins ?? Math.max(0, totalBobbins - issuedBobbins - dispatchedCount)),
+            availableWeight: Number(availability.availableWeight ?? row.availableWeight ?? Math.max(0, totalWeight - issuedWeight - dispatchedWeight)),
+        };
+    }
+
     async function addBarcode(raw) {
         if (scanLoading) return;
         const normalized = String(raw || '').trim().toUpperCase();
@@ -96,69 +148,83 @@ export function IssueToHolo() {
 
         setScanLoading(true);
         try {
-            const result = await api.getV2IssueSourceRow('holo', normalized);
-            const row = result?.row;
-            if (!row || result?.outcome !== 'found') {
-                alert(result?.error || 'Barcode not found in Cutter Receive rows');
+            const result = await api.lookupHoloSourceRowByBarcode(normalized);
+            const source = normalizeSourceLookup(result);
+            if (source.error) {
+                alert(source.error);
                 return;
             }
 
-            if (crates.some(c => c.rowId === row.id)) {
+            if (!source.rowId) {
+                alert('Cutter Receive row is missing its ID');
+                return;
+            }
+            if (crates.some(c => c.rowId === source.rowId)) {
                 alert('Crate already added');
                 return;
             }
-
-            const rowLot = row.lotNo || result?.trace?.lotNo;
-            const rowItem = row.itemId || result?.trace?.itemId;
-            if (!rowLot || !rowItem) {
+            if (!source.lotNo || !source.itemId) {
                 alert('Missing lot or item for this crate');
                 return;
             }
-
-            if (crates.length > 0 && rowItem !== lotSummary.itemId) {
+            if (crates.length > 0 && source.itemId !== lotSummary.itemId) {
                 alert('Mixed items not allowed');
                 return;
             }
-
-            const scannedCut = (typeof row.cut === 'string' ? row.cut : row.cut?.name) || row.cutMaster?.name || result?.trace?.cutName || '';
             if (crates.length > 0) {
                 const existingCut = String(crates[0]?.cut || '').trim().toLowerCase();
-                const nextCut = String(scannedCut || '').trim().toLowerCase();
+                const nextCut = String(source.cutName || '').trim().toLowerCase();
                 if (existingCut && nextCut && existingCut !== nextCut) {
                     alert('Mixed cuts not allowed');
                     return;
                 }
             }
-
-            const availCount = Number(result?.availability?.availableCount ?? row.availableBobbins ?? 0);
-            const availWt = Number(result?.availability?.availableWeight ?? row.availableWeight ?? 0);
-
-            if (availCount <= 0 || availWt <= 0) {
+            if (source.availableBobbins <= 0 || source.availableWeight <= 0) {
                 alert('No bobbins available for issue (may have been dispatched).');
                 setScanInput('');
                 return;
             }
 
-            const newCrate = {
-                rowId: row.id,
-                barcode: row.barcode,
-                lotNo: rowLot,
-                pieceId: row.pieceId,
-                itemId: rowItem,
-                itemName: row.itemName || result?.trace?.itemName || '',
-                availCount,
-                availWt,
-                cut: scannedCut,
-                bobbinType: row.bobbin?.name || row.pcsTypeName || '',
-                issuedBobbins: availCount,
-                issuedBobbinWeight: availWt
-            };
-
-            setCrates(prev => [...prev, newCrate]);
+            setCrates(prev => [...prev, {
+                rowId: source.rowId,
+                barcode: source.barcode || normalized,
+                lotNo: source.lotNo,
+                pieceId: source.pieceId,
+                itemId: source.itemId,
+                itemName: source.itemName,
+                cutId: source.cutId,
+                cut: source.cutName,
+                bobbinId: source.bobbinId,
+                bobbinName: source.bobbinName,
+                bobbinWeight: source.bobbinWeight,
+                boxId: source.boxId,
+                boxName: source.boxName,
+                boxWeight: source.boxWeight,
+                totalBobbins: source.totalBobbins,
+                totalWeight: source.totalWeight,
+                grossWeight: source.grossWeight,
+                tareWeight: source.tareWeight,
+                issuedBeforeCount: source.issuedBobbins,
+                issuedBeforeWeight: source.issuedWeight,
+                dispatchedCount: source.dispatchedCount,
+                dispatchedWeight: source.dispatchedWeight,
+                availCount: source.availableBobbins,
+                availWt: source.availableWeight,
+                issuedBobbins: source.availableBobbins,
+                issuedBobbinWeight: source.availableWeight,
+                source: {
+                    row: source.row,
+                    issue: source.issue,
+                    piece: source.piece,
+                    item: source.item,
+                    trace: source.trace,
+                    availability: source.availability,
+                },
+            }]);
             setScanInput('');
             setScanFeedback(`Added ${normalized}`);
         } catch (e) {
-            alert(e.message || 'Failed to lookup barcode');
+            alert(e.message || 'Barcode not found in Cutter Receive rows');
         } finally {
             setScanLoading(false);
         }
@@ -183,6 +249,41 @@ export function IssueToHolo() {
         }));
     }
 
+    async function offerPostCommitPrint(created, snapshot) {
+        try {
+            const issue = created?.issueToHoloMachine;
+            if (!issue) return;
+            const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
+            if (!template || !window.confirm('Print sticker for this issue?')) return;
+
+            await printStageTemplate(
+                LABEL_STAGE_KEYS.HOLO_ISSUE,
+                {
+                    lotNo: snapshot.lotLabel || issue.lotNo,
+                    barcode: issue.barcode,
+                    itemName: snapshot.itemName,
+                    machineName: snapshot.machineName,
+                    operatorName: snapshot.operatorName,
+                    shift: snapshot.shift,
+                    totalRolls: snapshot.totalRolls,
+                    totalWeight: snapshot.totalWeight,
+                    netWeight: snapshot.totalWeight,
+                    bobbinQty: snapshot.totalRolls,
+                    bobbinType: snapshot.bobbinType,
+                    cut: snapshot.cut,
+                    yarnKg: issue.yarnKg,
+                    twistName: snapshot.twistName,
+                    yarnName: snapshot.yarnName,
+                    date: snapshot.date,
+                },
+                { template },
+            );
+        } catch (error) {
+            console.error('Holo issue was saved but its label could not be printed', error);
+            alert('Issue was saved, but the label could not be printed. You can reprint it from Issue History.');
+        }
+    }
+
     const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (lotSummary.itemIds.length > 1) {
@@ -193,6 +294,21 @@ export function IssueToHolo() {
             alert('Twist is required');
             return;
         }
+        const firstCrate = crates[0] || {};
+        const labelSnapshot = {
+            lotLabel: lotSummary.lotLabel,
+            itemName: firstCrate.itemName || (db.items || []).find((item) => item.id === lotSummary.itemId)?.name || '',
+            machineName: (db.machines || []).find((machine) => machine.id === form.machineId)?.name || '',
+            operatorName: (db.operators || []).find((operator) => operator.id === form.operatorId)?.name || '',
+            twistName: (db.twists || []).find((twist) => twist.id === form.twistId)?.name || '',
+            yarnName: (db.yarns || []).find((yarn) => yarn.id === form.yarnId)?.name || '',
+            bobbinType: firstCrate.bobbinName || '',
+            cut: firstCrate.cut || '',
+            shift: form.shift || '',
+            date: form.date,
+            totalRolls: holoTotals.rolls,
+            totalWeight: holoTotals.weight,
+        };
         setSubmitting(true);
         try {
             const created = await api.createIssueToHoloMachine({
@@ -214,46 +330,14 @@ export function IssueToHolo() {
                     issuedBobbinWeight: Number(c.issuedBobbinWeight)
                 }))
             });
-            const firstCrate = crates[0] || null;
-            const printData = {
-                lotNo: lotSummary.lotLabel || created.issueToHoloMachine?.lotNo,
-                barcode: created.issueToHoloMachine?.barcode,
-                itemName: firstCrate?.itemName || db.items.find((i) => i.id === lotSummary.itemId)?.name,
-                machineName: db.machines.find((m) => m.id === form.machineId)?.name,
-                operatorName: db.operators.find((o) => o.id === form.operatorId)?.name,
-                shift: form.shift || '',
-                totalRolls: holoTotals.rolls,
-                totalWeight: holoTotals.weight,
-                netWeight: holoTotals.weight,
-                bobbinQty: holoTotals.rolls,
-                bobbinType: firstCrate?.bobbinType || '',
-                cut: firstCrate?.cut || '',
-                yarnKg: created.issueToHoloMachine?.yarnKg,
-                twistName: db.twists?.find((t) => t.id === form.twistId)?.name,
-                yarnName: db.yarns?.find((y) => y.id === form.yarnId)?.name,
-                date: form.date,
-            };
-
-            setCrates([]);
-            setForm(prev => ({ ...prev, yarnKg: '', note: '' }));
-            setSubmitting(false);
             emitInvalidation([
                 INVENTORY_INVALIDATION_KEYS.issueOnMachine('holo'),
                 INVENTORY_INVALIDATION_KEYS.issueHistory('holo'),
-                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-                INVENTORY_INVALIDATION_KEYS.stock('holo'),
             ], { source: 'createIssueToHoloMachine' });
+            setCrates([]);
+            setForm(prev => ({ ...prev, yarnKg: '', note: '' }));
             alert('Issued successfully');
-
-            try {
-                const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE);
-                if (template && created?.issueToHoloMachine && window.confirm('Print sticker for this issue?')) {
-                    await printStageTemplate(LABEL_STAGE_KEYS.HOLO_ISSUE, printData, { template });
-                }
-            } catch (printError) {
-                console.error('Holo issue label print failed', printError);
-                alert('Issued successfully, sticker not printed');
-            }
+            void offerPostCommitPrint(created, labelSnapshot);
         } catch (e) {
             alert(e.message);
         } finally {
@@ -353,10 +437,11 @@ export function IssueToHolo() {
                             value={scanInput}
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
+                            disabled={scanLoading}
                             className="flex-1 sm:w-48"
                         />
-                        <Button onClick={handleScan} disabled={scanLoading}>{scanLoading ? 'Checking...' : 'Add'}</Button>
-                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)}>
+                        <Button onClick={handleScan} disabled={scanLoading}>{scanLoading ? 'Adding...' : 'Add'}</Button>
+                        <Button type="button" className="md:hidden" onClick={() => setScanDialogOpen(true)} disabled={scanLoading}>
                             Scan
                         </Button>
                     </div>
@@ -369,7 +454,7 @@ export function IssueToHolo() {
                         <div className="space-y-4 mb-4">
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted rounded-md text-sm">
                                 <div><strong>Lot:</strong> {lotSummary.lotLabel || '—'}</div>
-                                <div><strong>Item:</strong> {db?.items?.find(i => i.id === lotSummary.itemId)?.name || lotSummary.itemId || '—'}</div>
+                                <div><strong>Item:</strong> {crates[0]?.itemName || db?.items?.find(i => i.id === lotSummary.itemId)?.name || lotSummary.itemId || '—'}</div>
                                 <div><strong>Cut:</strong> {crates[0]?.cut || '—'}</div>
                                 <div><strong>Yarn:</strong> {db?.yarns?.find(y => y.id === form.yarnId)?.name || '—'}</div>
                                 <div><strong>Twist:</strong> {db?.twists?.find(t => t.id === form.twistId)?.name || '—'}</div>
@@ -403,7 +488,7 @@ export function IssueToHolo() {
                                 ) : crates.map((c, i) => (
                                     <TableRow key={c.rowId}>
                                         <TableCell className="font-mono">{c.barcode}</TableCell>
-                                        <TableCell>{(db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
+                                        <TableCell>{c.itemName || (db.items || []).find(item => item.id === c.itemId)?.name || '—'}</TableCell>
                                         <TableCell>{c.cut || '—'}</TableCell>
                                         <TableCell>{c.pieceId || c.lotNo}</TableCell>
                                         <TableCell className="text-right tabular-nums">{c.availCount}</TableCell>

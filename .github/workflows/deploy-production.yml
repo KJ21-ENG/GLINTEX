@@ -12,23 +12,16 @@ concurrency:
 
 jobs:
   deploy:
-    name: Migrate, health-check backend, then replace frontend
+    name: Pull and rebuild production
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout exact release source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-
       - name: Deploy over SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
           SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
           APP_DIR: ${{ secrets.PRODUCTION_APP_DIR }}
-          DEPLOY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -38,15 +31,5 @@ jobs:
           chmod 600 ~/.ssh/production_deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
-          test -s .github/scripts/deploy-production.sh
-          bash -n .github/scripts/deploy-production.sh
-          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
-          printf -v app_dir_q '%q' "$APP_DIR"
-          printf -v deploy_sha_q '%q' "$DEPLOY_SHA"
-          remote_script="/tmp/glintex-deploy-${DEPLOY_SHA}.sh"
-          printf -v remote_script_q '%q' "$remote_script"
-          scp -q -i ~/.ssh/production_deploy_key \
-            .github/scripts/deploy-production.sh \
-            "$SSH_USER@$SSH_HOST:$remote_script"
           ssh -i ~/.ssh/production_deploy_key "$SSH_USER@$SSH_HOST" \
-            "set -e; trap 'rm -f $remote_script_q' EXIT; bash $remote_script_q $app_dir_q $deploy_sha_q"
+            "cd \"$APP_DIR\" && git pull --ff-only && docker compose up -d --build"

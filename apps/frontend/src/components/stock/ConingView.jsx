@@ -1,15 +1,13 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Button } from '../ui';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, formatDateDDMMYYYY, calculateMultiTermScore } from '../../utils';
 import { ChevronDown, ChevronRight, Printer } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { HighlightMatch } from '../common/HighlightMatch';
 import { TableStateRow, ListState } from '../data-table';
 import { LotPopover } from './LotPopover';
-import { LotRowsLoadMore } from './LotRowsLoadMore';
 import { cn } from '../../lib/utils';
 import { buildConingReceiveLabelData } from '../../utils/receiveLabelData';
-import { getV2ReceiveActionDetail } from '../../api/v2';
 
 const buildGroupKey = (lot) => ([
   lot.itemId || lot.itemName || '',
@@ -21,7 +19,7 @@ const buildGroupKey = (lot) => ([
 
 const idEq = (a, b) => String(a ?? '') === String(b ?? '');
 
-export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, v2 = null, canReprint = false }) {
+export function ConingView({ db, filters, search = '', groupBy = false, onApplyFilter, onDataChange, ensureProcessData = null, v2 = null }) {
   const EPSILON = 1e-9;
   const [expandedLot, setExpandedLot] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
@@ -32,6 +30,8 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   const v2LoadLotRows = v2?.loadLotRows;
   const barcodeHitKeys = v2?.barcodeHitKeys;
   const lastAutoExpandRef = useRef(null);
+
+  const findById = (rows, id) => (rows || []).find((row) => String(row?.id ?? '') === String(id ?? ''));
 
   const coningLots = useMemo(() => {
     return (v2Lots || []).map((lot) => {
@@ -130,7 +130,6 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
 
   const displayLots = useMemo(() => {
     if (!groupBy) return filteredLots;
-    if (v2 && filteredLots.some((lot) => lot.groupKey && Array.isArray(lot.lots))) return filteredLots;
     const map = new Map();
     filteredLots.forEach((lot) => {
       const key = buildGroupKey(lot);
@@ -157,7 +156,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
       map.set(key, existing);
     });
     return Array.from(map.values());
-  }, [filteredLots, groupBy, v2]);
+  }, [filteredLots, groupBy]);
 
   // Bubble up data for export (pass displayed data which respects groupBy)
   useEffect(() => {
@@ -167,25 +166,31 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
   const tableColumnCount = groupBy ? 7 : 8;
 
   // Grand Totals
-  const loadedGrandTotals = useMemo(() => {
+  const grandTotals = useMemo(() => {
     return displayLots.reduce((acc, lot) => ({
       totalCones: acc.totalCones + (lot.totalCones || 0),
       totalWeight: acc.totalWeight + (lot.totalWeight || 0),
     }), { totalCones: 0, totalWeight: 0 });
   }, [displayLots]);
-  const grandTotals = v2?.summary ? { ...loadedGrandTotals, ...v2.summary } : loadedGrandTotals;
 
   const handleReprintRow = async (r) => {
     if (reprintingId) return;
     setReprintingId(r.id);
     try {
-      const detail = await getV2ReceiveActionDetail('coning', r.id);
-      const fullRow = { ...(detail?.row || {}), ...(detail?.trace || {}), issue: detail?.issue || detail?.row?.issue };
-      const sourceDb = {
-        ...db,
-        issue_to_coning_machine: detail?.issue ? [detail.issue] : [],
-        receive_from_coning_machine_rows: [fullRow],
-      };
+      let sourceDb = db;
+      let fullRow = findById(sourceDb.receive_from_coning_machine_rows, r.id) || null;
+
+      if (!fullRow) {
+        const loadedDb = typeof ensureProcessData === 'function'
+          ? await ensureProcessData()
+          : null;
+        if (loadedDb) {
+          sourceDb = loadedDb;
+          fullRow = findById(sourceDb.receive_from_coning_machine_rows, r.id) || null;
+        }
+      }
+
+      if (!fullRow) throw new Error('Original receive row not found for reprint');
 
       const data = buildConingReceiveLabelData({ db: sourceDb, row: fullRow });
       const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
@@ -328,9 +333,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                                       <TableCell>{row.operatorName}</TableCell>
                                       <TableCell className="text-xs text-muted-foreground">{row.notes || row.note || '—'}</TableCell>
                                       <TableCell className="p-1">
-                                        {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintRow(row); }} disabled={reprintingId === row.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                                        <button onClick={(e) => { e.stopPropagation(); handleReprintRow(row); }} disabled={reprintingId === row.id} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                           <Printer className="w-3.5 h-3.5" />
-                                        </button>}
+                                        </button>
                                       </TableCell>
                                     </TableRow>
                                   );
@@ -338,10 +343,6 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                               </TableBody>
                             </Table>
                           </div>
-                          <LotRowsLoadMore
-                            pageState={v2?.rowPagesByKey?.[targetKey]}
-                            onLoadMore={() => v2?.loadMoreLotRows?.(targetKey)}
-                          />
                         </TableCell>
                       </TableRow>
                     )}
@@ -350,7 +351,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
               })
             )}
             {/* Grand Total Row */}
-            {displayLots.length > 0 && v2?.summary && (
+            {displayLots.length > 0 && (
               <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">Grand Total</TableCell>
@@ -453,9 +454,9 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                             <span className="font-semibold text-primary"><HighlightMatch text={r.barcode} query={search} /></span>
                             <span className="flex items-center gap-1.5">
                               <span>{formatKg(r.availableWeight)}</span>
-                              {canReprint && <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
+                              <button onClick={(e) => { e.stopPropagation(); handleReprintRow(r); }} disabled={reprintingId === r.id} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40" title="Reprint label">
                                 <Printer className="w-3 h-3" />
-                              </button>}
+                              </button>
                             </span>
                           </div>
                           <div className="flex justify-between text-[11px] text-muted-foreground">
@@ -465,10 +466,6 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
                         </div>
                       );
                     })}
-                    <LotRowsLoadMore
-                      pageState={v2?.rowPagesByKey?.[targetKey]}
-                      onLoadMore={() => v2?.loadMoreLotRows?.(targetKey)}
-                    />
                   </div>
                 )}
               </div>
@@ -476,7 +473,7 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           })
         )}
         {/* Mobile Grand Total Card */}
-        {displayLots.length > 0 && v2?.summary && (
+        {displayLots.length > 0 && (
           <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
             <div className="flex justify-between items-center">
               <span className="font-bold text-primary">Grand Total</span>
@@ -488,16 +485,6 @@ export function ConingView({ db, filters, search = '', groupBy = false, onApplyF
           </div>
         )}
       </div>
-      {v2?.summaryLoading && displayLots.length > 0 && (
-        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Calculating totals…</div>
-      )}
-      {v2?.lotsHasMore && (
-        <div className="flex justify-center pt-3">
-          <Button variant="outline" onClick={v2.loadMoreLots} disabled={v2.lotsLoadingMore}>
-            {v2.lotsLoadingMore ? 'Loading...' : 'Load more lots'}
-          </Button>
-        </div>
-      )}
     </>
   );
 }

@@ -20,35 +20,11 @@ services:
         condition: service_started
 
   backend:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
-    environment:
-      WWEBJS_WEB_CACHE_PATH: ${WWEBJS_WEB_CACHE_PATH:-/app/apps/backend/.wwebjs_cache}
-      PERF_LOG: ${PERF_LOG:-1}
-      PERF_SLOW_REQUEST_MS: ${PERF_SLOW_REQUEST_MS:-5000}
-      PERF_LOG_MAX_BYTES: ${PERF_LOG_MAX_BYTES:-52428800}
-      PERF_LOG_RETAIN_FILES: ${PERF_LOG_RETAIN_FILES:-5}
-    volumes: !override
-      - ./apps/backend/.wwebjs_auth:/app/apps/backend/.wwebjs_auth
-      - ./apps/backend/.wwebjs_cache:/app/apps/backend/.wwebjs_cache
-      - ./apps/backend/backups:/app/apps/backend/backups
-      - ./apps/backend/logs:/app/apps/backend/logs
-      - ./apps/backend:/app/apps/backend
-      - /app/apps/backend/node_modules
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  agent-api:
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
+    volumes:
+      - ./apps/backend:/app
+      - /app/node_modules
 
 volumes:
   frontend-dev-node_modules:
+
+

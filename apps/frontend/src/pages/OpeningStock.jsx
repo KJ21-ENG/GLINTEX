@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import * as api from '../api';
-import { API_BASE } from '../api/base';
 import {
   Button,
   Card,
@@ -22,6 +21,8 @@ import { formatKg, todayISO, uid, formatDateDDMMYYYY } from '../utils';
 import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplate, makeReceiveBarcode, makeHoloReceiveBarcode, makeConingReceiveBarcode } from '../utils/labelPrint';
 import { Plus, Save, Trash2, Upload, Download, Loader2, X, History, Search } from 'lucide-react';
 import { CatchWeightButton } from '../components/common/CatchWeightButton';
+import { buildConingTraceContext, resolveConingTrace } from '../utils/coningTrace';
+import { buildHoloTraceContext, resolveHoloTrace } from '../utils/holoTrace';
 import { usePermission } from '../hooks/usePermission';
 import { DisabledWithTooltip } from '../components/common/DisabledWithTooltip';
 import AccessDenied from '../components/common/AccessDenied';
@@ -58,6 +59,8 @@ export function OpeningStock() {
   const { db, emitInvalidation, subscribeInvalidation } = useInventory();
   const { canRead, canWrite, canDelete } = usePermission('opening_stock');
   const isReadOnly = canRead && !canWrite;
+  const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
+  const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
   const [stage, setStage] = useState('inbound');
   const [date, setDate] = useState(todayISO());
   const [itemId, setItemId] = useState('');
@@ -88,7 +91,9 @@ export function OpeningStock() {
 
   const handleDownloadTemplate = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/opening_stock/template?stage=${stage}`, {
+      // Build API base URL - same logic as api/client.js
+      const apiBase = import.meta.env.VITE_API_BASE || `${window.location.protocol}//${window.location.hostname}:4001`;
+      const res = await fetch(`${apiBase}/api/opening_stock/template?stage=${stage}`, {
         credentials: 'include',
       });
       if (!res.ok) throw new Error('Failed to download');
@@ -303,8 +308,8 @@ export function OpeningStock() {
   const v2HistoryList = useV2PagedList({
     enabled: true,
     scopeKey: `opening-stock:${stage}`,
-    fetchPage: ({ limit, page, search, dateFrom, dateTo, order, signal }) => (
-      v2.getV2OpeningStockHistory(stage, { limit, page, search, dateFrom, dateTo, order }, { signal })
+    fetchPage: ({ limit, page, search, dateFrom, dateTo, order }) => (
+      v2.getV2OpeningStockHistory(stage, { limit, page, search, dateFrom, dateTo, order })
     ),
     limit: 50,
     search: debouncedHistorySearchTerm,

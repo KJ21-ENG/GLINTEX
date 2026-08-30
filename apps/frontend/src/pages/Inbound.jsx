@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
+import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Badge, Label, ActionMenu } from '../components/ui';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
@@ -65,7 +65,7 @@ const EMPTY_CUTTER_ENTRY = {
 
 
 export function Inbound() {
-    const { db, createLot, refreshing, ensureModuleData, refreshModuleData, emitInvalidation } = useInventory();
+    const { db, createLot, refreshing, ensureModuleData, refreshProcessData } = useInventory();
     const { canRead, canWrite } = usePermission('inbound');
     const { canRead: canReadCutter, canWrite: canWriteCutter } = useStagePermission('receive', 'cutter');
     const readOnly = canRead && !canWrite;
@@ -392,12 +392,8 @@ export function Inbound() {
                 })),
             };
             await api.createCutterPurchaseInbound(payload);
-            emitInvalidation([
-                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
-                'inbound',
-            ], { reason: 'cutter-purchase-created' });
-            void refreshModuleData('inbound');
+            // Avoid full bootstrap refresh; cutter purchase affects cutter process data (and includes inbound basics).
+            await refreshProcessData('cutter');
 
             // Stickers already printed per-crate during addCutterCrate, no batch print needed
 
@@ -829,7 +825,7 @@ export function Inbound() {
 
 // Sub-component for Recent Lots
 function RecentLotsTable({ db }) {
-    const { refreshModuleData, emitInvalidation } = useInventory();
+    const { refreshProcessData } = useInventory();
     const { canEdit: canEditInbound, canDelete: canDeleteInbound } = usePermission('inbound');
     const { canEdit: canEditCutter, canDelete: canDeleteCutter } = useStagePermission('receive', 'cutter');
     const canEditCutterPurchase = canEditInbound && canEditCutter;
@@ -1203,12 +1199,7 @@ function RecentLotsTable({ db }) {
                 })),
             };
             await api.updateCutterPurchaseLot(cutterEditorLotNo, payload);
-            emitInvalidation([
-                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
-                'inbound',
-            ], { reason: 'cutter-purchase-updated' });
-            await refreshModuleData('inbound');
+            await refreshProcessData('cutter');
             closeCutterPurchaseEditor();
         } catch (err) {
             alert(err.message || 'Failed to update cutter purchase');
@@ -1225,12 +1216,7 @@ function RecentLotsTable({ db }) {
         if (!confirmDelete) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            emitInvalidation([
-                INVENTORY_INVALIDATION_KEYS.stock('cutter'),
-                INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'),
-                'inbound',
-            ], { reason: 'cutter-purchase-deleted' });
-            await refreshModuleData('inbound');
+            await refreshProcessData('cutter');
             if (expandedLot === lotNo) setExpandedLot(null);
         } catch (err) {
             alert(err.message || 'Failed to delete cutter purchase');

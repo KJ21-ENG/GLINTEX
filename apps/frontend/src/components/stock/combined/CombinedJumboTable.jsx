@@ -1,10 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../../ui';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../../ui';
 import { TableStateRow, ListState } from '../../data-table';
 import { formatKg, formatDateDDMMYYYY } from '../../../utils';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { countAvailablePieces } from '../stockSelectors';
-import { LotRowsLoadMore } from '../LotRowsLoadMore';
 
 /**
  * Read-only Jumbo Rolls table for the Combined Stock full-tables mode.
@@ -22,26 +21,10 @@ const formatWastageSummary = (lot) => {
   return `${formatKg(total)} kg (${pct.toFixed(1)}%)`;
 };
 
-export function CombinedJumboTable({
-  lots = [],
-  summary = null,
-  summaryLoading = false,
-  rowsByKey = {},
-  rowPagesByKey = {},
-  loadLotRows = null,
-  loadMoreLotRows = null,
-  isLoading = false,
-  isLoadingMore = false,
-  hasMore = false,
-  error = null,
-  onRetry = null,
-  onLoadMore = null,
-}) {
+export function CombinedJumboTable({ lots = [], isLoading = false, error = null, onRetry = null }) {
   const [expandedLot, setExpandedLot] = useState(null);
-  const [loadingLot, setLoadingLot] = useState(null);
-  const piecesFor = (lot) => rowsByKey?.[lot.lotKey] || lot.pieces || [];
 
-  const loadedGrandTotals = useMemo(() => {
+  const grandTotals = useMemo(() => {
     return lots.reduce((acc, lot) => ({
       availableCount: acc.availableCount + (lot.availableCount ?? countAvailablePieces(lot.pieces || [])),
       totalPieces: acc.totalPieces + (lot.totalPieces ?? (lot.pieces || []).length),
@@ -51,44 +34,13 @@ export function CombinedJumboTable({
       issuedWeightBaseTotal: acc.issuedWeightBaseTotal + Number(lot.issuedWeightBaseTotal || 0),
     }), { availableCount: 0, totalPieces: 0, totalWeight: 0, remainingWeight: 0, wastageTotal: 0, issuedWeightBaseTotal: 0 });
   }, [lots]);
-  const grandTotals = summary ? { ...loadedGrandTotals, ...summary } : loadedGrandTotals;
 
   const grandWastageSummary = formatWastageSummary({
     wastageTotal: grandTotals.wastageTotal,
     wastagePercent: grandTotals.issuedWeightBaseTotal > 0 ? ((grandTotals.wastageTotal / grandTotals.issuedWeightBaseTotal) * 100) : 0,
   });
 
-  const toggleExpand = async (lot) => {
-    const key = lot.lotKey || lot.lotNo;
-    if (expandedLot === key) {
-      setExpandedLot(null);
-      return;
-    }
-    setExpandedLot(key);
-    if (lot.lotKey && !rowsByKey?.[lot.lotKey] && loadLotRows) {
-      setLoadingLot(key);
-      try {
-        await loadLotRows(lot.lotKey);
-      } catch {
-        // The row-page state owns the retryable error shown below.
-      } finally {
-        setLoadingLot(null);
-      }
-    }
-  };
-
-  const retryLotRows = async (event, lot) => {
-    event.stopPropagation();
-    if (!lot?.lotKey || !loadLotRows) return;
-    setLoadingLot(lot.lotKey);
-    try {
-      await loadLotRows(lot.lotKey);
-    } catch {
-      // Keep the authoritative error in rowPagesByKey for another retry.
-    } finally {
-      setLoadingLot(null);
-    }
-  };
+  const toggleExpand = (lotNo) => setExpandedLot(prev => (prev === lotNo ? null : lotNo));
 
   return (
     <div className="space-y-4">
@@ -119,13 +71,10 @@ export function CombinedJumboTable({
               />
             ) : (
               lots.map((l, idx) => {
-                const lotIdentity = l.lotKey || l.lotNo;
-                const isExpanded = expandedLot === lotIdentity;
-                const pieces = piecesFor(l);
-                const rowError = l.lotKey ? rowPagesByKey?.[l.lotKey]?.error : null;
+                const isExpanded = expandedLot === l.lotNo;
                 return (
-                  <React.Fragment key={lotIdentity || idx}>
-                    <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(l)}>
+                  <React.Fragment key={l.lotNo || idx}>
+                    <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(l.lotNo)}>
                       <TableCell>
                         {isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                       </TableCell>
@@ -158,24 +107,13 @@ export function CombinedJumboTable({
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {loadingLot === lotIdentity ? (
-                                  <TableRow><TableCell colSpan={5} className="text-center py-4 text-muted-foreground">Loading pieces...</TableCell></TableRow>
-                                ) : rowError ? (
-                                  <TableRow>
-                                    <TableCell colSpan={5} className="py-4 text-center">
-                                      <div className="flex items-center justify-center gap-2 text-sm text-destructive">
-                                        <span>Could not load pieces.</span>
-                                        <Button type="button" variant="outline" size="sm" onClick={(event) => retryLotRows(event, l)}>Retry</Button>
-                                      </div>
-                                    </TableCell>
-                                  </TableRow>
-                                ) : pieces.length === 0 ? (
+                                {(l.pieces || []).length === 0 ? (
                                   <TableRow>
                                     <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
                                       No pieces.
                                     </TableCell>
                                   </TableRow>
-                                ) : pieces.slice().sort((a, b) => a.seq - b.seq).map(p => (
+                                ) : (l.pieces || []).slice().sort((a, b) => a.seq - b.seq).map(p => (
                                   <TableRow key={p.id}>
                                     <TableCell className="font-mono text-xs">
                                       <div className="flex flex-col">
@@ -193,10 +131,6 @@ export function CombinedJumboTable({
                                 ))}
                               </TableBody>
                             </Table>
-                            <LotRowsLoadMore
-                              pageState={rowPagesByKey?.[l.lotKey]}
-                              onLoadMore={() => loadMoreLotRows?.(l.lotKey)}
-                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -206,7 +140,7 @@ export function CombinedJumboTable({
               })
             )}
             {/* Grand Total Row */}
-            {lots.length > 0 && summary && (
+            {lots.length > 0 && (
               <TableRow className="bg-primary/10 font-bold border-t-2 border-primary/20">
                 <TableCell></TableCell>
                 <TableCell className="font-bold text-primary">Grand Total</TableCell>
@@ -236,16 +170,13 @@ export function CombinedJumboTable({
           />
         ) : (
           lots.map((l, idx) => {
-            const lotIdentity = l.lotKey || l.lotNo;
-            const isExpanded = expandedLot === lotIdentity;
-            const pieces = piecesFor(l);
-            const rowError = l.lotKey ? rowPagesByKey?.[l.lotKey]?.error : null;
+            const isExpanded = expandedLot === l.lotNo;
             const available = l.availableCount ?? countAvailablePieces(l.pieces || []);
             const total = l.totalPieces ?? (l.pieces || []).length;
 
             return (
-              <div key={lotIdentity || idx} className="border rounded-lg bg-card shadow-sm overflow-hidden">
-                <div className="p-4" onClick={() => toggleExpand(l)}>
+              <div key={l.lotNo || idx} className="border rounded-lg bg-card shadow-sm overflow-hidden">
+                <div className="p-4" onClick={() => toggleExpand(l.lotNo)}>
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold flex items-center gap-2">
@@ -270,18 +201,11 @@ export function CombinedJumboTable({
                 {isExpanded && (
                   <div className="border-t bg-muted/30 p-3 space-y-2">
                     <div className="text-xs text-muted-foreground">Firm: {l.firmName}</div>
-                    {loadingLot === lotIdentity ? (
-                      <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">Loading pieces...</div>
-                    ) : rowError ? (
-                      <div className="flex items-center justify-center gap-2 rounded border bg-background p-2 text-xs text-destructive">
-                        <span>Could not load pieces.</span>
-                        <Button type="button" variant="outline" size="sm" onClick={(event) => retryLotRows(event, l)}>Retry</Button>
-                      </div>
-                    ) : pieces.length === 0 ? (
+                    {(l.pieces || []).length === 0 ? (
                       <div className="text-xs text-muted-foreground bg-background border rounded p-2 text-center">
                         No pieces.
                       </div>
-                    ) : pieces.slice().sort((a, b) => a.seq - b.seq).map(p => (
+                    ) : (l.pieces || []).slice().sort((a, b) => a.seq - b.seq).map(p => (
                       <div key={p.id} className="bg-background border rounded p-2 text-sm">
                         <div className="flex justify-between items-start">
                           <div className="flex flex-col">
@@ -295,10 +219,6 @@ export function CombinedJumboTable({
                         </div>
                       </div>
                     ))}
-                    <LotRowsLoadMore
-                      pageState={rowPagesByKey?.[l.lotKey]}
-                      onLoadMore={() => loadMoreLotRows?.(l.lotKey)}
-                    />
                   </div>
                 )}
               </div>
@@ -306,7 +226,7 @@ export function CombinedJumboTable({
           })
         )}
         {/* Mobile Grand Total Card */}
-        {lots.length > 0 && summary && (
+        {lots.length > 0 && (
           <div className="border-2 border-primary/30 rounded-lg bg-primary/5 p-4 mt-2">
             <div className="flex justify-between items-center">
               <span className="font-bold text-primary">Grand Total</span>
@@ -318,16 +238,6 @@ export function CombinedJumboTable({
           </div>
         )}
       </div>
-      {summaryLoading && lots.length > 0 && (
-        <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">Calculating totals…</div>
-      )}
-      {hasMore && (
-        <div className="flex justify-center">
-          <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
-            {isLoadingMore ? 'Loading…' : 'Load more lots'}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
